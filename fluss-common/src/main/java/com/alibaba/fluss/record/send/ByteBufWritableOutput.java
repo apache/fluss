@@ -18,8 +18,9 @@
 package com.alibaba.fluss.record.send;
 
 import com.alibaba.fluss.record.bytesview.BytesView;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.utils.ProtoCodecUtils;
+
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 
 /**
  * A basic implementation of {@link WritableOutput} that writes data into a {@link ByteBuf}.

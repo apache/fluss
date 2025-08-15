@@ -46,7 +46,6 @@ import com.alibaba.fluss.server.replica.ReplicaManager;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperUtils;
 import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
-import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.clock.Clock;
 import com.alibaba.fluss.utils.clock.SystemClock;
@@ -54,6 +53,7 @@ import com.alibaba.fluss.utils.concurrent.FlussScheduler;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
 import com.alibaba.fluss.utils.concurrent.Scheduler;
 
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

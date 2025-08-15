@@ -17,8 +17,8 @@
 
 package com.alibaba.fluss.server.zk;
 
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.api.UnhandledErrorListener;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.UnhandledErrorListener;
 
 import java.io.Closeable;
 

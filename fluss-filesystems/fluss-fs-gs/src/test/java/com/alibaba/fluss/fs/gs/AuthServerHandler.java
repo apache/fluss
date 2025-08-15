@@ -17,31 +17,32 @@
 
 package com.alibaba.fluss.fs.gs;
 
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.Unpooled;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.SimpleChannelInboundHandler;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.DefaultFullHttpResponse;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.FullHttpResponse;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpMethod;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpObject;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpRequest;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpResponseStatus;
-import com.alibaba.fluss.shaded.netty4.io.netty.util.AsciiString;
 import com.alibaba.fluss.utils.IOUtils;
+
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.fluss.shaded.netty4.io.netty.channel.SimpleChannelInboundHandler;
+import org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.DefaultFullHttpResponse;
+import org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.FullHttpResponse;
+import org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpMethod;
+import org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpObject;
+import org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpRequest;
+import org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpResponseStatus;
+import org.apache.fluss.shaded.netty4.io.netty.util.AsciiString;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URI;
 
-import static com.alibaba.fluss.shaded.guava32.com.google.common.net.HttpHeaders.CONTENT_ENCODING;
-import static com.alibaba.fluss.shaded.guava32.com.google.common.net.HttpHeaders.CONTENT_LENGTH;
-import static com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpHeaderNames.CONNECTION;
-import static com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
-import static com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpHeaderValues.APPLICATION_JSON;
-import static com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpHeaderValues.CLOSE;
-import static com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
-import static com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpResponseStatus.OK;
+import static org.apache.fluss.shaded.guava32.com.google.common.net.HttpHeaders.CONTENT_ENCODING;
+import static org.apache.fluss.shaded.guava32.com.google.common.net.HttpHeaders.CONTENT_LENGTH;
+import static org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpHeaderNames.CONNECTION;
+import static org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpHeaderNames.CONTENT_TYPE;
+import static org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpHeaderValues.APPLICATION_JSON;
+import static org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpHeaderValues.CLOSE;
+import static org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpResponseStatus.NOT_FOUND;
+import static org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpResponseStatus.OK;
 
 /** Netty Handler for facilitating the Google auth token generation. */
 public class AuthServerHandler extends SimpleChannelInboundHandler<HttpObject> {

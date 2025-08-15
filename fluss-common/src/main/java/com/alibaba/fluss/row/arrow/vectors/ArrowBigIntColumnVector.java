@@ -19,7 +19,8 @@ package com.alibaba.fluss.row.arrow.vectors;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.row.columnar.LongColumnVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.BigIntVector;
+
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BigIntVector;
 
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 

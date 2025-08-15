@@ -158,7 +158,7 @@ final class NettyClientTest {
                                         .get())
                 .isInstanceOf(ExecutionException.class)
                 .hasMessageContaining("Disconnected from node")
-                .hasRootCauseMessage("Connection refused");
+                .hasRootCauseMessage("finishConnect(..) failed: Connection refused");
         assertThat(nettyClient.connections().size()).isEqualTo(0);
 
         // restart the netty server.

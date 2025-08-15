@@ -21,18 +21,18 @@ import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.server.utils.FatalErrorHandler;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.api.UnhandledErrorListener;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.state.ConnectionState;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.state.ConnectionStateListener;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.state.SessionConnectionStateErrorPolicy;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
-import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
-import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.server.quorum.QuorumPeerConfig;
 import com.alibaba.fluss.utils.function.ThrowingRunnable;
 
 import org.apache.commons.lang3.StringUtils;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.UnhandledErrorListener;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.state.ConnectionState;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.state.ConnectionStateListener;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.state.SessionConnectionStateErrorPolicy;
+import org.apache.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.server.quorum.QuorumPeerConfig;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

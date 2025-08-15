@@ -23,8 +23,8 @@ import com.alibaba.fluss.rpc.RpcGateway;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.ApiMessage;
-import com.alibaba.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
 
+import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

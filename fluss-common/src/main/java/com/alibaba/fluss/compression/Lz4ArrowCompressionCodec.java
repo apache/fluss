@@ -17,11 +17,12 @@
 
 package com.alibaba.fluss.compression;
 
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.AbstractCompressionCodec;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
 import com.alibaba.fluss.utils.IOUtils;
+
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.AbstractCompressionCodec;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;

@@ -17,8 +17,8 @@
 
 package com.alibaba.fluss.record.bytesview;
 
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.Unpooled;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 
 /** A {@link BytesView} that backends on a Netty {@link ByteBuf}. */
 public class ByteBufBytesView implements BytesView {

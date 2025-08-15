@@ -20,11 +20,11 @@ package com.alibaba.fluss.rpc.netty.server;
 import com.alibaba.fluss.rpc.netty.NettyChannelInitializer;
 import com.alibaba.fluss.rpc.protocol.ApiManager;
 import com.alibaba.fluss.security.auth.ServerAuthenticator;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import com.alibaba.fluss.utils.MathUtils;
 
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
+import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

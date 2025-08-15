@@ -24,21 +24,22 @@ import com.alibaba.fluss.compression.ArrowCompressionRatioEstimator;
 import com.alibaba.fluss.memory.AbstractPagedOutputView;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.writers.ArrowFieldWriter;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.BaseFixedWidthVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.BaseVariableWidthVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionCodec;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBlock;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.ArrowUtils;
 import com.alibaba.fluss.utils.PagedMemorySegmentWritableChannel;
+
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BaseFixedWidthVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BaseVariableWidthVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.FieldVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionCodec;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBlock;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
 
 import java.io.IOException;
 

@@ -20,12 +20,13 @@ package com.alibaba.fluss.row.arrow.writers;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.TimestampLtz;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampMicroVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampMilliVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampSecVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
+
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampMicroVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampMilliVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampSecVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
 
 import static com.alibaba.fluss.utils.Preconditions.checkState;
 

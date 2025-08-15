@@ -57,7 +57,6 @@ import com.alibaba.fluss.server.log.LogAppendInfo;
 import com.alibaba.fluss.server.log.LogTablet;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
 import com.alibaba.fluss.server.utils.FatalErrorHandler;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.BytesUtils;
@@ -65,6 +64,7 @@ import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.FlussPaths;
 import com.alibaba.fluss.utils.types.Tuple2;
 
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

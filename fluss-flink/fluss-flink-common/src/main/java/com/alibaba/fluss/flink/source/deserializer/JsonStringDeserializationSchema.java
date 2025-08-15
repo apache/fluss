@@ -21,14 +21,14 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.flink.utils.FlussRowToJsonConverters;
 import com.alibaba.fluss.flink.utils.TimestampFormat;
 import com.alibaba.fluss.record.LogRecord;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.SerializationFeature;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.SerializationFeature;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
 
 import java.util.LinkedHashMap;
 import java.util.Map;

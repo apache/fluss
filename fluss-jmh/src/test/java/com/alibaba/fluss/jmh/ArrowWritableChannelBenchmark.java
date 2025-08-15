@@ -18,23 +18,23 @@
 package com.alibaba.fluss.jmh;
 
 import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.IntVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.LargeVarBinaryVector;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.IpcOption;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Field;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.FieldType;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema;
 import com.alibaba.fluss.utils.MemorySegmentWritableChannel;
 
 import org.apache.commons.lang3.RandomUtils;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.IntVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.LargeVarBinaryVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.IpcOption;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Field;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.FieldType;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Level;

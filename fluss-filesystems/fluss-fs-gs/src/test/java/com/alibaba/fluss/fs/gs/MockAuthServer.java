@@ -17,19 +17,19 @@
 
 package com.alibaba.fluss.fs.gs;
 
-import com.alibaba.fluss.shaded.netty4.io.netty.bootstrap.ServerBootstrap;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelOption;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelPipeline;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.nio.NioEventLoopGroup;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.nio.NioServerSocketChannel;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpServerCodec;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.codec.http.HttpServerExpectContinueHandler;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.logging.LogLevel;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.logging.LoggingHandler;
+import org.apache.fluss.shaded.netty4.io.netty.bootstrap.ServerBootstrap;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOption;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelPipeline;
+import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.fluss.shaded.netty4.io.netty.channel.nio.NioEventLoopGroup;
+import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.socket.nio.NioServerSocketChannel;
+import org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpServerCodec;
+import org.apache.fluss.shaded.netty4.io.netty.handler.codec.http.HttpServerExpectContinueHandler;
+import org.apache.fluss.shaded.netty4.io.netty.handler.logging.LogLevel;
+import org.apache.fluss.shaded.netty4.io.netty.handler.logging.LoggingHandler;
 
 import java.io.Closeable;
 

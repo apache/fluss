@@ -36,14 +36,14 @@ import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
-import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooKeeper;
-import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.utils.types.Tuple2;
 
+import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooKeeper;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;

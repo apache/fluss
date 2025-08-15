@@ -54,9 +54,9 @@ import com.alibaba.fluss.security.acl.PermissionType;
 import com.alibaba.fluss.security.acl.Resource;
 import com.alibaba.fluss.security.acl.ResourceFilter;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
-import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Lists;
 import com.alibaba.fluss.utils.CloseableIterator;
 
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Lists;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

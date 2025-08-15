@@ -22,9 +22,9 @@ import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
 import com.alibaba.fluss.rpc.netty.server.FlussRequest;
 import com.alibaba.fluss.rpc.netty.server.RequestChannel;
 import com.alibaba.fluss.rpc.netty.server.RpcRequest;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.EmptyByteBuf;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.UnpooledByteBufAllocator;
 
+import org.apache.fluss.shaded.netty4.io.netty.buffer.EmptyByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.UnpooledByteBufAllocator;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;

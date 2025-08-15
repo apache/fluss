@@ -21,11 +21,11 @@ import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.record.bytesview.MultiBytesView;
 import com.alibaba.fluss.record.send.Send;
 import com.alibaba.fluss.record.send.SendWritableOutput;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 
 import com.google.protobuf.ByteString;
 import com.google.protobuf.CodedOutputStream;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

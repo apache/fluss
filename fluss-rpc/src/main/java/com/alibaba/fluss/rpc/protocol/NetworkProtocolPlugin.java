@@ -22,7 +22,8 @@ import com.alibaba.fluss.plugin.Plugin;
 import com.alibaba.fluss.rpc.RpcGatewayService;
 import com.alibaba.fluss.rpc.netty.server.RequestChannel;
 import com.alibaba.fluss.rpc.netty.server.RequestHandler;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
+
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 
 import java.util.List;
 
