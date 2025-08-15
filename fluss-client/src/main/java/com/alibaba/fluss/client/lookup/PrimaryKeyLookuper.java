@@ -20,6 +20,7 @@ package com.alibaba.fluss.client.lookup;
 import com.alibaba.fluss.bucketing.BucketingFunction;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.table.getter.PartitionGetter;
+import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
@@ -32,6 +33,7 @@ import com.alibaba.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
+import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
 import static com.alibaba.fluss.client.utils.ClientUtils.getPartitionId;
@@ -107,14 +109,20 @@ class PrimaryKeyLookuper implements Lookuper {
                 bucketKeyEncoder == primaryKeyEncoder
                         ? pkBytes
                         : bucketKeyEncoder.encodeKey(lookupKey);
-        Long partitionId =
-                partitionGetter == null
-                        ? null
-                        : getPartitionId(
+        Long partitionId = null;
+        if (partitionGetter != null) {
+            try {
+                partitionId =
+                        getPartitionId(
                                 lookupKey,
                                 partitionGetter,
                                 tableInfo.getTablePath(),
                                 metadataUpdater);
+            } catch (PartitionNotExistException e) {
+                return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
+            }
+        }
+
         int bucketId = bucketingFunction.bucketing(bkBytes, numBuckets);
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
         return lookupClient
