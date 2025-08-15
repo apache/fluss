@@ -284,9 +284,21 @@ public class RocksDBResourceContainer implements AutoCloseable {
         String logFilePath = System.getProperty("log.file");
         if (logFilePath != null) {
             File logFile = resolveFileLocation(logFilePath);
-            if (logFile != null && resolveFileLocation(logFile.getParent()) != null) {
-                dbOptions.setDbLogDir(logFile.getParent());
+            String rocksDbLogDir = logFile.getParent() + "/rocksdb";
+            File rocksDbLogDirFile = new File(rocksDbLogDir);
+            if (!rocksDbLogDirFile.exists()) {
+                try {
+                    if (!rocksDbLogDirFile.mkdirs()) {
+                        LOG.warn("Failed to create RocksDB log directory: {}", rocksDbLogDir);
+                        return;
+                    }
+                } catch (SecurityException e) {
+                    LOG.warn("Failed to create RocksDB log directory due to security restrictions: {}", 
+                            rocksDbLogDir, e);
+                    return;
+                }
             }
+            dbOptions.setDbLogDir(rocksDbLogDir);
         }
     }
 
