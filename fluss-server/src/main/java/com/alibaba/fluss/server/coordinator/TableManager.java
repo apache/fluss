@@ -266,11 +266,13 @@ public class TableManager {
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NonExistentReplica);
         deleteRemoteDirectory(tablePartition);
         try {
-            metadataManager.completeDeletePartition(tablePartition.getPartitionId());
+            metadataManager.completeDeletePartition(
+                    tablePartition.getPartitionId(),
+                    () -> coordinatorContext.removePartition(tablePartition),
+                    () -> {});
         } catch (Exception e) {
             LOG.error("Fail to complete partition {} deletion.", tablePartition, e);
         }
-        coordinatorContext.removePartition(tablePartition);
     }
 
     private void deleteRemoteDirectory(long tableId) {
