@@ -292,10 +292,7 @@ public final class RecordAccumulator {
         for (Integer node : nodes) {
             List<ReadyWriteBatch> ready = drainBatchesForOneNode(cluster, node, maxSize);
             if (!ready.isEmpty()) {
-                List<ReadyWriteBatch> previous = batches.put(node, ready);
-                if (previous != null) {
-                    throw new IllegalStateException("Duplicate node in nodes when drain: " + node);
-                }
+                batches.put(node, ready);
             }
         }
         return batches;
@@ -534,7 +531,7 @@ public final class RecordAccumulator {
 
     private long batchReady(
             boolean exhausted,
-            Integer leader,
+            int leader,
             long waitedTimeMs,
             boolean full,
             Set<Integer> readyNodes,

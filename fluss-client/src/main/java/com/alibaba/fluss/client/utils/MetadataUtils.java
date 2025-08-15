@@ -152,19 +152,6 @@ public class MetadataUtils {
                                 newPartitionIdByPath = newTableMetadata.partitionIdByPath;
                             }
 
-                            // update the leader id to check whether the leader is alive or not.
-                            newBucketLocations.forEach(
-                                    (physicalTablePath, bucketLocations) ->
-                                            bucketLocations.forEach(
-                                                    bucketLocation -> {
-                                                        Integer leader = bucketLocation.getLeader();
-                                                        if (leader != null
-                                                                && newAliveTabletServers.get(leader)
-                                                                        == null) {
-                                                            bucketLocation.setLeader(null);
-                                                        }
-                                                    }));
-
                             return new Cluster(
                                     newAliveTabletServers,
                                     coordinatorServer,
