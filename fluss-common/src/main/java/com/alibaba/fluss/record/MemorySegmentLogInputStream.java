@@ -19,8 +19,8 @@ package com.alibaba.fluss.record;
 
 import com.alibaba.fluss.memory.MemorySegment;
 
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.LENGTH_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.LOG_OVERHEAD;
+import static com.alibaba.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
+import static com.alibaba.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
 
 /**
  * A byte buffer backed log input stream. This class avoids the need to copy records by returning

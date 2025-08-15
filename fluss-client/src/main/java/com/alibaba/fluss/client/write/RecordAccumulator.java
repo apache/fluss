@@ -33,7 +33,6 @@ import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metrics.MetricNames;
-import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
@@ -61,7 +60,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
+import static com.alibaba.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
+import static com.alibaba.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -757,7 +757,7 @@ public final class RecordAccumulator {
             // flight request count to 1.
             int firstInFlightSequence = idempotenceManager.firstInFlightBatchSequence(tableBucket);
             boolean isFirstInFlightBatch =
-                    firstInFlightSequence == LogRecordBatch.NO_BATCH_SEQUENCE
+                    firstInFlightSequence == NO_BATCH_SEQUENCE
                             || (first.hasBatchSequence()
                                     && first.batchSequence() == firstInFlightSequence);
 
@@ -825,7 +825,7 @@ public final class RecordAccumulator {
             Deque<WriteBatch> deque, WriteBatch batch, TableBucket tableBucket) {
         // When we are re-enqueue and have enabled idempotence, the re-enqueued batch must always
         // have a batch sequence.
-        if (batch.batchSequence() == LogRecordBatch.NO_BATCH_SEQUENCE) {
+        if (batch.batchSequence() == NO_BATCH_SEQUENCE) {
             throw new IllegalStateException(
                     "Trying to re-enqueue a batch which doesn't have a sequence even "
                             + "though idempotence is enabled.");

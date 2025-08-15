@@ -66,7 +66,8 @@ import java.util.Map;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+import static com.alibaba.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static com.alibaba.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
@@ -600,7 +601,7 @@ class RecordAccumulatorTest {
 
     /** Return the offset delta. */
     private int expectedNumAppends(IndexedRow row, int batchSize) {
-        int size = RECORD_BATCH_HEADER_SIZE;
+        int size = recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE);
         int offsetDelta = 0;
         while (true) {
             int recordSize = IndexedLogRecord.sizeOf(row);
@@ -638,7 +639,8 @@ class RecordAccumulatorTest {
     }
 
     private long getTestBatchSize(BinaryRow row) {
-        return RECORD_BATCH_HEADER_SIZE + DefaultKvRecord.sizeOf(new byte[4], row);
+        return recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE)
+                + DefaultKvRecord.sizeOf(new byte[4], row);
     }
 
     private int getBatchNumInAccum(RecordAccumulator accum) {

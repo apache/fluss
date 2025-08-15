@@ -77,8 +77,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
-import static com.alibaba.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
-import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
+import static com.alibaba.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static com.alibaba.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
+import static com.alibaba.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static com.alibaba.fluss.record.TestData.DATA2_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA3_SCHEMA_PK;
@@ -893,6 +894,7 @@ class KvTabletTest {
                 DEFAULT_SCHEMA_ID,
                 baseOffset,
                 -1L,
+                CURRENT_LOG_MAGIC_VALUE,
                 NO_WRITER_ID,
                 NO_BATCH_SEQUENCE,
                 changeTypes,

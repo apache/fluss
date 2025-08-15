@@ -21,7 +21,6 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.memory.MemorySegmentPool;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.record.bytesview.BytesView;
 
 import org.slf4j.Logger;
@@ -35,6 +34,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
+import static com.alibaba.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** The abstract write batch contains write callback object to wait write request feedback. */
@@ -113,7 +113,7 @@ public abstract class WriteBatch {
     public abstract void abortRecordAppends();
 
     public boolean hasBatchSequence() {
-        return batchSequence() != LogRecordBatch.NO_BATCH_SEQUENCE;
+        return batchSequence() != NO_BATCH_SEQUENCE;
     }
 
     public void resetWriterState(long writerId, int batchSequence) {
