@@ -32,6 +32,10 @@ import com.alibaba.fluss.lake.source.LakeSource;
 import com.alibaba.fluss.lake.source.LakeSplit;
 import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.predicate.Equal;
+import com.alibaba.fluss.predicate.LeafPredicate;
+import com.alibaba.fluss.predicate.Predicate;
+import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.annotation.VisibleForTesting;
@@ -66,6 +70,8 @@ import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.functions.LookupFunction;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -92,6 +98,8 @@ public class FlinkTableSource
                 SupportsRowLevelModificationScan,
                 SupportsLimitPushDown,
                 SupportsAggregatePushDown {
+
+    public static final Logger LOG = LoggerFactory.getLogger(FlinkTableSource.class);
 
     private final TablePath tablePath;
     private final Configuration flussConfig;
@@ -405,7 +413,7 @@ public class FlinkTableSource
     @Override
     public Result applyFilters(List<ResolvedExpression> filters) {
         if (lakeSource != null) {
-            // todo: use real filters
+            // todo
         }
 
         List<ResolvedExpression> acceptedFilters = new ArrayList<>();
@@ -451,9 +459,43 @@ public class FlinkTableSource
                             remainingFilters,
                             FLINK_INTERNAL_VALUE);
             // partitions are filtered by string representations, convert the equals to string first
-            fieldEquals = stringifyFieldEquals(fieldEquals);
+            //            fieldEquals = stringifyFieldEquals(fieldEquals);
+            partitionFilters = stringifyFieldEquals(fieldEquals);
 
-            this.partitionFilters = fieldEquals;
+            if (lakeSource != null && !fieldEquals.isEmpty()) {
+                RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
+                List<Predicate> lakePredicates = new ArrayList<>();
+                for (FieldEqual fieldEqual : fieldEquals) {
+                    final int idx = fieldEqual.fieldIndex;
+                    final String fieldName = tableOutputType.getFieldNames().get(idx);
+                    final com.alibaba.fluss.types.DataType flussDataType =
+                            flussRowType.getTypeAt(idx);
+
+                    Object literal =
+                            toFlussLiteralForPartition(flussDataType, fieldEqual.equalValue);
+                    if (literal == null) {
+                        // currently, only support string type
+                        continue;
+                    }
+
+                    lakePredicates.add(
+                            new LeafPredicate(
+                                    Equal.INSTANCE,
+                                    flussDataType,
+                                    idx,
+                                    fieldName,
+                                    Collections.singletonList(literal)));
+                }
+
+                if (!lakePredicates.isEmpty()) {
+                    final LakeSource.FilterPushDownResult filterPushDownResult =
+                            lakeSource.withFilters(lakePredicates);
+                    if (filterPushDownResult.acceptedPredicates().size() != lakePredicates.size()) {
+                        LOG.warn("Some partition filters are not accepted by the lake source");
+                    }
+                }
+            }
+
             return Result.of(acceptedFilters, remainingFilters);
         } else {
             return Result.of(Collections.emptyList(), filters);
@@ -538,6 +580,16 @@ public class FlinkTableSource
             projection[primaryKeyIndexes[i]] = i;
         }
         return projection;
+    }
+
+    @Nullable
+    private Object toFlussLiteralForPartition(
+            com.alibaba.fluss.types.DataType flussType, Object equalValue) {
+        final String typeSummary = flussType.toString().toUpperCase();
+        if (typeSummary.contains("CHAR") || typeSummary.contains("STRING")) {
+            return BinaryString.fromString(String.valueOf(equalValue));
+        }
+        return null;
     }
 
     @VisibleForTesting
