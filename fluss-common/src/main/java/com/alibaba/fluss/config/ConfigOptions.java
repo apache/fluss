@@ -445,6 +445,12 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ZooKeeper Client Settings
     // ------------------------------------------------------------------------
+    public static final ConfigOption<Integer> ZOOKEEPER_MAX_INFLIGHT_REQUESTS =
+            key("zookeeper.client.max-inflight-requests")
+                    .intType()
+                    .defaultValue(100)
+                    .withDescription(
+                            "The maximum number of unacknowledged requests the client will send to ZooKeeper before blocking.");
 
     public static final ConfigOption<Duration> ZOOKEEPER_SESSION_TIMEOUT =
             key("zookeeper.client.session-timeout")
