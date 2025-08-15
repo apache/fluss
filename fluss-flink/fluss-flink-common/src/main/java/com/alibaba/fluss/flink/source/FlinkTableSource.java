@@ -412,9 +412,6 @@ public class FlinkTableSource
 
     @Override
     public Result applyFilters(List<ResolvedExpression> filters) {
-        if (lakeSource != null) {
-            // todo
-        }
 
         List<ResolvedExpression> acceptedFilters = new ArrayList<>();
         List<ResolvedExpression> remainingFilters = new ArrayList<>();
@@ -458,41 +455,51 @@ public class FlinkTableSource
                             acceptedFilters,
                             remainingFilters,
                             FLINK_INTERNAL_VALUE);
+
             // partitions are filtered by string representations, convert the equals to string first
-            //            fieldEquals = stringifyFieldEquals(fieldEquals);
             partitionFilters = stringifyFieldEquals(fieldEquals);
 
-            if (lakeSource != null && !fieldEquals.isEmpty()) {
-                RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
-                List<Predicate> lakePredicates = new ArrayList<>();
-                for (FieldEqual fieldEqual : fieldEquals) {
-                    final int idx = fieldEqual.fieldIndex;
-                    final String fieldName = tableOutputType.getFieldNames().get(idx);
-                    final com.alibaba.fluss.types.DataType flussDataType =
-                            flussRowType.getTypeAt(idx);
+            // lake source is not null
+            if (lakeSource != null) {
+                // and exist field equals, push down to lake source
+                if (!fieldEquals.isEmpty()) {
+                    // convert equal predicate on partition to fluss predicate
+                    RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
+                    List<Predicate> lakePredicates = new ArrayList<>();
 
-                    Object literal =
-                            toFlussLiteralForPartition(flussDataType, fieldEqual.equalValue);
-                    if (literal == null) {
-                        // currently, only support string type
-                        continue;
+                    for (FieldEqual fieldEqual : fieldEquals) {
+                        final int idx = fieldEqual.fieldIndex;
+                        final String fieldName = tableOutputType.getFieldNames().get(idx);
+                        final com.alibaba.fluss.types.DataType flussDataType =
+                                flussRowType.getTypeAt(idx);
+
+                        Object literal =
+                                toFlussLiteralForPartition(flussDataType, fieldEqual.equalValue);
+                        if (literal == null) {
+                            // currently, support only string partition
+                            continue;
+                        }
+
+                        lakePredicates.add(
+                                new LeafPredicate(
+                                        Equal.INSTANCE,
+                                        flussDataType,
+                                        idx,
+                                        fieldName,
+                                        Collections.singletonList(literal)));
                     }
 
-                    lakePredicates.add(
-                            new LeafPredicate(
-                                    Equal.INSTANCE,
-                                    flussDataType,
-                                    idx,
-                                    fieldName,
-                                    Collections.singletonList(literal)));
-                }
-
-                if (!lakePredicates.isEmpty()) {
-                    final LakeSource.FilterPushDownResult filterPushDownResult =
-                            lakeSource.withFilters(lakePredicates);
-                    if (filterPushDownResult.acceptedPredicates().size() != lakePredicates.size()) {
-                        LOG.warn("Some partition filters are not accepted by the lake source");
+                    if (!lakePredicates.isEmpty()) {
+                        final LakeSource.FilterPushDownResult filterPushDownResult =
+                                lakeSource.withFilters(lakePredicates);
+                        if (filterPushDownResult.acceptedPredicates().size()
+                                != lakePredicates.size()) {
+                            LOG.warn("Some partition filters are not accepted by the lake source");
+                        }
                     }
+                } else {
+                    // fill with empty list explicitly, when field equal is not exist
+                    lakeSource.withFilters(Collections.emptyList());
                 }
             }
 
