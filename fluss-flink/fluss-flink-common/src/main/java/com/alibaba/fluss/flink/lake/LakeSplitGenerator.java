@@ -30,6 +30,7 @@ import com.alibaba.fluss.lake.source.LakeSplit;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.types.DataField;
 
 import javax.annotation.Nullable;
 
@@ -40,10 +41,14 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static com.alibaba.fluss.flink.utils.DataLakeUtils.extractLakeCatalogProperties;
+import static com.alibaba.fluss.metadata.ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR;
+import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /** A generator for lake splits. */
 public class LakeSplitGenerator {
@@ -90,18 +95,67 @@ public class LakeSplitGenerator {
                                         (LakeSource.PlannerContext) lakeSnapshotInfo::getSnapshotId)
                                 .plan());
 
-        // first, filter by partition filters
+        // first, filter lake splits by partition filters
         if (!partitionFilters.isEmpty()) {
-            Set<String> allowedPartitionNames =
-                    partitionFilters.stream()
-                            .map(fieldEqual -> String.valueOf(fieldEqual.equalValue))
-                            .collect(Collectors.toSet());
-            lakeSplits
-                    .entrySet()
-                    .removeIf(entry -> !allowedPartitionNames.contains(entry.getKey()));
+            List<String> partitionKeys = fileStoreTable.partitionKeys();
+            boolean isSinglePartitionKey = partitionKeys.size() == 1;
+
+            if (isSinglePartitionKey) {
+                // single key: key == partition value
+                Set<String> allowedPartitionNames =
+                        partitionFilters.stream()
+                                .map(fieldEqual -> String.valueOf(fieldEqual.equalValue))
+                                .collect(Collectors.toSet());
+                lakeSplits
+                        .entrySet()
+                        .removeIf(entry -> !allowedPartitionNames.contains(entry.getKey()));
+
+            } else {
+                // multi partition key
+                List<DataField> dataFields = tableInfo.getRowType().getFields();
+                Map<Integer, String> partitionPosToValueMap = new java.util.HashMap<>();
+
+                // build position→expectedValue map
+                for (FieldEqual fieldEqual : partitionFilters) {
+                    String fieldName = dataFields.get(fieldEqual.fieldIndex).getName();
+                    int partitionPos = partitionKeys.indexOf(fieldName);
+                    if (partitionPos >= 0) {
+                        partitionPosToValueMap.put(
+                                partitionPos, String.valueOf(fieldEqual.equalValue));
+                    }
+                }
+
+                if (!partitionPosToValueMap.isEmpty()) {
+                    lakeSplits
+                            .entrySet()
+                            .removeIf(
+                                    entry -> {
+                                        String partitionName = entry.getKey(); // e.g. "20250815$08"
+                                        String[] partitionValues =
+                                                partitionName.split(
+                                                        Pattern.quote(PARTITION_SPEC_SEPARATOR));
+
+                                        // check if all partition key positions match
+                                        // their expected values
+                                        for (Map.Entry<Integer, String> posEntry :
+                                                partitionPosToValueMap.entrySet()) {
+                                            int pos = posEntry.getKey();
+                                            String expectedValue = posEntry.getValue();
+
+                                            if (pos >= partitionValues.length
+                                                    || !expectedValue.equals(
+                                                            partitionValues[pos])) {
+                                                return true; // remove this partition
+                                            }
+                                        }
+                                        return false; // keep this partition
+                                    });
+                }
+            }
         }
 
         if (isPartitioned) {
+            // pass pruned lake splits
             List<PartitionInfo> partitionInfos =
                     flussAdmin.listPartitionInfos(tableInfo.getTablePath()).get();
             Map<Long, String> partitionNameById =
@@ -127,7 +181,7 @@ public class LakeSplitGenerator {
     private Map<String, Map<Integer, List<LakeSplit>>> groupLakeSplits(List<LakeSplit> lakeSplits) {
         Map<String, Map<Integer, List<LakeSplit>>> result = new HashMap<>();
         for (LakeSplit split : lakeSplits) {
-            String partition = String.join("$", split.partition());
+            String partition = String.join(PARTITION_SPEC_SEPARATOR, split.partition());
             int bucket = split.bucket();
             // Get or create the partition group
             Map<Integer, List<LakeSplit>> bucketMap =
