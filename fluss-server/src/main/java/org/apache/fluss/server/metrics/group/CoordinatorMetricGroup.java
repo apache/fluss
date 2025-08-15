@@ -25,7 +25,6 @@ import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.utils.MapUtils;
-import org.apache.fluss.utils.MapUtils;
 
 import javax.annotation.Nullable;
 
