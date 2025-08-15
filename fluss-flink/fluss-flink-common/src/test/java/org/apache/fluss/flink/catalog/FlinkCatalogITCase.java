@@ -204,7 +204,7 @@ abstract class FlinkCatalogITCase {
 
         // alter table
         String dml =
-                "alter table test_alter_table_append_only set ('table.datalake.enabled' = 'true', 'bucket.num' = '10')";
+                "alter table test_alter_table_append_only set ('client.connect-timeout' = '240s', 'bucket.num' = '10')";
         tEnv.executeSql(dml);
         table =
                 (CatalogTable)
@@ -213,7 +213,7 @@ abstract class FlinkCatalogITCase {
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
         expectedOptions = new HashMap<>();
         expectedOptions.put("bucket.num", "5"); // unchanged
-        expectedOptions.put("table.datalake.enabled", "true"); // updated
+        expectedOptions.put("client.connect-timeout", "240s"); // updated
         assertOptionsEqual(table.getOptions(), expectedOptions);
     }
 

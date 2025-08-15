@@ -774,10 +774,9 @@ class TableManagerITCase {
         Map<String, String> existingCustomProperties = existTableDescriptor.getCustomProperties();
 
         Map<String, String> newProperties = new HashMap<>(existingProperties);
-        newProperties.put("table.datalake.enabled", "true");
 
         Map<String, String> newCustomProperties = new HashMap<>(existingCustomProperties);
-        newCustomProperties.put("table.datalake.enabled", "true");
+        newCustomProperties.put("client.connect-timeout", "240s");
 
         return TableDescriptor.builder()
                 .schema(existTableDescriptor.getSchema())

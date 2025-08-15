@@ -304,8 +304,6 @@ public class MetadataManager {
 
     public void alterTable(
             TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfNotExists) {
-        // validate table properties before altering table
-        validateAlterTableProperties(tableDescriptor);
 
         if (!databaseExists(tablePath.getDatabaseName())) {
             throw new DatabaseNotExistException(
@@ -322,7 +320,12 @@ public class MetadataManager {
         try {
             TableRegistration updatedTableRegistration =
                     getUpdatedTableRegistration(tablePath, tableDescriptor);
-            zookeeperClient.updateTable(tablePath, updatedTableRegistration);
+            if (updatedTableRegistration != null) {
+                zookeeperClient.updateTable(tablePath, updatedTableRegistration);
+            } else {
+                LOG.info(
+                        "No properties changed when alter table {}, skip update table.", tablePath);
+            }
         } catch (Exception e) {
             if (e instanceof KeeperException.NoNodeException) {
                 if (ignoreIfNotExists) {
@@ -337,27 +340,46 @@ public class MetadataManager {
 
     private TableRegistration getUpdatedTableRegistration(
             TablePath tablePath, TableDescriptor updateTableDescriptor) {
+        validateAlterTableProperties(updateTableDescriptor);
+
         TableRegistration existTableReg = getTableRegistration(tablePath);
         Map<String, String> updateProperties = updateTableDescriptor.getProperties();
         Map<String, String> updateCustomProperties = updateTableDescriptor.getCustomProperties();
-        validateAlterTableProperties(updateTableDescriptor);
 
         Map<String, String> newProperties = new HashMap<>(existTableReg.properties);
+        boolean propertiesChanged = false;
         for (Map.Entry<String, String> updateProperty : updateProperties.entrySet()) {
             // only alterable configs can be updated, other properties keep unchanged.
             if (FlussConfigUtils.ALTERABLE_CONFIG_OPTIONS.contains(updateProperty.getKey())) {
-                newProperties.put(updateProperty.getKey(), updateProperty.getValue());
+                String curValue = newProperties.get(updateProperty.getKey());
+                String updatedValue = updateProperty.getValue();
+                // check whether the value was updated
+                if (!updatedValue.equals(curValue)) {
+                    propertiesChanged = true;
+                    newProperties.put(updateProperty.getKey(), updateProperty.getValue());
+                }
             }
         }
 
         Map<String, String> newCustomProperties = new HashMap<>(existTableReg.customProperties);
+        boolean customPropertiesChanged = false;
         for (Map.Entry<String, String> updateCustomProperty : updateCustomProperties.entrySet()) {
             if (FlussConfigUtils.ALTERABLE_CONFIG_OPTIONS.contains(updateCustomProperty.getKey())) {
-                newCustomProperties.put(
-                        updateCustomProperty.getKey(), updateCustomProperty.getValue());
+                String curValue = newCustomProperties.get(updateCustomProperty.getKey());
+                String updatedValue = updateCustomProperty.getValue();
+                // check whether the value was updated
+                if (!updatedValue.equals(curValue)) {
+                    customPropertiesChanged = true;
+                    newCustomProperties.put(
+                            updateCustomProperty.getKey(), updateCustomProperty.getValue());
+                }
             }
         }
 
+        if (!propertiesChanged && !customPropertiesChanged) {
+            // if no properties updated, return null to represent no new TableRegistration
+            return null;
+        }
         return existTableReg.newProperties(newProperties, newCustomProperties);
     }
 

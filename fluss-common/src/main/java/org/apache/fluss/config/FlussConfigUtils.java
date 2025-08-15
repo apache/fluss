@@ -41,7 +41,7 @@ public class FlussConfigUtils {
         TABLE_OPTIONS = extractConfigOptions("table.");
         CLIENT_OPTIONS = extractConfigOptions("client.");
         ALTERABLE_CONFIG_OPTIONS =
-                Collections.singletonList(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
+                Collections.singletonList(ConfigOptions.CLIENT_CONNECT_TIMEOUT.key());
     }
 
     @VisibleForTesting

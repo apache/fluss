@@ -210,8 +210,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 new HashMap<>(existingTableDescriptor.getProperties());
         Map<String, String> updateCustomProperties =
                 new HashMap<>(existingTableDescriptor.getCustomProperties());
-        updateProperties.put("table.datalake.enabled", "true");
-        updateCustomProperties.put("table.datalake.enabled", "true");
+        updateCustomProperties.put("client.connect-timeout", "240s");
 
         TableDescriptor newTableDescriptor =
                 TableDescriptor.builder()
