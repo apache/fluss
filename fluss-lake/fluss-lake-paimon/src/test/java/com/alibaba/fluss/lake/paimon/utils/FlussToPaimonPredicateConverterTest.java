@@ -21,6 +21,7 @@ import com.alibaba.fluss.predicate.PredicateBuilder;
 import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
+
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
