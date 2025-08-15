@@ -65,6 +65,19 @@ public interface SnapshotContext {
             getLatestCompletedSnapshotProvider();
 
     /**
+     * Handles broken snapshots.
+     *
+     * <p>In the current implementation, broken snapshots may already have occurred in production
+     * environments due to issues such as https://github.com/apache/fluss/issues/1304. While we must
+     * prevent inconsistent or broken snapshots from being committed, we also need to provide
+     * mechanisms to help the server recover from such snapshots rather than failing permanently.
+     *
+     * @param snapshot The broken snapshot to handle
+     * @throws Exception if recovery handling fails
+     */
+    void handleSnapshotBroken(CompletedSnapshot snapshot) throws Exception;
+
+    /**
      * Get the max fetch size for fetching log to apply kv during recovering kv. The kv may apply
      * log during recovering.
      */
