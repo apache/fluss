@@ -17,6 +17,10 @@
 
 package com.alibaba.fluss.rpc.gateway;
 
+import com.alibaba.fluss.rpc.messages.AddServerTagRequest;
+import com.alibaba.fluss.rpc.messages.AddServerTagResponse;
+import com.alibaba.fluss.rpc.messages.CancelRebalanceRequest;
+import com.alibaba.fluss.rpc.messages.CancelRebalanceResponse;
 import com.alibaba.fluss.rpc.messages.CreateAclsRequest;
 import com.alibaba.fluss.rpc.messages.CreateAclsResponse;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
@@ -33,6 +37,12 @@ import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
 import com.alibaba.fluss.rpc.messages.DropPartitionResponse;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
 import com.alibaba.fluss.rpc.messages.DropTableResponse;
+import com.alibaba.fluss.rpc.messages.ListRebalanceProcessRequest;
+import com.alibaba.fluss.rpc.messages.ListRebalanceProcessResponse;
+import com.alibaba.fluss.rpc.messages.RebalanceRequest;
+import com.alibaba.fluss.rpc.messages.RebalanceResponse;
+import com.alibaba.fluss.rpc.messages.RemoveServerTagRequest;
+import com.alibaba.fluss.rpc.messages.RemoveServerTagResponse;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
 import com.alibaba.fluss.rpc.protocol.RPC;
 
@@ -103,6 +113,22 @@ public interface AdminGateway extends AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.DROP_ACLS)
     CompletableFuture<DropAclsResponse> dropAcls(DropAclsRequest request);
+
+    @RPC(api = ApiKeys.ADD_SERVER_TAG)
+    CompletableFuture<AddServerTagResponse> addServerTag(AddServerTagRequest request);
+
+    @RPC(api = ApiKeys.REMOVE_SERVER_TAG)
+    CompletableFuture<RemoveServerTagResponse> removeServerTag(RemoveServerTagRequest request);
+
+    @RPC(api = ApiKeys.REBALANCE)
+    CompletableFuture<RebalanceResponse> rebalance(RebalanceRequest request);
+
+    @RPC(api = ApiKeys.LIST_REBALANCE_PROCESS)
+    CompletableFuture<ListRebalanceProcessResponse> listRebalanceProcess(
+            ListRebalanceProcessRequest request);
+
+    @RPC(api = ApiKeys.CANCEL_REBALANCE)
+    CompletableFuture<CancelRebalanceResponse> cancelRebalance(CancelRebalanceRequest request);
 
     // todo: rename table & alter table
 
