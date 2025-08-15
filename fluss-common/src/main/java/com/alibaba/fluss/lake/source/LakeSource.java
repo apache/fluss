@@ -50,6 +50,14 @@ public interface LakeSource<Split extends LakeSplit> extends Serializable {
      */
     void withProject(int[][] project);
 
+    /**
+     * Returns the column projection applied to the data source.
+     *
+     * @return The column projection applied to the data source. Returns null if no projection has
+     *     been set.
+     */
+    int[][] getProject();
+
     /** Applies a row limit to the lake source. */
     void withLimit(int limit);
 
