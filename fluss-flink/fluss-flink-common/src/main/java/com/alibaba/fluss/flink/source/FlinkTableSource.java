@@ -35,7 +35,6 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.predicate.Equal;
 import com.alibaba.fluss.predicate.LeafPredicate;
 import com.alibaba.fluss.predicate.Predicate;
-import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.annotation.VisibleForTesting;
@@ -70,6 +69,7 @@ import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.functions.LookupFunction;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.paimon.data.BinaryString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -463,7 +463,7 @@ public class FlinkTableSource
             if (lakeSource != null) {
                 // and exist field equals, push down to lake source
                 if (!fieldEquals.isEmpty()) {
-                    // convert equal predicate on partition to fluss predicate
+                    // build lake predicates with paimon compatible literals
                     RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
                     List<Predicate> lakePredicates = new ArrayList<>();
 
@@ -474,9 +474,9 @@ public class FlinkTableSource
                                 flussRowType.getTypeAt(idx);
 
                         Object literal =
-                                toFlussLiteralForPartition(flussDataType, fieldEqual.equalValue);
+                                toPaimonLiteralForPartition(flussDataType, fieldEqual.equalValue);
+
                         if (literal == null) {
-                            // currently, support only string partition
                             continue;
                         }
 
@@ -590,12 +590,13 @@ public class FlinkTableSource
     }
 
     @Nullable
-    private Object toFlussLiteralForPartition(
-            com.alibaba.fluss.types.DataType flussType, Object equalValue) {
-        final String typeSummary = flussType.toString().toUpperCase();
+    private Object toPaimonLiteralForPartition(
+            com.alibaba.fluss.types.DataType flussDataType, Object equalValue) {
+        String typeSummary = flussDataType.toString().toUpperCase();
         if (typeSummary.contains("CHAR") || typeSummary.contains("STRING")) {
-            return BinaryString.fromString(String.valueOf(equalValue));
+            return BinaryString.fromString(equalValue.toString());
         }
+
         return null;
     }
 
