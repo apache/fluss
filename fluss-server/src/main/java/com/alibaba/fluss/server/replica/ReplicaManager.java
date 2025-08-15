@@ -302,6 +302,13 @@ public class ReplicaManager {
         serverMetricGroup.gauge(MetricNames.DELAYED_WRITE_COUNT, delayedWriteManager::numDelayed);
         serverMetricGroup.gauge(
                 MetricNames.DELAYED_FETCH_COUNT, delayedFetchLogManager::numDelayed);
+
+        serverMetricGroup.gauge(MetricNames.SEVER_LOG_SIZE, this::logSize);
+        serverMetricGroup.gauge(MetricNames.SERVER_REMOTE_LOG_SIZE, this::remoteLogSize);
+        serverMetricGroup.gauge(
+                MetricNames.SERVER_KV_LATEST_SNAPSHOT_SIZE, this::kvLatestSnapshotSize);
+        serverMetricGroup.gauge(MetricNames.LOGICAL_STORAGE_SIZE, this::logicalStorageSize);
+        serverMetricGroup.gauge(MetricNames.PHYSICAL_STORAGE_SIZE, this::physicalStorageSize);
     }
 
     private Stream<Replica> onlineReplicas() {
@@ -320,6 +327,58 @@ public class ReplicaManager {
 
     private int writerIdCount() {
         return onlineReplicas().map(Replica::writerIdCount).reduce(0, Integer::sum);
+    }
+
+    private long logSize() {
+        return onlineReplicas()
+                .map(replica -> replica.getLogTablet().logSize())
+                .reduce(0L, Long::sum);
+    }
+
+    private long remoteLogSize() {
+        return remoteLogManager.getRemoteLogSize();
+    }
+
+    private long kvLatestSnapshotSize() {
+        return onlineReplicas()
+                .filter(Replica::isKvTable)
+                .map(Replica::getLatestKvSnapshotSize)
+                .reduce(0L, Long::sum);
+    }
+
+    private long logicalStorageSize() {
+        long kvLatestSnapshotSize =
+                onlineReplicas()
+                        .filter(Replica::isKvTable)
+                        .map(Replica::getLatestKvSnapshotSize)
+                        .reduce(0L, Long::sum);
+        long leaderLogSize =
+                onlineReplicas()
+                        .filter(Replica::isLeader)
+                        .map(replica -> replica.getLogTablet().logSize())
+                        .reduce(0L, Long::sum);
+
+        // TODO add rocksdbTotalSstFilesSize;
+
+        return kvLatestSnapshotSize + leaderLogSize + remoteLogSize();
+    }
+
+    private long physicalStorageSize() {
+        // TODO all remote kv size.
+        long kvLatestSnapshotSize =
+                onlineReplicas()
+                        .filter(Replica::isKvTable)
+                        .map(Replica::getLatestKvSnapshotSize)
+                        .reduce(0L, Long::sum);
+        long logSize =
+                onlineReplicas()
+                        .filter(Replica::isLeader)
+                        .map(replica -> replica.getLogTablet().logSize())
+                        .reduce(0L, Long::sum);
+
+        // TODO add rocksdbTotalSstFilesSize;
+
+        return kvLatestSnapshotSize + logSize + remoteLogSize();
     }
 
     /**

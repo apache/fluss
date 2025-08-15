@@ -357,8 +357,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="10"><strong>tabletserver</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="10">-</td>
+      <th rowspan="15"><strong>tabletserver</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="15">-</td>
       <td>replicationBytesInPerSecond</td>
       <td>The bytes of data write into follower replica for data sync.</td>
       <td>Meter</td>
@@ -407,6 +407,31 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>delayedFetchFromClientExpiresPerSecond</td>
       <td>The delayed fetch log operation from client expire count per second in this TabletServer.</td>
       <td>Meter</td>
+    </tr>
+    <tr>
+      <td>logSize</td>
+      <td>The total size of log managed by this TabletServer.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>remoteLogSize</td>
+      <td>The total size of remote log managed by this TabletServer.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>kvLatestSnapshotSize</td>
+      <td>The total size of kv latest snapshot managed by this TabletServer.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>logicalStorageSize</td>
+      <td>The logical storage size managed by this TabletServer.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>physicalStorageSize</td>
+      <td>The physical storage size managed by this TabletServer.</td>
+      <td>Gauge</td>
     </tr>
   </tbody>
 </table>

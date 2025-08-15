@@ -94,6 +94,12 @@ public class MetricNames {
     public static final String FAILED_PREFIX_LOOKUP_REQUESTS_RATE =
             "failedPrefixLookupRequestsPerSecond";
 
+    public static final String SEVER_LOG_SIZE = "logSize";
+    public static final String SERVER_REMOTE_LOG_SIZE = "remoteLogSize";
+    public static final String SERVER_KV_LATEST_SNAPSHOT_SIZE = "kvLatestSnapshotSize";
+    public static final String LOGICAL_STORAGE_SIZE = "logicalStorageSize";
+    public static final String PHYSICAL_STORAGE_SIZE = "physicalStorageSize";
+
     // --------------------------------------------------------------------------------------------
     // metrics for table bucket
     // --------------------------------------------------------------------------------------------

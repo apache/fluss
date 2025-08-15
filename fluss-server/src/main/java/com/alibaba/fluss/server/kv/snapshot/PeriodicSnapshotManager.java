@@ -158,7 +158,11 @@ public class PeriodicSnapshotManager implements Closeable {
 
     private void registerMetrics(BucketMetricGroup bucketMetricGroup) {
         MetricGroup metricGroup = bucketMetricGroup.addGroup("kv").addGroup("snapshot");
-        metricGroup.gauge(MetricNames.KV_LATEST_SNAPSHOT_SIZE, target::getSnapshotSize);
+        metricGroup.gauge(MetricNames.KV_LATEST_SNAPSHOT_SIZE, this::getSnapshotSize);
+    }
+
+    public long getSnapshotSize() {
+        return target.getSnapshotSize();
     }
 
     // schedule thread and asyncOperationsThreadPool can access this method

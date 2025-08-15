@@ -193,6 +193,7 @@ public final class Replica {
     // null if table without pk or haven't become leader
     private volatile @Nullable KvTablet kvTablet;
     private volatile @Nullable CloseableRegistry closeableRegistryForKv;
+    private @Nullable PeriodicSnapshotManager kvSnapshotManager;
 
     // ------- metrics
     private Counter isrShrinks;
@@ -787,7 +788,7 @@ public final class Replica {
                             coordinatorEpochSupplier,
                             lastCompletedSnapshotLogOffset,
                             snapshotSize);
-            PeriodicSnapshotManager kvSnapshotManager =
+            this.kvSnapshotManager =
                     PeriodicSnapshotManager.create(
                             tableBucket,
                             kvTabletSnapshotTarget,
@@ -798,6 +799,14 @@ public final class Replica {
             closeableRegistryForKv.registerCloseable(kvSnapshotManager);
         } catch (Exception e) {
             LOG.error("init kv periodic snapshot failed.", e);
+        }
+    }
+
+    public long getLatestKvSnapshotSize() {
+        if (kvSnapshotManager == null) {
+            return 0L;
+        } else {
+            return kvSnapshotManager.getSnapshotSize();
         }
     }
 
