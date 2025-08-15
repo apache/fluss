@@ -17,6 +17,8 @@
 
 package com.alibaba.fluss.client.table.scanner.log;
 
+import com.alibaba.fluss.client.metadata.MetadataUpdater;
+import com.alibaba.fluss.client.metadata.TestingMetadataUpdater;
 import com.alibaba.fluss.client.metrics.ScannerMetricGroup;
 import com.alibaba.fluss.client.metrics.TestingScannerMetricGroup;
 import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
@@ -38,11 +40,13 @@ import java.io.File;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
+import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
 import static com.alibaba.fluss.testutils.DataTestUtils.genRemoteLogSegmentFile;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
@@ -70,12 +74,16 @@ class RemoteLogDownloaderTest {
         remoteLogDir = remoteLogDir(conf);
         remoteFileDownloader = new RemoteFileDownloader(1);
         scannerMetricGroup = TestingScannerMetricGroup.newInstance();
+        MetadataUpdater metadataUpdater =
+                new TestingMetadataUpdater(
+                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
         remoteLogDownloader =
                 new RemoteLogDownloader(
                         DATA1_TABLE_PATH,
                         conf,
                         remoteFileDownloader,
                         scannerMetricGroup,
+                        metadataUpdater,
                         // use a short timout for faster testing
                         10L);
     }
