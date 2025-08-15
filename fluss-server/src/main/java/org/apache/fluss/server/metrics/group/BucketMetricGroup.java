@@ -37,7 +37,7 @@ public class BucketMetricGroup extends AbstractMetricGroup {
             MetricRegistry registry,
             @Nullable String partitionName,
             int bucket,
-            TableMetricGroup parent) {
+            AbstractMetricGroup parent) {
         super(registry, makeScope(parent, String.valueOf(bucket)), parent);
         this.partitionName = partitionName;
         this.bucket = bucket;

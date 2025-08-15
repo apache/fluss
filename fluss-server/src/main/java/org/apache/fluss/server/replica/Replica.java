@@ -38,6 +38,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.LogRecords;
@@ -191,6 +193,7 @@ public final class Replica {
     // null if table without pk or haven't become leader
     private volatile @Nullable KvTablet kvTablet;
     private volatile @Nullable CloseableRegistry closeableRegistryForKv;
+    private @Nullable PeriodicSnapshotManager kvSnapshotManager;
 
     // ------- metrics
     private Counter isrShrinks;
@@ -249,6 +252,31 @@ public final class Replica {
         isrExpands = tabletServerMetricGroup.isrExpands();
         isrShrinks = tabletServerMetricGroup.isrShrinks();
         failedIsrUpdates = tabletServerMetricGroup.failedIsrUpdates();
+
+        // logical storage metrics.
+        MetricGroup logicalStorageMetrics = bucketMetricGroup.addGroup("logicalStorage");
+        logicalStorageMetrics.gauge(
+                MetricNames.LOCAL_STORAGE_LOG_SIZE, this::logicalStorageLogSize);
+        logicalStorageMetrics.gauge(MetricNames.LOCAL_STORAGE_KV_SIZE, this::logicalStorageKvSize);
+    }
+
+    public long logicalStorageLogSize() {
+        if (isLeader()) {
+            return logTablet.logicalStorageSize();
+        } else {
+            // follower doesn't need to report the logical storage size.
+            return 0L;
+        }
+    }
+
+    public long logicalStorageKvSize() {
+        if (isLeader() && isKvTable()) {
+            checkNotNull(kvSnapshotManager, "kvSnapshotManager is null");
+            return kvSnapshotManager.getSnapshotSize();
+        } else {
+            // follower doesn't need to report the logical storage size.
+            return 0L;
+        }
     }
 
     public boolean isKvTable() {
@@ -778,7 +806,7 @@ public final class Replica {
                             coordinatorEpochSupplier,
                             lastCompletedSnapshotLogOffset,
                             snapshotSize);
-            PeriodicSnapshotManager kvSnapshotManager =
+            this.kvSnapshotManager =
                     PeriodicSnapshotManager.create(
                             tableBucket,
                             kvTabletSnapshotTarget,
@@ -789,6 +817,14 @@ public final class Replica {
             closeableRegistryForKv.registerCloseable(kvSnapshotManager);
         } catch (Exception e) {
             LOG.error("init kv periodic snapshot failed.", e);
+        }
+    }
+
+    public long getLatestKvSnapshotSize() {
+        if (kvSnapshotManager == null) {
+            return 0L;
+        } else {
+            return kvSnapshotManager.getSnapshotSize();
         }
     }
 
