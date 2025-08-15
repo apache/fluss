@@ -293,8 +293,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
                         return;
                     }
                 } catch (SecurityException e) {
-                    LOG.warn("Failed to create RocksDB log directory due to security restrictions: {}", 
-                            rocksDbLogDir, e);
+                    LOG.warn("Failed to create RocksDB log directory due to security restrictions: {}", rocksDbLogDir, e);
                     return;
                 }
             }
