@@ -32,6 +32,9 @@ import com.alibaba.fluss.lake.source.LakeSource;
 import com.alibaba.fluss.lake.source.LakeSplit;
 import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.predicate.Equal;
+import com.alibaba.fluss.predicate.LeafPredicate;
+import com.alibaba.fluss.predicate.Predicate;
 import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.annotation.VisibleForTesting;
@@ -66,6 +69,9 @@ import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.functions.LookupFunction;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.paimon.data.BinaryString;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -80,6 +86,7 @@ import java.util.Map;
 
 import static com.alibaba.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 import static com.alibaba.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
+import static com.alibaba.fluss.flink.utils.PushdownUtils.ValueConversion.FLUSS_INTERNAL_VALUE;
 import static com.alibaba.fluss.flink.utils.PushdownUtils.extractFieldEquals;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
@@ -92,6 +99,8 @@ public class FlinkTableSource
                 SupportsRowLevelModificationScan,
                 SupportsLimitPushDown,
                 SupportsAggregatePushDown {
+
+    public static final Logger LOG = LoggerFactory.getLogger(FlinkTableSource.class);
 
     private final TablePath tablePath;
     private final Configuration flussConfig;
@@ -404,9 +413,6 @@ public class FlinkTableSource
 
     @Override
     public Result applyFilters(List<ResolvedExpression> filters) {
-        if (lakeSource != null) {
-            // todo: use real filters
-        }
 
         List<ResolvedExpression> acceptedFilters = new ArrayList<>();
         List<ResolvedExpression> remainingFilters = new ArrayList<>();
@@ -449,11 +455,57 @@ public class FlinkTableSource
                             getPartitionKeyTypes(),
                             acceptedFilters,
                             remainingFilters,
-                            FLINK_INTERNAL_VALUE);
-            // partitions are filtered by string representations, convert the equals to string first
-            fieldEquals = stringifyFieldEquals(fieldEquals);
+                            FLUSS_INTERNAL_VALUE);
 
-            this.partitionFilters = fieldEquals;
+            // partitions are filtered by string representations, convert the equals to string first
+            partitionFilters = stringifyFieldEquals(fieldEquals);
+
+            // lake source is not null
+            if (lakeSource != null) {
+                // and exist field equals, push down to lake source
+                if (!fieldEquals.isEmpty()) {
+
+                    // convert flink row type to fluss row type
+                    RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
+                    List<Predicate> lakePredicates = new ArrayList<>();
+
+                    for (FieldEqual fieldEqual : fieldEquals) {
+                        int idx = fieldEqual.fieldIndex;
+                        String fieldName = tableOutputType.getFieldNames().get(idx);
+                        com.alibaba.fluss.types.DataType flussDataType =
+                                flussRowType.getTypeAt(idx);
+
+                        // convert to Paimon literal for partition
+                        Object literal =
+                                toPaimonLiteralForPartition(flussDataType, fieldEqual.equalValue);
+
+                        if (literal == null) {
+                            continue;
+                        }
+
+                        lakePredicates.add(
+                                new LeafPredicate(
+                                        Equal.INSTANCE,
+                                        flussDataType,
+                                        idx,
+                                        fieldName,
+                                        Collections.singletonList(literal)));
+                    }
+
+                    if (!lakePredicates.isEmpty()) {
+                        final LakeSource.FilterPushDownResult filterPushDownResult =
+                                lakeSource.withFilters(lakePredicates);
+                        if (filterPushDownResult.acceptedPredicates().size()
+                                != lakePredicates.size()) {
+                            LOG.warn("Some partition filters are not accepted by the lake source");
+                        }
+                    }
+                } else {
+                    // fill with empty list explicitly, when field equal is not exist
+                    lakeSource.withFilters(Collections.emptyList());
+                }
+            }
+
             return Result.of(acceptedFilters, remainingFilters);
         } else {
             return Result.of(Collections.emptyList(), filters);
@@ -538,6 +590,18 @@ public class FlinkTableSource
             projection[primaryKeyIndexes[i]] = i;
         }
         return projection;
+    }
+
+    @Nullable
+    private Object toPaimonLiteralForPartition(
+            com.alibaba.fluss.types.DataType flussDataType, Object equalValue) {
+        String typeSummary = flussDataType.toString().toUpperCase();
+        if (typeSummary.contains("CHAR") || typeSummary.contains("STRING")) {
+            return BinaryString.fromString(equalValue.toString());
+        }
+
+        // todo: currently, we don't support other types for partition key except string
+        return null;
     }
 
     @VisibleForTesting

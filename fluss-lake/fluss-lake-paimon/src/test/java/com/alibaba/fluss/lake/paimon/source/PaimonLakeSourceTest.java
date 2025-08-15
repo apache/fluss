@@ -107,7 +107,9 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
         // test all filter can be accepted
         Predicate filter1 = FLUSS_BUILDER.greaterOrEqual(0, 2);
         Predicate filter2 = FLUSS_BUILDER.lessOrEqual(0, 3);
-        List<Predicate> allFilters = Arrays.asList(filter1, filter2);
+        Predicate filter3 =
+                FLUSS_BUILDER.startsWith(1, com.alibaba.fluss.row.BinaryString.fromString("name"));
+        List<Predicate> allFilters = Arrays.asList(filter1, filter2, filter3);
 
         LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
         LakeSource.FilterPushDownResult filterPushDownResult = lakeSource.withFilters(allFilters);
