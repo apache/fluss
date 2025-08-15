@@ -148,7 +148,6 @@
             <groupId>org.apache.paimon</groupId>
             <artifactId>paimon-flink-${flink.major.version}</artifactId>
             <version>${paimon.version}</version>
-            <scope>test</scope>
         </dependency>
 
         <dependency>
@@ -169,13 +168,11 @@
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-core</artifactId>
-            <scope>test</scope>
         </dependency>
 
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-table-common</artifactId>
-            <scope>test</scope>
         </dependency>
 
         <dependency>
@@ -200,6 +197,13 @@
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-table-test-utils</artifactId>
             <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>com.alibaba.fluss</groupId>
+            <artifactId>fluss-flink-common</artifactId>
+            <version>${project.version}</version>
+            <scope>provided</scope>
         </dependency>
     </dependencies>
 

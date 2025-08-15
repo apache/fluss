@@ -18,6 +18,7 @@
 package com.alibaba.fluss.lake.lakestorage;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
+import com.alibaba.fluss.lake.source.LakeFlinkSourceFactory;
 import com.alibaba.fluss.lake.source.LakeSource;
 import com.alibaba.fluss.lake.writer.LakeTieringFactory;
 import com.alibaba.fluss.metadata.TablePath;
@@ -50,4 +51,6 @@ public interface LakeStorage {
      * @return a configured lake source instance for the specified table
      */
     LakeSource<?> createLakeSource(TablePath tablePath);
+
+    LakeFlinkSourceFactory createLakeFlinkSourceFactory();
 }

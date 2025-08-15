@@ -19,6 +19,7 @@ package com.alibaba.fluss.flink.source;
 
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.flink.FlinkConnectorOptions;
+import com.alibaba.fluss.flink.lake.hybrid.LakeFlussHybridSourceBuilder;
 import com.alibaba.fluss.flink.source.deserializer.RowDataDeserializationSchema;
 import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
 import com.alibaba.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
@@ -114,6 +115,7 @@ public class FlinkTableSource
     private final long scanPartitionDiscoveryIntervalMs;
     private final boolean isDataLakeEnabled;
     @Nullable private final MergeEngineType mergeEngineType;
+    @Nullable private final LakeFlussHybridSourceBuilder hybridSourceBuilder;
 
     // output type after projection pushdown
     private LogicalType producedDataType;
@@ -174,6 +176,10 @@ public class FlinkTableSource
         if (isDataLakeEnabled) {
             this.lakeSource = createLakeSource(tablePath, tableOptions);
         }
+        this.hybridSourceBuilder =
+                isDataLakeEnabled && streaming
+                        ? LakeFlussHybridSourceBuilder.builder(tablePath, flussConfig)
+                        : null;
     }
 
     @Override
@@ -270,20 +276,39 @@ public class FlinkTableSource
                         "Unsupported startup mode: " + startupOptions.startupMode);
         }
 
-        FlinkSource<RowData> source =
-                new FlinkSource<>(
-                        flussConfig,
-                        tablePath,
-                        hasPrimaryKey(),
-                        isPartitioned(),
-                        flussRowType,
-                        projectedFields,
-                        offsetsInitializer,
-                        scanPartitionDiscoveryIntervalMs,
-                        new RowDataDeserializationSchema(),
-                        streaming,
-                        partitionFilters,
-                        lakeSource);
+        Source<RowData, ?, ?> source;
+        if (hybridSourceBuilder != null) {
+            source =
+                    hybridSourceBuilder
+                            .setFlussFlinkSourceBuilder(
+                                    FlinkSource.Builder.newBuilder(
+                                            flussConfig,
+                                            tablePath,
+                                            hasPrimaryKey(),
+                                            isPartitioned(),
+                                            flussRowType,
+                                            projectedFields,
+                                            scanPartitionDiscoveryIntervalMs,
+                                            new RowDataDeserializationSchema(),
+                                            streaming,
+                                            partitionFilters))
+                            .build();
+        } else {
+            source =
+                    new FlinkSource<>(
+                            flussConfig,
+                            tablePath,
+                            hasPrimaryKey(),
+                            isPartitioned(),
+                            flussRowType,
+                            projectedFields,
+                            offsetsInitializer,
+                            scanPartitionDiscoveryIntervalMs,
+                            new RowDataDeserializationSchema(),
+                            streaming,
+                            partitionFilters,
+                            lakeSource);
+        }
 
         if (!streaming) {
             // return a bounded source provide to make planner happy,
@@ -406,6 +431,9 @@ public class FlinkTableSource
     public Result applyFilters(List<ResolvedExpression> filters) {
         if (lakeSource != null) {
             // todo: use real filters
+        }
+        if (hybridSourceBuilder != null) {
+            hybridSourceBuilder.setFilters(filters);
         }
 
         List<ResolvedExpression> acceptedFilters = new ArrayList<>();

@@ -19,6 +19,7 @@ package com.alibaba.fluss.lake.lakestorage;
 
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
+import com.alibaba.fluss.lake.source.LakeFlinkSourceFactory;
 import com.alibaba.fluss.lake.source.LakeSource;
 import com.alibaba.fluss.lake.writer.LakeTieringFactory;
 import com.alibaba.fluss.metadata.TableDescriptor;
@@ -136,6 +137,11 @@ class LakeStorageTest {
 
         @Override
         public LakeSource<?> createLakeSource(TablePath tablePath) {
+            throw new UnsupportedOperationException("Not implemented");
+        }
+
+        @Override
+        public LakeFlinkSourceFactory createLakeFlinkSourceFactory() {
             throw new UnsupportedOperationException("Not implemented");
         }
     }
