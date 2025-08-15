@@ -24,6 +24,8 @@ import javax.annotation.Nullable;
 import java.util.Arrays;
 import java.util.Objects;
 
+import static com.alibaba.fluss.config.ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET;
+
 /** The structure of fetch data. */
 @Internal
 public final class FetchReqInfo {
@@ -31,17 +33,28 @@ public final class FetchReqInfo {
     private final long fetchOffset;
     @Nullable private final int[] projectFields;
 
-    private int maxBytes;
+    private final int maxBytes;
+    private final long maxRemoteBytes;
 
     public FetchReqInfo(long tableId, long fetchOffset, int maxBytes) {
-        this(tableId, fetchOffset, maxBytes, null);
+        this(
+                tableId,
+                fetchOffset,
+                maxBytes,
+                null,
+                CLIENT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET.defaultValue().getBytes());
     }
 
     public FetchReqInfo(
-            long tableId, long fetchOffset, int maxBytes, @Nullable int[] projectFields) {
+            long tableId,
+            long fetchOffset,
+            int maxBytes,
+            @Nullable int[] projectFields,
+            long maxRemoteBytes) {
         this.tableId = tableId;
         this.fetchOffset = fetchOffset;
         this.maxBytes = maxBytes;
+        this.maxRemoteBytes = maxRemoteBytes;
         this.projectFields = projectFields;
     }
 
@@ -53,8 +66,8 @@ public final class FetchReqInfo {
         return fetchOffset;
     }
 
-    public void setFetchMaxBytes(int maxBytes) {
-        this.maxBytes = maxBytes;
+    public long getMaxRemoteBytes() {
+        return maxRemoteBytes;
     }
 
     public int getMaxBytes() {

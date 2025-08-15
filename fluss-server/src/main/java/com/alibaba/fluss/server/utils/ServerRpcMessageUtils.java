@@ -173,6 +173,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.alibaba.fluss.config.ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
@@ -702,7 +703,12 @@ public class ServerRpcMessageUtils {
                                 tableId,
                                 fetchLogReqForBucket.getFetchOffset(),
                                 fetchLogReqForBucket.getMaxFetchBytes(),
-                                projectionFields));
+                                projectionFields,
+                                fetchLogReqForBucket.hasMaxRemoteBytes()
+                                        ? fetchLogReqForBucket.getMaxRemoteBytes()
+                                        : CLIENT_SCANNER_LOG_FETCH_MAX_BYTES_FOR_BUCKET
+                                                .defaultValue()
+                                                .getBytes()));
             }
         }
 
