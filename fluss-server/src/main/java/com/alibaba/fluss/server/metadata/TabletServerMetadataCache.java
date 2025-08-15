@@ -43,10 +43,6 @@ import java.util.concurrent.locks.ReentrantLock;
 
 import static com.alibaba.fluss.server.RpcServiceBase.getPartitionMetadataFromZk;
 import static com.alibaba.fluss.server.RpcServiceBase.getTableMetadataFromZk;
-import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
-import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
-import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
-import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 
 /** The implement of {@link ServerMetadataCache} for {@link TabletServer}. */
@@ -185,12 +181,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                         TableInfo tableInfo = tableMetadata.getTableInfo();
                         TablePath tablePath = tableInfo.getTablePath();
                         long tableId = tableInfo.getTableId();
-                        if (tableId == DELETED_TABLE_ID) {
-                            Long removedTableId = tableIdByPath.remove(tablePath);
-                            if (removedTableId != null) {
-                                bucketMetadataMapForTables.remove(removedTableId);
-                            }
-                        } else if (tablePath == DELETED_TABLE_PATH) {
+                        if (tableMetadata.isDeletedMarker()) {
                             serverMetadataSnapshot
                                     .getTablePath(tableId)
                                     .ifPresent(tableIdByPath::remove);
@@ -229,12 +220,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                         PhysicalTablePath physicalTablePath =
                                 PhysicalTablePath.of(tablePath, partitionName);
                         long partitionId = partitionMetadata.getPartitionId();
-                        if (partitionId == DELETED_PARTITION_ID) {
-                            Long removedPartitionId = partitionIdByPath.remove(physicalTablePath);
-                            if (removedPartitionId != null) {
-                                bucketMetadataMapForPartitions.remove(removedPartitionId);
-                            }
-                        } else if (partitionName.equals(DELETED_PARTITION_NAME)) {
+                        // TODO partitionMetadata.isDeletedMarker()
+                        if (partitionMetadata.isDeletedMarker()) {
                             serverMetadataSnapshot
                                     .getPhysicalTablePath(partitionId)
                                     .ifPresent(partitionIdByPath::remove);

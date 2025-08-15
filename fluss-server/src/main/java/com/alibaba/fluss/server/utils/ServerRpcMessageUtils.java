@@ -156,6 +156,9 @@ import com.alibaba.fluss.server.zk.data.BucketSnapshot;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import javax.annotation.Nullable;
 
 import java.nio.ByteBuffer;
@@ -182,6 +185,8 @@ import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
  * request/response.
  */
 public class ServerRpcMessageUtils {
+
+    private static final Logger log = LoggerFactory.getLogger(ServerRpcMessageUtils.class);
 
     public static TablePath toTablePath(PbTablePath pbTablePath) {
         return new TablePath(pbTablePath.getDatabaseName(), pbTablePath.getTableName());
@@ -387,6 +392,7 @@ public class ServerRpcMessageUtils {
                 .setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
+        pbTableMetadata.setDeletedMarker(tableMetadata.isDeletedMarker());
         pbTableMetadata.addAllBucketMetadatas(
                 toPbBucketMetadata(tableMetadata.getBucketMetadataList()));
         return pbTableMetadata;
@@ -398,6 +404,7 @@ public class ServerRpcMessageUtils {
                         .setTableId(partitionMetadata.getTableId())
                         .setPartitionId(partitionMetadata.getPartitionId())
                         .setPartitionName(partitionMetadata.getPartitionName());
+        pbPartitionMetadata.setDeletedMarker(partitionMetadata.isDeletedMarker());
         pbPartitionMetadata.addAllBucketMetadatas(
                 toPbBucketMetadata(partitionMetadata.getBucketMetadataList()));
         return pbPartitionMetadata;
@@ -446,7 +453,7 @@ public class ServerRpcMessageUtils {
             bucketMetadata.add(toBucketMetadata(pbBucketMetadata));
         }
 
-        return new TableMetadata(tableInfo, bucketMetadata);
+        return new TableMetadata(tableInfo, bucketMetadata, pbTableMetadata.isDeletedMarker());
     }
 
     private static BucketMetadata toBucketMetadata(PbBucketMetadata pbBucketMetadata) {
@@ -466,7 +473,8 @@ public class ServerRpcMessageUtils {
                 pbPartitionMetadata.getPartitionId(),
                 pbPartitionMetadata.getBucketMetadatasList().stream()
                         .map(ServerRpcMessageUtils::toBucketMetadata)
-                        .collect(Collectors.toList()));
+                        .collect(Collectors.toList()),
+                pbPartitionMetadata.isDeletedMarker());
     }
 
     public static NotifyLeaderAndIsrRequest makeNotifyLeaderAndIsrRequest(
