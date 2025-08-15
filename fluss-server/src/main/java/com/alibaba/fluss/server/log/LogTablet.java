@@ -337,12 +337,16 @@ public final class LogTablet {
         metricGroup.gauge(
                 MetricNames.LOG_NUM_SEGMENTS, () -> localLog.getSegments().numberOfSegments());
         metricGroup.gauge(MetricNames.LOG_END_OFFSET, localLog::getLocalLogEndOffset);
-        metricGroup.gauge(MetricNames.LOG_SIZE, () -> localLog.getSegments().sizeInBytes());
+        metricGroup.gauge(MetricNames.LOG_SIZE, this::logSize);
 
         // about flush
         metricGroup.meter(MetricNames.LOG_FLUSH_RATE, new MeterView(localLog.getFlushCount()));
         metricGroup.histogram(
                 MetricNames.LOG_FLUSH_LATENCY_MS, localLog.getFlushLatencyHistogram());
+    }
+
+    public long logSize() {
+        return localLog.getSegments().sizeInBytes();
     }
 
     public void updateLeaderEndOffsetSnapshot() {

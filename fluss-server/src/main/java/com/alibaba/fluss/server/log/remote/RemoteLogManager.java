@@ -156,6 +156,10 @@ public class RemoteLogManager implements Closeable {
         LOG.debug("Added the remote log tiering task for replica {}", tableBucket);
     }
 
+    public long getRemoteLogSize() {
+        return remoteLogs.values().stream().mapToLong(RemoteLogTablet::getRemoteSizeInBytes).sum();
+    }
+
     /** Stop the log tiering task for the given replica. */
     public void stopLogTiering(Replica replica) {
         if (remoteDisabled()) {
