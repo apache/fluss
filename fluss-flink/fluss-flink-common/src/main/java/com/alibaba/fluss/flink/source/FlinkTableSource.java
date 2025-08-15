@@ -35,7 +35,6 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.predicate.Equal;
 import com.alibaba.fluss.predicate.LeafPredicate;
 import com.alibaba.fluss.predicate.Predicate;
-import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.annotation.VisibleForTesting;
@@ -70,6 +69,7 @@ import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.functions.LookupFunction;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.paimon.data.BinaryString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -86,6 +86,7 @@ import java.util.Map;
 
 import static com.alibaba.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 import static com.alibaba.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
+import static com.alibaba.fluss.flink.utils.PushdownUtils.ValueConversion.FLUSS_INTERNAL_VALUE;
 import static com.alibaba.fluss.flink.utils.PushdownUtils.extractFieldEquals;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
@@ -454,7 +455,7 @@ public class FlinkTableSource
                             getPartitionKeyTypes(),
                             acceptedFilters,
                             remainingFilters,
-                            FLINK_INTERNAL_VALUE);
+                            FLUSS_INTERNAL_VALUE);
 
             // partitions are filtered by string representations, convert the equals to string first
             partitionFilters = stringifyFieldEquals(fieldEquals);
@@ -463,18 +464,20 @@ public class FlinkTableSource
             if (lakeSource != null) {
                 // and exist field equals, push down to lake source
                 if (!fieldEquals.isEmpty()) {
-                    // build lake predicates with paimon compatible literals
+
+                    // convert flink row type to fluss row type
                     RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
                     List<Predicate> lakePredicates = new ArrayList<>();
 
                     for (FieldEqual fieldEqual : fieldEquals) {
-                        final int idx = fieldEqual.fieldIndex;
-                        final String fieldName = tableOutputType.getFieldNames().get(idx);
-                        final com.alibaba.fluss.types.DataType flussDataType =
+                        int idx = fieldEqual.fieldIndex;
+                        String fieldName = tableOutputType.getFieldNames().get(idx);
+                        com.alibaba.fluss.types.DataType flussDataType =
                                 flussRowType.getTypeAt(idx);
 
+                        // convert to Paimon literal for partition
                         Object literal =
-                                toFlussLiteralForPartition(flussDataType, fieldEqual.equalValue);
+                                toPaimonLiteralForPartition(flussDataType, fieldEqual.equalValue);
 
                         if (literal == null) {
                             continue;
@@ -590,13 +593,14 @@ public class FlinkTableSource
     }
 
     @Nullable
-    private Object toFlussLiteralForPartition(
+    private Object toPaimonLiteralForPartition(
             com.alibaba.fluss.types.DataType flussDataType, Object equalValue) {
         String typeSummary = flussDataType.toString().toUpperCase();
         if (typeSummary.contains("CHAR") || typeSummary.contains("STRING")) {
             return BinaryString.fromString(equalValue.toString());
         }
 
+        // todo: currently, we don't support other types for partition key except string
         return null;
     }
 
