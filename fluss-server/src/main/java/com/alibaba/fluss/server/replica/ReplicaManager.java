@@ -34,6 +34,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.MetricNames;
+import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.remote.RemoteLogFetchInfo;
@@ -117,6 +118,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -306,6 +308,19 @@ public class ReplicaManager {
         serverMetricGroup.gauge(MetricNames.UNDER_REPLICATED, this::underReplicatedCount);
         serverMetricGroup.gauge(MetricNames.UNDER_MIN_ISR, this::underMinIsrCount);
         serverMetricGroup.gauge(MetricNames.AT_MIN_ISR, this::atMinIsrCount);
+
+        MetricGroup logicalStorage = serverMetricGroup.addGroup("logicalStorage");
+        logicalStorage.gauge(
+                MetricNames.SERVER_LOGICAL_STORAGE_LOG_SIZE, this::logicalStorageLogSize);
+        logicalStorage.gauge(
+                MetricNames.SERVER_LOGICAL_STORAGE_KV_SIZE, this::logicalStorageKvSize);
+
+        MetricGroup physicalStorage = serverMetricGroup.addGroup("physicalStorage");
+        physicalStorage.gauge(
+                MetricNames.SERVER_PHYSICAL_STORAGE_LOCAL_SIZE, this::physicalStorageLocalSize);
+        physicalStorage.gauge(
+                MetricNames.SERVER_PHYSICAL_STORAGE_REMOTE_LOG_SIZE,
+                this::physicalStorageRemoteLogSize);
     }
 
     private Stream<Replica> onlineReplicas() {
@@ -336,6 +351,33 @@ public class ReplicaManager {
 
     private int writerIdCount() {
         return onlineReplicas().map(Replica::writerIdCount).reduce(0, Integer::sum);
+    }
+
+    private long logicalStorageLogSize() {
+        return onlineReplicas().map(Replica::logicalStorageLogSize).reduce(0L, Long::sum);
+    }
+
+    private long logicalStorageKvSize() {
+        return onlineReplicas().map(Replica::logicalStorageKvSize).reduce(0L, Long::sum);
+    }
+
+    private long physicalStorageLocalSize() {
+        AtomicLong localSize = new AtomicLong(0L);
+
+        onlineReplicas()
+                .forEach(
+                        replica -> {
+                            if (replica.isKvTable()) {
+                                localSize.addAndGet(replica.getLatestKvSnapshotSize());
+                            }
+                            localSize.addAndGet(replica.getLogTablet().logSize());
+                        });
+
+        return localSize.get();
+    }
+
+    private long physicalStorageRemoteLogSize() {
+        return remoteLogManager.getRemoteLogSize();
     }
 
     /**

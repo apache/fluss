@@ -96,6 +96,14 @@ public class RemoteLogManifest {
         return endOffset;
     }
 
+    public long getRemoteLogSize() {
+        long size = 0;
+        for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
+            size += remoteLogSegment.segmentSizeInBytes();
+        }
+        return size;
+    }
+
     public byte[] toJsonBytes() {
         return RemoteLogManifestJsonSerde.toJson(this);
     }
