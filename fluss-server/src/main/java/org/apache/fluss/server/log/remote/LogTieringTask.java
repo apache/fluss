@@ -322,6 +322,7 @@ public class LogTieringTask implements Runnable {
         // to try to commit this snapshot.
         long newRemoteLogStartOffset = newRemoteLogManifest.getRemoteLogStartOffset();
         long newRemoteLogEndOffset = newRemoteLogManifest.getRemoteLogEndOffset();
+        long newRemoteLogSize = newRemoteLogManifest.getRemoteLogSize();
         int retrySendCommitTimes = 1;
         while (retrySendCommitTimes <= 10) {
             try {
@@ -356,6 +357,7 @@ public class LogTieringTask implements Runnable {
                     logTablet.updateRemoteLogStartOffset(newRemoteLogStartOffset);
                     // make the local log cleaner clean log segments that are committed to remote.
                     logTablet.updateRemoteLogEndOffset(newRemoteLogEndOffset);
+                    logTablet.updateRemoteLogSize(newRemoteLogSize);
                     return true;
                 }
             } catch (Exception e) {

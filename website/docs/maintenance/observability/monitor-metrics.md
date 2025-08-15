@@ -294,8 +294,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="9"><strong>coordinator</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="7">-</td>
+      <th rowspan="12"><strong>coordinator</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="9">-</td>
       <td>activeCoordinatorCount</td>
       <td>The number of active CoordinatorServer in this cluster.</td>
       <td>Gauge</td>
@@ -341,6 +341,23 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>The time that an event took to be processed by the coordinator event processor. This metric is labeled with <code>event_type</code> to distinguish between different types of coordinator events.</td>
       <td>Histogram</td>
     </tr>
+    <tr>
+      <td rowspan="1">physicalStorage</td>
+      <td>remoteKvSize</td>
+      <td>The physical storage size of remote KV store.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
+      <td rowspan="2">table_bucket</td>
+      <td>numKvSnapshots</td>
+      <td>number of kv snapshots of each table bucket.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
+      <td>allKvSnapshotSize</td>
+      <td>all kv snapshot size of each table bucket.</td>
+      <td>Gauge</td>
+    </tr>
   </tbody>
 </table>
 
@@ -358,7 +375,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="25"><strong>tabletserver</strong></th>
+      <th rowspan="29"><strong>tabletserver</strong></th>
       <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="25">-</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this server.</td>
@@ -484,6 +501,28 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>The number of kv pre-write buffer truncate due to the error happened when writing cdc to log per second.</td>
       <td>Meter</td>
     </tr>
+    <tr>
+      <td rowspan="2">logicalStorage</td>
+      <td>logSize</td>
+      <td>The logical storage size of log managed by this TabletServer.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>kvSize</td>
+      <td>The logical storage size of kv managed by this TabletServer.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="2">physicalStorage</td>
+      <td>localSize</td>
+      <td>The physical local storage size of this TabletServer.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>remoteLogSize</td>
+      <td>The physical remote log size managed by this TabletServer.</td>
+      <td>Gauge</td>
+    </tr>
   </tbody>
 </table>
 
@@ -607,7 +646,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="30"><strong>tabletserver</strong></th>
+      <th rowspan="28"><strong>tabletserver</strong></th>
       <td rowspan="20">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table.</td>
@@ -709,7 +748,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Meter</td>
     </tr>
      <tr>
-      <td rowspan="3">table_bucket_log</td>
+      <td rowspan="2">table_bucket_log</td>
       <td>numSegments</td>
       <td>The number of segments in local storage for this table bucket.</td>
       <td>Gauge</td>
@@ -717,11 +756,6 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
      <tr>
       <td>endOffset</td>
       <td>The end offset in local storage for this table bucket.</td>
-      <td>Gauge</td>
-    </tr>
-     <tr>
-      <td>size</td>
-      <td>The total log sizes in local storage for this table bucket.</td>
       <td>Gauge</td>
     </tr>
     <tr>
@@ -738,12 +772,6 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
      <tr>
       <td>size</td>
       <td>The number of bytes written per second to this table.</td>
-      <td>Gauge</td>
-    </tr>
-    <tr>
-      <td rowspan="1">table_bucket_kv_snapshot</td>
-      <td>latestSnapshotSize</td>
-      <td>The latest kv snapshot size in bytes for this table bucket.</td>
       <td>Gauge</td>
     </tr>
   </tbody>

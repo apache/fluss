@@ -17,18 +17,33 @@
 
 package org.apache.fluss.server.metrics.group;
 
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.utils.MapUtils;
+import org.apache.fluss.utils.MapUtils;
 
+import javax.annotation.Nullable;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
+
+import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
 
 /** The metric group for coordinator server. */
 public class CoordinatorMetricGroup extends AbstractMetricGroup {
 
     private static final String NAME = "coordinator";
+
+    private final Map<TablePath, SimpleTableMetricGroup> metricGroupByTable =
+            MapUtils.newConcurrentHashMap();
 
     protected final String clusterId;
     protected final String hostname;
@@ -61,5 +76,129 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
             Class<? extends CoordinatorEvent> eventClass) {
         return eventMetricGroups.computeIfAbsent(
                 eventClass, e -> new CoordinatorEventMetricGroup(registry, eventClass, this));
+    }
+
+    // ------------------------------------------------------------------------
+    //  table buckets groups
+    // ------------------------------------------------------------------------
+
+    public @Nullable BucketMetricGroup getTableBucketMetricGroup(
+            TablePath tablePath, TableBucket tableBucket) {
+        SimpleTableMetricGroup tableMetricGroup = metricGroupByTable.get(tablePath);
+        if (tableMetricGroup == null) {
+            return null;
+        }
+        return tableMetricGroup.buckets.get(tableBucket);
+    }
+
+    public void addTableBucketMetricGroup(
+            PhysicalTablePath physicalTablePath,
+            long tableId,
+            @Nullable Long partitionId,
+            Set<Integer> assignments) {
+        TablePath tablePath = physicalTablePath.getTablePath();
+        SimpleTableMetricGroup tableMetricGroup =
+                metricGroupByTable.computeIfAbsent(
+                        tablePath, table -> new SimpleTableMetricGroup(registry, tablePath, this));
+        assignments.forEach(
+                bucket ->
+                        tableMetricGroup.addBucketMetricGroup(
+                                physicalTablePath.getPartitionName(),
+                                new TableBucket(tableId, partitionId, bucket)));
+    }
+
+    public void removeTableMetricGroup(TablePath tablePath, long tableId) {
+        SimpleTableMetricGroup tableMetricGroup = metricGroupByTable.remove(tablePath);
+        if (tableMetricGroup != null) {
+            tableMetricGroup.removeBucketMetricsGroupForTable(tableId);
+            tableMetricGroup.close();
+        }
+    }
+
+    public void removeTablePartitionMetricsGroup(
+            TablePath tablePath, long tableId, long partitionId) {
+        SimpleTableMetricGroup tableMetricGroup = metricGroupByTable.get(tablePath);
+        if (tableMetricGroup != null) {
+            tableMetricGroup.removeBucketMetricsGroupForPartition(tableId, partitionId);
+        }
+    }
+
+    /** The metric group for table. */
+    public static class SimpleTableMetricGroup extends AbstractMetricGroup {
+
+        private final Map<TableBucket, BucketMetricGroup> buckets = new HashMap<>();
+
+        private final TablePath tablePath;
+
+        private final MetricRegistry registry;
+
+        public SimpleTableMetricGroup(
+                MetricRegistry registry,
+                TablePath tablePath,
+                AbstractMetricGroup serverMetricGroup) {
+            super(
+                    registry,
+                    makeScope(
+                            serverMetricGroup,
+                            tablePath.getDatabaseName(),
+                            tablePath.getTableName()),
+                    serverMetricGroup);
+
+            this.tablePath = tablePath;
+            this.registry = registry;
+        }
+
+        @Override
+        protected void putVariables(Map<String, String> variables) {
+            variables.put("database", tablePath.getDatabaseName());
+            variables.put("table", tablePath.getTableName());
+        }
+
+        @Override
+        protected String getGroupName(CharacterFilter filter) {
+            // partition and table share same logic group name
+            return "table";
+        }
+
+        // ------------------------------------------------------------------------
+        //  bucket groups
+        // ------------------------------------------------------------------------
+        public void addBucketMetricGroup(@Nullable String partitionName, TableBucket tableBucket) {
+            buckets.computeIfAbsent(
+                    tableBucket,
+                    (bucket) ->
+                            new BucketMetricGroup(
+                                    registry, partitionName, tableBucket.getBucket(), this));
+        }
+
+        public void removeBucketMetricsGroupForTable(long tableId) {
+            List<TableBucket> tableBuckets = new ArrayList<>();
+            buckets.forEach(
+                    (tableBucket, bucketMetricGroup) -> {
+                        if (tableBucket.getTableId() == tableId) {
+                            tableBuckets.add(tableBucket);
+                        }
+                    });
+            tableBuckets.forEach(this::removeBucketMetricGroup);
+        }
+
+        public void removeBucketMetricsGroupForPartition(long tableId, long partitionId) {
+            List<TableBucket> tableBuckets = new ArrayList<>();
+            buckets.forEach(
+                    (tableBucket, bucketMetricGroup) -> {
+                        Long bucketPartitionId = tableBucket.getPartitionId();
+                        if (tableBucket.getTableId() == tableId
+                                && bucketPartitionId != null
+                                && bucketPartitionId == partitionId) {
+                            tableBuckets.add(tableBucket);
+                        }
+                    });
+            tableBuckets.forEach(this::removeBucketMetricGroup);
+        }
+
+        public void removeBucketMetricGroup(TableBucket tb) {
+            BucketMetricGroup metricGroup = buckets.remove(tb);
+            metricGroup.close();
+        }
     }
 }
