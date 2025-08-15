@@ -24,6 +24,7 @@ import com.alibaba.fluss.flink.lake.split.LakeSnapshotSplit;
 import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
 import com.alibaba.fluss.flink.source.split.LogSplit;
 import com.alibaba.fluss.flink.source.split.SourceSplitBase;
+import com.alibaba.fluss.flink.utils.PushdownUtils.FieldEqual;
 import com.alibaba.fluss.lake.source.LakeSource;
 import com.alibaba.fluss.lake.source.LakeSplit;
 import com.alibaba.fluss.metadata.PartitionInfo;
@@ -38,6 +39,7 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
@@ -51,6 +53,7 @@ public class LakeSplitGenerator {
     private final OffsetsInitializer.BucketOffsetsRetriever bucketOffsetsRetriever;
     private final OffsetsInitializer stoppingOffsetInitializer;
     private final int bucketCount;
+    private final List<FieldEqual> partitionFilters;
 
     private final LakeSource<LakeSplit> lakeSource;
 
@@ -60,13 +63,16 @@ public class LakeSplitGenerator {
             LakeSource<LakeSplit> lakeSource,
             OffsetsInitializer.BucketOffsetsRetriever bucketOffsetsRetriever,
             OffsetsInitializer stoppingOffsetInitializer,
-            int bucketCount) {
+            int bucketCount,
+            List<FieldEqual> partitionFilters) {
         this.tableInfo = tableInfo;
         this.flussAdmin = flussAdmin;
         this.lakeSource = lakeSource;
         this.bucketOffsetsRetriever = bucketOffsetsRetriever;
         this.stoppingOffsetInitializer = stoppingOffsetInitializer;
         this.bucketCount = bucketCount;
+        this.partitionFilters =
+                partitionFilters; // check partition filter is not null in FlinkSourceEnumerator.
     }
 
     public List<SourceSplitBase> generateHybridLakeSplits() throws Exception {
@@ -83,6 +89,18 @@ public class LakeSplitGenerator {
                                 .createPlanner(
                                         (LakeSource.PlannerContext) lakeSnapshotInfo::getSnapshotId)
                                 .plan());
+
+        // first, filter by partition filters
+        if (!partitionFilters.isEmpty()) {
+            Set<String> allowedPartitionNames =
+                    partitionFilters.stream()
+                            .map(fieldEqual -> String.valueOf(fieldEqual.equalValue))
+                            .collect(Collectors.toSet());
+            lakeSplits
+                    .entrySet()
+                    .removeIf(entry -> !allowedPartitionNames.contains(entry.getKey()));
+        }
+
         if (isPartitioned) {
             List<PartitionInfo> partitionInfos =
                     flussAdmin.listPartitionInfos(tableInfo.getTablePath()).get();
