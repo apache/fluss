@@ -243,6 +243,15 @@ public class ClientRpcMessageUtils {
             @Nullable Set<TablePath> tablePaths,
             @Nullable Collection<PhysicalTablePath> tablePathPartitionNames,
             @Nullable Collection<Long> tablePathPartitionIds) {
+        return makeMetadataRequest(
+                tablePaths, tablePathPartitionNames, tablePathPartitionIds, false);
+    }
+
+    public static MetadataRequest makeMetadataRequest(
+            @Nullable Set<TablePath> tablePaths,
+            @Nullable Collection<PhysicalTablePath> tablePathPartitionNames,
+            @Nullable Collection<Long> tablePathPartitionIds,
+            boolean cacheOnly) {
         MetadataRequest metadataRequest = new MetadataRequest();
         if (tablePaths != null) {
             for (TablePath tablePath : tablePaths) {
@@ -265,6 +274,8 @@ public class ClientRpcMessageUtils {
         if (tablePathPartitionIds != null) {
             tablePathPartitionIds.forEach(metadataRequest::addPartitionsId);
         }
+
+        metadataRequest.setCacheOnly(cacheOnly);
 
         return metadataRequest;
     }

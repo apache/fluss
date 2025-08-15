@@ -25,6 +25,9 @@ dependency-reduced-pom.xml
 ### Mac OS ###
 .DS_Store
 
+### jenv ###
+.java-version
+
 # website & docs
 website/node_modules
 website/build
