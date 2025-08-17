@@ -30,6 +30,7 @@ import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.utils.clock.ManualClock;
+
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
@@ -55,6 +56,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
+
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -1088,14 +1090,15 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         waitUntilAllBucketFinishSnapshot(
                 admin, tablePath, Arrays.asList("2025$1", "2025$2", "2026$1"));
 
+        // query with different order of partition keys
         String sql = "select a, b from multi_partitioned_order_test_table where c='2025' and d='1'";
         String sqlWithReverseOrder =
                 "select a, b from multi_partitioned_order_test_table where d='1' and c='2025'";
 
         List<String> expectedQueryResult =
                 expectedRowValues.stream()
-                        .filter(s -> s.endsWith(", 2025, 1]")) // "+I[%d, v1, 2025, 1]" 형태
-                        .map(s -> s.replace(", 2025, 1]", "]")) // select a,b 만 조회하므로 포맷을 맞춤
+                        .filter(s -> s.endsWith(", 2025, 1]"))
+                        .map(s -> s.replace(", 2025, 1]", "]"))
                         .collect(Collectors.toList());
 
         assertThat(tEnv.explainSql(sql))
