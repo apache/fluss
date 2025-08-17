@@ -15,15 +15,19 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.lake.iceberg.tiering;
+package com.alibaba.fluss.lake.iceberg.tiering;
 
-import org.apache.fluss.lake.iceberg.tiering.writer.AppendOnlyTaskWriter;
-import org.apache.fluss.lake.iceberg.tiering.writer.DeltaTaskWriter;
-import org.apache.fluss.lake.writer.LakeWriter;
-import org.apache.fluss.lake.writer.WriterInitContext;
-import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.record.LogRecord;
+import com.alibaba.fluss.lake.iceberg.actions.CompactionResult;
+import com.alibaba.fluss.lake.iceberg.tiering.append.AppendOnlyWriter;
+import com.alibaba.fluss.lake.iceberg.tiering.writer.AppendOnlyTaskWriter;
+import com.alibaba.fluss.lake.iceberg.tiering.writer.DeltaTaskWriter;
+import com.alibaba.fluss.lake.writer.LakeWriter;
+import com.alibaba.fluss.lake.writer.WriterInitContext;
+import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.record.LogRecord;
 
+import edu.umd.cs.findbugs.annotations.Nullable;
+import org.apache.iceberg.DataFile;
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Table;
@@ -35,29 +39,66 @@ import org.apache.iceberg.util.PropertyUtil;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.util.Collections;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.ArrayList;
 import java.util.List;
 
-import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
+import static com.alibaba.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 import static org.apache.iceberg.TableProperties.WRITE_TARGET_FILE_SIZE_BYTES;
 import static org.apache.iceberg.TableProperties.WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT;
 
 /** Implementation of {@link LakeWriter} for Iceberg. */
 public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
 
+    private static final String AUTO_MAINTENANCE_KEY = "table.datalake.auto-maintenance";
+    private static final int MIN_FILES_TO_COMPACT = 5;
+    private static final long SMALL_FILE_THRESHOLD = 50 * 1024 * 1024;
+
     private final Catalog icebergCatalog;
     private final Table icebergTable;
     private final RecordWriter recordWriter;
+    private final boolean autoMaintenanceEnabled;
+
+    @Nullable private final ExecutorService compactionExecutor;
+    @Nullable private CompletableFuture<CompactionResult> compactionFuture;
 
     public IcebergLakeWriter(
-            IcebergCatalogProvider icebergCatalogProvider, WriterInitContext writerInitContext)
+            IcebergCatalogProvider icebergCatalogProvider,
+            WriterInitContext writerInitContext,
+            boolean autoMaintenanceEnabled,
+            @Nullable ExecutorService compactionExecutor)
             throws IOException {
         this.icebergCatalog = icebergCatalogProvider.get();
         this.icebergTable = getTable(writerInitContext.tablePath());
+        // Check auto-maintenance from table properties
+        this.autoMaintenanceEnabled =
+                Boolean.parseBoolean(
+                        icebergTable.properties().getOrDefault(AUTO_MAINTENANCE_KEY, "false"));
 
         // Create record writer based on table type
         // For now, only supporting non-partitioned append-only tables
         this.recordWriter = createRecordWriter(writerInitContext);
+        if (autoMaintenanceEnabled) {
+            this.compactionExecutor =
+                    Executors.newSingleThreadExecutor(
+                            r -> {
+                                Thread t =
+                                        new Thread(
+                                                r,
+                                                "iceberg-compact-"
+                                                        + writerInitContext.tableBucket());
+                                t.setDaemon(true);
+                                return t;
+                            });
+            scheduleCompactionIfNeeded(writerInitContext.tableBucket().getBucket());
+        } else {
+            this.compactionExecutor = null;
+        }
     }
 
     private RecordWriter createRecordWriter(WriterInitContext writerInitContext) {
@@ -107,6 +148,15 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
     @Override
     public void close() throws IOException {
         try {
+            if (compactionFuture != null && !compactionFuture.isDone()) {
+                compactionFuture.cancel(true);
+            }
+
+            if (compactionExecutor != null) {
+                compactionExecutor.shutdownNow();
+                compactionExecutor.awaitTermination(5, TimeUnit.SECONDS);
+            }
+
             if (recordWriter != null) {
                 recordWriter.close();
             }
@@ -124,6 +174,40 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
         } catch (Exception e) {
             throw new IOException("Failed to get table " + tablePath + " in Iceberg.", e);
         }
+    }
+
+    private void scheduleCompactionIfNeeded(int bucketId) {
+        if (!autoMaintenanceEnabled || compactionExecutor == null) {
+            return;
+        }
+
+        try {
+            // Scan files for this bucket
+            List<DataFile> bucketFiles = scanBucketFiles(bucketId);
+
+            // Check if compaction needed
+            if (shouldCompact(bucketFiles)) {
+
+                compactionFuture =
+                        CompletableFuture.supplyAsync(
+                                () -> compactFiles(bucketFiles, bucketId), compactionExecutor);
+            }
+        } catch (Exception e) {
+            throw new RuntimeException("Failed to schedule compaction", e);
+        }
+    }
+
+    // todo below methods
+    private List<DataFile> scanBucketFiles(int bucketId) {
+        return null;
+    }
+
+    private boolean shouldCompact(List<DataFile> files) {
+        return false;
+    }
+
+    private CompactionResult compactFiles(List<DataFile> files, int bucketId) {
+        return null;
     }
 
     private static FileFormat fileFormat(Table icebergTable) {
