@@ -30,7 +30,6 @@ import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.utils.clock.ManualClock;
-
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
@@ -56,7 +55,6 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
-
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
@@ -1064,6 +1062,51 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 tEnv.executeSql("select * from multi_partitioned_table where c ='2025' and d ='3'")
                         .collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    @Test
+    void testStreamingReadMultiPartitionPushDownReverseOrderCondition() throws Exception {
+        tEnv.executeSql(
+                "create table multi_partitioned_order_test_table"
+                        + " (a int not null, b varchar, c string, d string, primary key (a, c, d) NOT ENFORCED) partitioned by (c,d) "
+                        + "with ('table.auto-partition.enabled' = 'true', 'table.auto-partition.time-unit' = 'year','table.auto-partition.key'= 'c','table.auto-partition.num-precreate' = '0')");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "multi_partitioned_order_test_table");
+        tEnv.executeSql(
+                "alter table multi_partitioned_order_test_table add partition (c=2025,d=1)");
+        tEnv.executeSql(
+                "alter table multi_partitioned_order_test_table add partition (c=2025,d=2)");
+        tEnv.executeSql(
+                "alter table multi_partitioned_order_test_table add partition (c=2026,d=1)");
+
+        List<String> expectedRowValues =
+                writeRowsToTwoPartition(
+                                tablePath, Arrays.asList("c=2025,d=1", "c=2025,d=2", "c=2026,d=1"))
+                        .stream()
+                        .filter(s -> s.contains("2025"))
+                        .collect(Collectors.toList());
+
+        waitUntilAllBucketFinishSnapshot(
+                admin, tablePath, Arrays.asList("2025$1", "2025$2", "2026$1"));
+
+        String sql = "select a, b from multi_partitioned_order_test_table where c='2025' and d='1'";
+        String sqlWithReverseOrder =
+                "select a, b from multi_partitioned_order_test_table where d='1' and c='2025'";
+
+        List<String> expectedQueryResult =
+                expectedRowValues.stream()
+                        .filter(s -> s.endsWith(", 2025, 1]")) // "+I[%d, v1, 2025, 1]" 형태
+                        .map(s -> s.replace(", 2025, 1]", "]")) // select a,b 만 조회하므로 포맷을 맞춤
+                        .collect(Collectors.toList());
+
+        assertThat(tEnv.explainSql(sql))
+                .contains("filter=[and(=(c, _UTF-16LE'2025'")
+                .contains("=(d, _UTF-16LE'1'");
+        assertThat(tEnv.explainSql(sqlWithReverseOrder))
+                .contains("filter=[and(=(d, _UTF-16LE'1'")
+                .contains("=(c, _UTF-16LE'2025'");
+
+        assertQueryResult(sql, expectedQueryResult);
+        assertQueryResult(sqlWithReverseOrder, expectedQueryResult);
     }
 
     @Test
