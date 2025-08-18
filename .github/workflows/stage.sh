@@ -34,7 +34,7 @@ fluss-lake/fluss-lake-lance\
 "
 
 # modules that are only built with JDK 11
-JDK_11_ONLY="fluss-flink/fluss-flink-2.1"
+JDK_11_ONLY="fluss-flink/fluss-flink-2.1,fluss-test-coverage"
 
 function get_test_modules_for_stage() {
     local stage=$1
