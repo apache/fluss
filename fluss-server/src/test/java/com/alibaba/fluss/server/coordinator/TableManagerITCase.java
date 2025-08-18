@@ -59,6 +59,7 @@ import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
+import com.alibaba.fluss.server.zk.data.TableRegistration;
 import com.alibaba.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -99,6 +100,7 @@ import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMet
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toServerNode;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
+import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUtil;
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitValue;
 import static com.alibaba.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -110,6 +112,7 @@ class TableManagerITCase {
 
     private ZooKeeperClient zkClient;
     private Configuration clientConf;
+    private CoordinatorContext coordinatorContext;
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
@@ -136,6 +139,11 @@ class TableManagerITCase {
     void setup() {
         zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+        coordinatorContext =
+                FLUSS_CLUSTER_EXTENSION
+                        .getCoordinatorServer()
+                        .getCoordinatorEventProcessorForTesting()
+                        .getCoordinatorContext();
     }
 
     @Test
@@ -367,7 +375,7 @@ class TableManagerITCase {
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
 
         Instant now = Instant.now();
-        // then create a partitioned table
+        // then create an auto partitioned table
         Map<String, String> options = new HashMap<>();
         options.put(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true");
         options.put(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), timeUnit.name());
@@ -394,9 +402,17 @@ class TableManagerITCase {
                 getExpectAddedPartitions(Collections.singletonList("dt"), now, timeUnit, 1);
         assertThat(partitions).containsOnlyKeys(expectAddedPartitions);
 
+        TableRegistration autoPartitionRegistration = zkClient.getTable(tablePath).get();
+
         // let's drop the table
         adminGateway.dropTable(newDropTableRequest(db1, tb1, false)).get();
         assertThat(zkClient.getPartitions(tablePath)).isEmpty();
+
+        // wait until zk table deletion triggered and partition info deleted
+        waitUntilCoordinatorContextUpdated(autoPartitionRegistration.tableId);
+        TablePath autoPartitionDeletedTablePath =
+                coordinatorContext.getTablePathById(autoPartitionRegistration.tableId);
+        assertThat(autoPartitionDeletedTablePath).isNull();
 
         // create a non-auto-partitioned table
         adminGateway
@@ -416,6 +432,14 @@ class TableManagerITCase {
 
         // make sure the auto partition manager won't create partitions for the new table
         assertThat(zkClient.getPartitions(tablePath)).isEmpty();
+        TableRegistration nonAutoPartitionRegistration = zkClient.getTable(tablePath).get();
+        // drop the non-auto-partitioned table
+        adminGateway.dropTable(newDropTableRequest(db1, tb1, false)).get();
+        // wait until zk table deletion triggered and partition info deleted
+        waitUntilCoordinatorContextUpdated(nonAutoPartitionRegistration.tableId);
+        TablePath nonAutoPartitionDeletedTablePath =
+                coordinatorContext.getTablePathById(nonAutoPartitionRegistration.tableId);
+        assertThat(nonAutoPartitionDeletedTablePath).isNull();
     }
 
     @Test
@@ -797,5 +821,20 @@ class TableManagerITCase {
                     return null;
                 });
         return updateMetadataRequest;
+    }
+
+    private void waitUntilCoordinatorContextUpdated(long tableId) {
+        waitUtil(
+                () -> {
+                    TablePath autoPartitionDeletedTablePath =
+                            coordinatorContext.getTablePathById(tableId);
+                    if (autoPartitionDeletedTablePath == null) {
+                        return true;
+                    } else {
+                        return false;
+                    }
+                },
+                Duration.ofMinutes(1),
+                "Fail to wait until coordinator context updated");
     }
 }

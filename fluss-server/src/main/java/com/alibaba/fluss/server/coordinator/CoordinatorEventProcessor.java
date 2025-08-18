@@ -567,6 +567,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
             lakeTableTieringManager.removeLakeTable(tableId);
         }
 
+        // Try to resume in case of no replica was deleted but table was deleted
+        // for example a partitioned table without any partition.
+        tableManager.resumeDeletions();
+
         // send update metadata request.
         updateTabletServerMetadataCache(
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
@@ -1159,5 +1163,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
     @VisibleForTesting
     CompletedSnapshotStoreManager completedSnapshotStoreManager() {
         return completedSnapshotStoreManager;
+    }
+
+    @VisibleForTesting
+    public CoordinatorContext getCoordinatorContext() {
+        return coordinatorContext;
     }
 }
