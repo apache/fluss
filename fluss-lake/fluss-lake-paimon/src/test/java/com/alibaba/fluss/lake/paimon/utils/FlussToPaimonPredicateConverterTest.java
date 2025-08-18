@@ -18,6 +18,7 @@ package com.alibaba.fluss.lake.paimon.utils;
 
 import com.alibaba.fluss.predicate.Predicate;
 import com.alibaba.fluss.predicate.PredicateBuilder;
+import com.alibaba.fluss.row.BinaryString;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
 
@@ -26,8 +27,10 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 
 import java.util.Arrays;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static com.alibaba.fluss.row.BinaryString.fromString;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link FlussToPaimonPredicateConverter}. */
@@ -56,7 +59,9 @@ class FlussToPaimonPredicateConverterTest {
         return Stream.of(
                 // Leaf Predicates
                 Arguments.of(FLUSS_BUILDER.equal(0, 12L), PAIMON_BUILDER.equal(0, 12L)),
-                Arguments.of(FLUSS_BUILDER.notEqual(2, "test"), PAIMON_BUILDER.notEqual(2, "test")),
+                Arguments.of(
+                        FLUSS_BUILDER.notEqual(2, fromString("test")),
+                        PAIMON_BUILDER.notEqual(2, "test")),
                 Arguments.of(
                         FLUSS_BUILDER.greaterThan(1, 99.9d), PAIMON_BUILDER.greaterThan(1, 99.9d)),
                 Arguments.of(
@@ -67,15 +72,21 @@ class FlussToPaimonPredicateConverterTest {
                 Arguments.of(FLUSS_BUILDER.isNull(2), PAIMON_BUILDER.isNull(2)),
                 Arguments.of(FLUSS_BUILDER.isNotNull(1), PAIMON_BUILDER.isNotNull(1)),
                 Arguments.of(
-                        FLUSS_BUILDER.in(2, Arrays.asList("a", "b", "c")),
+                        FLUSS_BUILDER.in(
+                                2,
+                                Stream.of("a", "b", "c")
+                                        .map(BinaryString::fromString)
+                                        .collect(Collectors.toList())),
                         PAIMON_BUILDER.in(2, Arrays.asList("a", "b", "c"))),
                 Arguments.of(
                         FLUSS_BUILDER.in(
                                 2,
-                                Arrays.asList(
-                                        "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c",
-                                        "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b",
-                                        "c")),
+                                Stream.of(
+                                                "a", "b", "c", "a", "b", "c", "a", "b", "c", "a",
+                                                "b", "c", "a", "b", "c", "a", "b", "c", "a", "b",
+                                                "c", "a", "b", "c")
+                                        .map(BinaryString::fromString)
+                                        .collect(Collectors.toList())),
                         PAIMON_BUILDER.in(
                                 2,
                                 Arrays.asList(
@@ -85,10 +96,12 @@ class FlussToPaimonPredicateConverterTest {
                 Arguments.of(
                         FLUSS_BUILDER.notIn(
                                 2,
-                                Arrays.asList(
-                                        "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b", "c",
-                                        "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b",
-                                        "c")),
+                                Stream.of(
+                                                "a", "b", "c", "a", "b", "c", "a", "b", "c", "a",
+                                                "b", "c", "a", "b", "c", "a", "b", "c", "a", "b",
+                                                "c", "a", "b", "c")
+                                        .map(BinaryString::fromString)
+                                        .collect(Collectors.toList())),
                         PAIMON_BUILDER.notIn(
                                 2,
                                 Arrays.asList(
@@ -96,10 +109,14 @@ class FlussToPaimonPredicateConverterTest {
                                         "a", "b", "c", "a", "b", "c", "a", "b", "c", "a", "b",
                                         "c"))),
                 Arguments.of(
-                        FLUSS_BUILDER.startsWith(2, "start"),
+                        FLUSS_BUILDER.startsWith(2, fromString("start")),
                         PAIMON_BUILDER.startsWith(2, "start")),
-                Arguments.of(FLUSS_BUILDER.endsWith(2, "end"), PAIMON_BUILDER.endsWith(2, "end")),
-                Arguments.of(FLUSS_BUILDER.contains(2, "mid"), PAIMON_BUILDER.contains(2, "mid")),
+                Arguments.of(
+                        FLUSS_BUILDER.endsWith(2, fromString("end")),
+                        PAIMON_BUILDER.endsWith(2, "end")),
+                Arguments.of(
+                        FLUSS_BUILDER.contains(2, fromString("mid")),
+                        PAIMON_BUILDER.contains(2, "mid")),
 
                 // Compound Predicates
                 Arguments.of(
@@ -118,7 +135,7 @@ class FlussToPaimonPredicateConverterTest {
                 // Nested Predicate
                 Arguments.of(
                         PredicateBuilder.and(
-                                FLUSS_BUILDER.equal(2, "test"),
+                                FLUSS_BUILDER.equal(2, fromString("test")),
                                 PredicateBuilder.or(
                                         FLUSS_BUILDER.equal(0, 1L),
                                         FLUSS_BUILDER.greaterThan(1, 50.0))),
