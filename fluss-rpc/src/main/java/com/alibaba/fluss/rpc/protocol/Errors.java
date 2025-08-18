@@ -150,7 +150,7 @@ public enum Errors {
     STORAGE_EXCEPTION(26, "The general storage exception.", StorageException::new),
     OPERATION_NOT_ATTEMPTED_EXCEPTION(
             27,
-            "The sever did not attempt to execute this operation.",
+            "The server did not attempt to execute this operation.",
             OperationNotAttemptedException::new),
     NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION(
             28,

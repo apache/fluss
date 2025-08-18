@@ -40,7 +40,7 @@ import static com.alibaba.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 /**
  * Endpoint is what fluss server is listened for. It includes host, port and listener name. Listener
  * name is used for routing, all the fluss servers can have the same listener names to listen. For
- * example, coordinator server and tablet sever can use internal listener to communicate with each
+ * example, coordinator server and tablet server can use internal listener to communicate with each
  * other. And If a client connect to a server with a host and port, it can only see the other
  * server's same listener.
  */

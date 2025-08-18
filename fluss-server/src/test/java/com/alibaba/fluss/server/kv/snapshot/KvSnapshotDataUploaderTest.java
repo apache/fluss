@@ -106,11 +106,11 @@ class KvSnapshotDataUploaderTest {
 
     private void assertContentEqual(Path stateFilePath, FSDataInputStream inputStream)
             throws IOException {
-        byte[] excepted = Files.readAllBytes(stateFilePath);
-        byte[] actual = new byte[excepted.length];
+        byte[] expected = Files.readAllBytes(stateFilePath);
+        byte[] actual = new byte[expected.length];
         IOUtils.readFully(inputStream, actual, 0, actual.length);
         assertThat(inputStream.read()).isEqualTo(-1);
-        assertThat(actual).isEqualTo(excepted);
+        assertThat(actual).isEqualTo(expected);
     }
 
     private List<Path> generateRandomSstFiles(
