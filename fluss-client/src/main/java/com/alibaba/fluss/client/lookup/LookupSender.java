@@ -20,6 +20,7 @@ package com.alibaba.fluss.client.lookup;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.exception.LeaderNotAvailableException;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.LookupRequest;
@@ -147,6 +148,11 @@ class LookupSender implements Runnable {
     private void sendLookups(
             int destination, LookupType lookupType, List<AbstractLookupQuery<?>> lookupBatches) {
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
+        if (gateway == null) {
+            // TODO handle this exception, like retry.
+            throw new LeaderNotAvailableException(
+                    "Server " + destination + " is not found in metadata cache.");
+        }
 
         if (lookupType == LookupType.LOOKUP) {
             sendLookupRequest(gateway, lookupBatches);

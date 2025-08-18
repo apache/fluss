@@ -26,30 +26,28 @@ import javax.annotation.Nullable;
 import java.util.Arrays;
 import java.util.Objects;
 
-/** This is used to describe per-bucket location information. */
+/** This is used to describe per-bucket metadata in Cluster. */
 @Internal
 public final class BucketLocation {
     private final PhysicalTablePath physicalTablePath;
     private final TableBucket tableBucket;
-    @Nullable private final ServerNode leader;
-    private final ServerNode[] replicas;
-
-    // TODO add inSyncReplicas and offlineReplicas.
+    @Nullable private Integer leader;
+    private final int[] replicas;
 
     public BucketLocation(
             PhysicalTablePath physicalTablePath,
             long tableId,
             int bucketId,
-            @Nullable ServerNode leader,
-            ServerNode[] replicas) {
+            @Nullable Integer leader,
+            int[] replicas) {
         this(physicalTablePath, new TableBucket(tableId, bucketId), leader, replicas);
     }
 
     public BucketLocation(
             PhysicalTablePath physicalTablePath,
             TableBucket tableBucket,
-            @Nullable ServerNode leader,
-            ServerNode[] replicas) {
+            @Nullable Integer leader,
+            int[] replicas) {
         this.physicalTablePath = physicalTablePath;
         this.tableBucket = tableBucket;
         this.leader = leader;
@@ -69,11 +67,15 @@ public final class BucketLocation {
     }
 
     @Nullable
-    public ServerNode getLeader() {
+    public Integer getLeader() {
         return leader;
     }
 
-    public ServerNode[] getReplicas() {
+    public void setLeader(@Nullable Integer leader) {
+        this.leader = leader;
+    }
+
+    public int[] getReplicas() {
         return replicas;
     }
 
@@ -103,16 +105,16 @@ public final class BucketLocation {
                 "Bucket(physicalTablePath = %s, %s, leader = %s, replicas = %s)",
                 physicalTablePath,
                 tableBucket,
-                leader == null ? "none" : leader.id(),
+                leader == null ? "none" : leader,
                 formatNodeIds(replicas));
     }
 
-    /** Extract the node ids from each item in the array and format for display. */
-    private static String formatNodeIds(ServerNode[] nodes) {
+    /** Format the node ids from each item in the array for display. */
+    private static String formatNodeIds(int[] nodes) {
         StringBuilder b = new StringBuilder("[");
         if (nodes != null) {
             for (int i = 0; i < nodes.length; i++) {
-                b.append(nodes[i].id());
+                b.append(nodes[i]);
                 if (i < nodes.length - 1) {
                     b.append(',');
                 }

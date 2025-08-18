@@ -27,7 +27,6 @@ import com.alibaba.fluss.exception.WakeupException;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.Projection;
@@ -80,7 +79,6 @@ public class LogScannerImpl implements LogScanner {
     public LogScannerImpl(
             Configuration conf,
             TableInfo tableInfo,
-            RpcClient rpcClient,
             MetadataUpdater metadataUpdater,
             ClientMetricGroup clientMetricGroup,
             RemoteFileDownloader remoteFileDownloader,
@@ -98,7 +96,6 @@ public class LogScannerImpl implements LogScanner {
                 new LogFetcher(
                         tableInfo,
                         projection,
-                        rpcClient,
                         logScannerStatus,
                         conf,
                         metadataUpdater,

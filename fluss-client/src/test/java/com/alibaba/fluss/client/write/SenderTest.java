@@ -287,7 +287,7 @@ final class SenderTest {
         }
         // No batches can be drained from accumulator as the inflight request size is max in
         // IdempotenceManager.
-        Set<ServerNode> readyNodes = accumulator.ready(metadataUpdater.getCluster()).readyNodes;
+        Set<Integer> readyNodes = accumulator.ready(metadataUpdater.getCluster()).readyNodes;
         assertThat(readyNodes.isEmpty()).isFalse();
         Map<Integer, List<ReadyWriteBatch>> drained =
                 accumulator.drain(metadataUpdater.getCluster(), readyNodes, Integer.MAX_VALUE);

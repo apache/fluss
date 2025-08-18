@@ -37,7 +37,6 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Queue;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
@@ -50,13 +49,16 @@ class StickyStaticBucketAssignerTest {
     ServerNode node1 = new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER, "rack1");
     ServerNode node2 = new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER, "rack2");
     ServerNode node3 = new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER, "rack3");
-    private final ServerNode[] serverNodes = new ServerNode[] {node1, node2, node3};
+    private final int[] serverNodes = new int[] {node1.id(), node2.id(), node3.id()};
     private final BucketLocation bucket1 =
-            new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 0, node1, serverNodes);
+            new BucketLocation(
+                    DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 0, node1.id(), serverNodes);
     private final BucketLocation bucket2 =
-            new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 1, node1, serverNodes);
+            new BucketLocation(
+                    DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 1, node1.id(), serverNodes);
     private final BucketLocation bucket3 =
-            new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 2, node2, serverNodes);
+            new BucketLocation(
+                    DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 2, node2.id(), serverNodes);
 
     @Test
     void testSticky() {
@@ -127,9 +129,9 @@ class StickyStaticBucketAssignerTest {
         List<BucketLocation> allBuckets =
                 Arrays.asList(
                         new BucketLocation(tp1, 150001L, 1, null, serverNodes),
-                        new BucketLocation(tp1, 150001L, 2, node3, serverNodes),
+                        new BucketLocation(tp1, 150001L, 2, node3.id(), serverNodes),
                         new BucketLocation(tp2, 150002L, 0, null, serverNodes),
-                        new BucketLocation(tp2, 150002L, 1, node1, serverNodes),
+                        new BucketLocation(tp2, 150002L, 1, node1.id(), serverNodes),
                         new BucketLocation(tp3, 150003L, 0, null, serverNodes));
         Cluster cluster = updateCluster(allBuckets);
 
@@ -193,9 +195,10 @@ class StickyStaticBucketAssignerTest {
     }
 
     private Cluster updateCluster(List<BucketLocation> bucketLocations) {
-        Map<Integer, ServerNode> aliveTabletServersById =
-                Arrays.stream(serverNodes)
-                        .collect(Collectors.toMap(ServerNode::id, serverNode -> serverNode));
+        Map<Integer, ServerNode> aliveTabletServersById = new HashMap<>();
+        aliveTabletServersById.put(node1.id(), node1);
+        aliveTabletServersById.put(node2.id(), node2);
+        aliveTabletServersById.put(node3.id(), node3);
 
         Map<PhysicalTablePath, List<BucketLocation>> bucketsByPath = new HashMap<>();
         Map<TablePath, Long> tableIdByPath = new HashMap<>();

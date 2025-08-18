@@ -94,7 +94,6 @@ public class TableScan implements Scan {
         return new LogScannerImpl(
                 conn.getConfiguration(),
                 tableInfo,
-                conn.getRpcClient(),
                 conn.getMetadataUpdater(),
                 conn.getClientMetricGroup(),
                 conn.getOrCreateRemoteFileDownloader(),

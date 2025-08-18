@@ -123,8 +123,7 @@ public class MetadataUtils {
                             Map<PhysicalTablePath, Long> newPartitionIdByPath;
 
                             NewTableMetadata newTableMetadata =
-                                    getTableMetadataToUpdate(
-                                            originCluster, response, newAliveTabletServers);
+                                    getTableMetadataToUpdate(originCluster, response);
 
                             if (partialUpdate) {
                                 // If partial update, we will clear the to be updated table out ot
@@ -167,9 +166,7 @@ public class MetadataUtils {
     }
 
     private static NewTableMetadata getTableMetadataToUpdate(
-            Cluster cluster,
-            MetadataResponse metadataResponse,
-            Map<Integer, ServerNode> newAliveTableServers) {
+            Cluster cluster, MetadataResponse metadataResponse) {
         Map<TablePath, Long> newTablePathToTableId = new HashMap<>();
         Map<TablePath, TableInfo> newTablePathToTableInfo = new HashMap<>();
         Map<PhysicalTablePath, List<BucketLocation>> newBucketLocations = new HashMap<>();
@@ -205,12 +202,7 @@ public class MetadataUtils {
                     newBucketLocations.put(
                             PhysicalTablePath.of(tablePath),
                             toBucketLocations(
-                                    tablePath,
-                                    tableId,
-                                    null,
-                                    null,
-                                    pbBucketMetadataList,
-                                    newAliveTableServers));
+                                    tablePath, tableId, null, null, pbBucketMetadataList));
                 });
 
         List<PbPartitionMetadata> pbPartitionMetadataList =
@@ -233,8 +225,7 @@ public class MetadataUtils {
                                     tableId,
                                     pbPartitionMetadata.getPartitionId(),
                                     pbPartitionMetadata.getPartitionName(),
-                                    pbPartitionMetadata.getBucketMetadatasList(),
-                                    newAliveTableServers));
+                                    pbPartitionMetadata.getBucketMetadatasList()));
                 });
 
         return new NewTableMetadata(
@@ -309,19 +300,18 @@ public class MetadataUtils {
             long tableId,
             @Nullable Long partitionId,
             @Nullable String partitionName,
-            List<PbBucketMetadata> pbBucketMetadataList,
-            Map<Integer, ServerNode> newAliveTableServers) {
+            List<PbBucketMetadata> pbBucketMetadataList) {
         List<BucketLocation> bucketLocations = new ArrayList<>();
         for (PbBucketMetadata pbBucketMetadata : pbBucketMetadataList) {
             int bucketId = pbBucketMetadata.getBucketId();
             TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
-            ServerNode[] replicas = new ServerNode[pbBucketMetadata.getReplicaIdsCount()];
+            int[] replicas = new int[pbBucketMetadata.getReplicaIdsCount()];
             for (int i = 0; i < replicas.length; i++) {
-                replicas[i] = newAliveTableServers.get(pbBucketMetadata.getReplicaIdAt(i));
+                replicas[i] = pbBucketMetadata.getReplicaIdAt(i);
             }
-            ServerNode leader = null;
+            Integer leader = null;
             if (pbBucketMetadata.hasLeaderId()) {
-                leader = newAliveTableServers.get(pbBucketMetadata.getLeaderId());
+                leader = pbBucketMetadata.getLeaderId();
             }
             PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
 

@@ -37,11 +37,10 @@ public class BucketLocationTest {
                 new ServerNode(1, "localhost", 9093, ServerType.TABLET_SERVER, "rack1");
         ServerNode replica2 =
                 new ServerNode(2, "localhost", 9094, ServerType.TABLET_SERVER, "rack2");
-        ServerNode[] replicas = {leader, replica1, replica2};
-        // TODO add isr and offline.
+        int[] replicas = new int[] {leader.id(), replica1.id(), replica2.id()};
         BucketLocation bucketLocation =
                 new BucketLocation(
-                        PhysicalTablePath.of(tablePath), tableId, bucketId, leader, replicas);
+                        PhysicalTablePath.of(tablePath), tableId, bucketId, leader.id(), replicas);
 
         assertThat(bucketLocation.getReplicas()).isEqualTo(replicas);
 
