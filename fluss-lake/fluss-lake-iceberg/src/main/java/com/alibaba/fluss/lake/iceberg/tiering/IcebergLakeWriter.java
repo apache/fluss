@@ -17,7 +17,7 @@
 
 package com.alibaba.fluss.lake.iceberg.tiering;
 
-import com.alibaba.fluss.lake.iceberg.tiering.writer.AppendOnlyWriter;
+import com.alibaba.fluss.lake.iceberg.tiering.writer.AppendOnlyTaskWriter;
 import com.alibaba.fluss.lake.iceberg.tiering.writer.DeltaTaskWriter;
 import com.alibaba.fluss.lake.writer.LakeWriter;
 import com.alibaba.fluss.lake.writer.WriterInitContext;
@@ -25,7 +25,6 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.LogRecord;
 
 import org.apache.iceberg.FileFormat;
-import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableProperties;
@@ -37,7 +36,6 @@ import org.apache.iceberg.util.PropertyUtil;
 import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
-import java.util.Collections;
 import java.util.List;
 
 import static com.alibaba.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
@@ -65,7 +63,6 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
     private RecordWriter createRecordWriter(WriterInitContext writerInitContext) {
         Schema schema = icebergTable.schema();
         List<Integer> equalityFieldIds = new ArrayList<>(schema.identifierFieldIds());
-        PartitionSpec spec = icebergTable.spec();
 
         // Get target file size from table properties
         long targetFileSize = targetFileSize(icebergTable);
@@ -79,34 +76,12 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
                         .format(format)
                         .build();
 
-        if (equalityFieldIds == null || equalityFieldIds.isEmpty()) {
-            if (spec.isUnpartitioned()) {
-                return new AppendOnlyWriter(
-                        icebergTable,
-                        writerInitContext.schema().getRowType(),
-                        writerInitContext.tableBucket(),
-                        null, // No partition for non-partitioned table
-                        Collections.emptyList(), // No partition keys
-                        format,
-                        outputFileFactory,
-                        targetFileSize);
-            } else {
-                return null;
-            }
+        if (equalityFieldIds.isEmpty()) {
+            return new AppendOnlyTaskWriter(
+                    icebergTable, writerInitContext, format, outputFileFactory, targetFileSize);
         } else {
-            if (spec.isUnpartitioned()) {
-                return new DeltaTaskWriter(
-                        icebergTable,
-                        writerInitContext.schema().getRowType(),
-                        writerInitContext.tableBucket(),
-                        null, // No partition for non-partitioned table
-                        Collections.emptyList(), // No partition keys);
-                        format,
-                        outputFileFactory,
-                        targetFileSize);
-            } else {
-                return null;
-            }
+            return new DeltaTaskWriter(
+                    icebergTable, writerInitContext, format, outputFileFactory, targetFileSize);
         }
     }
 

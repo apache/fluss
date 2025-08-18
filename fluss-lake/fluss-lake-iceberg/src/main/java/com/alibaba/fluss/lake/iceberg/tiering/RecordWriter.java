@@ -26,30 +26,22 @@ import org.apache.iceberg.data.Record;
 import org.apache.iceberg.io.TaskWriter;
 import org.apache.iceberg.io.WriteResult;
 
-import javax.annotation.Nullable;
-
-import java.util.List;
-
 /** A base interface to write {@link LogRecord} to Iceberg. */
 public abstract class RecordWriter implements AutoCloseable {
 
     protected final TaskWriter<Record> taskWriter;
     protected final Schema icebergSchema;
     protected final int bucket;
-    @Nullable protected final String partition;
     protected final FlussRecordAsIcebergRecord flussRecordAsIcebergRecord;
 
     public RecordWriter(
             TaskWriter<Record> taskWriter,
             Schema icebergSchema,
             RowType flussRowType,
-            TableBucket tableBucket,
-            @Nullable String partition,
-            List<String> partitionKeys) {
+            TableBucket tableBucket) {
         this.taskWriter = taskWriter;
         this.icebergSchema = icebergSchema;
         this.bucket = tableBucket.getBucket();
-        this.partition = partition; // null for non-partitioned tables
         this.flussRecordAsIcebergRecord =
                 new FlussRecordAsIcebergRecord(
                         tableBucket.getBucket(), icebergSchema, flussRowType);
