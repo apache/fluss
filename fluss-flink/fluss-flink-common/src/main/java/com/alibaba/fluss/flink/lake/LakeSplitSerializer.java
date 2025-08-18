@@ -17,8 +17,8 @@
 
 package com.alibaba.fluss.flink.lake;
 
+import com.alibaba.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import com.alibaba.fluss.flink.lake.split.LakeSnapshotSplit;
-import com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
 import com.alibaba.fluss.flink.source.split.LogSplit;
 import com.alibaba.fluss.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
@@ -27,15 +27,15 @@ import com.alibaba.fluss.metadata.TableBucket;
 
 import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.core.memory.DataOutputSerializer;
-import org.apache.paimon.flink.source.FileStoreSourceSplit;
-import org.apache.paimon.flink.source.FileStoreSourceSplitSerializer;
 
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.util.ArrayList;
+import java.util.List;
 
+import static com.alibaba.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit.LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND;
 import static com.alibaba.fluss.flink.lake.split.LakeSnapshotSplit.LAKE_SNAPSHOT_SPLIT_KIND;
-import static com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit.PAIMON_SNAPSHOT_FLUSS_LOG_SPLIT_KIND;
 
 /** A serializer for lake split. */
 public class LakeSplitSerializer {
@@ -52,32 +52,30 @@ public class LakeSplitSerializer {
                     sourceSplitSerializer.serialize(((LakeSnapshotSplit) split).getLakeSplit());
             out.writeInt(serializeBytes.length);
             out.write(serializeBytes);
-        } else if (split instanceof PaimonSnapshotAndFlussLogSplit) {
-            // TODO support primary key table in https://github.com/apache/fluss/issues/1434
-            FileStoreSourceSplitSerializer fileStoreSourceSplitSerializer =
-                    new FileStoreSourceSplitSerializer();
+        } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
             // writing file store source split
-            PaimonSnapshotAndFlussLogSplit paimonSnapshotAndFlussLogSplit =
-                    ((PaimonSnapshotAndFlussLogSplit) split);
-            FileStoreSourceSplit fileStoreSourceSplit =
-                    paimonSnapshotAndFlussLogSplit.getSnapshotSplit();
-            if (fileStoreSourceSplit == null) {
+            LakeSnapshotAndFlussLogSplit lakeSnapshotAndFlussLogSplit =
+                    ((LakeSnapshotAndFlussLogSplit) split);
+            List<LakeSplit> lakeSplits = lakeSnapshotAndFlussLogSplit.getLakeSplits();
+            if (lakeSplits == null) {
                 // no snapshot data for the bucket
                 out.writeBoolean(false);
             } else {
                 out.writeBoolean(true);
-                byte[] serializeBytes =
-                        fileStoreSourceSplitSerializer.serialize(fileStoreSourceSplit);
-                out.writeInt(serializeBytes.length);
-                out.write(serializeBytes);
+                out.writeInt(lakeSplits.size());
+                for (LakeSplit lakeSplit : lakeSplits) {
+                    byte[] serializeBytes = sourceSplitSerializer.serialize(lakeSplit);
+                    out.writeInt(serializeBytes.length);
+                    out.write(serializeBytes);
+                }
             }
             // writing starting/stopping offset
-            out.writeLong(paimonSnapshotAndFlussLogSplit.getStartingOffset());
+            out.writeLong(lakeSnapshotAndFlussLogSplit.getStartingOffset());
             out.writeLong(
-                    paimonSnapshotAndFlussLogSplit
+                    lakeSnapshotAndFlussLogSplit
                             .getStoppingOffset()
                             .orElse(LogSplit.NO_STOPPING_OFFSET));
-            out.writeLong(paimonSnapshotAndFlussLogSplit.getRecordsToSkip());
+            out.writeLong(lakeSnapshotAndFlussLogSplit.getRecordsToSkip());
         } else {
             throw new UnsupportedOperationException(
                     "Unsupported split type: " + split.getClass().getName());
@@ -97,25 +95,26 @@ public class LakeSplitSerializer {
                     sourceSplitSerializer.deserialize(
                             sourceSplitSerializer.getVersion(), serializeBytes);
             return new LakeSnapshotSplit(tableBucket, partition, fileStoreSourceSplit);
-            // TODO support primary key table in https://github.com/apache/fluss/issues/1434
-        } else if (splitKind == PAIMON_SNAPSHOT_FLUSS_LOG_SPLIT_KIND) {
-            FileStoreSourceSplitSerializer fileStoreSourceSplitSerializer =
-                    new FileStoreSourceSplitSerializer();
-            FileStoreSourceSplit fileStoreSourceSplit = null;
+        } else if (splitKind == LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND) {
+            List<LakeSplit> lakeSplits = null;
             if (input.readBoolean()) {
-                byte[] serializeBytes = new byte[input.readInt()];
-                input.read(serializeBytes);
-                fileStoreSourceSplit =
-                        fileStoreSourceSplitSerializer.deserialize(
-                                fileStoreSourceSplitSerializer.getVersion(), serializeBytes);
+                int lakeSplitSize = input.readInt();
+                lakeSplits = new ArrayList<>(lakeSplitSize);
+                for (int i = 0; i < lakeSplitSize; i++) {
+                    byte[] serializeBytes = new byte[input.readInt()];
+                    input.read(serializeBytes);
+                    lakeSplits.add(
+                            sourceSplitSerializer.deserialize(
+                                    sourceSplitSerializer.getVersion(), serializeBytes));
+                }
             }
             long startingOffset = input.readLong();
             long stoppingOffset = input.readLong();
             long recordsToSkip = input.readLong();
-            return new PaimonSnapshotAndFlussLogSplit(
+            return new LakeSnapshotAndFlussLogSplit(
                     tableBucket,
                     partition,
-                    fileStoreSourceSplit,
+                    lakeSplits,
                     startingOffset,
                     stoppingOffset,
                     recordsToSkip);

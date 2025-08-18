@@ -19,8 +19,8 @@ package com.alibaba.fluss.flink.lake;
 
 import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.client.metadata.LakeSnapshot;
+import com.alibaba.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import com.alibaba.fluss.flink.lake.split.LakeSnapshotSplit;
-import com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
 import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
 import com.alibaba.fluss.flink.source.split.LogSplit;
 import com.alibaba.fluss.flink.source.split.SourceSplitBase;
@@ -29,17 +29,6 @@ import com.alibaba.fluss.lake.source.LakeSplit;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
-
-import org.apache.paimon.CoreOptions;
-import org.apache.paimon.catalog.Catalog;
-import org.apache.paimon.catalog.Identifier;
-import org.apache.paimon.flink.FlinkCatalogFactory;
-import org.apache.paimon.flink.source.FileStoreSourceSplit;
-import org.apache.paimon.flink.source.FileStoreSourceSplitGenerator;
-import org.apache.paimon.options.MemorySize;
-import org.apache.paimon.options.Options;
-import org.apache.paimon.table.FileStoreTable;
-import org.apache.paimon.table.source.InnerTableScan;
 
 import javax.annotation.Nullable;
 
@@ -53,8 +42,6 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
-import static com.alibaba.fluss.flink.utils.DataLakeUtils.extractLakeCatalogProperties;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /** A generator for lake splits. */
 public class LakeSplitGenerator {
@@ -86,10 +73,6 @@ public class LakeSplitGenerator {
         // get the file store
         LakeSnapshot lakeSnapshotInfo =
                 flussAdmin.getLatestLakeSnapshot(tableInfo.getTablePath()).get();
-        FileStoreTable fileStoreTable =
-                getTable(
-                        lakeSnapshotInfo.getSnapshotId(),
-                        extractLakeCatalogProperties(tableInfo.getProperties()));
 
         boolean isLogTable = !tableInfo.hasPrimaryKey();
         boolean isPartitioned = tableInfo.isPartitioned();
@@ -113,17 +96,13 @@ public class LakeSplitGenerator {
                     lakeSplits,
                     isLogTable,
                     lakeSnapshotInfo.getTableBucketsOffset(),
-                    partitionNameById,
-                    fileStoreTable);
+                    partitionNameById);
         } else {
             Map<Integer, List<LakeSplit>> nonPartitionLakeSplits =
                     lakeSplits.values().iterator().next();
             // non-partitioned table
             return generateNoPartitionedTableSplit(
-                    nonPartitionLakeSplits,
-                    isLogTable,
-                    lakeSnapshotInfo.getTableBucketsOffset(),
-                    fileStoreTable);
+                    nonPartitionLakeSplits, isLogTable, lakeSnapshotInfo.getTableBucketsOffset());
         }
     }
 
@@ -145,8 +124,7 @@ public class LakeSplitGenerator {
             Map<String, Map<Integer, List<LakeSplit>>> lakeSplits,
             boolean isLogTable,
             Map<TableBucket, Long> tableBucketSnapshotLogOffset,
-            Map<Long, String> partitionNameById,
-            @Nullable FileStoreTable fileStoreTable)
+            Map<Long, String> partitionNameById)
             throws Exception {
         List<SourceSplitBase> splits = new ArrayList<>();
         Map<String, Long> flussPartitionIdByName =
@@ -181,8 +159,7 @@ public class LakeSplitGenerator {
                                 partitionName,
                                 isLogTable,
                                 tableBucketSnapshotLogOffset,
-                                bucketEndOffset,
-                                fileStoreTable));
+                                bucketEndOffset));
 
             } else {
                 // only lake data
@@ -216,8 +193,7 @@ public class LakeSplitGenerator {
                             isLogTable,
                             // pass empty map since we won't read lake splits
                             Collections.emptyMap(),
-                            bucketEndOffset,
-                            fileStoreTable));
+                            bucketEndOffset));
         }
         return splits;
     }
@@ -228,8 +204,7 @@ public class LakeSplitGenerator {
             @Nullable String partitionName,
             boolean isLogTable,
             Map<TableBucket, Long> tableBucketSnapshotLogOffset,
-            Map<Integer, Long> bucketEndOffset,
-            @Nullable FileStoreTable fileStoreTable) {
+            Map<Integer, Long> bucketEndOffset) {
         List<SourceSplitBase> splits = new ArrayList<>();
         if (isLogTable) {
             if (lakeSplits != null) {
@@ -264,12 +239,9 @@ public class LakeSplitGenerator {
                         new TableBucket(tableInfo.getTableId(), partitionId, bucket);
                 Long snapshotLogOffset = tableBucketSnapshotLogOffset.get(tableBucket);
                 long stoppingOffset = bucketEndOffset.get(bucket);
-                FileStoreSourceSplitGenerator splitGenerator = new FileStoreSourceSplitGenerator();
-
                 splits.add(
                         generateSplitForPrimaryKeyTableBucket(
-                                fileStoreTable,
-                                splitGenerator,
+                                lakeSplits != null ? lakeSplits.get(bucket) : null,
                                 tableBucket,
                                 partitionName,
                                 snapshotLogOffset,
@@ -295,83 +267,26 @@ public class LakeSplitGenerator {
     }
 
     private SourceSplitBase generateSplitForPrimaryKeyTableBucket(
-            FileStoreTable fileStoreTable,
-            FileStoreSourceSplitGenerator splitGenerator,
+            @Nullable List<LakeSplit> lakeSplits,
             TableBucket tableBucket,
             @Nullable String partitionName,
             @Nullable Long snapshotLogOffset,
             long stoppingOffset) {
-
         // no snapshot data for this bucket or no a corresponding log offset in this bucket,
         // can only scan from change log
         if (snapshotLogOffset == null || snapshotLogOffset < 0) {
-            return new PaimonSnapshotAndFlussLogSplit(
+            return new LakeSnapshotAndFlussLogSplit(
                     tableBucket, partitionName, null, EARLIEST_OFFSET, stoppingOffset);
         }
 
-        // then, generate a split contains
-        // snapshot and change log so that we can merge change log and snapshot
-        // to get the full data
-        fileStoreTable =
-                fileStoreTable.copy(
-                        Collections.singletonMap(
-                                CoreOptions.SOURCE_SPLIT_TARGET_SIZE.key(),
-                                // we set a max size to make sure only one splits
-                                MemorySize.MAX_VALUE.toString()));
-        InnerTableScan tableScan =
-                fileStoreTable.newScan().withBucketFilter((b) -> b == tableBucket.getBucket());
-
-        if (partitionName != null) {
-            tableScan =
-                    tableScan.withPartitionFilter(getPartitionSpec(fileStoreTable, partitionName));
-        }
-
-        List<FileStoreSourceSplit> fileStoreSourceSplits =
-                splitGenerator.createSplits(tableScan.plan());
-
-        checkState(fileStoreSourceSplits.size() == 1, "Splits for primary key table must be 1.");
-        FileStoreSourceSplit fileStoreSourceSplit = fileStoreSourceSplits.get(0);
-        return new PaimonSnapshotAndFlussLogSplit(
-                tableBucket,
-                partitionName,
-                fileStoreSourceSplit,
-                snapshotLogOffset,
-                stoppingOffset);
-    }
-
-    private Map<String, String> getPartitionSpec(
-            FileStoreTable fileStoreTable, String partitionName) {
-        List<String> partitionKeys = fileStoreTable.partitionKeys();
-        checkState(
-                partitionKeys.size() == 1,
-                "Must only one partition key for paimon table %, but got %s, the partition keys are: ",
-                tableInfo.getTablePath(),
-                partitionKeys.size(),
-                partitionKeys);
-        return Collections.singletonMap(partitionKeys.get(0), partitionName);
-    }
-
-    private FileStoreTable getTable(long snapshotId, Map<String, String> catalogProperties)
-            throws Exception {
-        try (Catalog catalog =
-                FlinkCatalogFactory.createPaimonCatalog(Options.fromMap(catalogProperties))) {
-            return (FileStoreTable)
-                    catalog.getTable(
-                                    Identifier.create(
-                                            tableInfo.getTablePath().getDatabaseName(),
-                                            tableInfo.getTablePath().getTableName()))
-                            .copy(
-                                    Collections.singletonMap(
-                                            CoreOptions.SCAN_SNAPSHOT_ID.key(),
-                                            String.valueOf(snapshotId)));
-        }
+        return new LakeSnapshotAndFlussLogSplit(
+                tableBucket, partitionName, lakeSplits, snapshotLogOffset, stoppingOffset);
     }
 
     private List<SourceSplitBase> generateNoPartitionedTableSplit(
             Map<Integer, List<LakeSplit>> lakeSplits,
             boolean isLogTable,
-            Map<TableBucket, Long> tableBucketSnapshotLogOffset,
-            FileStoreTable fileStoreTable) {
+            Map<TableBucket, Long> tableBucketSnapshotLogOffset) {
         // iterate all bucket
         // assume bucket is from 0 to bucket count
         Map<Integer, Long> bucketEndOffset =
@@ -380,12 +295,6 @@ public class LakeSplitGenerator {
                         IntStream.range(0, bucketCount).boxed().collect(Collectors.toList()),
                         bucketOffsetsRetriever);
         return generateSplit(
-                lakeSplits,
-                null,
-                null,
-                isLogTable,
-                tableBucketSnapshotLogOffset,
-                bucketEndOffset,
-                fileStoreTable);
+                lakeSplits, null, null, isLogTable, tableBucketSnapshotLogOffset, bucketEndOffset);
     }
 }

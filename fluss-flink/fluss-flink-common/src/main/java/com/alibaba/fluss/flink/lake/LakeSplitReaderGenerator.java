@@ -18,7 +18,9 @@
 package com.alibaba.fluss.flink.lake;
 
 import com.alibaba.fluss.client.table.Table;
+import com.alibaba.fluss.flink.lake.reader.LakeSnapshotAndLogSplitScanner;
 import com.alibaba.fluss.flink.lake.reader.LakeSnapshotScanner;
+import com.alibaba.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import com.alibaba.fluss.flink.lake.split.LakeSnapshotSplit;
 import com.alibaba.fluss.flink.lakehouse.paimon.reader.PaimonSnapshotAndLogSplitScanner;
 import com.alibaba.fluss.flink.lakehouse.paimon.reader.PaimonSnapshotScanner;
@@ -73,7 +75,8 @@ public class LakeSplitReaderGenerator {
             boundedSplits.add(split);
         } else if (split instanceof LakeSnapshotSplit) {
             boundedSplits.add(split);
-            // TODO support primary key table in https://github.com/apache/fluss/issues/1434
+        } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
+            boundedSplits.add(split);
         } else {
             throw new UnsupportedOperationException(
                     String.format("The split type of %s is not supported.", split.getClass()));
@@ -112,7 +115,15 @@ public class LakeSplitReaderGenerator {
                     new LakeSnapshotScanner(lakeSource, lakeSnapshotSplit);
             return new BoundedSplitReader(
                     lakeSnapshotScanner, lakeSnapshotSplit.getRecordsToSplit());
-            // TODO support primary key table in https://github.com/apache/fluss/issues/1434
+        } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
+            LakeSnapshotAndFlussLogSplit lakeSnapshotAndFlussLogSplit =
+                    (LakeSnapshotAndFlussLogSplit) split;
+            LakeSnapshotAndLogSplitScanner lakeSnapshotAndLogSplitScanner =
+                    new LakeSnapshotAndLogSplitScanner(
+                            table, lakeSource, lakeSnapshotAndFlussLogSplit, projectedFields);
+            return new BoundedSplitReader(
+                    lakeSnapshotAndLogSplitScanner,
+                    lakeSnapshotAndFlussLogSplit.getRecordsToSkip());
         } else {
             throw new UnsupportedOperationException(
                     String.format("The split type of %s is not supported.", split.getClass()));

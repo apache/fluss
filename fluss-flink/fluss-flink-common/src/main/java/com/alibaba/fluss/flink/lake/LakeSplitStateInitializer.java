@@ -17,7 +17,9 @@
 
 package com.alibaba.fluss.flink.lake;
 
+import com.alibaba.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import com.alibaba.fluss.flink.lake.split.LakeSnapshotSplit;
+import com.alibaba.fluss.flink.lake.state.LakeSnapshotAndFlussLogSplitState;
 import com.alibaba.fluss.flink.lake.state.LakeSnapshotSplitState;
 import com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
 import com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplitState;
@@ -32,7 +34,8 @@ public class LakeSplitStateInitializer {
             return new PaimonSnapshotAndFlussLogSplitState((PaimonSnapshotAndFlussLogSplit) split);
         } else if (split instanceof LakeSnapshotSplit) {
             return new LakeSnapshotSplitState((LakeSnapshotSplit) split);
-            // TODO support primary key table in https://github.com/apache/fluss/issues/1434
+        } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
+            return new LakeSnapshotAndFlussLogSplitState((LakeSnapshotAndFlussLogSplit) split);
         } else {
             throw new UnsupportedOperationException("Unsupported split type: " + split);
         }
