@@ -175,22 +175,17 @@ public class CoordinatorServer extends ServerBase {
         ZooKeeperUtils.registerZookeeperClientReInitSessionListener(
                 zkClient, this::registerCoordinatorServer, this);
 
-        // try to register Coordinator leader once
-        if (tryElectCoordinatorLeaderOnce()) {
-            startCoordinatorLeaderService();
-        } else {
-            // standby
-            CoordinatorLeaderElection coordinatorLeaderElection =
-                    new CoordinatorLeaderElection(zkClient.getCuratorClient(), serverId);
-            coordinatorLeaderElection.startElectLeader(
-                    () -> {
-                        try {
-                            startCoordinatorLeaderService();
-                        } catch (Exception e) {
-                            throw new RuntimeException(e);
-                        }
-                    });
-        }
+        // standby
+        CoordinatorLeaderElection coordinatorLeaderElection =
+                new CoordinatorLeaderElection(zkClient.getCuratorClient(), serverId);
+        coordinatorLeaderElection.startElectLeader(
+                () -> {
+                    try {
+                        startCoordinatorLeaderService();
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
     }
 
     protected void startCoordinatorLeaderService() throws Exception {
@@ -344,19 +339,6 @@ public class CoordinatorServer extends ServerBase {
                     break;
                 }
             }
-        }
-    }
-
-    private boolean tryElectCoordinatorLeaderOnce() throws Exception {
-        try {
-            zkClient.electCoordinatorLeader();
-            LOG.info("Coordinator server {} win the leader in election now.", serverId);
-            return true;
-        } catch (KeeperException.NodeExistsException nodeExistsException) {
-            LOG.warn(
-                    "Coordinator leader already registered in Zookeeper. Coordinator {} will be standby",
-                    serverId);
-            return false;
         }
     }
 

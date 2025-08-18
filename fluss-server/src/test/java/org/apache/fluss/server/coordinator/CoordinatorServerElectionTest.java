@@ -33,6 +33,8 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -57,12 +59,22 @@ class CoordinatorServerElectionTest {
         CoordinatorServer coordinatorServer1 = new CoordinatorServer(createConfiguration(1));
         CoordinatorServer coordinatorServer2 = new CoordinatorServer(createConfiguration(2));
         CoordinatorServer coordinatorServer3 = new CoordinatorServer(createConfiguration(3));
-        coordinatorServer1.start();
-        coordinatorServer2.start();
-        coordinatorServer3.start();
 
         List<CoordinatorServer> coordinatorServerList =
                 Arrays.asList(coordinatorServer1, coordinatorServer2, coordinatorServer3);
+
+        ExecutorService executor = Executors.newFixedThreadPool(3);
+        for (int i = 0; i < 3; i++) {
+            CoordinatorServer server = coordinatorServerList.get(i);
+            executor.submit(
+                    () -> {
+                        try {
+                            server.start();
+                        } catch (Exception e) {
+                            e.printStackTrace();
+                        }
+                    });
+        }
 
         waitUntilCoordinatorServerElected();
 
