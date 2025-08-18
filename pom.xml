@@ -61,14 +61,6 @@
         </repository>
     </distributionManagement>
 
-    <repositories>
-        <repository>
-            <id>fluss-shaded-staging</id>
-            <name>Temporary Staging Repo</name>
-            <url>https://repository.apache.org/content/repositories/orgapachefluss-1000/</url>
-        </repository>
-    </repositories>
-
     <modules>
         <module>fluss-common</module>
         <module>fluss-metrics</module>
