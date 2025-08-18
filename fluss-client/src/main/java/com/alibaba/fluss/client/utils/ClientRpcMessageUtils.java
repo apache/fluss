@@ -33,6 +33,8 @@ import com.alibaba.fluss.metadata.PartitionSpec;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.metadata.UpdateProperties;
+import com.alibaba.fluss.rpc.messages.AlterTableRequest;
 import com.alibaba.fluss.rpc.messages.CreatePartitionRequest;
 import com.alibaba.fluss.rpc.messages.DropPartitionRequest;
 import com.alibaba.fluss.rpc.messages.GetFileSystemSecurityTokenResponse;
@@ -52,6 +54,7 @@ import com.alibaba.fluss.rpc.messages.PbPrefixLookupReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbProduceLogReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbPutKvReqForBucket;
 import com.alibaba.fluss.rpc.messages.PbRemotePathAndLocalFile;
+import com.alibaba.fluss.rpc.messages.PbUpdateProperties;
 import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
 import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
 import com.alibaba.fluss.rpc.messages.PutKvRequest;
@@ -343,5 +346,24 @@ public class ClientRpcMessageUtils {
         partitionSpecMap.forEach(
                 (key, value) -> pbKeyValues.add(new PbKeyValue().setKey(key).setValue(value)));
         return new PbPartitionSpec().addAllPartitionKeyValues(pbKeyValues);
+    }
+
+    public static AlterTableRequest makeAlterTableRequest(
+            TablePath tablePath, UpdateProperties updateProperties) {
+        AlterTableRequest request = new AlterTableRequest();
+        request.setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        PbUpdateProperties pbUpdateProperties = new PbUpdateProperties();
+        pbUpdateProperties.addAllSetProperties(
+                updateProperties.getSetProperties().entrySet().stream()
+                        .map(
+                                entry ->
+                                        new PbKeyValue()
+                                                .setKey(entry.getKey())
+                                                .setValue(entry.getValue()))
+                        .collect(Collectors.toList()));
+        request.setUpdateProperties(pbUpdateProperties);
+        return request;
     }
 }

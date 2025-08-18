@@ -23,6 +23,7 @@ import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
 import com.alibaba.fluss.exception.FlussRuntimeException;
+import com.alibaba.fluss.exception.InvalidAlterTableException;
 import com.alibaba.fluss.exception.InvalidPartitionException;
 import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
@@ -40,6 +41,8 @@ import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.metadata.UpdateProperties;
+import com.alibaba.fluss.server.entity.AlterTableData;
 import com.alibaba.fluss.server.utils.LakeStorageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.data.DatabaseRegistration;
@@ -55,13 +58,17 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
 
+import static com.alibaba.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
+import static com.alibaba.fluss.config.FlussConfigUtils.TABLE_OPTIONS_SUPPORT_ALTER;
 import static com.alibaba.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** A manager for metadata. */
 public class MetadataManager {
@@ -162,6 +169,77 @@ public class MetadataManager {
     public Map<String, Long> listPartitions(TablePath tablePath)
             throws TableNotExistException, TableNotPartitionedException {
         return listPartitions(tablePath, null);
+    }
+
+    public void alterTable(
+            AlterTableData alterTableData,
+            LakeCatalogDynamicLoader lakeCatalogDynamicLoader,
+            LakeTableTieringManager lakeTableTieringManager) {
+        TablePath tablePath = alterTableData.getTablePath();
+        if (!tableExists(tablePath)) {
+            throw new TableNotExistException("Table " + tablePath + " does not exist.");
+        }
+
+        TableRegistration oldTableReg = getTableRegistration(tablePath);
+
+        // validate and apply update properties.
+        TableRegistration newTableReg =
+                validateAndApplyUpdateProperties(
+                        oldTableReg, alterTableData.getUpdatePropertiesData());
+
+        Configuration newConfig =
+                Configuration.fromMap(alterTableData.getUpdatePropertiesData().getSetProperties());
+
+        boolean isEnabledDataLake = false;
+        if (newConfig.get(TABLE_DATALAKE_ENABLED)
+                && !Configuration.fromMap(oldTableReg.properties).get(TABLE_DATALAKE_ENABLED)) {
+            try {
+                TableDescriptor newTableDescriptor =
+                        getTable(tablePath)
+                                .toTableDescriptor()
+                                .withProperties(newTableReg.properties);
+                checkNotNull(lakeCatalogDynamicLoader.getLakeCatalog())
+                        .createTable(tablePath, newTableDescriptor);
+                isEnabledDataLake = true;
+            } catch (TableAlreadyExistException e) {
+                throw new TableAlreadyExistException(
+                        String.format(
+                                "The table %s already exists in %s catalog, please "
+                                        + "first drop the table in %s catalog or use a new table name.",
+                                tablePath,
+                                lakeCatalogDynamicLoader.getDataLakeFormat(),
+                                lakeCatalogDynamicLoader.getDataLakeFormat()));
+            }
+        } else if (!newConfig.get(TABLE_DATALAKE_ENABLED)) {
+            lakeTableTieringManager.removeLakeTable(oldTableReg.tableId);
+        }
+
+        uncheck(
+                () -> zookeeperClient.updateTable(tablePath, newTableReg),
+                "Fail to alter table: " + tablePath);
+
+        if (isEnabledDataLake) {
+            lakeTableTieringManager.addNewLakeTable(getTable(tablePath));
+        }
+    }
+
+    private TableRegistration validateAndApplyUpdateProperties(
+            TableRegistration oldTableReg, UpdateProperties updatePropertiesData) {
+        Map<String, String> properties = new HashMap<>(oldTableReg.properties);
+        // 1. set table properties.
+        for (Map.Entry<String, String> setProperty :
+                updatePropertiesData.getSetProperties().entrySet()) {
+            validateSetTableProperty(setProperty.getKey());
+            properties.put(setProperty.getKey(), setProperty.getValue());
+        }
+        return oldTableReg.copy(properties);
+    }
+
+    private void validateSetTableProperty(String setKey) {
+        if (!TABLE_OPTIONS_SUPPORT_ALTER.contains(setKey)) {
+            throw new InvalidAlterTableException(
+                    "Update table property: '" + setKey + "' is not supported yet.");
+        }
     }
 
     /**

@@ -26,7 +26,12 @@ import com.alibaba.fluss.client.table.writer.Append;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.Upsert;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
+import com.alibaba.fluss.exception.InvalidAlterTableException;
+import com.alibaba.fluss.exception.TableNotExistException;
 import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.metadata.UpdateProperties;
+
+import java.util.concurrent.CompletableFuture;
 
 /**
  * Used to communicate with a single Fluss table. Obtain an instance from a {@link Connection}.
@@ -72,4 +77,18 @@ public interface Table extends AutoCloseable {
      * this table (requires to be a Primary Key Table).
      */
     Upsert newUpsert();
+
+    /**
+     * Update the table properties with this table.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link TableNotExistException} if the table does not exist.
+     *   <li>{@link InvalidAlterTableException} if the update properties is invalid.
+     * </ul>
+     *
+     * @param updateProperties the update properties.
+     */
+    CompletableFuture<Void> updateProperties(UpdateProperties updateProperties);
 }

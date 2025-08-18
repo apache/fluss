@@ -561,6 +561,19 @@ message AlterConfigsResponse{
 }
 
 
+message AlterTableRequest {
+  required PbTablePath table_path = 1;
+  optional PbUpdateProperties update_properties = 2;
+}
+
+message AlterTableResponse {
+}
+
+message PbUpdateProperties {
+  repeated string remove_properties = 1;
+  repeated PbKeyValue set_properties = 2;
+}
+
 
 // --------------- Inner classes ----------------
 message PbApiVersion {

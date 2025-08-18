@@ -29,7 +29,13 @@ import com.alibaba.fluss.client.table.writer.TableUpsert;
 import com.alibaba.fluss.client.table.writer.Upsert;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.metadata.UpdateProperties;
+import com.alibaba.fluss.rpc.GatewayClientProxy;
+import com.alibaba.fluss.rpc.gateway.AdminGateway;
 
+import java.util.concurrent.CompletableFuture;
+
+import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeAlterTableRequest;
 import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /**
@@ -84,6 +90,18 @@ public class FlussTable implements Table {
                 "Table %s is not a Primary Key Table and doesn't support UpsertWriter.",
                 tablePath);
         return new TableUpsert(tablePath, tableInfo, conn.getOrCreateWriterClient());
+    }
+
+    @Override
+    public CompletableFuture<Void> updateProperties(UpdateProperties updateProperties) {
+        AdminGateway adminGateway =
+                GatewayClientProxy.createGatewayProxy(
+                        () -> conn.getMetadataUpdater().getCoordinatorServer(),
+                        conn.getRpcClient(),
+                        AdminGateway.class);
+        return adminGateway
+                .alterTable(makeAlterTableRequest(tablePath, updateProperties))
+                .thenApply(r -> null);
     }
 
     @Override

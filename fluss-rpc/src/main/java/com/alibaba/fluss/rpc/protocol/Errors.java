@@ -28,6 +28,7 @@ import com.alibaba.fluss.exception.DatabaseNotExistException;
 import com.alibaba.fluss.exception.DuplicateSequenceException;
 import com.alibaba.fluss.exception.FencedLeaderEpochException;
 import com.alibaba.fluss.exception.FencedTieringEpochException;
+import com.alibaba.fluss.exception.InvalidAlterTableException;
 import com.alibaba.fluss.exception.InvalidColumnProjectionException;
 import com.alibaba.fluss.exception.InvalidConfigException;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
@@ -219,7 +220,9 @@ public enum Errors {
     INVALID_REQUEST(
             54,
             "This most likely occurs because of a request being malformed by the client library or the message was sent to an incompatible server. See the server logs for more details.",
-            InvalidRequestException::new);
+            InvalidRequestException::new),
+    INVALID_ALTER_TABLE_EXCEPTION(
+            40, "The alter table is invalid.", InvalidAlterTableException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

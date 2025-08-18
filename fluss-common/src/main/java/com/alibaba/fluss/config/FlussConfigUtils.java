@@ -21,8 +21,12 @@ import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.annotation.VisibleForTesting;
 
 import java.lang.reflect.Field;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
+
+import static com.alibaba.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
 
 /** Utilities of Fluss {@link ConfigOptions}. */
 @Internal
@@ -37,6 +41,10 @@ public class FlussConfigUtils {
         TABLE_OPTIONS = extractConfigOptions("table.");
         CLIENT_OPTIONS = extractConfigOptions("client.");
     }
+
+    // table properties that support alter.
+    public static final List<String> TABLE_OPTIONS_SUPPORT_ALTER =
+            Collections.singletonList(TABLE_DATALAKE_ENABLED.key());
 
     @VisibleForTesting
     static Map<String, ConfigOption<?>> extractConfigOptions(String prefix) {

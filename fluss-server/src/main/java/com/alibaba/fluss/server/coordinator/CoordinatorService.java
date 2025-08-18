@@ -45,6 +45,8 @@ import com.alibaba.fluss.rpc.messages.AdjustIsrRequest;
 import com.alibaba.fluss.rpc.messages.AdjustIsrResponse;
 import com.alibaba.fluss.rpc.messages.AlterConfigsRequest;
 import com.alibaba.fluss.rpc.messages.AlterConfigsResponse;
+import com.alibaba.fluss.rpc.messages.AlterTableRequest;
+import com.alibaba.fluss.rpc.messages.AlterTableResponse;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotResponse;
 import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -124,6 +126,7 @@ import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilte
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getAdjustIsrData;
+import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getAlterTableData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getCommitLakeTableSnapshotData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getCommitRemoteLogManifestData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
@@ -696,6 +699,14 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         });
         eventManagerSupplier.get().put(accessContextEvent);
         return future;
+    }
+
+    @Override
+    public CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request) {
+        AlterTableResponse response = new AlterTableResponse();
+        metadataManager.alterTable(
+                getAlterTableData(request), lakeCatalogDynamicLoader, lakeTableTieringManager);
+        return CompletableFuture.completedFuture(response);
     }
 
     @VisibleForTesting

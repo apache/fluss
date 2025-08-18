@@ -30,6 +30,7 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.metadata.UpdateProperties;
 import com.alibaba.fluss.record.BytesViewLogRecords;
 import com.alibaba.fluss.record.DefaultKvRecordBatch;
 import com.alibaba.fluss.record.DefaultValueRecordBatch;
@@ -49,6 +50,7 @@ import com.alibaba.fluss.rpc.entity.ProduceLogResultForBucket;
 import com.alibaba.fluss.rpc.entity.PutKvResultForBucket;
 import com.alibaba.fluss.rpc.messages.AdjustIsrRequest;
 import com.alibaba.fluss.rpc.messages.AdjustIsrResponse;
+import com.alibaba.fluss.rpc.messages.AlterTableRequest;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.CommitRemoteLogManifestRequest;
@@ -116,6 +118,7 @@ import com.alibaba.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbTableBucket;
 import com.alibaba.fluss.rpc.messages.PbTableMetadata;
 import com.alibaba.fluss.rpc.messages.PbTablePath;
+import com.alibaba.fluss.rpc.messages.PbUpdateProperties;
 import com.alibaba.fluss.rpc.messages.PbValue;
 import com.alibaba.fluss.rpc.messages.PbValueList;
 import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
@@ -133,6 +136,7 @@ import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.server.authorizer.AclCreateResult;
 import com.alibaba.fluss.server.authorizer.AclDeleteResult;
 import com.alibaba.fluss.server.entity.AdjustIsrResultForBucket;
+import com.alibaba.fluss.server.entity.AlterTableData;
 import com.alibaba.fluss.server.entity.CommitLakeTableSnapshotData;
 import com.alibaba.fluss.server.entity.CommitRemoteLogManifestData;
 import com.alibaba.fluss.server.entity.FetchReqInfo;
@@ -1625,5 +1629,18 @@ public class ServerRpcMessageUtils {
         result.addAll(response);
         result.addAll(errors);
         return result;
+    }
+
+    public static AlterTableData getAlterTableData(AlterTableRequest request) {
+        PbTablePath pbTablePath = request.getTablePath();
+        TablePath tablePath =
+                TablePath.of(pbTablePath.getDatabaseName(), pbTablePath.getTableName());
+        PbUpdateProperties pbUpdateProperties = request.getUpdateProperties();
+        UpdateProperties.Builder builder = UpdateProperties.builder();
+        for (PbKeyValue setProperty : pbUpdateProperties.getSetPropertiesList()) {
+            builder.setProperty(setProperty.getKey(), setProperty.getValue());
+        }
+
+        return new AlterTableData(tablePath, builder.build());
     }
 }

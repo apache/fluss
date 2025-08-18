@@ -27,6 +27,7 @@ import com.alibaba.fluss.exception.InvalidTableException;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.metadata.UpdateProperties;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.types.DataTypes;
 
@@ -115,6 +116,37 @@ class LakeEnabledTableCreateITCase {
                         CatalogContext.create(Options.fromMap(extractLakeProperties(conf))));
 
         return conf;
+    }
+
+    @Test
+    void testDynamicEnableLake() throws Exception {
+        TableDescriptor logTable =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("log_c1", DataTypes.INT()).build())
+                        .build();
+        TablePath logTablePath = TablePath.of(DATABASE, "log_table");
+        admin.createTable(logTablePath, logTable, false).get();
+
+        com.alibaba.fluss.client.table.Table table = conn.getTable(logTablePath);
+        table.updateProperties(
+                        UpdateProperties.builder()
+                                .setProperty(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                                .build())
+                .get();
+        assertThat(conn.getTable(logTablePath).getTableInfo().getTableConfig().isDataLakeEnabled())
+                .isTrue();
+
+        Table paimonLogTable =
+                paimonCatalog.getTable(Identifier.create(DATABASE, logTablePath.getTableName()));
+        System.out.println(paimonLogTable);
+
+        table.updateProperties(
+                        UpdateProperties.builder()
+                                .setProperty(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false")
+                                .build())
+                .get();
+        assertThat(conn.getTable(logTablePath).getTableInfo().getTableConfig().isDataLakeEnabled())
+                .isFalse();
     }
 
     @Test
