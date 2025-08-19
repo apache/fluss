@@ -27,13 +27,22 @@ import java.io.ObjectOutputStream;
 public class HadoopConfSerde {
 
     public static void writeObject(ObjectOutputStream out, Object hadoopConf) throws IOException {
-        Configuration conf = (Configuration) hadoopConf;
-        conf.write(out);
+        try {
+            Configuration conf = (Configuration) hadoopConf;
+            conf.write(out);
+        } catch (IOException e) {
+            throw new IOException("Failed to serialize Hadoop Configuration: " + e.getMessage(), e);
+        }
     }
 
     public static Configuration readObject(ObjectInputStream in) throws IOException {
-        Configuration hadoopConf = new Configuration();
-        hadoopConf.readFields(in);
-        return hadoopConf;
+        try {
+            Configuration hadoopConf = new Configuration();
+            hadoopConf.readFields(in);
+            return hadoopConf;
+        } catch (IOException e) {
+            throw new IOException(
+                    "Failed to deserialize Hadoop Configuration: " + e.getMessage(), e);
+        }
     }
 }

@@ -44,11 +44,13 @@ class IcebergConfigurationTest {
         // test when conf is not null
         Configuration hadoopConf = new Configuration();
         hadoopConf.set("k1", "v1");
+        hadoopConf.set("k2", "v2");
         conf = new IcebergConfiguration(hadoopConf);
         data = serialize(conf);
         gotConf = deserialize(data);
         Configuration gotHadoopConf = (Configuration) gotConf.get();
-        assertThat(gotHadoopConf.toString()).isEqualTo(hadoopConf.toString());
+        assertThat(gotHadoopConf.get("k1")).isEqualTo("v1");
+        assertThat(gotHadoopConf.get("k2")).isEqualTo("v2");
     }
 
     private byte[] serialize(IcebergConfiguration conf) throws IOException {
