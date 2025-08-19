@@ -49,6 +49,7 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
     private final Map<String, String> configs;
 
     public SaslServerAuthenticator(Configuration configuration) {
+        // todo: 更新之后会更新这些值 + loginManager.closeAll()
         this.configs = configuration.toMap();
         List<String> enabledMechanisms = configuration.get(SERVER_SASL_ENABLED_MECHANISMS_CONFIG);
         if (enabledMechanisms == null || enabledMechanisms.isEmpty()) {

@@ -64,6 +64,7 @@ import com.alibaba.fluss.rpc.protocol.ApiError;
 import com.alibaba.fluss.rpc.protocol.Errors;
 import com.alibaba.fluss.security.acl.OperationType;
 import com.alibaba.fluss.security.acl.Resource;
+import com.alibaba.fluss.server.DynamicConfigManager;
 import com.alibaba.fluss.server.RpcServiceBase;
 import com.alibaba.fluss.server.authorizer.Authorizer;
 import com.alibaba.fluss.server.coordinator.MetadataManager;
@@ -130,8 +131,15 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             ReplicaManager replicaManager,
             TabletServerMetadataCache metadataCache,
             MetadataManager metadataManager,
-            @Nullable Authorizer authorizer) {
-        super(remoteFileSystem, ServerType.TABLET_SERVER, zkClient, metadataManager, authorizer);
+            @Nullable Authorizer authorizer,
+            DynamicConfigManager dynamicConfigManager) {
+        super(
+                remoteFileSystem,
+                ServerType.TABLET_SERVER,
+                zkClient,
+                metadataManager,
+                authorizer,
+                dynamicConfigManager);
         this.serviceName = "server-" + serverId;
         this.replicaManager = replicaManager;
         this.metadataCache = metadataCache;

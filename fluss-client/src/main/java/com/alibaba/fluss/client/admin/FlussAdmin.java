@@ -24,6 +24,8 @@ import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.utils.ClientRpcMessageUtils;
 import com.alibaba.fluss.cluster.Cluster;
 import com.alibaba.fluss.cluster.ServerNode;
+import com.alibaba.fluss.config.dynamic.AlterConfigOp;
+import com.alibaba.fluss.config.dynamic.ConfigEntry;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.DatabaseInfo;
 import com.alibaba.fluss.metadata.PartitionInfo;
@@ -40,11 +42,13 @@ import com.alibaba.fluss.rpc.RpcClient;
 import com.alibaba.fluss.rpc.gateway.AdminGateway;
 import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
+import com.alibaba.fluss.rpc.messages.AlterConfigsRequest;
 import com.alibaba.fluss.rpc.messages.CreateAclsRequest;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
+import com.alibaba.fluss.rpc.messages.DescribeConfigsRequest;
 import com.alibaba.fluss.rpc.messages.DropAclsRequest;
 import com.alibaba.fluss.rpc.messages.DropDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.DropTableRequest;
@@ -61,6 +65,8 @@ import com.alibaba.fluss.rpc.messages.ListOffsetsRequest;
 import com.alibaba.fluss.rpc.messages.ListPartitionInfosRequest;
 import com.alibaba.fluss.rpc.messages.ListTablesRequest;
 import com.alibaba.fluss.rpc.messages.ListTablesResponse;
+import com.alibaba.fluss.rpc.messages.PbAlterConfigsRequestInfo;
+import com.alibaba.fluss.rpc.messages.PbDescribeConfigsResponseInfo;
 import com.alibaba.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import com.alibaba.fluss.rpc.messages.PbPartitionSpec;
 import com.alibaba.fluss.rpc.messages.PbTablePath;
@@ -80,6 +86,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
 import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
@@ -463,6 +470,65 @@ public class FlussAdmin implements Admin {
                             }
                         });
         return result;
+    }
+
+    @Override
+    public CompletableFuture<Collection<ConfigEntry>> describeConfigs() {
+        CompletableFuture<Collection<ConfigEntry>> future = new CompletableFuture<>();
+        DescribeConfigsRequest request = new DescribeConfigsRequest();
+        gateway.describeConfigs(request)
+                .whenComplete(
+                        (r, t) -> {
+                            if (t != null) {
+                                future.completeExceptionally(t);
+                            }
+
+                            List<PbDescribeConfigsResponseInfo> responseInfos = r.getInfosList();
+                            List<ConfigEntry> configEntries =
+                                    responseInfos.stream()
+                                            .map(
+                                                    responseInfo ->
+                                                            new ConfigEntry(
+                                                                    responseInfo.getConfigKey(),
+                                                                    responseInfo.hasConfigValue()
+                                                                            ? responseInfo
+                                                                                    .getConfigValue()
+                                                                            : null,
+                                                                    ConfigEntry.ConfigSource
+                                                                            .valueOf(
+                                                                                    responseInfo
+                                                                                            .getConfigSource())))
+                                            .collect(Collectors.toList());
+                            future.complete(configEntries);
+                        });
+        return future;
+    }
+
+    @Override
+    public CompletableFuture<Void> alterConfigs(Collection<AlterConfigOp> configs) {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+
+        AlterConfigsRequest request = new AlterConfigsRequest();
+        for (AlterConfigOp alterConfigOp : configs) {
+            PbAlterConfigsRequestInfo requestInfo =
+                    request.addInfo()
+                            .setConfigKey(alterConfigOp.key())
+                            .setOpType(alterConfigOp.opType().id());
+            if (alterConfigOp.value() != null) {
+                requestInfo.setConfigValue(alterConfigOp.value());
+            }
+        }
+        gateway.alterConfigs(request)
+                .whenComplete(
+                        (r, t) -> {
+                            if (t != null) {
+                                future.completeExceptionally(t);
+                            }
+
+                            future.complete(null);
+                        });
+
+        return future;
     }
 
     @Override

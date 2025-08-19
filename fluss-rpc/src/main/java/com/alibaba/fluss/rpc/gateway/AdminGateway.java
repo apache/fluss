@@ -17,6 +17,8 @@
 
 package com.alibaba.fluss.rpc.gateway;
 
+import com.alibaba.fluss.rpc.messages.AlterConfigsRequest;
+import com.alibaba.fluss.rpc.messages.AlterConfigsResponse;
 import com.alibaba.fluss.rpc.messages.CreateAclsRequest;
 import com.alibaba.fluss.rpc.messages.CreateAclsResponse;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
@@ -103,6 +105,9 @@ public interface AdminGateway extends AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.DROP_ACLS)
     CompletableFuture<DropAclsResponse> dropAcls(DropAclsRequest request);
+
+    @RPC(api = ApiKeys.ALTER_CONFIGS)
+    CompletableFuture<AlterConfigsResponse> alterConfigs(AlterConfigsRequest request);
 
     // todo: rename table & alter table
 

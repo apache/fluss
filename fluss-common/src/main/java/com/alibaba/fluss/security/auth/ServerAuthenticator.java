@@ -21,7 +21,6 @@ import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
 
-import java.io.Closeable;
 import java.io.IOException;
 
 /**
@@ -30,7 +29,7 @@ import java.io.IOException;
  * @since 0.7
  */
 @PublicEvolving
-public interface ServerAuthenticator extends Closeable {
+public interface ServerAuthenticator {
 
     String protocol();
 

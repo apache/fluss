@@ -34,6 +34,7 @@ import com.alibaba.fluss.exception.InvalidCoordinatorException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidPartitionException;
 import com.alibaba.fluss.exception.InvalidReplicationFactorException;
+import com.alibaba.fluss.exception.InvalidRequestException;
 import com.alibaba.fluss.exception.InvalidRequiredAcksException;
 import com.alibaba.fluss.exception.InvalidServerRackInfoException;
 import com.alibaba.fluss.exception.InvalidTableException;
@@ -214,7 +215,11 @@ public enum Errors {
     INVALID_SERVER_RACK_INFO_EXCEPTION(
             52, "The server rack info is invalid.", InvalidServerRackInfoException::new),
     LAKE_SNAPSHOT_NOT_EXIST(
-            53, "The lake snapshot is not exist.", LakeTableSnapshotNotExistException::new);
+            53, "The lake snapshot is not exist.", LakeTableSnapshotNotExistException::new),
+    INVALID_REQUEST(
+            54,
+            "This most likely occurs because of a request being malformed by the client library or the message was sent to an incompatible server. See the server logs for more details.",
+            InvalidRequestException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

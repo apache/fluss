@@ -288,6 +288,7 @@ public class WriterClient {
         writerMetricGroup.close();
 
         if (sender != null) {
+            // todo
             sender.initiateClose();
         }
 

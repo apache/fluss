@@ -924,6 +924,7 @@ public final class RecordAccumulator {
 
         writerBufferPool.close();
         arrowWriterPool.close();
+        // todo: close的时候会检测,
         bufferAllocator.close();
     }
 

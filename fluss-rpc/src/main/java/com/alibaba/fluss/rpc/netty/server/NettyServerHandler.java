@@ -170,12 +170,12 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 authenticator.isCompleted()
                         ? ConnectionState.READY
                         : ConnectionState.AUTHENTICATING);
-
         // TODO: connection metrics (count, client tags, receive request avg idle time, etc.)
     }
 
     @Override
     public void channelInactive(ChannelHandlerContext ctx) throws Exception {
+        // todo: remove later
         super.channelInactive(ctx);
     }
 
@@ -209,7 +209,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
 
     private void close() {
         switchState(ConnectionState.CLOSE);
-        IOUtils.closeQuietly(authenticator);
+        IOUtils.closeQuietly(authenticator::close);
         ctx.close();
     }
 
