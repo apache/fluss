@@ -81,7 +81,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
     private static final Logger LOG = LoggerFactory.getLogger(FlinkSourceSplitReader.class);
     private final RowType sourceOutputType;
-    private final TablePath tablePath;
 
     // boundedSplits, kv snapshot split or lake snapshot split
     private final Queue<SourceSplitBase> boundedSplits;
@@ -127,7 +126,6 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         this.connection = ConnectionFactory.createConnection(flussConf, flinkMetricRegistry);
         this.table = connection.getTable(tablePath);
         this.sourceOutputType = sourceOutputType;
-        this.tablePath = tablePath;
         this.boundedSplits = new ArrayDeque<>();
         this.subscribedBuckets = new HashMap<>();
         this.projectedFields = projectedFields;
@@ -222,8 +220,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     private LakeSplitReaderGenerator getLakeSplitReader() {
         if (lakeSplitReaderGenerator == null) {
             lakeSplitReaderGenerator =
-                    new LakeSplitReaderGenerator(
-                            table, tablePath, projectedFields, checkNotNull(lakeSource));
+                    new LakeSplitReaderGenerator(table, projectedFields, checkNotNull(lakeSource));
         }
         return lakeSplitReaderGenerator;
     }

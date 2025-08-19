@@ -313,7 +313,6 @@
                                         <!-- start exclude for metric -->
                                         <exclude>com.alibaba.fluss.metrics.*</exclude>
                                         <!-- end exclude for metric -->
-                                        <exclude>com.alibaba.fluss.flink.lakehouse.*</exclude>
                                         <exclude>com.alibaba.fluss.flink.lake.*</exclude>
                                         <exclude>com.alibaba.fluss.kafka.*</exclude>
                                         <!-- exclude for fluss-ci-tools -->

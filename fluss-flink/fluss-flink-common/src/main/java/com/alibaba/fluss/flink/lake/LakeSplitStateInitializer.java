@@ -21,8 +21,6 @@ import com.alibaba.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import com.alibaba.fluss.flink.lake.split.LakeSnapshotSplit;
 import com.alibaba.fluss.flink.lake.state.LakeSnapshotAndFlussLogSplitState;
 import com.alibaba.fluss.flink.lake.state.LakeSnapshotSplitState;
-import com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
-import com.alibaba.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplitState;
 import com.alibaba.fluss.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.flink.source.split.SourceSplitState;
 
@@ -30,9 +28,7 @@ import com.alibaba.fluss.flink.source.split.SourceSplitState;
 public class LakeSplitStateInitializer {
 
     public static SourceSplitState initializedState(SourceSplitBase split) {
-        if (split instanceof PaimonSnapshotAndFlussLogSplit) {
-            return new PaimonSnapshotAndFlussLogSplitState((PaimonSnapshotAndFlussLogSplit) split);
-        } else if (split instanceof LakeSnapshotSplit) {
+        if (split instanceof LakeSnapshotSplit) {
             return new LakeSnapshotSplitState((LakeSnapshotSplit) split);
         } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
             return new LakeSnapshotAndFlussLogSplitState((LakeSnapshotAndFlussLogSplit) split);

@@ -28,7 +28,6 @@ import com.alibaba.fluss.metadata.TableBucket;
 import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.core.memory.DataOutputSerializer;
 import org.junit.jupiter.api.Test;
-import org.mockito.Mock;
 
 import java.io.IOException;
 import java.util.Collections;
@@ -55,7 +54,7 @@ class LakeSplitSerializerTest {
     private final SimpleVersionedSerializer<LakeSplit> sourceSplitSerializer =
             new TestSimpleVersionedSerializer();
 
-    @Mock private TableBucket tableBucket = new TableBucket(0, 1L, 0);
+    private TableBucket tableBucket = new TableBucket(0, 1L, 0);
 
     private final LakeSplitSerializer serializer = new LakeSplitSerializer(sourceSplitSerializer);
 
