@@ -480,16 +480,13 @@ public class FlinkTableSource
                         if (filterPushDownResult.acceptedPredicates().size()
                                 != lakePredicates.size()) {
                             LOG.info(
-                                    "LakeSource rejected partition filters. This can affect performance. Falling back to Flink-side filtering.");
-
-                            // Report zero accepted filters
+                                    "LakeSource rejected some partition filters. Falling back to Flink-side filtering.");
                             // Flink will apply all filters to preserve correctness
                             return Result.of(Collections.emptyList(), filters);
                         }
                     }
                 }
             }
-
             return Result.of(acceptedFilters, remainingFilters);
         } else {
             return Result.of(Collections.emptyList(), filters);
