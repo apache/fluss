@@ -32,9 +32,8 @@ import com.alibaba.fluss.lake.source.LakeSource;
 import com.alibaba.fluss.lake.source.LakeSplit;
 import com.alibaba.fluss.metadata.MergeEngineType;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.predicate.Equal;
-import com.alibaba.fluss.predicate.LeafPredicate;
 import com.alibaba.fluss.predicate.Predicate;
+import com.alibaba.fluss.predicate.PredicateBuilder;
 import com.alibaba.fluss.types.RowType;
 
 import org.apache.flink.annotation.VisibleForTesting;
@@ -69,7 +68,6 @@ import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.functions.LookupFunction;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
-import org.apache.paimon.data.BinaryString;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -464,32 +462,16 @@ public class FlinkTableSource
             if (lakeSource != null) {
                 // and exist field equals, push down to lake source
                 if (!fieldEquals.isEmpty()) {
-
                     // convert flink row type to fluss row type
                     RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
+
                     List<Predicate> lakePredicates = new ArrayList<>();
+                    PredicateBuilder predicateBuilder = new PredicateBuilder(flussRowType);
 
                     for (FieldEqual fieldEqual : fieldEquals) {
-                        int idx = fieldEqual.fieldIndex;
-                        String fieldName = tableOutputType.getFieldNames().get(idx);
-                        com.alibaba.fluss.types.DataType flussDataType =
-                                flussRowType.getTypeAt(idx);
-
-                        // convert to Paimon literal for partition
-                        Object literal =
-                                toPaimonLiteralForPartition(flussDataType, fieldEqual.equalValue);
-
-                        if (literal == null) {
-                            continue;
-                        }
-
                         lakePredicates.add(
-                                new LeafPredicate(
-                                        Equal.INSTANCE,
-                                        flussDataType,
-                                        idx,
-                                        fieldName,
-                                        Collections.singletonList(literal)));
+                                predicateBuilder.equal(
+                                        fieldEqual.fieldIndex, fieldEqual.equalValue));
                     }
 
                     if (!lakePredicates.isEmpty()) {
@@ -497,12 +479,14 @@ public class FlinkTableSource
                                 lakeSource.withFilters(lakePredicates);
                         if (filterPushDownResult.acceptedPredicates().size()
                                 != lakePredicates.size()) {
-                            LOG.warn("Some partition filters are not accepted by the lake source");
+                            LOG.info(
+                                    "LakeSource rejected partition filters. This can affect performance. Falling back to Flink-side filtering.");
+
+                            // Report zero accepted filters
+                            // Flink will apply all filters to preserve correctness
+                            return Result.of(Collections.emptyList(), filters);
                         }
                     }
-                } else {
-                    // fill with empty list explicitly, when field equal is not exist
-                    lakeSource.withFilters(Collections.emptyList());
                 }
             }
 
@@ -590,18 +574,6 @@ public class FlinkTableSource
             projection[primaryKeyIndexes[i]] = i;
         }
         return projection;
-    }
-
-    @Nullable
-    private Object toPaimonLiteralForPartition(
-            com.alibaba.fluss.types.DataType flussDataType, Object equalValue) {
-        String typeSummary = flussDataType.toString().toUpperCase();
-        if (typeSummary.contains("CHAR") || typeSummary.contains("STRING")) {
-            return BinaryString.fromString(equalValue.toString());
-        }
-
-        // todo: currently, we don't support other types for partition key except string
-        return null;
     }
 
     @VisibleForTesting

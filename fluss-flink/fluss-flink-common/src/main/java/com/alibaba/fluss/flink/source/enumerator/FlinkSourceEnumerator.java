@@ -519,8 +519,7 @@ public class FlinkSourceEnumerator
                         lakeSource,
                         bucketOffsetsRetriever,
                         stoppingOffsetsInitializer,
-                        tableInfo.getNumBuckets(),
-                        partitionFilters);
+                        tableInfo.getNumBuckets());
         List<SourceSplitBase> lakeSplits = lakeSplitGenerator.generateHybridLakeSplits();
         return lakeSplits;
     }
