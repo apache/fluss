@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.iceberg.tiering.append;
+package com.alibaba.fluss.lake.iceberg.tiering.writer;
 
 import com.alibaba.fluss.lake.iceberg.tiering.RecordWriter;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -24,21 +24,16 @@ import com.alibaba.fluss.types.RowType;
 
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.Table;
-import org.apache.iceberg.TableProperties;
 import org.apache.iceberg.data.GenericAppenderFactory;
 import org.apache.iceberg.data.Record;
 import org.apache.iceberg.io.FileAppenderFactory;
 import org.apache.iceberg.io.OutputFileFactory;
 import org.apache.iceberg.io.TaskWriter;
 import org.apache.iceberg.io.UnpartitionedWriter;
-import org.apache.iceberg.util.PropertyUtil;
 
 import javax.annotation.Nullable;
 
 import java.util.List;
-
-import static org.apache.iceberg.TableProperties.WRITE_TARGET_FILE_SIZE_BYTES;
-import static org.apache.iceberg.TableProperties.WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT;
 
 /** A {@link RecordWriter} to write to Iceberg's append-only table. */
 public class AppendOnlyWriter extends RecordWriter {
@@ -48,9 +43,12 @@ public class AppendOnlyWriter extends RecordWriter {
             RowType flussRowType,
             TableBucket tableBucket,
             @Nullable String partition,
-            List<String> partitionKeys) {
+            List<String> partitionKeys,
+            FileFormat format,
+            OutputFileFactory outputFileFactory,
+            long targetFileSize) {
         super(
-                createTaskWriter(icebergTable, tableBucket),
+                createTaskWriter(icebergTable, format, outputFileFactory, targetFileSize),
                 icebergTable.schema(),
                 flussRowType,
                 tableBucket,
@@ -59,21 +57,12 @@ public class AppendOnlyWriter extends RecordWriter {
     }
 
     private static TaskWriter<Record> createTaskWriter(
-            Table icebergTable, TableBucket tableBucket) {
-        // Get target file size from table properties
-        long targetFileSize = targetFileSize(icebergTable);
-
+            Table icebergTable,
+            FileFormat format,
+            OutputFileFactory outputFileFactory,
+            long targetFileSize) {
         FileAppenderFactory<Record> fileAppenderFactory =
                 new GenericAppenderFactory(icebergTable.schema());
-        FileFormat format = fileFormat(icebergTable);
-        OutputFileFactory outputFileFactory =
-                OutputFileFactory.builderFor(
-                                icebergTable,
-                                tableBucket.getBucket(),
-                                // task id always 0
-                                0)
-                        .format(format)
-                        .build();
 
         return new UnpartitionedWriter<>(
                 icebergTable.spec(),
@@ -88,21 +77,5 @@ public class AppendOnlyWriter extends RecordWriter {
     public void write(LogRecord record) throws Exception {
         flussRecordAsIcebergRecord.setFlussRecord(record);
         taskWriter.write(flussRecordAsIcebergRecord);
-    }
-
-    private static FileFormat fileFormat(Table icebergTable) {
-        String formatString =
-                PropertyUtil.propertyAsString(
-                        icebergTable.properties(),
-                        TableProperties.DEFAULT_FILE_FORMAT,
-                        TableProperties.DEFAULT_FILE_FORMAT_DEFAULT);
-        return FileFormat.fromString(formatString);
-    }
-
-    private static long targetFileSize(Table icebergTable) {
-        return PropertyUtil.propertyAsLong(
-                icebergTable.properties(),
-                WRITE_TARGET_FILE_SIZE_BYTES,
-                WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT);
     }
 }
