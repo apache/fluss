@@ -83,6 +83,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Unit test for tiering to Iceberg via {@link IcebergLakeTieringFactory}. */
 class IcebergTieringTest {
 
+    private static final int BUCKET_NUM = 3;
+
     private @TempDir File tempWarehouseDir;
     private IcebergLakeTieringFactory icebergLakeTieringFactory;
     private Catalog icebergCatalog;
@@ -112,7 +114,6 @@ class IcebergTieringTest {
     @MethodSource("tieringWriteArgs")
     void testTieringWriteTable(boolean isPrimaryKeyTable, boolean isPartitionedTable)
             throws Exception {
-        int bucketNum = 3;
         TablePath tablePath =
                 TablePath.of(
                         "iceberg",
@@ -143,7 +144,7 @@ class IcebergTieringTest {
                 icebergLakeTieringFactory.getCommittableSerializer();
 
         // first, write data
-        for (int bucket = 0; bucket < bucketNum; bucket++) {
+        for (int bucket = 0; bucket < BUCKET_NUM; bucket++) {
             for (Map.Entry<Long, String> entry : partitionIdAndName.entrySet()) {
                 String partition = entry.getValue();
                 try (LakeWriter<IcebergWriteResult> writer =
@@ -365,7 +366,7 @@ class IcebergTieringTest {
 
         PartitionSpec partitionSpec;
         if (isPrimaryTable) {
-            partitionSpec = builder.bucket("c1", 3).build();
+            partitionSpec = builder.bucket("c1", BUCKET_NUM).build();
         } else {
             partitionSpec = builder.identity(BUCKET_COLUMN_NAME).build();
         }
