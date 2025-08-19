@@ -23,6 +23,8 @@ import com.alibaba.fluss.client.metadata.KvSnapshots;
 import com.alibaba.fluss.client.metadata.LakeSnapshot;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.dynamic.AlterConfigOp;
+import com.alibaba.fluss.config.dynamic.ConfigEntry;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
@@ -450,4 +452,19 @@ public interface Admin extends AutoCloseable {
      * @return A CompletableFuture indicating completion of the operation.
      */
     DropAclsResult dropAcls(Collection<AclBindingFilter> filters);
+
+    /**
+     * Describe the configs of the cluster.
+     *
+     * @return A CompletableFuture containing the configs of the cluster.
+     */
+    CompletableFuture<Collection<ConfigEntry>> describeConfigs();
+
+    /**
+     * Alter the configs of the cluster.
+     *
+     * @param configs List of configs to alter.
+     * @return A CompletableFuture indicating completion of the operation.
+     */
+    CompletableFuture<Void> alterConfigs(Collection<AlterConfigOp> configs);
 }

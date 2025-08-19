@@ -274,6 +274,7 @@
                                             com.alibaba.fluss.security.auth.sasl.plain.PlainSaslServer.PlainSaslServerFactory
                                         </exclude>
                                         <exclude>com.alibaba.fluss.security.auth.ServerAuthenticator</exclude>
+                                        <exclude>com.alibaba.fluss.config.dynamic.AlterConfigOp</exclude>
                                         <!-- start exclude for flink-connector -->
                                         <exclude>com.alibaba.fluss.flink.utils.*</exclude>
                                         <exclude>com.alibaba.fluss.flink.source.*

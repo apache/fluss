@@ -17,10 +17,12 @@
 
 package com.alibaba.fluss.server.coordinator;
 
+import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.cluster.TabletServerInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.config.dynamic.AlterConfigOp;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidTableException;
@@ -28,7 +30,6 @@ import com.alibaba.fluss.exception.SecurityDisabledException;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
 import com.alibaba.fluss.exception.TableNotPartitionedException;
 import com.alibaba.fluss.fs.FileSystem;
-import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
 import com.alibaba.fluss.metadata.PartitionSpec;
@@ -42,6 +43,8 @@ import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.messages.AdjustIsrRequest;
 import com.alibaba.fluss.rpc.messages.AdjustIsrResponse;
+import com.alibaba.fluss.rpc.messages.AlterConfigsRequest;
+import com.alibaba.fluss.rpc.messages.AlterConfigsResponse;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotRequest;
 import com.alibaba.fluss.rpc.messages.CommitKvSnapshotResponse;
 import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -68,6 +71,7 @@ import com.alibaba.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import com.alibaba.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import com.alibaba.fluss.rpc.messages.MetadataRequest;
 import com.alibaba.fluss.rpc.messages.MetadataResponse;
+import com.alibaba.fluss.rpc.messages.PbAlterConfigsRequestInfo;
 import com.alibaba.fluss.rpc.messages.PbHeartbeatReqForTable;
 import com.alibaba.fluss.rpc.messages.PbHeartbeatRespForTable;
 import com.alibaba.fluss.rpc.netty.server.Session;
@@ -76,6 +80,7 @@ import com.alibaba.fluss.security.acl.AclBinding;
 import com.alibaba.fluss.security.acl.AclBindingFilter;
 import com.alibaba.fluss.security.acl.OperationType;
 import com.alibaba.fluss.security.acl.Resource;
+import com.alibaba.fluss.server.DynamicConfigManager;
 import com.alibaba.fluss.server.RpcServiceBase;
 import com.alibaba.fluss.server.authorizer.AclCreateResult;
 import com.alibaba.fluss.server.authorizer.AclDeleteResult;
@@ -113,6 +118,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
@@ -127,7 +133,6 @@ import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static com.alibaba.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static com.alibaba.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /** An RPC Gateway service for coordinator server. */
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
@@ -138,10 +143,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final Supplier<Integer> coordinatorEpochSupplier;
     private final ServerMetadataCache metadataCache;
 
-    // null if the cluster hasn't configured datalake format
-    private final @Nullable DataLakeFormat dataLakeFormat;
-    private final @Nullable LakeCatalog lakeCatalog;
     private final LakeTableTieringManager lakeTableTieringManager;
+    private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
     public CoordinatorService(
             Configuration conf,
@@ -151,24 +154,25 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             ServerMetadataCache metadataCache,
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
-            @Nullable LakeCatalog lakeCatalog,
-            LakeTableTieringManager lakeTableTieringManager) {
-        super(remoteFileSystem, ServerType.COORDINATOR, zkClient, metadataManager, authorizer);
+            LakeCatalogDynamicLoader lakeCatalogDynamicLoader,
+            LakeTableTieringManager lakeTableTieringManager,
+            DynamicConfigManager dynamicConfigManager) {
+        super(
+                remoteFileSystem,
+                ServerType.COORDINATOR,
+                zkClient,
+                metadataManager,
+                authorizer,
+                dynamicConfigManager);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.eventManagerSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
         this.coordinatorEpochSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEpoch();
-        this.dataLakeFormat = conf.getOptional(ConfigOptions.DATALAKE_FORMAT).orElse(null);
-        this.lakeCatalog = lakeCatalog;
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.metadataCache = metadataCache;
-        checkState(
-                (dataLakeFormat == null) == (lakeCatalog == null),
-                "dataLakeFormat and lakeCatalog must both be null or both non-null, but dataLakeFormat is %s, lakeCatalog is %s.",
-                dataLakeFormat,
-                lakeCatalog);
+        this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
     }
 
     @Override
@@ -178,7 +182,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public void shutdown() {
-        IOUtils.closeQuietly(lakeCatalog, "lake catalog");
+        IOUtils.closeQuietly(lakeCatalogDynamicLoader, "lake catalog");
     }
 
     @Override
@@ -266,13 +270,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // before create table in fluss, we may create in lake
         if (isDataLakeEnabled(tableDescriptor)) {
             try {
-                checkNotNull(lakeCatalog).createTable(tablePath, tableDescriptor);
+                checkNotNull(lakeCatalogDynamicLoader.getLakeCatalog())
+                        .createTable(tablePath, tableDescriptor);
             } catch (TableAlreadyExistException e) {
                 throw new TableAlreadyExistException(
                         String.format(
                                 "The table %s already exists in %s catalog, please "
                                         + "first drop the table in %s catalog or use a new table name.",
-                                tablePath, dataLakeFormat, dataLakeFormat));
+                                tablePath,
+                                lakeCatalogDynamicLoader.getDataLakeFormat(),
+                                lakeCatalogDynamicLoader.getDataLakeFormat()));
             }
         }
 
@@ -285,6 +292,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     private TableDescriptor applySystemDefaults(TableDescriptor tableDescriptor) {
         TableDescriptor newDescriptor = tableDescriptor;
+        DataLakeFormat dataLakeFormat = lakeCatalogDynamicLoader.getDataLakeFormat();
 
         // not set bucket num
         if (!newDescriptor.getTableDistribution().isPresent()
@@ -649,5 +657,49 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     bucketMetadataList.add(bucketMetadata);
                 });
         return bucketMetadataList;
+    }
+
+    @Override
+    public CompletableFuture<AlterConfigsResponse> alterConfigs(AlterConfigsRequest request) {
+        CompletableFuture<AlterConfigsResponse> future = new CompletableFuture<>();
+        List<PbAlterConfigsRequestInfo> infos = request.getInfosList();
+        if (infos.isEmpty()) {
+            return CompletableFuture.completedFuture(new AlterConfigsResponse());
+        }
+
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.ALTER_CONFIGS, Resource.cluster());
+        }
+
+        List<AlterConfigOp> serverConfigChanges =
+                infos.stream()
+                        .map(
+                                info ->
+                                        new AlterConfigOp(
+                                                info.getConfigKey(),
+                                                info.hasConfigValue()
+                                                        ? info.getConfigValue()
+                                                        : null,
+                                                AlterConfigOp.OpType.forId(
+                                                        (byte) info.getOpType())))
+                        .collect(Collectors.toList());
+        AccessContextEvent<Void> accessContextEvent =
+                new AccessContextEvent<>(
+                        (context) -> {
+                            try {
+                                dynamicConfigManager.alterConfigs(serverConfigChanges);
+                                future.complete(new AlterConfigsResponse());
+                            } catch (Exception e) {
+                                future.completeExceptionally(e);
+                            }
+                            return null;
+                        });
+        eventManagerSupplier.get().put(accessContextEvent);
+        return future;
+    }
+
+    @VisibleForTesting
+    public DataLakeFormat getDataLakeFormat() {
+        return lakeCatalogDynamicLoader.getDataLakeFormat();
     }
 }

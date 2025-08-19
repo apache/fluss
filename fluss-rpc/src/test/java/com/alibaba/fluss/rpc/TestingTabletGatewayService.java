@@ -21,6 +21,8 @@ import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsRequest;
 import com.alibaba.fluss.rpc.messages.DatabaseExistsResponse;
+import com.alibaba.fluss.rpc.messages.DescribeConfigsRequest;
+import com.alibaba.fluss.rpc.messages.DescribeConfigsResponse;
 import com.alibaba.fluss.rpc.messages.FetchLogRequest;
 import com.alibaba.fluss.rpc.messages.FetchLogResponse;
 import com.alibaba.fluss.rpc.messages.GetDatabaseInfoRequest;
@@ -239,6 +241,12 @@ public class TestingTabletGatewayService extends TestingGatewayService
 
     @Override
     public CompletableFuture<ListAclsResponse> listAcls(ListAclsRequest request) {
+        return null;
+    }
+
+    @Override
+    public CompletableFuture<DescribeConfigsResponse> describeConfigs(
+            DescribeConfigsRequest request) {
         return null;
     }
 }

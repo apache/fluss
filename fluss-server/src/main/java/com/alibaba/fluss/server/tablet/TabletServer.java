@@ -31,6 +31,7 @@ import com.alibaba.fluss.rpc.RpcServer;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
 import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
 import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
+import com.alibaba.fluss.server.DynamicConfigManager;
 import com.alibaba.fluss.server.ServerBase;
 import com.alibaba.fluss.server.authorizer.Authorizer;
 import com.alibaba.fluss.server.authorizer.AuthorizerLoader;
@@ -144,6 +145,9 @@ public class TabletServer extends ServerBase {
     @Nullable
     private Authorizer authorizer;
 
+    @GuardedBy("lock")
+    private DynamicConfigManager dynamicConfigManager;
+
     public TabletServer(Configuration conf) {
         this(conf, SystemClock.getInstance());
     }
@@ -182,7 +186,6 @@ public class TabletServer extends ServerBase {
                             serverId);
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
-
             MetadataManager metadataManager = new MetadataManager(zkClient, conf);
             this.metadataCache = new TabletServerMetadataCache(metadataManager, zkClient);
 
@@ -199,6 +202,7 @@ public class TabletServer extends ServerBase {
             if (authorizer != null) {
                 authorizer.startup();
             }
+
             // rpc client to sent request to the tablet server where the leader replica is located
             // to fetch log.
             this.clientMetricGroup =
@@ -229,6 +233,10 @@ public class TabletServer extends ServerBase {
                             clock);
             replicaManager.startup();
 
+            this.dynamicConfigManager =
+                    new DynamicConfigManager(zkClient, dynamicServerConfig, false);
+            dynamicConfigManager.startup();
+
             this.tabletService =
                     new TabletService(
                             serverId,
@@ -237,7 +245,8 @@ public class TabletServer extends ServerBase {
                             replicaManager,
                             metadataCache,
                             metadataManager,
-                            authorizer);
+                            authorizer,
+                            dynamicConfigManager);
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
@@ -394,6 +403,10 @@ public class TabletServer extends ServerBase {
 
                 if (authorizer != null) {
                     authorizer.close();
+                }
+
+                if (dynamicConfigManager != null) {
+                    dynamicConfigManager.close();
                 }
 
             } catch (Throwable t) {
