@@ -60,7 +60,7 @@ import static com.alibaba.fluss.utils.UnsafeUtils.BYTE_ARRAY_BASE_OFFSET;
  *   <li>Buffer all the key-value pairs that are waiting for the corresponding WAL to be persisted.
  *       And flush these key-value pairs whose WAL has been persisted to underlying kv storage.
  *   <li>A temporary in-memory key-value buffer for put/get a key. Since Fluss will lookup the
- *       previous written data to generate CDC as WAL, it need a buffer to buffer the data been
+ *       previous written data to generate CDC as WAL, it needs a buffer to buffer the data been
  *       written before but is still waiting for the WAL to be persisted before flush to underlying
  *       kv storage.
  * </ol>

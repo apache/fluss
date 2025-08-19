@@ -17,6 +17,7 @@
 
 package com.alibaba.fluss.server.metrics.group;
 
+import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.CharacterFilter;
 import com.alibaba.fluss.metrics.Counter;
@@ -40,7 +41,7 @@ import static com.alibaba.fluss.metrics.utils.MetricGroupUtils.makeScope;
  */
 public class TableMetricGroup extends AbstractMetricGroup {
 
-    private final Map<Integer, BucketMetricGroup> buckets = new HashMap<>();
+    private final Map<TableBucket, BucketMetricGroup> buckets = new HashMap<>();
 
     private final TablePath tablePath;
 
@@ -220,13 +221,17 @@ public class TableMetricGroup extends AbstractMetricGroup {
     // ------------------------------------------------------------------------
     //  bucket groups
     // ------------------------------------------------------------------------
-    public BucketMetricGroup addBucketMetricGroup(int bucketId) {
+    public BucketMetricGroup addBucketMetricGroup(
+            @Nullable String partitionName, TableBucket tableBucket) {
         return buckets.computeIfAbsent(
-                bucketId, (bucket) -> new BucketMetricGroup(registry, bucketId, this));
+                tableBucket,
+                (bucket) ->
+                        new BucketMetricGroup(
+                                registry, partitionName, tableBucket.getBucket(), this));
     }
 
-    public void removeBucketMetricGroup(int bucketId) {
-        BucketMetricGroup metricGroup = buckets.remove(bucketId);
+    public void removeBucketMetricGroup(TableBucket tableBucket) {
+        BucketMetricGroup metricGroup = buckets.remove(tableBucket);
         metricGroup.close();
     }
 

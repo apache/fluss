@@ -124,14 +124,6 @@ public final class LocalLog {
         return recoveryPoint;
     }
 
-    Histogram getFlushLatencyHistogram() {
-        return flushLatencyHistogram;
-    }
-
-    Counter getFlushCount() {
-        return flushCount;
-    }
-
     /** The offset metadata of the next message that will be appended to the log. */
     @VisibleForTesting
     LogOffsetMetadata getLocalLogEndOffsetMetadata() {

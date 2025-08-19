@@ -17,6 +17,8 @@
 
 package com.alibaba.fluss.server.metrics.group;
 
+import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.CharacterFilter;
 import com.alibaba.fluss.metrics.Counter;
@@ -225,15 +227,16 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     //  table buckets groups
     // ------------------------------------------------------------------------
     public BucketMetricGroup addTableBucketMetricGroup(
-            TablePath tablePath, int bucket, boolean isKvTable) {
+            PhysicalTablePath physicalTablePath, TableBucket bucket, boolean isKvTable) {
+        TablePath tablePath = physicalTablePath.getTablePath();
         TableMetricGroup tableMetricGroup =
                 metricGroupByTable.computeIfAbsent(
                         tablePath,
                         table -> new TableMetricGroup(registry, tablePath, isKvTable, this));
-        return tableMetricGroup.addBucketMetricGroup(bucket);
+        return tableMetricGroup.addBucketMetricGroup(physicalTablePath.getPartitionName(), bucket);
     }
 
-    public void removeTableBucketMetricGroup(TablePath tablePath, int bucket) {
+    public void removeTableBucketMetricGroup(TablePath tablePath, TableBucket bucket) {
         // get the metric group of the table
         TableMetricGroup tableMetricGroup = metricGroupByTable.get(tablePath);
         // if get the table metric group

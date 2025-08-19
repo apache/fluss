@@ -37,5 +37,5 @@ public class TestingMetricGroups {
                     TABLET_SERVER_METRICS);
 
     public static final BucketMetricGroup BUCKET_METRICS =
-            new BucketMetricGroup(NOPMetricRegistry.INSTANCE, 0, TABLE_METRICS);
+            new BucketMetricGroup(NOPMetricRegistry.INSTANCE, null, 0, TABLE_METRICS);
 }

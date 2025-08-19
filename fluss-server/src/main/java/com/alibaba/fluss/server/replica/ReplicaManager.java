@@ -1398,7 +1398,7 @@ public class ReplicaManager {
             if (delete) {
                 if (allReplicas.remove(tb) != null) {
                     serverMetricGroup.removeTableBucketMetricGroup(
-                            replicaToDelete.getPhysicalTablePath().getTablePath(), tb.getBucket());
+                            replicaToDelete.getPhysicalTablePath().getTablePath(), tb);
                     replicaToDelete.delete();
                     Path tabletParentDir = replicaToDelete.getTabletParentDir();
                     if (tb.getPartitionId() != null) {
@@ -1476,7 +1476,7 @@ public class ReplicaManager {
                 boolean isKvTable = tableInfo.hasPrimaryKey();
                 BucketMetricGroup bucketMetricGroup =
                         serverMetricGroup.addTableBucketMetricGroup(
-                                tablePath, tb.getBucket(), isKvTable);
+                                physicalTablePath, tb, isKvTable);
                 Replica replica =
                         new Replica(
                                 physicalTablePath,
