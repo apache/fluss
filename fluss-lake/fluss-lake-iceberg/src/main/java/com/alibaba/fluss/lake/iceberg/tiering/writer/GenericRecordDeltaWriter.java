@@ -50,7 +50,10 @@ class GenericRecordDeltaWriter extends BaseTaskWriter<Record> {
         super(icebergTable.spec(), format, appenderFactory, fileFactory, io, targetFileSize);
         this.deltaWriter =
                 new GenericEqualityDeltaWriter(
-                        toPartition(icebergTable, writerInitContext),
+                        toPartition(
+                                icebergTable,
+                                writerInitContext.partition(),
+                                writerInitContext.tableBucket().getBucket()),
                         icebergTable.schema(),
                         deleteSchema);
     }
