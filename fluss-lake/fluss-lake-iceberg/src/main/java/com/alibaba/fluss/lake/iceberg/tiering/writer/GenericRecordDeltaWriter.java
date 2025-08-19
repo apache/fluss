@@ -17,11 +17,13 @@
 
 package com.alibaba.fluss.lake.iceberg.tiering.writer;
 
+import com.alibaba.fluss.lake.writer.WriterInitContext;
+
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.PartitionKey;
-import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.StructLike;
+import org.apache.iceberg.Table;
 import org.apache.iceberg.data.Record;
 import org.apache.iceberg.io.BaseTaskWriter;
 import org.apache.iceberg.io.FileAppenderFactory;
@@ -30,21 +32,30 @@ import org.apache.iceberg.io.OutputFileFactory;
 
 import java.io.IOException;
 
+import static com.alibaba.fluss.lake.iceberg.utils.IcebergConversions.toPartition;
+
 /** A generic task equality delta writer. * */
-class GenericTaskDeltaWriter extends BaseTaskWriter<Record> {
+class GenericRecordDeltaWriter extends BaseTaskWriter<Record> {
     private final GenericEqualityDeltaWriter deltaWriter;
 
-    public GenericTaskDeltaWriter(
-            Schema schema,
+    public GenericRecordDeltaWriter(
+            Table icebergTable,
             Schema deleteSchema,
-            PartitionSpec spec,
             FileFormat format,
             FileAppenderFactory<Record> appenderFactory,
             OutputFileFactory fileFactory,
             FileIO io,
-            long targetFileSize) {
-        super(spec, format, appenderFactory, fileFactory, io, targetFileSize);
-        this.deltaWriter = new GenericEqualityDeltaWriter(null, schema, deleteSchema);
+            long targetFileSize,
+            WriterInitContext writerInitContext) {
+        super(icebergTable.spec(), format, appenderFactory, fileFactory, io, targetFileSize);
+        this.deltaWriter =
+                new GenericEqualityDeltaWriter(
+                        toPartition(
+                                icebergTable,
+                                writerInitContext.partition(),
+                                writerInitContext.tableBucket().getBucket()),
+                        icebergTable.schema(),
+                        deleteSchema);
     }
 
     @Override

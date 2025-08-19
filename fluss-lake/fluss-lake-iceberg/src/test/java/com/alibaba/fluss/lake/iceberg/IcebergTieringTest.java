@@ -36,6 +36,7 @@ import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.utils.types.Tuple2;
 
+import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Catalog;
@@ -44,7 +45,6 @@ import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.data.IcebergGenerics;
 import org.apache.iceberg.data.Record;
-import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.types.Types;
 import org.junit.jupiter.api.BeforeEach;
@@ -77,10 +77,13 @@ import static com.alibaba.fluss.record.ChangeType.DELETE;
 import static com.alibaba.fluss.record.ChangeType.INSERT;
 import static com.alibaba.fluss.record.ChangeType.UPDATE_AFTER;
 import static com.alibaba.fluss.record.ChangeType.UPDATE_BEFORE;
+import static org.apache.iceberg.expressions.Expressions.equal;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Unit test for tiering to Iceberg via {@link IcebergLakeTieringFactory}. */
 class IcebergTieringTest {
+
+    private static final int BUCKET_NUM = 3;
 
     private @TempDir File tempWarehouseDir;
     private IcebergLakeTieringFactory icebergLakeTieringFactory;
@@ -99,24 +102,40 @@ class IcebergTieringTest {
     }
 
     private static Stream<Arguments> tieringWriteArgs() {
-        return Stream.of(Arguments.of(true), Arguments.of(false));
+        return Stream.of(
+                // isPrimaryKeyTable, isPartitionedTable
+                Arguments.of(true, true),
+                Arguments.of(true, false),
+                Arguments.of(false, true),
+                Arguments.of(false, false));
     }
 
     @ParameterizedTest
     @MethodSource("tieringWriteArgs")
-    void testTieringWriteTable(boolean isPrimaryKeyTable) throws Exception {
-        int bucketNum = 3;
+    void testTieringWriteTable(boolean isPrimaryKeyTable, boolean isPartitionedTable)
+            throws Exception {
         TablePath tablePath =
                 TablePath.of(
                         "iceberg",
                         String.format(
-                                "test_tiering_table_%s",
-                                isPrimaryKeyTable ? "primary_key" : "log"));
-        createTable(tablePath, isPrimaryKeyTable);
+                                "test_tiering_table_%s_%s",
+                                isPrimaryKeyTable ? "pk" : "log",
+                                isPartitionedTable ? "partitioned" : "unpartitioned"));
+        createTable(tablePath, isPrimaryKeyTable, isPartitionedTable);
 
         Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
 
-        Map<Integer, List<LogRecord>> recordsByBucket = new HashMap<>();
+        Map<Tuple2<String, Integer>, List<LogRecord>> recordsByBucket = new HashMap<>();
+        Map<Long, String> partitionIdAndName =
+                isPartitionedTable
+                        ? new HashMap<Long, String>() {
+                            {
+                                put(1L, "p1");
+                                put(2L, "p2");
+                                put(3L, "p3");
+                            }
+                        }
+                        : Collections.singletonMap(null, null);
 
         List<IcebergWriteResult> icebergWriteResults = new ArrayList<>();
         SimpleVersionedSerializer<IcebergWriteResult> writeResultSerializer =
@@ -125,24 +144,30 @@ class IcebergTieringTest {
                 icebergLakeTieringFactory.getCommittableSerializer();
 
         // first, write data
-        for (int bucket = 0; bucket < bucketNum; bucket++) {
-            try (LakeWriter<IcebergWriteResult> writer = createLakeWriter(tablePath, bucket)) {
-                Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
-                        isPrimaryKeyTable
-                                ? genPrimaryKeyTableRecords(bucket)
-                                : genLogTableRecords(bucket, 10);
+        for (int bucket = 0; bucket < BUCKET_NUM; bucket++) {
+            for (Map.Entry<Long, String> entry : partitionIdAndName.entrySet()) {
+                String partition = entry.getValue();
+                try (LakeWriter<IcebergWriteResult> writer =
+                        createLakeWriter(tablePath, bucket, partition, entry.getKey())) {
+                    Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
+                    Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
+                            isPrimaryKeyTable
+                                    ? genPrimaryKeyTableRecords(partition, bucket)
+                                    : genLogTableRecords(partition, bucket, 10);
 
-                List<LogRecord> writtenRecords = writeAndExpectRecords.f0;
-                List<LogRecord> expectRecords = writeAndExpectRecords.f1;
-                recordsByBucket.put(bucket, expectRecords);
-                for (LogRecord record : writtenRecords) {
-                    writer.write(record);
+                    List<LogRecord> writtenRecords = writeAndExpectRecords.f0;
+                    List<LogRecord> expectRecords = writeAndExpectRecords.f1;
+                    recordsByBucket.put(partitionBucket, expectRecords);
+
+                    for (LogRecord record : writtenRecords) {
+                        writer.write(record);
+                    }
+                    IcebergWriteResult result = writer.complete();
+                    byte[] serialized = writeResultSerializer.serialize(result);
+                    icebergWriteResults.add(
+                            writeResultSerializer.deserialize(
+                                    writeResultSerializer.getVersion(), serialized));
                 }
-                IcebergWriteResult result = writer.complete();
-                byte[] serialized = writeResultSerializer.serialize(result);
-                icebergWriteResults.add(
-                        writeResultSerializer.deserialize(
-                                writeResultSerializer.getVersion(), serialized));
             }
         }
 
@@ -166,17 +191,18 @@ class IcebergTieringTest {
 
         // then, check data
         for (int bucket = 0; bucket < 3; bucket++) {
-            List<LogRecord> expectRecords = recordsByBucket.get(bucket);
-            CloseableIterator<Record> actualRecords = getIcebergRows(icebergTable, bucket);
-            if (isPrimaryKeyTable) {
-                verifyTableRecords(actualRecords, expectRecords, bucket);
-            } else {
-                verifyTableRecords(actualRecords, expectRecords, bucket);
+            for (String partition : partitionIdAndName.values()) {
+                Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
+                List<LogRecord> expectRecords = recordsByBucket.get(partitionBucket);
+                CloseableIterator<Record> actualRecords =
+                        getIcebergRows(icebergTable, partition, bucket);
+                verifyTableRecords(actualRecords, expectRecords, bucket, partition);
             }
         }
     }
 
-    private LakeWriter<IcebergWriteResult> createLakeWriter(TablePath tablePath, int bucket)
+    private LakeWriter<IcebergWriteResult> createLakeWriter(
+            TablePath tablePath, int bucket, @Nullable String partition, @Nullable Long partitionId)
             throws IOException {
         return icebergLakeTieringFactory.createLakeWriter(
                 new WriterInitContext() {
@@ -187,13 +213,13 @@ class IcebergTieringTest {
 
                     @Override
                     public TableBucket tableBucket() {
-                        return new TableBucket(0, null, bucket);
+                        return new TableBucket(0, partitionId, bucket);
                     }
 
                     @Nullable
                     @Override
                     public String partition() {
-                        return null;
+                        return partition;
                     }
 
                     @Override
@@ -218,13 +244,17 @@ class IcebergTieringTest {
     }
 
     private Tuple2<List<LogRecord>, List<LogRecord>> genLogTableRecords(
-            int bucket, int numRecords) {
+            @Nullable String partition, int bucket, int numRecords) {
         List<LogRecord> logRecords = new ArrayList<>();
         for (int i = 0; i < numRecords; i++) {
             GenericRow genericRow = new GenericRow(3);
             genericRow.setField(0, i);
             genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
-            genericRow.setField(2, BinaryString.fromString("bucket" + bucket));
+            if (partition != null) {
+                genericRow.setField(2, BinaryString.fromString(partition));
+            } else {
+                genericRow.setField(2, BinaryString.fromString("bucket" + bucket));
+            }
 
             LogRecord logRecord =
                     new GenericRecord(
@@ -234,10 +264,11 @@ class IcebergTieringTest {
         return Tuple2.of(logRecords, logRecords);
     }
 
-    private Tuple2<List<LogRecord>, List<LogRecord>> genPrimaryKeyTableRecords(int bucket) {
+    private Tuple2<List<LogRecord>, List<LogRecord>> genPrimaryKeyTableRecords(
+            @Nullable String partition, int bucket) {
         int offset = -1;
         // gen +I, -U, +U, -D
-        List<GenericRow> rows = genKvRow(bucket, 0, 0, 4);
+        List<GenericRow> rows = genKvRow(partition, bucket, 0, 0, 4);
         List<LogRecord> writtenLogRecords =
                 new ArrayList<>(
                         Arrays.asList(
@@ -248,7 +279,7 @@ class IcebergTieringTest {
         List<LogRecord> expectLogRecords = new ArrayList<>();
 
         // gen +I, -U, +U
-        rows = genKvRow(bucket, 1, 4, 7);
+        rows = genKvRow(partition, bucket, 1, 4, 7);
         writtenLogRecords.addAll(
                 Arrays.asList(
                         toRecord(++offset, rows.get(0), INSERT),
@@ -257,7 +288,7 @@ class IcebergTieringTest {
         expectLogRecords.add(writtenLogRecords.get(writtenLogRecords.size() - 1));
 
         // gen +I, +U
-        rows = genKvRow(bucket, 2, 7, 9);
+        rows = genKvRow(partition, bucket, 2, 7, 9);
         writtenLogRecords.addAll(
                 Arrays.asList(
                         toRecord(++offset, rows.get(0), INSERT),
@@ -265,23 +296,27 @@ class IcebergTieringTest {
         expectLogRecords.add(writtenLogRecords.get(writtenLogRecords.size() - 1));
 
         // gen +I
-        rows = genKvRow(bucket, 3, 9, 10);
+        rows = genKvRow(partition, bucket, 3, 9, 10);
         writtenLogRecords.add(toRecord(++offset, rows.get(0), INSERT));
         expectLogRecords.add(writtenLogRecords.get(writtenLogRecords.size() - 1));
 
         return Tuple2.of(writtenLogRecords, expectLogRecords);
     }
 
-    private List<GenericRow> genKvRow(int bucket, int key, int from, int to) {
+    private List<GenericRow> genKvRow(
+            @Nullable String partition, int bucket, int key, int from, int to) {
         List<GenericRow> rows = new ArrayList<>();
         for (int i = from; i < to; i++) {
             GenericRow genericRow;
-            // Non-partitioned table
             genericRow = new GenericRow(3);
             genericRow.setField(0, key);
             genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
-            genericRow.setField(2, BinaryString.fromString("bucket" + bucket));
 
+            if (partition != null) {
+                genericRow.setField(2, BinaryString.fromString(partition));
+            } else {
+                genericRow.setField(2, BinaryString.fromString("bucket" + bucket));
+            }
             rows.add(genericRow);
         }
         return rows;
@@ -291,7 +326,8 @@ class IcebergTieringTest {
         return new GenericRecord(offset, System.currentTimeMillis(), changeType, row);
     }
 
-    private void createTable(TablePath tablePath, boolean isPrimaryTable) throws Exception {
+    private void createTable(
+            TablePath tablePath, boolean isPrimaryTable, boolean isPartitionedTable) {
         Namespace namespace = Namespace.of(tablePath.getDatabaseName());
         if (icebergCatalog instanceof SupportsNamespaces) {
             SupportsNamespaces ns = (SupportsNamespaces) icebergCatalog;
@@ -303,6 +339,10 @@ class IcebergTieringTest {
         Set<Integer> identifierFieldIds = new HashSet<>();
         if (isPrimaryTable) {
             identifierFieldIds.add(1);
+            if (isPartitionedTable) {
+                // we use c3 as the partition column, so c3 should also be included the pk
+                identifierFieldIds.add(3);
+            }
         }
 
         org.apache.iceberg.Schema schema =
@@ -310,7 +350,7 @@ class IcebergTieringTest {
                         Arrays.asList(
                                 Types.NestedField.required(1, "c1", Types.IntegerType.get()),
                                 Types.NestedField.optional(2, "c2", Types.StringType.get()),
-                                Types.NestedField.optional(3, "c3", Types.StringType.get()),
+                                Types.NestedField.required(3, "c3", Types.StringType.get()),
                                 Types.NestedField.required(
                                         4, BUCKET_COLUMN_NAME, Types.IntegerType.get()),
                                 Types.NestedField.required(
@@ -319,22 +359,40 @@ class IcebergTieringTest {
                                         6, TIMESTAMP_COLUMN_NAME, Types.TimestampType.withZone())),
                         identifierFieldIds);
 
+        PartitionSpec.Builder builder = PartitionSpec.builderFor(schema);
+        if (isPartitionedTable) {
+            builder.identity("c3");
+        }
+
+        PartitionSpec partitionSpec;
+        if (isPrimaryTable) {
+            partitionSpec = builder.bucket("c1", BUCKET_NUM).build();
+        } else {
+            partitionSpec = builder.identity(BUCKET_COLUMN_NAME).build();
+        }
+
         TableIdentifier tableId =
                 TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
-        icebergCatalog.createTable(tableId, schema);
+        icebergCatalog.createTable(tableId, schema, partitionSpec);
     }
 
-    private CloseableIterator<Record> getIcebergRows(Table table, int bucket) {
-        return IcebergGenerics.read(table)
-                .where(Expressions.equal(BUCKET_COLUMN_NAME, bucket))
-                .build()
-                .iterator();
+    private CloseableIterator<Record> getIcebergRows(
+            Table table, @Nullable String partition, int bucket) {
+        IcebergGenerics.ScanBuilder scanBuilder =
+                IcebergGenerics.read(table).where(equal(BUCKET_COLUMN_NAME, bucket));
+        if (partition != null) {
+            String partitionCol = table.spec().fields().get(0).name();
+            scanBuilder = scanBuilder.where(equal(partitionCol, partition));
+        }
+
+        return scanBuilder.build().iterator();
     }
 
     private void verifyTableRecords(
             CloseableIterator<Record> actualRecords,
             List<LogRecord> expectRecords,
-            int expectBucket) {
+            int expectBucket,
+            @Nullable String partition) {
         for (LogRecord expectRecord : expectRecords) {
             Record actualRecord = actualRecords.next();
             // check business columns:
@@ -343,6 +401,10 @@ class IcebergTieringTest {
                     .isEqualTo(expectRecord.getRow().getString(1).toString());
             assertThat(actualRecord.get(2, String.class))
                     .isEqualTo(expectRecord.getRow().getString(2).toString());
+            if (partition != null) {
+                assertThat(actualRecord.get(2, String.class)).isEqualTo(partition);
+            }
+
             // check system columns: __bucket, __offset, __timestamp
             assertThat(actualRecord.get(3)).isEqualTo(expectBucket);
             assertThat(actualRecord.get(4)).isEqualTo(expectRecord.logOffset());

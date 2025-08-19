@@ -18,9 +18,8 @@
 package com.alibaba.fluss.lake.iceberg.tiering.writer;
 
 import com.alibaba.fluss.lake.iceberg.tiering.RecordWriter;
-import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.lake.writer.WriterInitContext;
 import com.alibaba.fluss.record.LogRecord;
-import com.alibaba.fluss.types.RowType;
 
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.Schema;
@@ -31,8 +30,6 @@ import org.apache.iceberg.io.FileAppenderFactory;
 import org.apache.iceberg.io.OutputFileFactory;
 import org.apache.iceberg.io.TaskWriter;
 
-import javax.annotation.Nullable;
-
 import java.util.ArrayList;
 import java.util.List;
 
@@ -41,27 +38,24 @@ public class DeltaTaskWriter extends RecordWriter {
 
     public DeltaTaskWriter(
             Table icebergTable,
-            RowType flussRowType,
-            TableBucket tableBucket,
-            @Nullable String partition,
-            List<String> partitionKeys,
+            WriterInitContext writerInitContext,
             FileFormat format,
             OutputFileFactory outputFileFactory,
             long targetFileSize) {
         super(
-                createTaskWriter(icebergTable, format, outputFileFactory, targetFileSize),
+                createTaskWriter(
+                        icebergTable, format, outputFileFactory, targetFileSize, writerInitContext),
                 icebergTable.schema(),
-                flussRowType,
-                tableBucket,
-                partition,
-                partitionKeys);
+                writerInitContext.schema().getRowType(),
+                writerInitContext.tableBucket());
     }
 
     private static TaskWriter<Record> createTaskWriter(
             Table icebergTable,
             FileFormat format,
             OutputFileFactory outputFileFactory,
-            long targetFileSize) {
+            long targetFileSize,
+            WriterInitContext writerInitContext) {
         int[] equalityFieldIds =
                 icebergTable.schema().identifierFieldIds().stream()
                         .mapToInt(Integer::intValue)
@@ -79,20 +73,20 @@ public class DeltaTaskWriter extends RecordWriter {
             columns.add(icebergTable.schema().findField(fieldId).name());
         }
         Schema deleteSchema = icebergTable.schema().select(columns);
-        return new GenericTaskDeltaWriter(
-                icebergTable.schema(),
+        return new GenericRecordDeltaWriter(
+                icebergTable,
                 deleteSchema,
-                icebergTable.spec(),
                 format,
                 appenderFactory,
                 outputFileFactory,
                 icebergTable.io(),
-                targetFileSize);
+                targetFileSize,
+                writerInitContext);
     }
 
     @Override
     public void write(LogRecord record) throws Exception {
-        GenericTaskDeltaWriter deltaWriter = (GenericTaskDeltaWriter) taskWriter;
+        GenericRecordDeltaWriter deltaWriter = (GenericRecordDeltaWriter) taskWriter;
         flussRecordAsIcebergRecord.setFlussRecord(record);
         switch (record.getChangeType()) {
             case INSERT:

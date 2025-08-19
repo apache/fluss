@@ -197,12 +197,7 @@ class PaimonTieringTest {
                 List<LogRecord> expectRecords = recordsByBucket.get(partitionBucket);
                 CloseableIterator<InternalRow> actualRecords =
                         getPaimonRows(tablePath, partition, isPrimaryKeyTable, bucket);
-                if (isPrimaryKeyTable) {
-                    verifyPrimaryKeyTableRecord(actualRecords, expectRecords, bucket, partition);
-                } else {
-                    verifyLogTableRecords(
-                            actualRecords, expectRecords, bucket, isPartitioned, partition);
-                }
+                verifyTableRecords(actualRecords, expectRecords, bucket, partition);
             }
         }
 
@@ -365,43 +360,6 @@ class PaimonTieringTest {
         }
     }
 
-    private void verifyLogTableRecords(
-            CloseableIterator<InternalRow> actualRecords,
-            List<LogRecord> expectRecords,
-            int expectBucket,
-            boolean isPartitioned,
-            @Nullable String partition)
-            throws Exception {
-        for (LogRecord expectRecord : expectRecords) {
-            InternalRow actualRow = actualRecords.next();
-            // check business columns:
-            assertThat(actualRow.getInt(0)).isEqualTo(expectRecord.getRow().getInt(0));
-            assertThat(actualRow.getString(1).toString())
-                    .isEqualTo(expectRecord.getRow().getString(1).toString());
-
-            if (isPartitioned) {
-                // For partitioned tables, partition field comes from metadata
-                assertThat(actualRow.getString(2).toString()).isEqualTo(partition);
-                // check system columns: __bucket, __offset, __timestamp
-                assertThat(actualRow.getInt(3)).isEqualTo(expectBucket);
-                assertThat(actualRow.getLong(4)).isEqualTo(expectRecord.logOffset());
-                assertThat(actualRow.getTimestamp(5, 6).getMillisecond())
-                        .isEqualTo(expectRecord.timestamp());
-            } else {
-                // For non-partitioned tables, c3 is business data
-                assertThat(actualRow.getString(2).toString())
-                        .isEqualTo(expectRecord.getRow().getString(2).toString());
-                // check system columns: __bucket, __offset, __timestamp
-                assertThat(actualRow.getInt(3)).isEqualTo(expectBucket);
-                assertThat(actualRow.getLong(4)).isEqualTo(expectRecord.logOffset());
-                assertThat(actualRow.getTimestamp(5, 6).getMillisecond())
-                        .isEqualTo(expectRecord.timestamp());
-            }
-        }
-        assertThat(actualRecords.hasNext()).isFalse();
-        actualRecords.close();
-    }
-
     private void verifyLogTableRecordsMultiPartition(
             CloseableIterator<InternalRow> actualRecords,
             List<LogRecord> expectRecords,
@@ -460,7 +418,7 @@ class PaimonTieringTest {
         actualRecords.close();
     }
 
-    private void verifyPrimaryKeyTableRecord(
+    private void verifyTableRecords(
             CloseableIterator<InternalRow> actualRecords,
             List<LogRecord> expectRecords,
             int expectBucket,
@@ -473,26 +431,16 @@ class PaimonTieringTest {
             assertThat(actualRow.getString(1).toString())
                     .isEqualTo(expectRecord.getRow().getString(1).toString());
 
+            assertThat(actualRow.getString(2).toString())
+                    .isEqualTo(expectRecord.getRow().getString(2).toString());
             if (partition != null) {
-                // For partitioned tables, partition field should match record data
-                assertThat(actualRow.getString(2).toString())
-                        .isEqualTo(expectRecord.getRow().getString(2).toString());
-                // check system columns: __bucket, __offset, __timestamp
-                assertThat(actualRow.getInt(3)).isEqualTo(expectBucket);
-                assertThat(actualRow.getLong(4)).isEqualTo(expectRecord.logOffset());
-                long actualTimestamp = actualRow.getTimestamp(5, 6).getMillisecond();
-                long expectedTimestamp = expectRecord.timestamp();
-                assertThat(Math.abs(actualTimestamp - expectedTimestamp)).isLessThanOrEqualTo(10L);
-            } else {
-                // For non-partitioned tables
-                assertThat(actualRow.getString(2).toString())
-                        .isEqualTo(expectRecord.getRow().getString(2).toString());
-                // check system columns: __bucket, __offset, __timestamp
-                assertThat(actualRow.getInt(3)).isEqualTo(expectBucket);
-                assertThat(actualRow.getLong(4)).isEqualTo(expectRecord.logOffset());
-                assertThat(actualRow.getTimestamp(5, 6).getMillisecond())
-                        .isEqualTo(expectRecord.timestamp());
+                assertThat(actualRow.getString(2).toString()).isEqualTo(partition);
             }
+            // check system columns: __bucket, __offset, __timestamp
+            assertThat(actualRow.getInt(3)).isEqualTo(expectBucket);
+            assertThat(actualRow.getLong(4)).isEqualTo(expectRecord.logOffset());
+            assertThat(actualRow.getTimestamp(5, 6).getMillisecond())
+                    .isEqualTo(expectRecord.timestamp());
         }
         assertThat(actualRecords.hasNext()).isFalse();
         actualRecords.close();
@@ -503,17 +451,13 @@ class PaimonTieringTest {
         List<LogRecord> logRecords = new ArrayList<>();
         for (int i = 0; i < numRecords; i++) {
             GenericRow genericRow;
+            // Partitioned table: include partition field in data
+            genericRow = new GenericRow(3); // c1, c2, c3(partition)
+            genericRow.setField(0, i);
+            genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
             if (partition != null) {
-                // Partitioned table: include partition field in data
-                genericRow = new GenericRow(3); // c1, c2, c3(partition)
-                genericRow.setField(0, i);
-                genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
                 genericRow.setField(2, BinaryString.fromString(partition)); // partition field
             } else {
-                // Non-partitioned table
-                genericRow = new GenericRow(3);
-                genericRow.setField(0, i);
-                genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
                 genericRow.setField(2, BinaryString.fromString("bucket" + bucket));
             }
             LogRecord logRecord =

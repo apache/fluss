@@ -19,7 +19,15 @@ package com.alibaba.fluss.lake.iceberg.utils;
 
 import com.alibaba.fluss.metadata.TablePath;
 
+import org.apache.iceberg.PartitionKey;
+import org.apache.iceberg.PartitionSpec;
+import org.apache.iceberg.Schema;
+import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.TableIdentifier;
+
+import javax.annotation.Nullable;
+
+import static com.alibaba.fluss.metadata.ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR;
 
 /** Utility class for static conversions between Fluss and Iceberg types. */
 public class IcebergConversions {
@@ -27,5 +35,21 @@ public class IcebergConversions {
     /** Convert Fluss TablePath to Iceberg TableIdentifier. */
     public static TableIdentifier toIceberg(TablePath tablePath) {
         return TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
+    }
+
+    public static PartitionKey toPartition(
+            Table table, @Nullable String partitionName, int bucket) {
+        PartitionSpec partitionSpec = table.spec();
+        Schema schema = table.schema();
+        PartitionKey partitionKey = new PartitionKey(partitionSpec, schema);
+        int pos = 0;
+        if (partitionName != null) {
+            String[] partitionArr = partitionName.split("\\" + PARTITION_SPEC_SEPARATOR);
+            for (String partition : partitionArr) {
+                partitionKey.set(pos++, partition);
+            }
+        }
+        partitionKey.set(pos, bucket);
+        return partitionKey;
     }
 }
