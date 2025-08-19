@@ -341,7 +341,7 @@ public final class Replica {
     }
 
     public boolean isAtMinIsr() {
-        return isLeader() && isrState.isr().size() < minInSyncReplicas;
+        return isLeader() && isrState.isr().size() == minInSyncReplicas;
     }
 
     public BucketMetricGroup bucketMetrics() {
