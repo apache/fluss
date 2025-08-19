@@ -20,6 +20,7 @@ package com.alibaba.fluss.lake.iceberg;
 import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.TableAlreadyExistException;
+import com.alibaba.fluss.lake.iceberg.conf.IcebergConfiguration;
 import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
 import com.alibaba.fluss.metadata.TableDescriptor;
 import com.alibaba.fluss.metadata.TablePath;
@@ -53,6 +54,8 @@ import static org.apache.iceberg.CatalogUtil.buildIcebergCatalog;
 /** An Iceberg implementation of {@link LakeCatalog}. */
 public class IcebergLakeCatalog implements LakeCatalog {
 
+    public static final String ICEBERG_CATALOG_DEFAULT_NAME = "fluss-iceberg-catalog";
+
     private static final LinkedHashMap<String, Type> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
     static {
@@ -81,15 +84,9 @@ public class IcebergLakeCatalog implements LakeCatalog {
 
     private Catalog createIcebergCatalog(Configuration configuration) {
         Map<String, String> icebergProps = configuration.toMap();
-
-        String catalogName = icebergProps.getOrDefault("name", "fluss-iceberg-catalog");
-
+        String catalogName = icebergProps.getOrDefault("name", ICEBERG_CATALOG_DEFAULT_NAME);
         return buildIcebergCatalog(
-                catalogName,
-                icebergProps, // todo: current is an empty configuration, need to init from env or
-                // fluss
-                // configurations
-                new org.apache.hadoop.conf.Configuration());
+                catalogName, icebergProps, IcebergConfiguration.from(configuration).get());
     }
 
     @Override
