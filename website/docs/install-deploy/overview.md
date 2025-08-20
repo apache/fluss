@@ -43,7 +43,7 @@ We have listed them in the table below the figure.
             </td>
             <td>
                 <ul>
-                    <li>[Flink Connector](engine-flink/getting-started.md)</li>
+                    <li>[Flink Connector](flink-engine/getting-started.md)</li>
                 </ul>
             </td>
         </tr>

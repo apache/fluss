@@ -124,7 +124,7 @@ CREATE TABLE my_part_log_table (
 Fluss partitioned table supports dynamic partition creation, which means you can write data into a partition without pre-creating it.
 You can use the `INSERT INTO` statement to write data into a partitioned table, and Fluss will automatically create the partition if it does not exist.
 See the [Dynamic Partitioning](table-design/data-distribution/partitioning.md#dynamic-partitioning) for more details.
-But you can still use the [Add Partition](engine-flink/ddl.md#add-partition) statement to manually add partitions if needed.
+But you can still use the [Add Partition](flink-engine/ddl.md#add-partition) statement to manually add partitions if needed.
 :::
 
 #### Multi-Fields Partitioned Table
@@ -182,7 +182,7 @@ For more details about Auto Partitioned (Primary Key/Log) Table, refer to [Auto 
 
 ### Options
 
-The supported option in `WITH` parameters when creating a table are listed in [Connector Options](engine-flink/options.md) page.
+The supported option in `WITH` parameters when creating a table are listed in [Connector Options](flink-engine/options.md) page.
 
 ## Create Table Like
 

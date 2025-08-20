@@ -9,7 +9,7 @@ sidebar_position: 2
 In Fluss, a **Partitioned Table** organizes data based on one or more partition keys, providing a way to improve query performance and manageability for large datasets. Partitions allow the system to divide data into distinct segments, each corresponding to specific values of the partition keys.
 
 For partitioned tables, Fluss supports three strategies of managing partitions.
-   - **Manual management partitions**, user can create new partitions or drop exists partitions. Learn how to create or drop partitions please refer to [Add Partition](engine-flink/ddl.md#add-partition) and [Drop Partition](engine-flink/ddl.md#drop-partition).
+   - **Manual management partitions**, user can create new partitions or drop exists partitions. Learn how to create or drop partitions please refer to [Add Partition](flink-engine/ddl.md#add-partition) and [Drop Partition](flink-engine/ddl.md#drop-partition).
    - **Auto management partitions**, the partitions will be created based on the auto partitioning rules configured at the time of table creation, and expired partitions are automatically removed, ensuring data not expanding unlimited. See [Auto Partitioning](table-design/data-distribution/partitioning.md#auto-partitioning).
    - **Dynamic create partitions**, the partitions will be created automatically based on the data being written to the table. See [Dynamic Partitioning](table-design/data-distribution/partitioning.md#dynamic-partitioning).
    

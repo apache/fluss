@@ -297,7 +297,7 @@ Flink SQL> SELECT * FROM user_rec_wide;
 ### Conclusion
 Partial updates in Fluss enable an alternative approach in how we design streaming data pipelines for enriching or joining data. 
 
-When all your sources share a primary key - otherwise you can mix & match [streaming lookup joins](https://alibaba.github.io/fluss-docs/docs/engine-flink/lookups/#lookup) - you can turn the problem on its head: update a unified table incrementally, rather than joining streams on the fly. 
+When all your sources share a primary key - otherwise you can mix & match [streaming lookup joins](https://alibaba.github.io/fluss-docs/docs/flink-engine/lookups/#lookup) - you can turn the problem on its head: update a unified table incrementally, rather than joining streams on the fly. 
 
 The result is a more scalable, maintainable, and efficient pipeline. 
 Engineers can spend less time wrestling with Flink’s state, checkpoints and join mechanics, and more time delivering fresh, integrated data to power real-time analytics and applications. 
