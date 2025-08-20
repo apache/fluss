@@ -310,13 +310,8 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
         String partitionName = "notExistPartition";
         Lookuper lookuper = table.newLookup().createLookuper();
 
-        // test get for a not exist partition
-        assertThatThrownBy(() -> lookuper.lookup(row(1, partitionName)).get())
-                .cause()
-                .isInstanceOf(PartitionNotExistException.class)
-                .hasMessageContaining(
-                        "Table partition '%s' does not exist.",
-                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK, partitionName));
+        // lookup a not exist partition will return null.
+        assertThat(lookuper.lookup(row(1, partitionName)).get().getSingletonRow()).isEqualTo(null);
 
         // test write to not exist partition
         UpsertWriter upsertWriter = table.newUpsert().createWriter();
@@ -331,7 +326,6 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
         // test scan a not exist partition's log
         LogScanner logScanner = table.newScan().createLogScanner();
         assertThatThrownBy(() -> logScanner.subscribe(100L, 0, 0))
-                .cause()
                 .isInstanceOf(PartitionNotExistException.class)
                 .hasMessageContaining("Partition not exist for partition ids: [100]");
         logScanner.close();

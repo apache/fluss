@@ -108,7 +108,7 @@ public class DynamicPartitionCreator {
             idExist = metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
-            if (t.getCause() instanceof PartitionNotExistException) {
+            if (t instanceof PartitionNotExistException) {
                 if (!dynamicPartitionEnabled) {
                     throw new PartitionNotExistException(
                             String.format(

@@ -102,6 +102,10 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
             }
         }
 
+        // lookup the non-exist partition
+        assertThat(lookuper.lookup(row(0, "non-exist-partition")).get().getSingletonRow())
+                .isEqualTo(null);
+
         // then, let's scan and check the cdc log
         verifyPartitionLogs(table, schema.getRowType(), expectPutRows);
     }
