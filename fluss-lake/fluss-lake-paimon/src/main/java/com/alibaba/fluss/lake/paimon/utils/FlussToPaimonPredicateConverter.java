@@ -32,6 +32,8 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
+import static com.alibaba.fluss.lake.paimon.utils.PaimonConversions.toPaimonLiteral;
+
 /**
  * Converts a Fluss {@link com.alibaba.fluss.predicate.Predicate} into a Paimon {@link Predicate}.
  *
@@ -43,9 +45,11 @@ public class FlussToPaimonPredicateConverter implements PredicateVisitor<Predica
 
     private final PredicateBuilder builder;
     private final LeafFunctionConverter converter = new LeafFunctionConverter();
+    private final RowType paimonRowType;
 
     public FlussToPaimonPredicateConverter(RowType rowType) {
         this.builder = new PredicateBuilder(rowType);
+        this.paimonRowType = rowType;
     }
 
     public static Optional<Predicate> convert(
@@ -97,57 +101,74 @@ public class FlussToPaimonPredicateConverter implements PredicateVisitor<Predica
 
         @Override
         public Predicate visitStartsWith(FieldRef fieldRef, Object literal) {
-            return builder.startsWith(fieldRef.index(), literal);
+            return builder.startsWith(
+                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitEndsWith(FieldRef fieldRef, Object literal) {
-            return builder.endsWith(fieldRef.index(), literal);
+            return builder.endsWith(
+                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitContains(FieldRef fieldRef, Object literal) {
-            return builder.contains(fieldRef.index(), literal);
+            return builder.contains(
+                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitLessThan(FieldRef fieldRef, Object literal) {
-            return builder.lessThan(fieldRef.index(), literal);
+            return builder.lessThan(
+                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitGreaterOrEqual(FieldRef fieldRef, Object literal) {
-            return builder.greaterOrEqual(fieldRef.index(), literal);
+            return builder.greaterOrEqual(
+                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitNotEqual(FieldRef fieldRef, Object literal) {
-            return builder.notEqual(fieldRef.index(), literal);
+            return builder.notEqual(
+                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitLessOrEqual(FieldRef fieldRef, Object literal) {
-            return builder.lessOrEqual(fieldRef.index(), literal);
+            return builder.lessOrEqual(
+                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitEqual(FieldRef fieldRef, Object literal) {
-            return builder.equal(fieldRef.index(), literal);
+            return builder.equal(
+                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitGreaterThan(FieldRef fieldRef, Object literal) {
-            return builder.greaterThan(fieldRef.index(), literal);
+            return builder.greaterThan(
+                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitIn(FieldRef fieldRef, List<Object> literals) {
-            return builder.in(fieldRef.index(), literals);
+            return builder.in(
+                    fieldRef.index(),
+                    literals.stream()
+                            .map(literal -> convertToPaimonLiteral(fieldRef.index(), literal))
+                            .collect(Collectors.toList()));
         }
 
         @Override
         public Predicate visitNotIn(FieldRef fieldRef, List<Object> literals) {
-            return builder.notIn(fieldRef.index(), literals);
+            return builder.notIn(
+                    fieldRef.index(),
+                    literals.stream()
+                            .map(literal -> convertToPaimonLiteral(fieldRef.index(), literal))
+                            .collect(Collectors.toList()));
         }
 
         @Override
@@ -160,6 +181,10 @@ public class FlussToPaimonPredicateConverter implements PredicateVisitor<Predica
         public Predicate visitOr(List<Predicate> children) {
             // shouldn't come to here
             throw new UnsupportedOperationException("Unsupported visitOr method.");
+        }
+
+        private Object convertToPaimonLiteral(int fieldIndex, Object flussLiteral) {
+            return toPaimonLiteral(paimonRowType.getTypeAt(fieldIndex), flussLiteral);
         }
     }
 }

@@ -38,10 +38,13 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static com.alibaba.fluss.metadata.ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR;
 
 /** A generator for lake splits. */
 public class LakeSplitGenerator {
@@ -51,6 +54,7 @@ public class LakeSplitGenerator {
     private final OffsetsInitializer.BucketOffsetsRetriever bucketOffsetsRetriever;
     private final OffsetsInitializer stoppingOffsetInitializer;
     private final int bucketCount;
+    private final Supplier<Set<PartitionInfo>> listPartitionSupplier;
 
     private final LakeSource<LakeSplit> lakeSource;
 
@@ -60,13 +64,15 @@ public class LakeSplitGenerator {
             LakeSource<LakeSplit> lakeSource,
             OffsetsInitializer.BucketOffsetsRetriever bucketOffsetsRetriever,
             OffsetsInitializer stoppingOffsetInitializer,
-            int bucketCount) {
+            int bucketCount,
+            Supplier<Set<PartitionInfo>> listPartitionSupplier) {
         this.tableInfo = tableInfo;
         this.flussAdmin = flussAdmin;
         this.lakeSource = lakeSource;
         this.bucketOffsetsRetriever = bucketOffsetsRetriever;
         this.stoppingOffsetInitializer = stoppingOffsetInitializer;
         this.bucketCount = bucketCount;
+        this.listPartitionSupplier = listPartitionSupplier;
     }
 
     public List<SourceSplitBase> generateHybridLakeSplits() throws Exception {
@@ -83,9 +89,13 @@ public class LakeSplitGenerator {
                                 .createPlanner(
                                         (LakeSource.PlannerContext) lakeSnapshotInfo::getSnapshotId)
                                 .plan());
+
+        if (lakeSplits.isEmpty()) {
+            return Collections.emptyList();
+        }
+
         if (isPartitioned) {
-            List<PartitionInfo> partitionInfos =
-                    flussAdmin.listPartitionInfos(tableInfo.getTablePath()).get();
+            Set<PartitionInfo> partitionInfos = listPartitionSupplier.get();
             Map<Long, String> partitionNameById =
                     partitionInfos.stream()
                             .collect(
@@ -109,7 +119,7 @@ public class LakeSplitGenerator {
     private Map<String, Map<Integer, List<LakeSplit>>> groupLakeSplits(List<LakeSplit> lakeSplits) {
         Map<String, Map<Integer, List<LakeSplit>>> result = new HashMap<>();
         for (LakeSplit split : lakeSplits) {
-            String partition = String.join("$", split.partition());
+            String partition = String.join(PARTITION_SPEC_SEPARATOR, split.partition());
             int bucket = split.bucket();
             // Get or create the partition group
             Map<Integer, List<LakeSplit>> bucketMap =

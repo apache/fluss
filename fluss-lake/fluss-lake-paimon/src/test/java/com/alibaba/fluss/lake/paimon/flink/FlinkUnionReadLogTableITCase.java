@@ -95,11 +95,37 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
                         .map(row -> Row.of(row.getField(1)))
                         .collect(Collectors.toList());
         assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
+
+        if (isPartitioned) {
+            // get first partition
+            String partition = waitUntilPartitions(t1).values().iterator().next();
+            String sqlWithPartitionFilter =
+                    "select * FROM " + tableName + " WHERE p = '" + partition + "'";
+
+            String plan = batchTEnv.explainSql(sqlWithPartitionFilter);
+
+            // check if the plan contains partition filter
+            assertThat(plan)
+                    .contains("TableSourceScan(")
+                    .contains("filter=[=(p, _UTF-16LE'" + partition + "'");
+
+            List<Row> expectedFiltered =
+                    writtenRows.stream()
+                            .filter(r -> partition.equals(r.getField(15)))
+                            .collect(Collectors.toList());
+
+            List<Row> actualFiltered =
+                    CollectionUtil.iteratorToList(
+                            batchTEnv.executeSql(sqlWithPartitionFilter).collect());
+
+            assertThat(actualFiltered).containsExactlyInAnyOrderElementsOf(expectedFiltered);
+        }
     }
 
     private long prepareLogTable(
             TablePath tablePath, int bucketNum, boolean isPartitioned, List<Row> flinkRows)
             throws Exception {
+        // createFullTypeLogTable creates a datalake-enabled table with a partition column.
         long t1Id = createFullTypeLogTable(tablePath, bucketNum, isPartitioned);
         if (isPartitioned) {
             Map<Long, String> partitionNameById = waitUntilPartitions(tablePath);
