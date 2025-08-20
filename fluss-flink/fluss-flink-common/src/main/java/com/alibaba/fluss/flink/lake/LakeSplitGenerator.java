@@ -38,13 +38,13 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
-import static com.alibaba.fluss.flink.utils.DataLakeUtils.extractLakeCatalogProperties;
 import static com.alibaba.fluss.metadata.ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
 
 /** A generator for lake splits. */
 public class LakeSplitGenerator {
@@ -54,6 +54,7 @@ public class LakeSplitGenerator {
     private final OffsetsInitializer.BucketOffsetsRetriever bucketOffsetsRetriever;
     private final OffsetsInitializer stoppingOffsetInitializer;
     private final int bucketCount;
+    private final Supplier<Set<PartitionInfo>> listPartitionSupplier;
 
     private final LakeSource<LakeSplit> lakeSource;
 
@@ -63,13 +64,15 @@ public class LakeSplitGenerator {
             LakeSource<LakeSplit> lakeSource,
             OffsetsInitializer.BucketOffsetsRetriever bucketOffsetsRetriever,
             OffsetsInitializer stoppingOffsetInitializer,
-            int bucketCount) {
+            int bucketCount,
+            Supplier<Set<PartitionInfo>> listPartitionSupplier) {
         this.tableInfo = tableInfo;
         this.flussAdmin = flussAdmin;
         this.lakeSource = lakeSource;
         this.bucketOffsetsRetriever = bucketOffsetsRetriever;
         this.stoppingOffsetInitializer = stoppingOffsetInitializer;
         this.bucketCount = bucketCount;
+        this.listPartitionSupplier = listPartitionSupplier;
     }
 
     public List<SourceSplitBase> generateHybridLakeSplits() throws Exception {
@@ -92,9 +95,7 @@ public class LakeSplitGenerator {
         }
 
         if (isPartitioned) {
-            // pass pruned lake splits
-            List<PartitionInfo> partitionInfos =
-                    flussAdmin.listPartitionInfos(tableInfo.getTablePath()).get();
+            Set<PartitionInfo> partitionInfos = listPartitionSupplier.get();
             Map<Long, String> partitionNameById =
                     partitionInfos.stream()
                             .collect(

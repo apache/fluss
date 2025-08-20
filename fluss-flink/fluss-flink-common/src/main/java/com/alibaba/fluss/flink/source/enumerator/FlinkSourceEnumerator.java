@@ -62,6 +62,7 @@ import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
@@ -296,7 +297,7 @@ public class FlinkSourceEnumerator
         try {
             List<PartitionInfo> partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
             partitionInfos = applyPartitionFilter(partitionInfos);
-            return new HashSet<>(partitionInfos);
+            return new LinkedHashSet<>(partitionInfos);
         } catch (Exception e) {
             throw new FlinkRuntimeException(
                     String.format("Failed to list partitions for %s", tablePath),
@@ -519,9 +520,9 @@ public class FlinkSourceEnumerator
                         lakeSource,
                         bucketOffsetsRetriever,
                         stoppingOffsetsInitializer,
-                        tableInfo.getNumBuckets());
-        List<SourceSplitBase> lakeSplits = lakeSplitGenerator.generateHybridLakeSplits();
-        return lakeSplits;
+                        tableInfo.getNumBuckets(),
+                        this::listPartitions);
+        return lakeSplitGenerator.generateHybridLakeSplits();
     }
 
     private boolean ignoreTableBucket(TableBucket tableBucket) {
