@@ -99,8 +99,9 @@
         <netty.version>4.1.104</netty.version>
         <arrow.version>15.0.0</arrow.version>
         <paimon.version>1.2.0</paimon.version>
-        <!--    todo: Revisit to add support as per Iceberg 1.9.1 post #1195 merge for Java 11 support-->
+        <!--    todo: Revisit to add support as per Iceberg 1.9.1 post #1195 merge for Java 11 support, also modify the parquet version too-->
         <iceberg.version>1.4.3</iceberg.version>
+        <parquet.version>1.13.1</parquet.version>
 
         <fluss.hadoop.version>2.10.2</fluss.hadoop.version>
         <frocksdb.version>6.20.3-ververica-2.0</frocksdb.version>

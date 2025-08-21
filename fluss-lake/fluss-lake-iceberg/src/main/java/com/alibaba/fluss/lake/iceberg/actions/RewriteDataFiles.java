@@ -20,13 +20,16 @@ package com.alibaba.fluss.lake.iceberg.actions;
 import org.apache.iceberg.actions.RewriteDataFilesActionResult;
 import org.apache.iceberg.expressions.Expression;
 
-/** This mirrors Iceberg's actual RewriteDataFiles interface but simplified for Fluss's use case. */
+/**
+ * Interface for rewriting data files in Iceberg tables. Simplified version adapted for Fluss's use
+ * case.
+ */
 public interface RewriteDataFiles {
 
-    /** Filter files to rewrite. */
+    /** Filter files to rewrite based on expression. */
     RewriteDataFiles filter(Expression expression);
 
-    /** Set target file size. */
+    /** Set target file size for compacted files. */
     RewriteDataFiles targetSizeInBytes(long targetSize);
 
     /** Use bin-pack strategy for compaction. */
