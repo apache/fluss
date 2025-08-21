@@ -42,7 +42,7 @@ public class IcebergLakeTieringFactory
     @Override
     public LakeWriter<IcebergWriteResult> createLakeWriter(WriterInitContext writerInitContext)
             throws IOException {
-        return new IcebergLakeWriter(icebergCatalogProvider, writerInitContext, false, null);
+        return new IcebergLakeWriter(icebergCatalogProvider, writerInitContext);
     }
 
     @Override
