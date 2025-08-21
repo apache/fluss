@@ -17,6 +17,8 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
+import edu.umd.cs.findbugs.annotations.Nullable;
+import org.apache.iceberg.actions.RewriteDataFilesActionResult;
 import org.apache.iceberg.io.WriteResult;
 
 import java.io.Serializable;
@@ -28,12 +30,22 @@ public class IcebergWriteResult implements Serializable {
 
     private final WriteResult writeResult;
 
-    public IcebergWriteResult(WriteResult writeResult) {
+    @Nullable private final RewriteDataFilesActionResult rewriteDataFilesActionResult;
+
+    public IcebergWriteResult(
+            WriteResult writeResult,
+            @Nullable RewriteDataFilesActionResult rewriteDataFilesActionResult) {
         this.writeResult = writeResult;
+        this.rewriteDataFilesActionResult = rewriteDataFilesActionResult;
     }
 
     public WriteResult getWriteResult() {
         return writeResult;
+    }
+
+    @Nullable
+    public RewriteDataFilesActionResult getRewriteDataFilesActionResult() {
+        return rewriteDataFilesActionResult;
     }
 
     @Override

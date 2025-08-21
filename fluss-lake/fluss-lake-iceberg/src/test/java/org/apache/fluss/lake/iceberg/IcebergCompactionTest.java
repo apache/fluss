@@ -248,7 +248,7 @@ class IcebergCompactionTest {
 
         // We only validate that WriteResult round-trips; compaction details are not serialized.
         WriteResult dummyWrite = WriteResult.builder().build();
-        IcebergWriteResult writeResult = new IcebergWriteResult(dummyWrite);
+        IcebergWriteResult writeResult = new IcebergWriteResult(dummyWrite, null);
 
         SimpleVersionedSerializer<IcebergWriteResult> serializer =
                 lakeTieringFactory.getWriteResultSerializer();
@@ -399,7 +399,7 @@ class IcebergCompactionTest {
                                 .addDataFiles(new org.apache.iceberg.DataFile[] {df})
                                 .build();
 
-                IcebergWriteResult writeResult = new IcebergWriteResult(wr);
+                IcebergWriteResult writeResult = new IcebergWriteResult(wr, null);
                 byte[] bytes = writeResultSerializer.serialize(writeResult);
                 results.add(
                         writeResultSerializer.deserialize(
