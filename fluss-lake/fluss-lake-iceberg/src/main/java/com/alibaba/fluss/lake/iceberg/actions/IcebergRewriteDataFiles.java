@@ -24,30 +24,31 @@ import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.Metrics;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.RewriteFiles;
+import org.apache.iceberg.StructLike;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.actions.RewriteDataFilesActionResult;
 import org.apache.iceberg.data.GenericAppenderFactory;
+import org.apache.iceberg.data.IcebergGenericReader;
 import org.apache.iceberg.data.Record;
-import org.apache.iceberg.data.parquet.GenericParquetReaders;
-import org.apache.iceberg.data.parquet.GenericParquetWriter;
 import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.expressions.Expressions;
 import org.apache.iceberg.io.CloseableIterable;
+import org.apache.iceberg.io.FileAppender;
 import org.apache.iceberg.io.FileAppenderFactory;
 import org.apache.iceberg.io.InputFile;
 import org.apache.iceberg.io.OutputFile;
-import org.apache.iceberg.parquet.Parquet;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
 import java.util.UUID;
 
 /**
- * Concrete implementation of {@link RewriteDataFiles} for Fluss's Iceberg integration. Handles
- * bin-packing compaction of small files into larger ones.
+ * Concrete implementation for Fluss's Iceberg integration. Handles bin-packing compaction of small
+ * files into larger ones.
  */
-public class IcebergRewriteDataFiles implements RewriteDataFiles {
+public class IcebergRewriteDataFiles {
 
     private final Table table;
     private Expression filter = Expressions.alwaysTrue();
@@ -57,41 +58,38 @@ public class IcebergRewriteDataFiles implements RewriteDataFiles {
         this.table = table;
     }
 
-    @Override
-    public RewriteDataFiles filter(Expression expression) {
+    public IcebergRewriteDataFiles filter(Expression expression) {
         this.filter = expression;
         return this;
     }
 
-    @Override
-    public RewriteDataFiles targetSizeInBytes(long targetSize) {
+    public IcebergRewriteDataFiles targetSizeInBytes(long targetSize) {
         this.targetSizeInBytes = targetSize;
         return this;
     }
 
-    @Override
-    public RewriteDataFiles binPack() {
+    public IcebergRewriteDataFiles binPack() {
         return this;
     }
 
-    @Override
     public RewriteDataFilesActionResult execute() {
         try {
             // Scan files matching the filter
-            List<DataFile> filesToRewrite = scanFilesToRewrite();
+            List<FileScanTask> tasksToRewrite = scanFilesToRewrite();
 
-            if (filesToRewrite.size() < 2) {
-                return new RewriteDataFilesActionResult(new ArrayList<>(), new ArrayList<>());
+            if (tasksToRewrite.size() < 2) {
+                return new RewriteDataFilesActionResult(
+                        Collections.emptyList(), Collections.emptyList());
             }
 
             // Group files using bin-packing strategy
-            List<List<DataFile>> fileGroups = binPackFiles(filesToRewrite);
+            List<List<FileScanTask>> fileGroups = binPackFiles(tasksToRewrite);
 
             List<DataFile> allNewFiles = new ArrayList<>();
             List<DataFile> allOldFiles = new ArrayList<>();
 
             // Rewrite each group
-            for (List<DataFile> group : fileGroups) {
+            for (List<FileScanTask> group : fileGroups) {
                 if (group.size() < 2) {
                     continue;
                 }
@@ -99,7 +97,9 @@ public class IcebergRewriteDataFiles implements RewriteDataFiles {
                 DataFile newFile = rewriteFileGroup(group);
                 if (newFile != null) {
                     allNewFiles.add(newFile);
-                    allOldFiles.addAll(group);
+                    for (FileScanTask task : group) {
+                        allOldFiles.add(task.file());
+                    }
                 }
             }
 
@@ -114,38 +114,40 @@ public class IcebergRewriteDataFiles implements RewriteDataFiles {
         }
     }
 
-    private List<DataFile> scanFilesToRewrite() throws IOException {
-        List<DataFile> files = new ArrayList<>();
+    private List<FileScanTask> scanFilesToRewrite() throws IOException {
+        List<FileScanTask> tasks = new ArrayList<>();
 
-        try (CloseableIterable<FileScanTask> tasks = table.newScan().filter(filter).planFiles()) {
+        try (CloseableIterable<FileScanTask> scanTasks =
+                table.newScan().filter(filter).planFiles()) {
 
-            for (FileScanTask task : tasks) {
-                files.add(task.file());
+            for (FileScanTask task : scanTasks) {
+                tasks.add(task);
             }
         } catch (IOException e) {
             throw new IOException("Failed to scan files", e);
         }
-        return files;
+        return tasks;
     }
 
-    private List<List<DataFile>> binPackFiles(List<DataFile> files) {
-        List<List<DataFile>> groups = new ArrayList<>();
-        List<DataFile> currentGroup = new ArrayList<>();
+    private List<List<FileScanTask>> binPackFiles(List<FileScanTask> tasks) {
+        List<List<FileScanTask>> groups = new ArrayList<>();
+        List<FileScanTask> currentGroup = new ArrayList<>();
         long currentSize = 0;
 
         // Sort files by size for better bin-packing (smallest first)
-        files.sort((f1, f2) -> Long.compare(f1.fileSizeInBytes(), f2.fileSizeInBytes()));
+        tasks.sort(
+                (t1, t2) -> Long.compare(t1.file().fileSizeInBytes(), t2.file().fileSizeInBytes()));
 
-        for (DataFile file : files) {
-            if (currentSize + file.fileSizeInBytes() > targetSizeInBytes
-                    && !currentGroup.isEmpty()) {
+        for (FileScanTask task : tasks) {
+            long size = task.file().fileSizeInBytes();
+            if (currentSize + size > targetSizeInBytes && !currentGroup.isEmpty()) {
                 // Start a new group
                 groups.add(new ArrayList<>(currentGroup));
                 currentGroup.clear();
                 currentSize = 0;
             }
-            currentGroup.add(file);
-            currentSize += file.fileSizeInBytes();
+            currentGroup.add(task);
+            currentSize += size;
         }
 
         // Add the last group
@@ -155,31 +157,27 @@ public class IcebergRewriteDataFiles implements RewriteDataFiles {
         return groups;
     }
 
-    private DataFile rewriteFileGroup(List<DataFile> group) {
+    private DataFile rewriteFileGroup(List<FileScanTask> group) {
         try {
             // Generate output file path
-            String fileName = String.format("%s.parquet", UUID.randomUUID());
+            DataFile sample = group.get(0).file();
+            FileFormat fileFormat = sample.format();
+            String fileName = String.format("%s.%s", UUID.randomUUID(), fileFormat.toString());
             OutputFile outputFile =
                     table.io().newOutputFile(table.locationProvider().newDataLocation(fileName));
 
-            // Create Parquet writer
             FileAppenderFactory<Record> appenderFactory =
                     new GenericAppenderFactory(table.schema());
-
-            Parquet.WriteBuilder writeBuilder =
-                    Parquet.write(outputFile)
-                            .schema(table.schema())
-                            .createWriterFunc(GenericParquetWriter::buildWriter)
-                            .overwrite();
 
             // Use Iceberg FileAppender to write, then build a DataFile manually
             Metrics metrics;
             long recordCount = 0L;
-            org.apache.iceberg.io.FileAppender<Record> writer = null;
+            FileAppender<Record> writer = null;
             try {
-                writer = writeBuilder.build();
-                for (DataFile file : group) {
-                    try (CloseableIterable<Record> records = readDataFile(file)) {
+                writer = appenderFactory.newAppender(outputFile, fileFormat);
+
+                for (FileScanTask task : group) {
+                    try (CloseableIterable<Record> records = readDataFile(task)) {
                         for (Record record : records) {
                             writer.add(record);
                             recordCount++;
@@ -195,7 +193,7 @@ public class IcebergRewriteDataFiles implements RewriteDataFiles {
 
             // Assumes all files in group share the same partition
             PartitionSpec spec = table.spec();
-            DataFile sample = group.get(0);
+            StructLike partition = sample.partition();
 
             String location = outputFile.location();
             InputFile inputFile = table.io().newInputFile(location);
@@ -205,10 +203,10 @@ public class IcebergRewriteDataFiles implements RewriteDataFiles {
                     DataFiles.builder(spec)
                             .withPath(location)
                             .withFileSizeInBytes(fileSizeInBytes)
-                            .withFormat(FileFormat.PARQUET)
+                            .withFormat(fileFormat)
                             .withRecordCount(recordCount)
                             .withMetrics(metrics)
-                            .withPartition(sample.partition()) // no-op for unpartitioned specs
+                            .withPartition(partition) // no-op for unpartitioned specs
                             .build();
 
             return newFile;
@@ -218,12 +216,9 @@ public class IcebergRewriteDataFiles implements RewriteDataFiles {
         }
     }
 
-    private CloseableIterable<Record> readDataFile(DataFile file) throws IOException {
-        return Parquet.read(table.io().newInputFile(file.path().toString()))
-                .project(table.schema())
-                .createReaderFunc(
-                        fileSchema -> GenericParquetReaders.buildReader(table.schema(), fileSchema))
-                .build();
+    private CloseableIterable<Record> readDataFile(FileScanTask task) throws IOException {
+        IcebergGenericReader reader = new IcebergGenericReader(table.newScan(), true);
+        return reader.open(task);
     }
 
     private void commitChanges(List<DataFile> oldFiles, List<DataFile> newFiles) {

@@ -25,6 +25,7 @@ import com.alibaba.fluss.lake.writer.WriterInitContext;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.record.LogRecord;
+import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.FileFormat;
@@ -40,6 +41,8 @@ import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.OutputFileFactory;
 import org.apache.iceberg.io.WriteResult;
 import org.apache.iceberg.util.PropertyUtil;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -47,6 +50,7 @@ import java.io.Closeable;
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CancellationException;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -59,10 +63,10 @@ import static org.apache.iceberg.TableProperties.WRITE_TARGET_FILE_SIZE_BYTES_DE
 /** Implementation of {@link LakeWriter} for Iceberg. */
 public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
 
+    protected static final Logger LOG = LoggerFactory.getLogger(IcebergLakeWriter.class);
+
     private static final String AUTO_MAINTENANCE_KEY = "table.datalake.auto-maintenance";
-    private static final int MIN_FILES_TO_COMPACT = 5;
     private static final long SMALL_FILE_THRESHOLD = 50 * 1024 * 1024; // 50MB
-    private static final long COMPACTION_TARGET_SIZE = 128 * 1024 * 1024; // 128MB
 
     private final Catalog icebergCatalog;
     private final Table icebergTable;
@@ -93,11 +97,7 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
         if (autoMaintenanceEnabled) {
             this.compactionExecutor =
                     Executors.newSingleThreadExecutor(
-                            r -> {
-                                Thread t = new Thread(r, "iceberg-compact-" + tableBucket);
-                                t.setDaemon(true);
-                                return t;
-                            });
+                            new ExecutorThreadFactory("iceberg-compact-" + tableBucket));
             scheduleCompactionIfNeeded(tableBucket.getBucket());
         } else {
             this.compactionExecutor = null;
@@ -143,16 +143,14 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
         try {
             WriteResult writeResult = recordWriter.complete();
 
-            if (compactionFuture != null && !compactionFuture.isDone()) {
-                try {
-                    compactionFuture.get(30, TimeUnit.SECONDS);
-                } catch (Exception e) {
-                    throw new RuntimeException(
-                            "Failed to wait for compaction result for bucket: " + tableBucket, e);
-                }
+            RewriteDataFilesActionResult rewriteDataFilesActionResult;
+            try {
+                rewriteDataFilesActionResult = compactionFuture.get();
+            } catch (CancellationException e) {
+                rewriteDataFilesActionResult = null;
             }
 
-            return new IcebergWriteResult(writeResult);
+            return new IcebergWriteResult(writeResult, rewriteDataFilesActionResult);
         } catch (Exception e) {
             throw new IOException("Failed to complete Iceberg write.", e);
         }
@@ -165,9 +163,8 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
                 compactionFuture.cancel(true);
             }
 
-            if (compactionExecutor != null) {
-                compactionExecutor.shutdownNow();
-                compactionExecutor.awaitTermination(5, TimeUnit.SECONDS);
+            if (!compactionExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                LOG.warn("Fail to close compactionExecutor.");
             }
 
             if (recordWriter != null) {
@@ -190,25 +187,29 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
     }
 
     private void scheduleCompactionIfNeeded(int bucketId) {
-        if (!autoMaintenanceEnabled || compactionExecutor == null) {
-            return;
-        }
-
         if (bucketPartitionFieldName == null) {
             return;
         }
 
         try {
-            // Scan files for this bucket
-            List<DataFile> bucketFiles = scanBucketFiles(bucketId);
+            compactionFuture =
+                    CompletableFuture.supplyAsync(
+                            () -> {
+                                try {
+                                    // Scan files for this bucket
+                                    List<DataFile> bucketFiles = scanBucketFiles(bucketId);
 
-            // Check if compaction needed
-            if (shouldCompact(bucketFiles)) {
-
-                compactionFuture =
-                        CompletableFuture.supplyAsync(
-                                () -> compactFiles(bucketFiles, bucketId), compactionExecutor);
-            }
+                                    // Check if compaction needed
+                                    if (shouldCompact(bucketFiles)) {
+                                        return compactFiles(bucketFiles, bucketId);
+                                    }
+                                    return null;
+                                } catch (Exception e) {
+                                    // Swallow and return null to avoid failing the write path
+                                    return null;
+                                }
+                            },
+                            compactionExecutor);
         } catch (Exception e) {
             throw new RuntimeException("Failed to schedule compaction for bucket: " + bucketId, e);
         }
@@ -221,7 +222,7 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
             if (bucketPartitionFieldName == null) {
                 return bucketFiles;
             }
-            // Scan files filtered by Iceberg bucket partition field (e.g., bucket_3_order_id)
+            // Scan files filtered by Iceberg bucket partition field
             CloseableIterable<FileScanTask> tasks =
                     icebergTable
                             .newScan()
@@ -241,18 +242,10 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
     }
 
     private boolean shouldCompact(List<DataFile> files) {
-        if (files.isEmpty()) {
-            return false;
-        }
-        if (files.size() > MIN_FILES_TO_COMPACT) {
+        if (files.size() > 1) {
             return true;
         }
-
-        // Also compact if any file is smaller than threshold
-        boolean hasSmallFiles =
-                files.stream().anyMatch(f -> f.fileSizeInBytes() < SMALL_FILE_THRESHOLD);
-
-        return hasSmallFiles;
+        return false;
     }
 
     private RewriteDataFilesActionResult compactFiles(List<DataFile> files, int bucketId) {
@@ -267,7 +260,7 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
 
             RewriteDataFilesActionResult result =
                     rewriter.filter(Expressions.equal(bucketPartitionFieldName, bucketId))
-                            .targetSizeInBytes(COMPACTION_TARGET_SIZE)
+                            .targetSizeInBytes(compactionTargetSize(icebergTable))
                             .binPack()
                             .execute();
 
@@ -283,8 +276,7 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
         try {
             for (PartitionField f : table.spec().fields()) {
                 String name = f.name();
-                // Heuristic: Iceberg uses "bucket_<N>_<sourceCol>" by default
-                if (name != null && name.startsWith("bucket_")) {
+                if (name != null) {
                     return name;
                 }
             }
@@ -309,5 +301,19 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
                 icebergTable.properties(),
                 WRITE_TARGET_FILE_SIZE_BYTES,
                 WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT);
+    }
+
+    private static long compactionTargetSize(Table icebergTable) {
+        long splitSize =
+                PropertyUtil.propertyAsLong(
+                        icebergTable.properties(),
+                        TableProperties.SPLIT_SIZE,
+                        TableProperties.SPLIT_SIZE_DEFAULT);
+        long targetFileSize =
+                PropertyUtil.propertyAsLong(
+                        icebergTable.properties(),
+                        TableProperties.WRITE_TARGET_FILE_SIZE_BYTES,
+                        TableProperties.WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT);
+        return Math.min(splitSize, targetFileSize);
     }
 }
