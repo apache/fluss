@@ -230,7 +230,7 @@ public class FlinkSourceEnumerator
         }
 
         if (isPartitioned) {
-            if (streaming && scanPartitionDiscoveryIntervalMs > 0) {
+            if (streaming && !lakeEnabled && scanPartitionDiscoveryIntervalMs > 0) {
                 // should do partition discovery
                 LOG.info(
                         "Starting the FlussSourceEnumerator for table {} "
@@ -243,29 +243,27 @@ public class FlinkSourceEnumerator
                         this::checkPartitionChanges,
                         0,
                         scanPartitionDiscoveryIntervalMs);
+            } else if (streaming && !lakeEnabled && scanPartitionDiscoveryIntervalMs <= 0) {
+                // just call once
+                LOG.info(
+                        "Starting the FlussSourceEnumerator for table {} without partition discovery.",
+                        tablePath);
+                context.callAsync(this::listPartitions, this::checkPartitionChanges);
             } else {
-                if (!streaming) {
-                    startInBatchMode();
-                } else {
-                    // just call once
-                    LOG.info(
-                            "Starting the FlussSourceEnumerator for table {} without partition discovery.",
-                            tablePath);
-                    context.callAsync(this::listPartitions, this::checkPartitionChanges);
-                }
+                genHybridLakeAndFlussSplits();
             }
 
         } else {
-            if (!streaming) {
-                startInBatchMode();
-            } else {
+            if (streaming && !lakeEnabled) {
                 // init bucket splits and assign
                 context.callAsync(this::initNonPartitionedSplits, this::handleSplitsAdd);
+            } else {
+                genHybridLakeAndFlussSplits();
             }
         }
     }
 
-    private void startInBatchMode() {
+    private void genHybridLakeAndFlussSplits() {
         if (lakeEnabled) {
             context.callAsync(this::getLakeSplit, this::handleSplitsAdd);
         } else {
