@@ -27,7 +27,7 @@ public class PartitionMetadata {
      * to identify this partition already deleted, but there is an partitionId residual in
      * zookeeper. In this case, tabletServers need to clear the metadata of this partition.
      */
-    public static final String DELETED_PARTITION_NAME = "__delete__";
+    public static final String DELETED_PARTITION_NAME = "__delete_marker__";
 
     /**
      * The already delete partition id. This partition id will be used in UpdateMetadata request to
@@ -40,16 +40,27 @@ public class PartitionMetadata {
     private final String partitionName;
     private final long partitionId;
     private final List<BucketMetadata> bucketMetadataList;
+    private final boolean deletedMarker;
 
     public PartitionMetadata(
             long tableId,
             String partitionName,
             long partitionId,
             List<BucketMetadata> bucketMetadataList) {
+        this(tableId, partitionName, partitionId, bucketMetadataList, false);
+    }
+
+    public PartitionMetadata(
+            long tableId,
+            String partitionName,
+            long partitionId,
+            List<BucketMetadata> bucketMetadataList,
+            boolean deletedMarker) {
         this.tableId = tableId;
         this.partitionName = partitionName;
         this.partitionId = partitionId;
         this.bucketMetadataList = bucketMetadataList;
+        this.deletedMarker = deletedMarker;
     }
 
     public long getTableId() {
@@ -66,5 +77,9 @@ public class PartitionMetadata {
 
     public List<BucketMetadata> getBucketMetadataList() {
         return bucketMetadataList;
+    }
+
+    public boolean isDeletedMarker() {
+        return deletedMarker;
     }
 }

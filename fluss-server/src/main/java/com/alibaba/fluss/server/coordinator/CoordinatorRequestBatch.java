@@ -45,6 +45,7 @@ import com.alibaba.fluss.server.metadata.PartitionMetadata;
 import com.alibaba.fluss.server.metadata.TableMetadata;
 import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
+import com.alibaba.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,9 +62,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
-import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
 import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_PATH;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrResponseData;
 import static com.alibaba.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
@@ -616,9 +615,12 @@ public class CoordinatorRequestBatch {
         List<TableMetadata> tableMetadataList = new ArrayList<>();
         updateMetadataRequestBucketMap.forEach(
                 (tableId, bucketMetadataList) -> {
-                    TableInfo tableInfo = getTableInfo(tableId);
+                    Tuple2<Boolean, TableInfo> tableInfoTuple = getTableInfo(tableId);
+                    TableInfo tableInfo = tableInfoTuple.f1;
                     if (tableInfo != null) {
-                        tableMetadataList.add(new TableMetadata(tableInfo, bucketMetadataList));
+                        tableMetadataList.add(
+                                new TableMetadata(
+                                        tableInfo, bucketMetadataList, tableInfoTuple.f0));
                     }
                 });
 
@@ -640,7 +642,8 @@ public class CoordinatorRequestBatch {
                                                 tableId,
                                                 DELETED_PARTITION_NAME,
                                                 partitionId,
-                                                kvEntry.getValue());
+                                                kvEntry.getValue(),
+                                                true);
                             } else {
                                 throw new IllegalStateException(
                                         "Partition name is null for partition " + partitionId);
@@ -650,19 +653,20 @@ public class CoordinatorRequestBatch {
                                     new PartitionMetadata(
                                             tableId,
                                             partitionName,
-                                            partitionQueuedForDeletion
-                                                    ? DELETED_PARTITION_ID
-                                                    : partitionId,
-                                            kvEntry.getValue());
+                                            partitionId,
+                                            kvEntry.getValue(),
+                                            partitionQueuedForDeletion);
                         }
                         // table
                         partitionMetadataList.add(partitionMetadata);
                     }
                     // no bucket metadata, use empty metadata list
-                    TableInfo tableInfo = getTableInfo(tableId);
+                    Tuple2<Boolean, TableInfo> tableInfoTuple = getTableInfo(tableId);
+                    TableInfo tableInfo = tableInfoTuple.f1;
                     if (tableInfo != null) {
                         tableMetadataList.add(
-                                new TableMetadata(getTableInfo(tableId), Collections.emptyList()));
+                                new TableMetadata(
+                                        tableInfo, Collections.emptyList(), tableInfoTuple.f0));
                     }
                 });
 
@@ -675,32 +679,34 @@ public class CoordinatorRequestBatch {
                 partitionMetadataList);
     }
 
-    @Nullable
-    private TableInfo getTableInfo(long tableId) {
+    private Tuple2<Boolean, TableInfo> getTableInfo(long tableId) {
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
         boolean tableQueuedForDeletion = coordinatorContext.isTableQueuedForDeletion(tableId);
         if (tableInfo == null) {
             if (tableQueuedForDeletion) {
-                return TableInfo.of(
-                        DELETED_TABLE_PATH, tableId, 0, EMPTY_TABLE_DESCRIPTOR, -1L, -1L);
+                tableInfo =
+                        TableInfo.of(
+                                DELETED_TABLE_PATH, tableId, 0, EMPTY_TABLE_DESCRIPTOR, -1L, -1L);
             } else {
                 // it may happen that the table is dropped, but the partition still exists
                 // when coordinator restarts, it won't consider it as deleted table,
                 // and will still send partition bucket metadata to tablet server after startup,
                 // which will fail into this code patch, not throw exception, just return null.
                 // TODO: FIX ME, it shouldn't come into here
-                return null;
+                tableInfo = null;
             }
         } else {
-            return tableQueuedForDeletion
-                    ? TableInfo.of(
-                            tableInfo.getTablePath(),
-                            DELETED_TABLE_ID,
-                            0,
-                            EMPTY_TABLE_DESCRIPTOR,
-                            -1L,
-                            -1L)
-                    : tableInfo;
+            tableInfo =
+                    tableQueuedForDeletion
+                            ? TableInfo.of(
+                                    tableInfo.getTablePath(),
+                                    tableId,
+                                    0,
+                                    EMPTY_TABLE_DESCRIPTOR,
+                                    -1L,
+                                    -1L)
+                            : tableInfo;
         }
+        return Tuple2.of(tableQueuedForDeletion, tableInfo);
     }
 }
