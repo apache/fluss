@@ -26,7 +26,7 @@
 
 - [fluss-fs-s3-0.7.0.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-s3/0.7.0/fluss-fs-s3-0.7.0.jar) ([asc](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-s3/0.7.0/fluss-fs-s3-0.7.0.jar.asc), [sha](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-s3/0.7.0/fluss-fs-s3-0.7.0.jar.sha1))
 - [fluss-fs-oss-0.7.0.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-oss/0.7.0/fluss-fs-oss-0.7.0.jar) ([asc](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-oss/0.7.0/fluss-fs-oss-0.7.0.jar.asc), [sha](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-oss/0.7.0/fluss-fs-oss-0.7.0.jar.sha1))
-- [fluss-fs-hadoop-0.7.0.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.7.0/fluss-fs-hadoop-0.7.0.jar) ([asc](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.7.0/fluss-fs-hadoop-0.7.0.jar.asc), [sha](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.7.0/fluss-fs-hadoop-0.7.0.jar.sha1))
+- [fluss-fs-hadoop-0.7.0.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.7.0/fluss-fs-hadoop-0.7.0-with-dependencies.jar) ([asc](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.7.0/fluss-fs-hadoop-0.7.0.jar.asc), [sha](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-fs-hadoop/0.7.0/fluss-fs-hadoop-0.7.0.jar.sha1))
 
 #### Flink Tier Service Jar
 
