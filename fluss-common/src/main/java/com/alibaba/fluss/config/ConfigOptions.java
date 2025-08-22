@@ -1535,6 +1535,38 @@ public class ConfigOptions {
                             "The amount of the cache for data blocks in RocksDB. "
                                     + "The default block-cache size is `8MB`.");
 
+    public static final ConfigOption<Boolean> KV_SHARED_BLOCK_CACHE_ENABLED =
+            key("kv.rocksdb.shared-block-cache.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Whether to enable the shared block cache across all column families.");
+
+    public static final ConfigOption<MemorySize> KV_SHARED_BLOCK_CACHE_SIZE =
+            key("kv.rocksdb.shared-block-cache.size")
+                    .memoryType()
+                    .defaultValue(MemorySize.parse("4gb"))
+                    .withDescription("The size of the shared block cache if enabled.");
+
+    public static final ConfigOption<Boolean> KV_SHARED_BLOCK_CACHE_STRICT_CAPACITY_LIMIT =
+            key("kv.rocksdb.shared-block-cache.strict-capacity-limit")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription("Whether to strictly limit the shared block cache capacity.");
+
+    public static final ConfigOption<Integer> KV_SHARED_BLOCK_CACHE_NUM_SHARD_BITS =
+            key("kv.rocksdb.shared-block-cache.num-shard-bits")
+                    .intType()
+                    .defaultValue(-1)
+                    .withDescription(
+                            "Number of bits for shard count (8 means 256 shards) in the shared block cache.");
+
+    public static final ConfigOption<Double> KV_SHARED_BLOCK_CACHE_HIGH_PRI_POOL_RATIO =
+            key("kv.rocksdb.shared-block-cache.high-pri-pool-ratio")
+                    .doubleType()
+                    .defaultValue(0.0)
+                    .withDescription("Ratio of high priority pool in the shared block cache.");
+
     public static final ConfigOption<Boolean> KV_USE_BLOOM_FILTER =
             key("kv.rocksdb.use-bloom-filter")
                     .booleanType()
