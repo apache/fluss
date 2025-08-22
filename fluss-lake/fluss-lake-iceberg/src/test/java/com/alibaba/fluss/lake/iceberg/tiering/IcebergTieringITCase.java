@@ -73,99 +73,44 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
 
         // then start tiering job
         JobClient jobClient = buildTieringJob(execEnv);
+        try {
+            // check the status of replica after synced
+            assertReplicaStatus(t1Bucket, 3);
 
-        // check the status of replica after synced
-        assertReplicaStatus(t1Bucket, 3);
+            checkDataInIcebergPrimaryKeyTable(t1, rows);
+            // check snapshot property in iceberg
+            Map<String, String> properties =
+                    new HashMap<String, String>() {
+                        {
+                            put(
+                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                    "[{\"bucket_id\":0,\"log_offset\":3}]");
+                        }
+                    };
+            checkSnapshotPropertyInIceberg(t1, properties);
 
-        checkDataInIcebergPrimaryKeyTable(t1, rows);
-        // check snapshot property in paimon
-        Map<String, String> properties =
-                new HashMap<String, String>() {
-                    {
-                        put(
-                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                "[{\"bucket_id\":0,\"log_offset\":3}]");
-                    }
-                };
-        checkSnapshotPropertyInIceberg(t1, properties);
+            // test log table
+            testLogTableTiering();
 
-        // then, create another log table
-        TablePath t2 = TablePath.of(DEFAULT_DB, "logTable");
-        long t2Id = createLogTable(t2);
-        TableBucket t2Bucket = new TableBucket(t2Id, 0);
-        List<InternalRow> flussRows = new ArrayList<>();
-        // write records
-        for (int i = 0; i < 10; i++) {
-            rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
-            flussRows.addAll(rows);
+            // then write data to the pk tables
             // write records
-            writeRows(t2, rows, true);
+            rows = Arrays.asList(row(1, "v111"), row(2, "v222"), row(3, "v333"));
+            // write records
+            writeRows(t1, rows, false);
+
+            // check the status of replica of t1 after synced
+            // not check start offset since we won't
+            // update start log offset for primary key table
+            // 3 initial + (3 deletes + 3 inserts) = 9
+            assertReplicaStatus(t1Bucket, 9);
+
+            checkDataInIcebergPrimaryKeyTable(t1, rows);
+
+            // then create partitioned table and wait partitions are ready
+            testPartitionedTableTiering();
+        } finally {
+            jobClient.cancel().get();
         }
-        // check the status of replica after synced;
-        // note: we can't update log start offset for unaware bucket mode log table
-        assertReplicaStatus(t2Bucket, 30);
-
-        // check data in paimon
-        checkDataInIcebergAppendOnlyTable(t2, flussRows, 0);
-
-        // then write data to the pk tables
-        // write records
-        rows = Arrays.asList(row(1, "v111"), row(2, "v222"), row(3, "v333"));
-        // write records
-        writeRows(t1, rows, false);
-
-        // check the status of replica of t2 after synced
-        // not check start offset since we won't
-        // update start log offset for primary key table
-        assertReplicaStatus(t1Bucket, 9);
-
-        checkDataInIcebergPrimaryKeyTable(t1, rows);
-
-        // then create partitioned table and wait partitions are ready
-        TablePath partitionedTablePath = TablePath.of(DEFAULT_DB, "partitionedTable");
-        Tuple2<Long, TableDescriptor> tableIdAndDescriptor =
-                createPartitionedTable(partitionedTablePath);
-        Map<Long, String> partitionNameByIds = waitUntilPartitions(partitionedTablePath);
-
-        // now, write rows into partitioned table
-        TableDescriptor partitionedTableDescriptor = tableIdAndDescriptor.f1;
-        Map<String, List<InternalRow>> writtenRowsByPartition =
-                writeRowsIntoPartitionedTable(
-                        partitionedTablePath, partitionedTableDescriptor, partitionNameByIds);
-        long tableId = tableIdAndDescriptor.f0;
-
-        // wait until synced to paimon
-        for (Long partitionId : partitionNameByIds.keySet()) {
-            TableBucket tableBucket = new TableBucket(tableId, partitionId, 0);
-            assertReplicaStatus(tableBucket, 3);
-        }
-
-        // now, let's check data in paimon per partition
-        // check data in paimon
-        String partitionCol = partitionedTableDescriptor.getPartitionKeys().get(0);
-        for (String partitionName : partitionNameByIds.values()) {
-            checkDataInIcebergAppendOnlyPartitionedTable(
-                    partitionedTablePath,
-                    Collections.singletonMap(partitionCol, partitionName),
-                    writtenRowsByPartition.get(partitionName),
-                    0);
-        }
-
-        properties =
-                new HashMap<String, String>() {
-                    {
-                        put(
-                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                "["
-                                        + "{\"partition_id\":0,\"bucket_id\":0,\"partition_name\":\"date=2025\",\"log_offset\":3},"
-                                        + "{\"partition_id\":1,\"bucket_id\":0,\"partition_name\":\"date=2026\",\"log_offset\":3}"
-                                        + "]");
-                    }
-                };
-
-        checkSnapshotPropertyInIceberg(partitionedTablePath, properties);
-
-        jobClient.cancel().get();
     }
 
     private Tuple2<Long, TableDescriptor> createPartitionedTable(TablePath partitionedTablePath)
@@ -189,5 +134,72 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
         return Tuple2.of(
                 createTable(partitionedTablePath, partitionedTableDescriptor),
                 partitionedTableDescriptor);
+    }
+
+    private void testLogTableTiering() throws Exception {
+        // then, create another log table
+        TablePath t2 = TablePath.of(DEFAULT_DB, "logTable");
+        long t2Id = createLogTable(t2);
+        TableBucket t2Bucket = new TableBucket(t2Id, 0);
+        List<InternalRow> flussRows = new ArrayList<>();
+        List<InternalRow> rows;
+        // write records
+        for (int i = 0; i < 10; i++) {
+            rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+            flussRows.addAll(rows);
+            // write records
+            writeRows(t2, rows, true);
+        }
+        // check the status of replica after synced;
+        // note: we can't update log start offset for unaware bucket mode log table
+        assertReplicaStatus(t2Bucket, 30);
+
+        // check data in iceberg
+        checkDataInIcebergAppendOnlyTable(t2, flussRows, 0);
+    }
+
+    private void testPartitionedTableTiering() throws Exception {
+        TablePath partitionedTablePath = TablePath.of(DEFAULT_DB, "partitionedTable");
+        Tuple2<Long, TableDescriptor> tableIdAndDescriptor =
+                createPartitionedTable(partitionedTablePath);
+        Map<Long, String> partitionNameByIds = waitUntilPartitions(partitionedTablePath);
+
+        // now, write rows into partitioned table
+        TableDescriptor partitionedTableDescriptor = tableIdAndDescriptor.f1;
+        Map<String, List<InternalRow>> writtenRowsByPartition =
+                writeRowsIntoPartitionedTable(
+                        partitionedTablePath, partitionedTableDescriptor, partitionNameByIds);
+        long tableId = tableIdAndDescriptor.f0;
+
+        // wait until synced to iceberg
+        for (Long partitionId : partitionNameByIds.keySet()) {
+            TableBucket tableBucket = new TableBucket(tableId, partitionId, 0);
+            assertReplicaStatus(tableBucket, 3);
+        }
+
+        // now, let's check data in iceberg per partition
+        // check data in iceberg
+        String partitionCol = partitionedTableDescriptor.getPartitionKeys().get(0);
+        for (String partitionName : partitionNameByIds.values()) {
+            checkDataInIcebergAppendOnlyPartitionedTable(
+                    partitionedTablePath,
+                    Collections.singletonMap(partitionCol, partitionName),
+                    writtenRowsByPartition.get(partitionName),
+                    0);
+        }
+
+        Map<String, String> properties =
+                new HashMap<String, String>() {
+                    {
+                        put(
+                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                "["
+                                        + "{\"partition_id\":0,\"bucket_id\":0,\"partition_name\":\"date=2025\",\"log_offset\":3},"
+                                        + "{\"partition_id\":1,\"bucket_id\":0,\"partition_name\":\"date=2026\",\"log_offset\":3}"
+                                        + "]");
+                    }
+                };
+
+        checkSnapshotPropertyInIceberg(partitionedTablePath, properties);
     }
 }
