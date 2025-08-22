@@ -88,6 +88,7 @@ during the Fluss cluster working.
 | netty.server.num-network-threads | Integer  | 3       | The number of threads that the server uses for receiving requests from the network and sending responses to the network.                    |
 | netty.server.num-worker-threads  | Integer  | 8       | The number of threads that the server uses for processing requests, which may include disk and remote I/O.                                  |
 | netty.server.max-queued-requests | Integer  | 500     | The number of queued requests allowed for worker threads, before blocking the I/O threads.                                                  |
+| netty.server.connection-queue-size | Integer  | 1000    | The size of the queue for pending connections. When the number of concurrent connections reaches the limit, new connection attempts will be queued up to this size. If the queue is full, new connection attempts will be rejected immediately. The default value is 1000. |
 | netty.connection.max-idle-time   | Duration | 10min   | Close idle connections after the given time specified by this config.                                                                       |
 | netty.client.num-network-threads | Integer  | 1       | The number of threads that the client uses for sending requests to the network and receiving responses from network. The default value is 1 |
 

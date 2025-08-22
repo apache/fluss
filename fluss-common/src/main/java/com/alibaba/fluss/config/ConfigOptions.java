@@ -736,6 +736,16 @@ public class ConfigOptions {
                     .withDescription(
                             "Close idle connections after the given time specified by this config.");
 
+    public static final ConfigOption<Integer> NETTY_SERVER_CONNECTION_QUEUE_SIZE =
+            key("netty.server.connection-queue-size")
+                    .intType()
+                    .defaultValue(1000)
+                    .withDescription(
+                            "The size of the queue for pending connections. When the number of concurrent connections "
+                                    + "reaches the limit, new connection attempts will be queued up to this size. "
+                                    + "If the queue is full, new connection attempts will be rejected immediately. "
+                                    + "The default value is 1000.");
+
     public static final ConfigOption<Integer> NETTY_CLIENT_NUM_NETWORK_THREADS =
             key("netty.client.num-network-threads")
                     .intType()
