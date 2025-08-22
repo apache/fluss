@@ -79,6 +79,12 @@
             <fileMode>0644</fileMode>
         </file>
 
+        <file>
+            <source>../fluss-filesystems/fluss-fs-cosn/target/fluss-fs-cosn-${project.version}.jar</source>
+            <outputDirectory>plugins/cosn/</outputDirectory>
+            <destName>fluss-fs-cosn-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
         <!-- metrics -->
         <file>
             <source>../fluss-metrics/fluss-metrics-prometheus/target/fluss-metrics-prometheus-${project.version}.jar</source>
