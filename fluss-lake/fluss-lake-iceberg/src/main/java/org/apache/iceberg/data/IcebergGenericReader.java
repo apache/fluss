@@ -18,9 +18,13 @@
 
 package org.apache.iceberg.data;
 
+import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.TableScan;
 
-/** GenericReader to read for records for iceberg. */
+/**
+ * GenericReader to read for records for iceberg. Extends from Iceberg {@link GenericReader} to
+ * enable the {@link #open(FileScanTask)} method to be visible to Fluss.
+ */
 public class IcebergGenericReader extends GenericReader {
 
     public IcebergGenericReader(TableScan scan, boolean reuseContainers) {

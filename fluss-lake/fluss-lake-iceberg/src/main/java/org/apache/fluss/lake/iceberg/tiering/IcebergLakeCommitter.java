@@ -24,11 +24,13 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
+import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
 
 import org.apache.iceberg.AppendFiles;
 import org.apache.iceberg.CatalogUtil;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DeleteFile;
+import org.apache.iceberg.RewriteFiles;
 import org.apache.iceberg.RowDelta;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.SnapshotUpdate;
@@ -44,7 +46,6 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -87,6 +88,11 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             for (DeleteFile deleteFile : writeResult.deleteFiles()) {
                 builder.addDeleteFile(deleteFile);
             }
+
+            RewriteDataFileResult rewriteDataFileResult = result.rewriteDataFileResult();
+            if (rewriteDataFileResult != null) {
+                builder.addRewriteDataFileResult(rewriteDataFileResult);
+            }
         }
 
         return builder.build();
@@ -105,30 +111,34 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                 for (DataFile dataFile : committable.getDataFiles()) {
                     appendFiles.appendFile(dataFile);
                 }
-
                 addFlussProperties(appendFiles, snapshotProperties);
-
                 appendFiles.commit();
             } else {
-                /**
-                 * Row delta validations are not needed for streaming changes that write equality
-                 * deletes. Equality deletes are applied to data in all previous sequence numbers,
-                 * so retries may push deletes further in the future, but do not affect correctness.
-                 * Position deletes committed to the table in this path are used only to delete rows
-                 * from data files that are being added in this commit. There is no way for data
-                 * files added along with the delete files to be concurrently removed, so there is
-                 * no need to validate the files referenced by the position delete files that are
-                 * being committed.
-                 */
+                /*
+                 Row delta validations are not needed for streaming changes that write equality
+                 deletes. Equality deletes are applied to data in all previous sequence numbers,
+                 so retries may push deletes further in the future, but do not affect correctness.
+                 Position deletes committed to the table in this path are used only to delete rows
+                 from data files that are being added in this commit. There is no way for data
+                 files added along with the delete files to be concurrently removed, so there is
+                 no need to validate the files referenced by the position delete files that are
+                 being committed.
+                */
                 RowDelta rowDelta = icebergTable.newRowDelta();
                 Arrays.stream(committable.getDataFiles().stream().toArray(DataFile[]::new))
                         .forEach(rowDelta::addRows);
                 Arrays.stream(committable.getDeleteFiles().stream().toArray(DeleteFile[]::new))
                         .forEach(rowDelta::addDeletes);
-                snapshotProperties.forEach(rowDelta::set);
+                addFlussProperties(rowDelta, snapshotProperties);
                 rowDelta.commit();
             }
 
+            // when rewrite files, commit rewrite files
+            List<RewriteDataFileResult> rewriteDataFileResults =
+                    committable.rewriteDataFileResults();
+            if (!rewriteDataFileResults.isEmpty()) {
+                commitRewrite(rewriteDataFileResults, snapshotProperties);
+            }
             Long commitSnapshotId = currentCommitSnapshotId.get();
             currentCommitSnapshotId.remove();
 
@@ -137,6 +147,19 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
         } catch (Exception e) {
             throw new IOException("Failed to commit to Iceberg table.", e);
         }
+    }
+
+    private void commitRewrite(
+            List<RewriteDataFileResult> rewriteDataFileResults,
+            Map<String, String> snapshotProperties) {
+        icebergTable.refresh();
+        RewriteFiles rewriteFiles = icebergTable.newRewrite();
+        for (RewriteDataFileResult rewriteDataFileResult : rewriteDataFileResults) {
+            rewriteDataFileResult.addedDataFiles().forEach(rewriteFiles::addFile);
+            rewriteDataFileResult.deletedDataFiles().forEach(rewriteFiles::deleteFile);
+        }
+        addFlussProperties(rewriteFiles, snapshotProperties);
+        rewriteFiles.commit();
     }
 
     private void addFlussProperties(

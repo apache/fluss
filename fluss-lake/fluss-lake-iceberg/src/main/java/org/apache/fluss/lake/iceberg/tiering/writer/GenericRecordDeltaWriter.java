@@ -30,6 +30,8 @@ import org.apache.iceberg.io.FileAppenderFactory;
 import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.io.OutputFileFactory;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toPartition;
@@ -46,14 +48,12 @@ class GenericRecordDeltaWriter extends BaseTaskWriter<Record> {
             OutputFileFactory fileFactory,
             FileIO io,
             long targetFileSize,
-            WriterInitContext writerInitContext) {
+            @Nullable String partition,
+            int bucket) {
         super(icebergTable.spec(), format, appenderFactory, fileFactory, io, targetFileSize);
         this.deltaWriter =
                 new GenericEqualityDeltaWriter(
-                        toPartition(
-                                icebergTable,
-                                writerInitContext.partition(),
-                                writerInitContext.tableBucket().getBucket()),
+                        toPartition(icebergTable, partition, bucket),
                         icebergTable.schema(),
                         deleteSchema);
     }

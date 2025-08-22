@@ -21,12 +21,8 @@ import org.apache.fluss.lake.iceberg.tiering.RecordWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.record.LogRecord;
 
-import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.Table;
-import org.apache.iceberg.data.GenericAppenderFactory;
 import org.apache.iceberg.data.Record;
-import org.apache.iceberg.io.FileAppenderFactory;
-import org.apache.iceberg.io.OutputFileFactory;
 import org.apache.iceberg.io.TaskWriter;
 
 /** A {@link RecordWriter} to write to Iceberg's append-only table. */
@@ -35,33 +31,12 @@ public class AppendOnlyTaskWriter extends RecordWriter {
     public AppendOnlyTaskWriter(
             Table icebergTable,
             WriterInitContext writerInitContext,
-            FileFormat format,
-            OutputFileFactory outputFileFactory,
-            long targetFileSize) {
+            TaskWriter<Record> taskWriter) {
         super(
-                createTaskWriter(
-                        icebergTable, writerInitContext, format, outputFileFactory, targetFileSize),
+                taskWriter,
                 icebergTable.schema(),
                 writerInitContext.schema().getRowType(),
                 writerInitContext.tableBucket());
-    }
-
-    private static TaskWriter<Record> createTaskWriter(
-            Table icebergTable,
-            WriterInitContext writerInitContext,
-            FileFormat format,
-            OutputFileFactory outputFileFactory,
-            long targetFileSize) {
-        FileAppenderFactory<Record> fileAppenderFactory =
-                new GenericAppenderFactory(icebergTable.schema(), icebergTable.spec());
-        return new GenericRecordAppendOnlyWriter(
-                icebergTable,
-                format,
-                fileAppenderFactory,
-                outputFileFactory,
-                icebergTable.io(),
-                targetFileSize,
-                writerInitContext);
     }
 
     @Override

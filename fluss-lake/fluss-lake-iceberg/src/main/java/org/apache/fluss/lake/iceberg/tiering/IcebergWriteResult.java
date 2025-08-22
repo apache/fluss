@@ -17,8 +17,9 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
+import com.alibaba.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
+
 import edu.umd.cs.findbugs.annotations.Nullable;
-import org.apache.iceberg.actions.RewriteDataFilesActionResult;
 import org.apache.iceberg.io.WriteResult;
 
 import java.io.Serializable;
@@ -28,15 +29,16 @@ public class IcebergWriteResult implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    // the normal result of tiering writing to iceberg
     private final WriteResult writeResult;
 
-    @Nullable private final RewriteDataFilesActionResult rewriteDataFilesActionResult;
+    // the rewrite result
+    @Nullable private final RewriteDataFileResult rewriteDataFileResult;
 
     public IcebergWriteResult(
-            WriteResult writeResult,
-            @Nullable RewriteDataFilesActionResult rewriteDataFilesActionResult) {
+            WriteResult writeResult, @Nullable RewriteDataFileResult rewriteDataFileResult) {
         this.writeResult = writeResult;
-        this.rewriteDataFilesActionResult = rewriteDataFilesActionResult;
+        this.rewriteDataFileResult = rewriteDataFileResult;
     }
 
     public WriteResult getWriteResult() {
@@ -44,8 +46,8 @@ public class IcebergWriteResult implements Serializable {
     }
 
     @Nullable
-    public RewriteDataFilesActionResult getRewriteDataFilesActionResult() {
-        return rewriteDataFilesActionResult;
+    public RewriteDataFileResult rewriteDataFileResult() {
+        return rewriteDataFileResult;
     }
 
     @Override
@@ -55,6 +57,9 @@ public class IcebergWriteResult implements Serializable {
                 + writeResult.dataFiles().length
                 + ", deleteFiles="
                 + writeResult.deleteFiles().length
+                + (rewriteDataFileResult != null
+                        ? (", rewriteDataFiles=" + rewriteDataFileResult)
+                        : "")
                 + '}';
     }
 }

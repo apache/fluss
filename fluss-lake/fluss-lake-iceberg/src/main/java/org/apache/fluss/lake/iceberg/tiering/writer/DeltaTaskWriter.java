@@ -21,17 +21,9 @@ import org.apache.fluss.lake.iceberg.tiering.RecordWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.record.LogRecord;
 
-import org.apache.iceberg.FileFormat;
-import org.apache.iceberg.Schema;
 import org.apache.iceberg.Table;
-import org.apache.iceberg.data.GenericAppenderFactory;
 import org.apache.iceberg.data.Record;
-import org.apache.iceberg.io.FileAppenderFactory;
-import org.apache.iceberg.io.OutputFileFactory;
 import org.apache.iceberg.io.TaskWriter;
-
-import java.util.ArrayList;
-import java.util.List;
 
 /** A {@link RecordWriter} to write to Iceberg's primary-key table. */
 public class DeltaTaskWriter extends RecordWriter {
@@ -39,49 +31,12 @@ public class DeltaTaskWriter extends RecordWriter {
     public DeltaTaskWriter(
             Table icebergTable,
             WriterInitContext writerInitContext,
-            FileFormat format,
-            OutputFileFactory outputFileFactory,
-            long targetFileSize) {
+            TaskWriter<Record> taskWriter) {
         super(
-                createTaskWriter(
-                        icebergTable, format, outputFileFactory, targetFileSize, writerInitContext),
+                taskWriter,
                 icebergTable.schema(),
                 writerInitContext.schema().getRowType(),
                 writerInitContext.tableBucket());
-    }
-
-    private static TaskWriter<Record> createTaskWriter(
-            Table icebergTable,
-            FileFormat format,
-            OutputFileFactory outputFileFactory,
-            long targetFileSize,
-            WriterInitContext writerInitContext) {
-        int[] equalityFieldIds =
-                icebergTable.schema().identifierFieldIds().stream()
-                        .mapToInt(Integer::intValue)
-                        .toArray();
-        FileAppenderFactory<Record> appenderFactory =
-                new GenericAppenderFactory(
-                        icebergTable.schema(),
-                        icebergTable.spec(),
-                        equalityFieldIds,
-                        icebergTable.schema(),
-                        null);
-
-        List<String> columns = new ArrayList<>();
-        for (Integer fieldId : icebergTable.schema().identifierFieldIds()) {
-            columns.add(icebergTable.schema().findField(fieldId).name());
-        }
-        Schema deleteSchema = icebergTable.schema().select(columns);
-        return new GenericRecordDeltaWriter(
-                icebergTable,
-                deleteSchema,
-                format,
-                appenderFactory,
-                outputFileFactory,
-                icebergTable.io(),
-                targetFileSize,
-                writerInitContext);
     }
 
     @Override
