@@ -38,9 +38,6 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.metrics.Counter;
-import com.alibaba.fluss.metrics.MeterView;
-import com.alibaba.fluss.metrics.MetricNames;
-import com.alibaba.fluss.metrics.SimpleCounter;
 import com.alibaba.fluss.record.DefaultValueRecordBatch;
 import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.LogRecords;
@@ -76,7 +73,8 @@ import com.alibaba.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import com.alibaba.fluss.server.log.remote.RemoteLogManager;
 import com.alibaba.fluss.server.metadata.ServerMetadataCache;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
-import com.alibaba.fluss.server.metrics.group.PhysicalTableMetricGroup;
+import com.alibaba.fluss.server.metrics.group.TableMetricGroup;
+import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
 import com.alibaba.fluss.server.replica.delay.DelayedFetchLog;
 import com.alibaba.fluss.server.replica.delay.DelayedOperationManager;
 import com.alibaba.fluss.server.replica.delay.DelayedTableBucketKey;
@@ -245,19 +243,12 @@ public final class Replica {
     }
 
     private void registerMetrics() {
-        bucketMetricGroup.gauge(MetricNames.UNDER_REPLICATED, () -> isUnderReplicated() ? 1 : 0);
-        bucketMetricGroup.gauge(
-                MetricNames.IN_SYNC_REPLICAS, () -> isLeader() ? isrState.isr().size() : 0);
-        bucketMetricGroup.gauge(MetricNames.UNDER_MIN_ISR, () -> isUnderMinIsr() ? 1 : 0);
-        bucketMetricGroup.gauge(MetricNames.AT_MIN_ISR, () -> isAtMinIsr() ? 1 : 0);
-
-        isrExpands = new SimpleCounter();
-        bucketMetricGroup.meter(MetricNames.ISR_EXPANDS_RATE, new MeterView(isrExpands));
-        isrShrinks = new SimpleCounter();
-        bucketMetricGroup.meter(MetricNames.ISR_SHRINKS_RATE, new MeterView(isrShrinks));
-        failedIsrUpdates = new SimpleCounter();
-        bucketMetricGroup.meter(
-                MetricNames.FAILED_ISR_UPDATES_RATE, new MeterView(failedIsrUpdates));
+        // get root metric in the reference: bucket -> table -> tabletServer
+        TabletServerMetricGroup tabletServerMetricGroup =
+                bucketMetricGroup.getTableMetricGroup().getTabletServerMetricGroup();
+        isrExpands = tabletServerMetricGroup.isrExpands();
+        isrShrinks = tabletServerMetricGroup.isrShrinks();
+        failedIsrUpdates = tabletServerMetricGroup.failedIsrUpdates();
     }
 
     public boolean isKvTable() {
@@ -348,8 +339,8 @@ public final class Replica {
         return bucketMetricGroup;
     }
 
-    public PhysicalTableMetricGroup tableMetrics() {
-        return bucketMetricGroup.getPhysicalTableMetricGroup();
+    public TableMetricGroup tableMetrics() {
+        return bucketMetricGroup.getTableMetricGroup();
     }
 
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {
@@ -1733,12 +1724,12 @@ public final class Replica {
         }
     }
 
-    private boolean isUnderReplicated() {
+    public boolean isUnderReplicated() {
         // is leader and isr size less than numReplicas
         return isLeader() && isrState.isr().size() < tableConfig.getReplicationFactor();
     }
 
-    private boolean isUnderMinIsr() {
+    public boolean isUnderMinIsr() {
         return isLeader() && isrState.isr().size() < minInSyncReplicas;
     }
 

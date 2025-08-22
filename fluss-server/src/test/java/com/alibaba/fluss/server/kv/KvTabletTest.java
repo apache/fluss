@@ -48,6 +48,7 @@ import com.alibaba.fluss.server.log.FetchIsolation;
 import com.alibaba.fluss.server.log.LogAppendInfo;
 import com.alibaba.fluss.server.log.LogTablet;
 import com.alibaba.fluss.server.log.LogTestUtils;
+import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
 import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
@@ -144,6 +145,7 @@ class KvTabletTest {
                 tablePath,
                 logTabletDir,
                 conf,
+                TestingMetricGroups.TABLET_SERVER_METRICS,
                 0,
                 new FlussScheduler(1),
                 LogFormat.ARROW,
@@ -172,6 +174,7 @@ class KvTabletTest {
                 logTablet,
                 tmpKvDir,
                 conf,
+                TestingMetricGroups.TABLET_SERVER_METRICS,
                 new RootAllocator(Long.MAX_VALUE),
                 new TestingMemorySegmentPool(10 * 1024),
                 KvFormat.COMPACTED,

@@ -178,10 +178,18 @@ public class ReplicaTestBase {
         scheduler.startup();
 
         manualClock = new ManualClock(System.currentTimeMillis());
-        logManager = LogManager.create(conf, zkClient, scheduler, manualClock);
+        logManager =
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        scheduler,
+                        manualClock,
+                        TestingMetricGroups.TABLET_SERVER_METRICS);
         logManager.startup();
 
-        kvManager = KvManager.create(conf, zkClient, logManager);
+        kvManager =
+                KvManager.create(
+                        conf, zkClient, logManager, TestingMetricGroups.TABLET_SERVER_METRICS);
         kvManager.startup();
 
         serverMetadataCache =
@@ -436,8 +444,7 @@ public class ReplicaTestBase {
         BucketMetricGroup metricGroup =
                 replicaManager
                         .getServerMetricGroup()
-                        .addPhysicalTableBucketMetricGroup(
-                                physicalTablePath, tableBucket.getBucket(), isPkTable);
+                        .addTableBucketMetricGroup(physicalTablePath, tableBucket, isPkTable);
         return new Replica(
                 physicalTablePath,
                 tableBucket,
