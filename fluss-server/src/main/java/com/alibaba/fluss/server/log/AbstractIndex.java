@@ -21,7 +21,6 @@ import com.alibaba.fluss.exception.IndexOffsetOverflowException;
 import com.alibaba.fluss.server.exception.CorruptIndexException;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.IOUtils;
-import com.alibaba.fluss.utils.OperatingSystem;
 import com.alibaba.fluss.utils.log.ByteBufferUnmapper;
 
 import org.slf4j.Logger;
@@ -37,10 +36,11 @@ import java.nio.channels.FileChannel;
 import java.nio.file.Files;
 import java.util.Objects;
 import java.util.OptionalInt;
-import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
+import java.util.concurrent.locks.ReentrantReadWriteLock;
 
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
+import static com.alibaba.fluss.utils.concurrent.LockUtils.inWriteLock;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -50,7 +50,19 @@ import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
 public abstract class AbstractIndex implements Closeable {
     private static final Logger LOG = LoggerFactory.getLogger(AbstractIndex.class);
 
-    protected final Lock lock = new ReentrantLock();
+    // Serializes all index operations that mutate internal state.
+    // Readers do not need to acquire this lock because:
+    //  1) MappedByteBuffer provides direct access to the OS-level buffer cache,
+    //     which allows concurrent reads in practice.
+    //  2) Clients only read committed data and are not affected by concurrent appends/truncates.
+    //     In the rare case when the data is truncated, the follower could read inconsistent data.
+    //     The follower has the logic to ignore the inconsistent data through crc and leader epoch.
+    //  3) Read and remap operations are coordinated via remapLock to ensure visibility of the
+    //     underlying mmap.
+    protected final ReentrantLock lock = new ReentrantLock();
+    // Allows concurrent read operations while ensuring exclusive access if the underlying mmap is
+    // changed
+    protected final ReentrantReadWriteLock remapLock = new ReentrantReadWriteLock();
 
     /** The base offset of the segment that this index is corresponding to. */
     private final long baseOffset;
@@ -189,43 +201,48 @@ public abstract class AbstractIndex implements Closeable {
     public boolean resize(int newSize) throws IOException {
         return inLock(
                 lock,
-                () -> {
-                    int roundedNewSize = roundDownToExactMultiple(newSize, entrySize());
+                () ->
+                        inWriteLock(
+                                remapLock,
+                                () -> {
+                                    int roundedNewSize =
+                                            roundDownToExactMultiple(newSize, entrySize());
 
-                    if (length == roundedNewSize) {
-                        LOG.debug(
-                                "Index {} was not resized because it already has size {}",
-                                file.getAbsolutePath(),
-                                roundedNewSize);
-                        return false;
-                    } else {
-                        RandomAccessFile raf = new RandomAccessFile(file, "rw");
-                        try {
-                            int position = mmap.position();
+                                    if (length == roundedNewSize) {
+                                        LOG.debug(
+                                                "Index {} was not resized because it already has size {}",
+                                                file.getAbsolutePath(),
+                                                roundedNewSize);
+                                        return false;
+                                    } else {
+                                        RandomAccessFile raf = new RandomAccessFile(file, "rw");
+                                        try {
+                                            int position = mmap.position();
 
-                            /* Windows won't let us modify the file length while the file is mmapped :-( */
-                            if (OperatingSystem.isWindows()) {
-                                safeForceUnmap();
-                            }
-                            raf.setLength(roundedNewSize);
-                            this.length = roundedNewSize;
-                            mmap =
-                                    raf.getChannel()
-                                            .map(FileChannel.MapMode.READ_WRITE, 0, roundedNewSize);
-                            this.maxEntries = mmap.limit() / entrySize();
-                            mmap.position(position);
-                            LOG.debug(
-                                    "Resized {} to {}, position is {} and limit is {}",
-                                    file.getAbsolutePath(),
-                                    roundedNewSize,
-                                    mmap.position(),
-                                    mmap.limit());
-                            return true;
-                        } finally {
-                            IOUtils.closeQuietly(raf, "index file " + file.getName());
-                        }
-                    }
-                });
+                                            safeForceUnmap();
+                                            raf.setLength(roundedNewSize);
+                                            this.length = roundedNewSize;
+                                            mmap =
+                                                    raf.getChannel()
+                                                            .map(
+                                                                    FileChannel.MapMode.READ_WRITE,
+                                                                    0,
+                                                                    roundedNewSize);
+                                            this.maxEntries = mmap.limit() / entrySize();
+                                            mmap.position(position);
+                                            LOG.debug(
+                                                    "Resized {} to {}, position is {} and limit is {}",
+                                                    file.getAbsolutePath(),
+                                                    roundedNewSize,
+                                                    mmap.position(),
+                                                    mmap.limit());
+                                            return true;
+                                        } finally {
+                                            IOUtils.closeQuietly(
+                                                    raf, "index file " + file.getName());
+                                        }
+                                    }
+                                }));
     }
 
     /**
@@ -283,7 +300,7 @@ public abstract class AbstractIndex implements Closeable {
         // metadata from a physical disk.
         // To prevent this, we forcefully cleanup memory mapping within proper execution which never
         // affects API responsiveness.
-        inLock(lock, this::safeForceUnmap);
+        inLock(lock, () -> inWriteLock(remapLock, this::safeForceUnmap));
     }
 
     /** Remove all the entries from the index and resize the index to the max index size. */
@@ -409,25 +426,6 @@ public abstract class AbstractIndex implements Closeable {
     protected void truncateToEntries0(int entries) {
         this.entries = entries;
         mmap.position(entries * entrySize());
-    }
-
-    /**
-     * Execute the given function in a lock only if we are running on windows. We do this because
-     * Windows won't let us resize a file while it is mmapped. As a result we have to force unmap it
-     * and this requires synchronizing reads.
-     */
-    protected final <T, E extends Exception> T maybeLock(Lock lock, StorageAction<T, E> action)
-            throws E {
-        if (OperatingSystem.isWindows()) {
-            lock.lock();
-        }
-        try {
-            return action.execute();
-        } finally {
-            if (OperatingSystem.isWindows()) {
-                lock.unlock();
-            }
-        }
     }
 
     /**

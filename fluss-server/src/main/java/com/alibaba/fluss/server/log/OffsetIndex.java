@@ -30,6 +30,7 @@ import java.nio.ByteBuffer;
 import java.util.Optional;
 
 import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
+import static com.alibaba.fluss.utils.concurrent.LockUtils.inReadLock;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -70,7 +71,7 @@ public final class OffsetIndex extends AbstractIndex {
     private static final int ENTRY_SIZE = 8;
 
     /* the last offset in the index */
-    private long lastOffset;
+    private volatile long lastOffset;
 
     public OffsetIndex(File file, long baseOffset) throws IOException {
         this(file, baseOffset, -1);
@@ -130,8 +131,8 @@ public final class OffsetIndex extends AbstractIndex {
      *     (baseOffset, 0) is returned.
      */
     public OffsetPosition lookup(long targetOffset) {
-        return maybeLock(
-                lock,
+        return inReadLock(
+                remapLock,
                 () -> {
                     ByteBuffer idx = mmap().duplicate();
                     int slot = largestLowerBoundSlotFor(idx, targetOffset, IndexSearchType.KEY);
@@ -150,8 +151,8 @@ public final class OffsetIndex extends AbstractIndex {
      * @return The offset/position pair at that entry
      */
     public OffsetPosition entry(int n) {
-        return maybeLock(
-                lock,
+        return inReadLock(
+                remapLock,
                 () -> {
                     if (n >= entries()) {
                         throw new IllegalArgumentException(
@@ -173,8 +174,8 @@ public final class OffsetIndex extends AbstractIndex {
      */
     public Optional<OffsetPosition> fetchUpperBoundOffset(
             OffsetPosition fetchOffset, int fetchSize) {
-        return maybeLock(
-                lock,
+        return inReadLock(
+                remapLock,
                 () -> {
                     ByteBuffer idx = mmap().duplicate();
                     int slot =
@@ -309,8 +310,8 @@ public final class OffsetIndex extends AbstractIndex {
 
     /** The last entry in the index. */
     private OffsetPosition lastEntry() {
-        return inLock(
-                lock,
+        return inReadLock(
+                remapLock,
                 () -> {
                     int entries = entries();
                     if (entries == 0) {
