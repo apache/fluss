@@ -222,7 +222,7 @@ public enum Errors {
             "This most likely occurs because of a request being malformed by the client library or the message was sent to an incompatible server. See the server logs for more details.",
             InvalidRequestException::new),
     INVALID_ALTER_TABLE_EXCEPTION(
-            40, "The alter table is invalid.", InvalidAlterTableException::new);
+            55, "The alter table is invalid.", InvalidAlterTableException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 
