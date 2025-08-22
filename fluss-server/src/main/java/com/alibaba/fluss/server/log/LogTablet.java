@@ -30,7 +30,6 @@ import com.alibaba.fluss.metadata.LogFormat;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.metrics.MeterView;
 import com.alibaba.fluss.metrics.MetricNames;
 import com.alibaba.fluss.metrics.groups.MetricGroup;
 import com.alibaba.fluss.record.DefaultLogRecordBatch;
@@ -41,6 +40,7 @@ import com.alibaba.fluss.record.LogRecords;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.server.log.LocalLog.SegmentDeletionReason;
 import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
+import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
 import com.alibaba.fluss.utils.FlussPaths;
 import com.alibaba.fluss.utils.clock.Clock;
 import com.alibaba.fluss.utils.concurrent.Scheduler;
@@ -65,6 +65,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.atomic.AtomicLong;
 
 import static com.alibaba.fluss.utils.FileUtils.flushFileIfExists;
 import static com.alibaba.fluss.utils.Preconditions.checkArgument;
@@ -117,6 +118,8 @@ public final class LogTablet {
     private volatile long remoteLogStartOffset = Long.MAX_VALUE;
     // tracking the log end offset in remote storage
     private volatile long remoteLogEndOffset = -1L;
+    // tracking the log size in remote storage
+    private volatile long remoteLogSize = 0;
 
     // tracking the log start/end offset in lakehouse storage
     private volatile long lakeTableSnapshotId = -1;
@@ -277,6 +280,7 @@ public final class LogTablet {
             PhysicalTablePath tablePath,
             File tabletDir,
             Configuration conf,
+            TabletServerMetricGroup serverMetricGroup,
             long recoveryPoint,
             Scheduler scheduler,
             LogFormat logFormat,
@@ -313,6 +317,7 @@ public final class LogTablet {
                 new LocalLog(
                         tabletDir,
                         conf,
+                        serverMetricGroup,
                         segments,
                         recoveryPoint,
                         offsets.getNextOffsetMetadata(),
@@ -337,12 +342,22 @@ public final class LogTablet {
         metricGroup.gauge(
                 MetricNames.LOG_NUM_SEGMENTS, () -> localLog.getSegments().numberOfSegments());
         metricGroup.gauge(MetricNames.LOG_END_OFFSET, localLog::getLocalLogEndOffset);
-        metricGroup.gauge(MetricNames.LOG_SIZE, () -> localLog.getSegments().sizeInBytes());
+    }
 
-        // about flush
-        metricGroup.meter(MetricNames.LOG_FLUSH_RATE, new MeterView(localLog.getFlushCount()));
-        metricGroup.histogram(
-                MetricNames.LOG_FLUSH_LATENCY_MS, localLog.getFlushLatencyHistogram());
+    public long logSize() {
+        return localLog.getSegments().sizeInBytes();
+    }
+
+    public long logicalStorageSize() {
+        if (remoteLogEndOffset <= 0L) {
+            return localLog.getSegments().sizeInBytes();
+        } else {
+            AtomicLong logicalStorageSize = new AtomicLong(remoteLogSize);
+            localLog.getSegments().higherSegments(remoteLogEndOffset).stream()
+                    .mapToLong(LogSegment::getSizeInBytes)
+                    .forEach(logicalStorageSize::addAndGet);
+            return logicalStorageSize.get();
+        }
     }
 
     public void updateLeaderEndOffsetSnapshot() {
@@ -471,6 +486,10 @@ public final class LogTablet {
         if (prev == Long.MAX_VALUE || remoteLogStartOffset > prev) {
             this.remoteLogStartOffset = remoteLogStartOffset;
         }
+    }
+
+    public void updateRemoteLogSize(long remoteLogSize) {
+        this.remoteLogSize = remoteLogSize;
     }
 
     public void updateRemoteLogEndOffset(long remoteLogEndOffset) {
