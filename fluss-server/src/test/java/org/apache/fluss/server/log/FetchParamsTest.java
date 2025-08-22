@@ -32,13 +32,13 @@ class FetchParamsTest {
     void testSetCurrentFetch() {
         FetchParams fetchParams = new FetchParams(1, 100);
         fetchParams.setCurrentFetch(
-                1L, 20L, 1024, TestData.DATA1_ROW_TYPE, DEFAULT_COMPRESSION, null);
+                1L, 20L, 1024, TestData.DATA1_ROW_TYPE, DEFAULT_COMPRESSION, null, -1L);
         assertThat(fetchParams.fetchOffset()).isEqualTo(20L);
         assertThat(fetchParams.maxFetchBytes()).isEqualTo(1024);
         assertThat(fetchParams.projection()).isNull();
 
         fetchParams.setCurrentFetch(
-                2L, 30L, 512, TestData.DATA2_ROW_TYPE, DEFAULT_COMPRESSION, new int[] {0, 2});
+                2L, 30L, 512, TestData.DATA2_ROW_TYPE, DEFAULT_COMPRESSION, new int[] {0, 2}, -1L);
         assertThat(fetchParams.fetchOffset()).isEqualTo(30L);
         assertThat(fetchParams.maxFetchBytes()).isEqualTo(512);
         assertThat(fetchParams.projection()).isNotNull();
@@ -46,11 +46,11 @@ class FetchParamsTest {
         FileLogProjection prevProjection = fetchParams.projection();
 
         fetchParams.setCurrentFetch(
-                1L, 40L, 256, TestData.DATA1_ROW_TYPE, DEFAULT_COMPRESSION, null);
+                1L, 40L, 256, TestData.DATA1_ROW_TYPE, DEFAULT_COMPRESSION, null, -1L);
         assertThat(fetchParams.projection()).isNull();
 
         fetchParams.setCurrentFetch(
-                2L, 30L, 512, TestData.DATA2_ROW_TYPE, DEFAULT_COMPRESSION, new int[] {0, 2});
+                2L, 30L, 512, TestData.DATA2_ROW_TYPE, DEFAULT_COMPRESSION, new int[] {0, 2}, -1L);
         // the FileLogProjection should be cached
         assertThat(fetchParams.projection()).isNotNull().isSameAs(prevProjection);
     }

@@ -132,10 +132,24 @@ class TableBucketStateMachineTest {
         coordinatorContext.updateBucketReplicaAssignment(t2b0, Arrays.asList(1, 2));
 
         // create LeaderAndIsr for t10/t11 info in zk,
+        LeaderAndIsr.Builder builder = new LeaderAndIsr.Builder();
         zookeeperClient.registerLeaderAndIsr(
-                new TableBucket(t1Id, 0), new LeaderAndIsr(0, 0, Arrays.asList(0, 1), 0, 0));
+                new TableBucket(t1Id, 0),
+                builder.leader(0)
+                        .leaderEpoch(0)
+                        .isr(Arrays.asList(0, 1))
+                        .coordinatorEpoch(0)
+                        .bucketEpoch(0)
+                        .build());
+        builder = new LeaderAndIsr.Builder();
         zookeeperClient.registerLeaderAndIsr(
-                new TableBucket(t1Id, 1), new LeaderAndIsr(2, 0, Arrays.asList(2, 3), 0, 0));
+                new TableBucket(t1Id, 1),
+                builder.leader(2)
+                        .leaderEpoch(0)
+                        .isr(Arrays.asList(2, 3))
+                        .coordinatorEpoch(0)
+                        .bucketEpoch(0)
+                        .build());
         // update the LeaderAndIsr to context
         coordinatorContext.putBucketLeaderAndIsr(
                 t1b0, zookeeperClient.getLeaderAndIsr(new TableBucket(t1Id, 0)).get());

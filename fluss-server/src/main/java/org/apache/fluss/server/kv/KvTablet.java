@@ -22,6 +22,7 @@ import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.KvStorageException;
+import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.memory.MemorySegmentPool;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
@@ -36,6 +37,7 @@ import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordReadContext;
+import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.row.arrow.ArrowWriterProvider;
@@ -57,6 +59,7 @@ import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 import org.apache.fluss.server.utils.FatalErrorHandler;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
@@ -115,6 +118,14 @@ public final class KvTablet {
      * flushed into kv.
      */
     private volatile long flushedLogOffset = 0;
+
+    /**
+     * This is specifically used for standby replicas. It refers to the current log apply offset of
+     * the standby replica. If this offset catches up to the log's highWatermark, it indicates that
+     * the replica has already been included in the {@link LeaderAndIsr}'s ISSR (In-Sync Standby
+     * Replica) set.
+     */
+    private volatile long kvAppliedOffset = -1L;
 
     @GuardedBy("kvLock")
     private volatile boolean isClosed = false;
@@ -241,6 +252,14 @@ public final class KvTablet {
 
     public long getFlushedLogOffset() {
         return flushedLogOffset;
+    }
+
+    public long getKvAppliedOffset() {
+        return kvAppliedOffset;
+    }
+
+    public void setKvAppliedOffset(long kvAppliedOffset) {
+        this.kvAppliedOffset = kvAppliedOffset;
     }
 
     public void registerMetrics(BucketMetricGroup bucketMetricGroup) {
@@ -390,6 +409,48 @@ public final class KvTablet {
                         // deallocate the memory and arrow writer used by the wal builder
                         walBuilder.deallocate();
                     }
+                });
+    }
+
+    /**
+     * Put the MemoryLogRecords into the kv storage for hotStandbyReplica, and apply the log records
+     * to log storage.
+     *
+     * @param logRecords the log records to put into
+     * @param kvApplyLogHelper the helper to apply the log records to kv storage
+     */
+    public LogAppendInfo putAsHotStandby(
+            MemoryLogRecords logRecords, KvApplyLogHelper kvApplyLogHelper) throws Exception {
+        return inWriteLock(
+                kvLock,
+                () -> {
+                    long nextApplyOffset;
+                    LogAppendInfo logAppendInfo;
+                    try {
+                        rocksDBKv.checkIfRocksDBClosed();
+
+                        // 1. apply kv to private buffer.
+                        nextApplyOffset =
+                                kvApplyLogHelper.applyLogRecords(logRecords, kvAppliedOffset);
+
+                        // 2. apply log to follower.
+                        logAppendInfo = logTablet.appendAsFollower(logRecords);
+                        // if the batch is duplicated, we should truncate the kvPreWriteBuffer
+                        // already written.
+                        if (logAppendInfo.duplicated()) {
+                            kvPreWriteBuffer.truncateTo(kvAppliedOffset, TruncateReason.DUPLICATED);
+                            throw new OutOfOrderSequenceException(
+                                    "The log records are duplicated.");
+                        }
+                    } catch (Throwable t) {
+                        kvPreWriteBuffer.truncateTo(kvAppliedOffset, TruncateReason.ERROR);
+                        throw t;
+                    }
+
+                    // increment the kv applied offset and flush the pre-write buffer
+                    kvAppliedOffset = nextApplyOffset;
+                    kvPreWriteBuffer.flush(kvAppliedOffset);
+                    return logAppendInfo;
                 });
     }
 

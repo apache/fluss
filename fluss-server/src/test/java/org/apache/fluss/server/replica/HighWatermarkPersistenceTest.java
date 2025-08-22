@@ -101,12 +101,10 @@ final class HighWatermarkPersistenceTest extends ReplicaTestBase {
                                 PhysicalTablePath.of(DATA2_TABLE_PATH),
                                 tableBucket1,
                                 Collections.singletonList(TABLET_SERVER_ID),
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        LeaderAndIsr.INITIAL_LEADER_EPOCH,
-                                        Collections.singletonList(TABLET_SERVER_ID),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        LeaderAndIsr.INITIAL_BUCKET_EPOCH))),
+                                new LeaderAndIsr.Builder()
+                                        .leader(TABLET_SERVER_ID)
+                                        .isr(Collections.singletonList(TABLET_SERVER_ID))
+                                        .build())),
                 result -> {});
 
         replicaManager.checkpointHighWatermarks();

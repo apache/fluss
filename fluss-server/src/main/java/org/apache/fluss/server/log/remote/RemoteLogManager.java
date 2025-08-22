@@ -134,6 +134,23 @@ public class RemoteLogManager implements Closeable {
             return;
         }
         TableBucket tableBucket = replica.getTableBucket();
+        // first register the remote log.
+        RemoteLogTablet remoteLog = addRemoteLog(replica);
+
+        doHandleLeaderReplica(replica, remoteLog, tableBucket);
+        LOG.debug("Added the remote log tiering task for replica {}", tableBucket);
+    }
+
+    public boolean hasRemoteLog(TableBucket tableBucket) {
+        return remoteLogs.containsKey(tableBucket);
+    }
+
+    public void removeRemoteLog(TableBucket tableBucket) {
+        remoteLogs.remove(tableBucket);
+    }
+
+    public RemoteLogTablet addRemoteLog(Replica replica) throws Exception {
+        TableBucket tableBucket = replica.getTableBucket();
         PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
         LogTablet log = replica.getLogTablet();
         RemoteLogTablet remoteLog =
@@ -153,9 +170,7 @@ public class RemoteLogManager implements Closeable {
         // leader needs to register the remote log metrics
         remoteLog.registerMetrics(replica.bucketMetrics());
         remoteLogs.put(tableBucket, remoteLog);
-
-        doHandleLeaderReplica(replica, remoteLog, tableBucket);
-        LOG.debug("Added the remote log tiering task for replica {}", tableBucket);
+        return remoteLog;
     }
 
     /** Stop the log tiering task for the given replica. */

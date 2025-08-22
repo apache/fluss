@@ -21,7 +21,6 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
-import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.config.ConfigOptions;
@@ -37,6 +36,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.remote.RemoteFileDownloader;
 import org.apache.fluss.remote.RemoteLogFetchInfo;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
@@ -406,6 +406,7 @@ public class LogFetcher implements Closeable {
                         tb);
                 // try to get the latest metadata info of this table because the leader for this
                 // bucket is unknown.
+                // TODO tables to update once.
                 metadataUpdater.updateTableOrPartitionMetadata(tablePath, tb.getPartitionId());
             } else if (nodesWithPendingFetchRequests.contains(leader)) {
                 LOG.trace(

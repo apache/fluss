@@ -963,6 +963,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         if (rebalanceResultForBucket != null) {
             ReplicaReassignment reassignment =
                     ReplicaReassignment.build(
+                            rebalanceResultForBucket.originalLeader(),
+                            rebalanceResultForBucket.targetLeader(),
                             coordinatorContext.getAssignment(tableBucket),
                             rebalanceResultForBucket.targetReplicas());
             try {
@@ -983,23 +985,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         tableBucket,
                         coordinatorContext.removeOngoingRebalanceTask(tableBucket).markFailed());
             }
-
-            //            if (rebalanceResultForBucket.isLeaderAction()) {
-            //                List<Integer> assignedReplicas =
-            // coordinatorContext.getAssignment(tableBucket);
-            //                int preferredReplica = assignedReplicas.get(0);
-            //                int currentLeader =
-            //
-            // coordinatorContext.getBucketLeaderAndIsr(tableBucket).get().leader();
-            //                if (currentLeader == preferredReplica) {
-            //                    coordinatorContext.putFinishedRebalanceTask(
-            //                            tableBucket,
-            //                            coordinatorContext
-            //                                    .removeOngoingRebalanceTask(tableBucket)
-            //                                    .markCompleted());
-            //                }
-            //            } else {
-            //            }
         }
 
         // judge whether the rebalance task is finished
@@ -1050,7 +1035,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
 
         // buckets only need to change leader like preferred leader election and leader replica
-        // rebalance.
+        // rebalance. (Excluding for PrimaryKey Table)
         Set<TableBucket> electableBuckets = new HashSet<>();
         // buckets to do reassignments.
         Map<TableBucket, ReplicaReassignment> reassignments = new HashMap<>();
@@ -1083,42 +1068,25 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 continue;
             }
 
-            //            if (planForBucket.isLeaderAction()) {
-            //                List<Integer> assignedReplicas =
-            // coordinatorContext.getAssignment(tableBucket);
-            //                int preferredReplica = assignedReplicas.get(0);
-            //                int currentLeader =
-            //
-            // coordinatorContext.getBucketLeaderAndIsr(tableBucket).get().leader();
-            //                if (currentLeader != preferredReplica) {
-            //                    electableBuckets.add(tableBucket);
-            //                    coordinatorContext.putOngoingRebalanceTask(
-            //                            tableBucket,
-            //                            new RebalanceResultForBucket(
-            //                                    planForBucket.getOriginalLeader(),
-            //                                    planForBucket.getNewLeader(),
-            //                                    RebalanceStatusForBucket.PENDING));
-            //                } else {
-            //                    // already finished.
-            //                    coordinatorContext.putFinishedRebalanceTask(
-            //                            tableBucket,
-            //                            RebalanceResultForBucket.of(
-            //                                    planForBucket,
-            // RebalanceStatusForBucket.COMPLETED));
-            //                }
-            //            } else {
-            //            }
-
             List<Integer> newReplicas = planForBucket.getNewReplicas();
             ReplicaReassignment reassignment =
                     ReplicaReassignment.build(
-                            coordinatorContext.getAssignment(tableBucket), newReplicas);
-            if (planForBucket.isLeaderAction() && !reassignment.isBeingReassigned()) {
+                            planForBucket.getOriginalLeader(),
+                            planForBucket.getNewLeader(),
+                            coordinatorContext.getAssignment(tableBucket),
+                            newReplicas);
+            if (planForBucket.isLeaderAction()
+                    && !reassignment.isBeingReassigned()
+                    && !coordinatorContext
+                            .getTableInfoById(tableBucket.getTableId())
+                            .hasPrimaryKey()) {
                 LOG.info("trigger leader election for tableBucket {}.", tableBucket);
                 electableBuckets.add(tableBucket);
                 coordinatorContext.putOngoingRebalanceTask(
                         tableBucket,
                         new RebalanceResultForBucket(
+                                planForBucket.getOriginalLeader(),
+                                planForBucket.getNewLeader(),
                                 planForBucket.getOriginReplicas(),
                                 planForBucket.getNewReplicas(),
                                 RebalanceStatusForBucket.PENDING));
@@ -1129,19 +1097,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
             coordinatorContext.putOngoingRebalanceTask(
                     tableBucket,
                     new RebalanceResultForBucket(
+                            planForBucket.getOriginalLeader(),
+                            planForBucket.getNewLeader(),
                             planForBucket.getOriginReplicas(),
                             planForBucket.getNewReplicas(),
                             RebalanceStatusForBucket.PENDING));
-
-            //            if (reassignment.isBeingReassigned()) {
-            //
-            //            } else {
-            //                // already finished.
-            //                coordinatorContext.putFinishedRebalanceTask(
-            //                        tableBucket,
-            //                        RebalanceResultForBucket.of(
-            //                                planForBucket, RebalanceStatusForBucket.COMPLETED));
-            //            }
         }
 
         // try to trigger leader election together.
@@ -1299,7 +1259,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
             List<Integer> targetReplicas = reassignment.getTargetReplicas();
             // B3. Send LeaderAndIsr request with a potential new leader (if current leader not in
             // TRS) and a new RS (using TRS) and same isr to every tabletServer in ORS + TRS or TRS
-            maybeReassignedBucketLeaderIfRequired(tableBucket, targetReplicas);
+            maybeReassignedBucketLeaderIfRequired(
+                    tableBucket,
+                    reassignment.originalLeader,
+                    reassignment.newLeader,
+                    targetReplicas);
             // B4. replicas in RR -> Offline (force those replicas out of isr)
             // B5. replicas in RR -> NonExistentReplica (force those replicas to be deleted)
             stopRemovedReplicasOfReassignedBucket(tableBucket, removingReplicas);
@@ -1324,18 +1288,26 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private boolean isReassignmentComplete(
             TableBucket tableBucket, ReplicaReassignment reassignment) throws Exception {
-        //        if (!reassignment.isBeingReassigned()) {
-        //            return true;
-        //        }
-
         LeaderAndIsr leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
         List<Integer> isr = leaderAndIsr.isr();
         List<Integer> targetReplicas = reassignment.getTargetReplicas();
-        return targetReplicas.isEmpty() || new HashSet<>(isr).containsAll(targetReplicas);
+
+        boolean isPrimaryKeyTable =
+                coordinatorContext.getTableInfoById(tableBucket.getTableId()).hasPrimaryKey();
+        if (isPrimaryKeyTable) {
+            return new HashSet<>(leaderAndIsr.issr()).contains(reassignment.newLeader)
+                    && (targetReplicas.isEmpty() || new HashSet<>(isr).containsAll(targetReplicas));
+        } else {
+            return targetReplicas.isEmpty() || new HashSet<>(isr).containsAll(targetReplicas);
+        }
     }
 
     private void maybeReassignedBucketLeaderIfRequired(
-            TableBucket tableBucket, List<Integer> targetReplicas) throws Exception {
+            TableBucket tableBucket,
+            int originalLeader,
+            int newLeader,
+            List<Integer> targetReplicas)
+            throws Exception {
         int currentLeader = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get().leader();
         if (!targetReplicas.contains(currentLeader)) {
             LOG.info(
@@ -1356,7 +1328,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
             updateLeaderEpochAndSendRequest(
                     tableBucket,
                     new ReplicaReassignment(
-                            targetReplicas, Collections.emptyList(), Collections.emptyList()));
+                            targetReplicas,
+                            originalLeader,
+                            newLeader,
+                            Collections.emptyList(),
+                            Collections.emptyList()));
         } else {
             LOG.info(
                     "Leader {} for tableBucket {} being reassigned, is already in the new list of replicas {} but is dead",
@@ -1435,18 +1411,19 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                             new FlussRuntimeException(
                                                     "Leader not found for table bucket "
                                                             + tableBucket));
-            LeaderAndIsr newLeaderAndIsr =
-                    new LeaderAndIsr(
-                            // the leaderEpoch in request has been validated to be equal to current
-                            // leaderEpoch, which means the leader is still the same, so we use
-                            // leader and leaderEpoch in currentLeaderAndIsr.
-                            currentLeaderAndIsr.leader(),
-                            currentLeaderAndIsr.leaderEpoch(),
-                            // TODO: reject the request if there is a replica in ISR is not online,
-                            //  see KIP-841.
-                            tryAdjustLeaderAndIsr.isr(),
-                            coordinatorContext.getCoordinatorEpoch(),
-                            currentLeaderAndIsr.bucketEpoch() + 1);
+
+            LeaderAndIsr.Builder builder = new LeaderAndIsr.Builder();
+            // the leaderEpoch in request has been validated to be equal to current
+            // leaderEpoch, which means the leader is still the same, so we use
+            // leader and leaderEpoch in currentLeaderAndIsr.
+            builder.leader(currentLeaderAndIsr.leader())
+                    .leaderEpoch(currentLeaderAndIsr.leaderEpoch());
+            // TODO: reject the request if there is a replica in ISR is not online,
+            //  see KIP-841.
+            builder.isr(tryAdjustLeaderAndIsr.isr())
+                    .coordinatorEpoch(currentLeaderAndIsr.coordinatorEpoch())
+                    .bucketEpoch(currentLeaderAndIsr.bucketEpoch() + 1);
+            LeaderAndIsr newLeaderAndIsr = builder.build();
             newLeaderAndIsrList.put(tableBucket, newLeaderAndIsr);
         }
 
@@ -1743,11 +1720,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private void updateLeaderEpochAndSendRequest(
             TableBucket tableBucket, ReplicaReassignment reassignment) throws Exception {
-        LeaderAndIsr leaderAndIsr = updateLeaderEpoch(tableBucket);
-        if (leaderAndIsr == null) {
+        Optional<LeaderAndIsr> leaderAndIsrOpt =
+                coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+        if (!leaderAndIsrOpt.isPresent()) {
             return;
         }
 
+        LeaderAndIsr leaderAndIsr = leaderAndIsrOpt.get();
         String partitionName = null;
         if (tableBucket.getPartitionId() != null) {
             partitionName = coordinatorContext.getPartitionName(tableBucket.getPartitionId());
@@ -1755,6 +1734,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 LOG.error("Can't find partition name for partition: {}.", tableBucket.getBucket());
                 return;
             }
+        }
+
+        // For kv table, we need to add hot standby replica.
+        if (coordinatorContext.getTableInfoById(tableBucket.getTableId()).hasPrimaryKey()
+                && reassignment.isLeaderAction()) {
+            int newLeader = reassignment.getNewLeader();
+            // Set issr to empty list.
+            leaderAndIsr =
+                    leaderAndIsr.newLeaderAndIsr(
+                            Collections.singletonList(newLeader), Collections.emptyList());
         }
 
         coordinatorRequestBatch.newBatch();
@@ -1778,17 +1767,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
             return null;
         }
         LeaderAndIsr leaderAndIsr = leaderAndIsrOpt.get();
-        // increment the leader epoch even if there are no leader or isr changes to allow the
-        // leader to cache the expanded assigned replica list.
-        // LeaderAndIsr newLeaderAndIsr = leaderAndIsr.newLeaderAndIsrWithNewLeaderEpoch();
-        // zooKeeperClient.updateLeaderAndIsr(tableBucket, newLeaderAndIsr);
-        // update leader and isr
-        // coordinatorContext.putBucketLeaderAndIsr(tableBucket, newLeaderAndIsr);
-        //        LOG.info(
-        //                "Updated leader epoch for tableBucket {} from {} to {}",
-        //                tableBucket,
-        //                leaderAndIsr,
-        //                newLeaderAndIsr);
         return leaderAndIsr;
     }
 
@@ -1799,20 +1777,29 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private static final class ReplicaReassignment {
         private final List<Integer> replicas;
+        private final int originalLeader;
+        private final int newLeader;
         private final List<Integer> addingReplicas;
         private final List<Integer> removingReplicas;
 
         private ReplicaReassignment(
                 List<Integer> replicas,
+                int originalLeader,
+                int newLeader,
                 List<Integer> addingReplicas,
                 List<Integer> removingReplicas) {
             this.replicas = Collections.unmodifiableList(replicas);
+            this.originalLeader = originalLeader;
+            this.newLeader = newLeader;
             this.addingReplicas = Collections.unmodifiableList(addingReplicas);
             this.removingReplicas = Collections.unmodifiableList(removingReplicas);
         }
 
         private static ReplicaReassignment build(
-                List<Integer> originReplicas, List<Integer> targetReplicas) {
+                int originalLeader,
+                int newLeader,
+                List<Integer> originReplicas,
+                List<Integer> targetReplicas) {
             // targetReplicas behind originReplicas in full set.
             List<Integer> fullReplicaSet = new ArrayList<>(targetReplicas);
             fullReplicaSet.addAll(originReplicas);
@@ -1824,7 +1811,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
             List<Integer> newRemovingReplicas = new ArrayList<>(originReplicas);
             newRemovingReplicas.removeAll(targetReplicas);
 
-            return new ReplicaReassignment(fullReplicaSet, newAddingReplicas, newRemovingReplicas);
+            return new ReplicaReassignment(
+                    fullReplicaSet,
+                    originalLeader,
+                    newLeader,
+                    newAddingReplicas,
+                    newRemovingReplicas);
+        }
+
+        private int getNewLeader() {
+            return newLeader;
         }
 
         private List<Integer> getTargetReplicas() {
@@ -1833,10 +1829,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             return Collections.unmodifiableList(computed);
         }
 
-        private List<Integer> getOriginReplicas() {
-            List<Integer> computed = new ArrayList<>(replicas);
-            computed.removeAll(addingReplicas);
-            return Collections.unmodifiableList(computed);
+        private boolean isLeaderAction() {
+            return originalLeader != newLeader;
         }
 
         private boolean isBeingReassigned() {
@@ -1846,8 +1840,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         @Override
         public String toString() {
             return String.format(
-                    "ReplicaAssignment(replicas=%s, addingReplicas=%s, removingReplicas=%s)",
-                    replicas, addingReplicas, removingReplicas);
+                    "ReplicaAssignment(replicas=%s, originalLeader=%s, newLeader=%s, addingReplicas=%s, removingReplicas=%s)",
+                    replicas, originalLeader, newLeader, addingReplicas, removingReplicas);
         }
 
         @Override
@@ -1863,12 +1857,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
             ReplicaReassignment that = (ReplicaReassignment) o;
             return Objects.equals(replicas, that.replicas)
                     && Objects.equals(addingReplicas, that.addingReplicas)
-                    && Objects.equals(removingReplicas, that.removingReplicas);
+                    && Objects.equals(removingReplicas, that.removingReplicas)
+                    && Objects.equals(originalLeader, that.originalLeader)
+                    && Objects.equals(newLeader, that.newLeader);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(replicas, addingReplicas, removingReplicas);
+            return Objects.hash(
+                    replicas, originalLeader, newLeader, addingReplicas, removingReplicas);
         }
     }
 }

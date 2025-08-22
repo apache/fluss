@@ -438,7 +438,11 @@ public class TableBucketStateMachine {
 
         // Register the initial leader and isr.
         LeaderAndIsr leaderAndIsr =
-                new LeaderAndIsr(leader, 0, isr, coordinatorContext.getCoordinatorEpoch(), 0);
+                new LeaderAndIsr.Builder()
+                        .leader(leader)
+                        .isr(isr)
+                        .coordinatorEpoch(coordinatorContext.getCoordinatorEpoch())
+                        .build();
 
         return Optional.of(new ElectionResult(liveServers, leaderAndIsr));
     }
@@ -628,12 +632,13 @@ public class TableBucketStateMachine {
 
         // get the updated leader and isr
         LeaderAndIsr newLeaderAndIsr =
-                new LeaderAndIsr(
-                        leaderOpt.get(),
-                        leaderAndIsr.leaderEpoch() + 1,
-                        leaderAndIsr.isr(),
-                        coordinatorContext.getCoordinatorEpoch(),
-                        leaderAndIsr.bucketEpoch() + 1);
+                new LeaderAndIsr.Builder()
+                        .leader(leaderOpt.get())
+                        .leaderEpoch(leaderAndIsr.leaderEpoch() + 1)
+                        .isr(leaderAndIsr.isr())
+                        .coordinatorEpoch(coordinatorContext.getCoordinatorEpoch())
+                        .bucketEpoch(leaderAndIsr.bucketEpoch() + 1)
+                        .build();
 
         return Optional.of(new ElectionResult(liveReplicas, newLeaderAndIsr));
     }

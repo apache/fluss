@@ -18,11 +18,11 @@
 package org.apache.fluss.client.table.scanner.batch;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.remote.RemoteFileDownloader;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;

@@ -504,7 +504,9 @@ public class ServerRpcMessageUtils {
         reqForBucket
                 .setPhysicalTablePath(fromPhysicalTablePath(physicalTablePath))
                 .setReplicas(notifyLeaderAndIsrData.getReplicasArray())
-                .setIsrs(notifyLeaderAndIsrData.getIsrArray());
+                .setIsrs(notifyLeaderAndIsrData.getIsrArray())
+                .setHotStandbyReplicas(notifyLeaderAndIsrData.getStandbyArray())
+                .setIssrs(notifyLeaderAndIsrData.getIssrArray());
 
         return reqForBucket;
     }
@@ -525,17 +527,26 @@ public class ServerRpcMessageUtils {
             }
 
             PbTableBucket pbTableBucket = reqForBucket.getTableBucket();
+            LeaderAndIsr.Builder builder =
+                    new LeaderAndIsr.Builder()
+                            .leader(reqForBucket.getLeader())
+                            .leaderEpoch(reqForBucket.getLeaderEpoch())
+                            .isr(isr)
+                            .coordinatorEpoch(request.getCoordinatorEpoch())
+                            .bucketEpoch(reqForBucket.getBucketEpoch());
+
+            builder.standbyReplicas(
+                    Arrays.stream(reqForBucket.getHotStandbyReplicas())
+                            .boxed()
+                            .collect(Collectors.toList()));
+            builder.issr(
+                    Arrays.stream(reqForBucket.getIssrs()).boxed().collect(Collectors.toList()));
             notifyLeaderAndIsrDataList.add(
                     new NotifyLeaderAndIsrData(
                             toPhysicalTablePath(reqForBucket.getPhysicalTablePath()),
                             toTableBucket(pbTableBucket),
                             replicas,
-                            new LeaderAndIsr(
-                                    reqForBucket.getLeader(),
-                                    reqForBucket.getLeaderEpoch(),
-                                    isr,
-                                    request.getCoordinatorEpoch(),
-                                    reqForBucket.getBucketEpoch())));
+                            builder.build()));
         }
         return notifyLeaderAndIsrDataList;
     }
@@ -708,7 +719,10 @@ public class ServerRpcMessageUtils {
                                 tableId,
                                 fetchLogReqForBucket.getFetchOffset(),
                                 fetchLogReqForBucket.getMaxFetchBytes(),
-                                projectionFields));
+                                projectionFields,
+                                fetchLogReqForBucket.hasKvAppliedOffset()
+                                        ? fetchLogReqForBucket.getKvAppliedOffset()
+                                        : null));
             }
         }
 
@@ -1042,7 +1056,10 @@ public class ServerRpcMessageUtils {
                     if (tb.getPartitionId() != null) {
                         reqForBucket.setPartitionId(tb.getPartitionId());
                     }
+
                     leaderAndIsr.isr().forEach(reqForBucket::addNewIsr);
+                    leaderAndIsr.issr().forEach(reqForBucket::addNewIssr);
+
                     if (reqForBucketByTableId.containsKey(tb.getTableId())) {
                         reqForBucketByTableId.get(tb.getTableId()).add(reqForBucket);
                     } else {
@@ -1086,12 +1103,13 @@ public class ServerRpcMessageUtils {
                 }
                 leaderAndIsrMap.put(
                         tb,
-                        new LeaderAndIsr(
-                                leaderId,
-                                reqForBucket.getLeaderEpoch(),
-                                newIsr,
-                                reqForBucket.getCoordinatorEpoch(),
-                                reqForBucket.getBucketEpoch()));
+                        new LeaderAndIsr.Builder()
+                                .leader(leaderId)
+                                .leaderEpoch(reqForBucket.getLeaderEpoch())
+                                .isr(newIsr)
+                                .coordinatorEpoch(reqForBucket.getCoordinatorEpoch())
+                                .bucketEpoch(reqForBucket.getBucketEpoch())
+                                .build());
             }
         }
         return leaderAndIsrMap;
@@ -1116,7 +1134,9 @@ public class ServerRpcMessageUtils {
                         .setLeaderEpoch(leaderAndIsr.leaderEpoch())
                         .setCoordinatorEpoch(leaderAndIsr.coordinatorEpoch())
                         .setBucketEpoch(leaderAndIsr.bucketEpoch())
-                        .setIsrs(leaderAndIsr.isrArray());
+                        .setIsrs(leaderAndIsr.isrArray())
+                        .setHotStandbyReplicas(leaderAndIsr.standbyArray())
+                        .setIssrs(leaderAndIsr.issrArray());
             }
 
             if (respMap.containsKey(tb.getTableId())) {
@@ -1169,12 +1189,13 @@ public class ServerRpcMessageUtils {
                         tb,
                         new AdjustIsrResultForBucket(
                                 tb,
-                                new LeaderAndIsr(
-                                        respForBucket.getLeaderId(),
-                                        respForBucket.getLeaderEpoch(),
-                                        isr,
-                                        respForBucket.getCoordinatorEpoch(),
-                                        respForBucket.getBucketEpoch())));
+                                new LeaderAndIsr.Builder()
+                                        .leader(respForBucket.getLeaderId())
+                                        .leaderEpoch(respForBucket.getLeaderEpoch())
+                                        .isr(isr)
+                                        .coordinatorEpoch(respForBucket.getCoordinatorEpoch())
+                                        .bucketEpoch(respForBucket.getBucketEpoch())
+                                        .build()));
             }
         }
         return adjustIsrResult;

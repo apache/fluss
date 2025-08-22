@@ -90,6 +90,7 @@ import org.apache.fluss.server.replica.delay.DelayedTableBucketKey;
 import org.apache.fluss.server.replica.delay.DelayedWrite;
 import org.apache.fluss.server.replica.fetcher.InitialFetchStatus;
 import org.apache.fluss.server.replica.fetcher.ReplicaFetcherManager;
+import org.apache.fluss.server.replica.standby.KvStandbyManager;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.LakeTableSnapshot;
@@ -137,6 +138,7 @@ public class ReplicaManager {
     private final Scheduler scheduler;
     private final LogManager logManager;
     private final KvManager kvManager;
+    private final KvStandbyManager kvStandbyManager;
     private final ZooKeeperClient zkClient;
     protected final int serverId;
     private final AtomicBoolean highWatermarkCheckPointThreadStarted = new AtomicBoolean(false);
@@ -237,6 +239,13 @@ public class ReplicaManager {
         this.scheduler = scheduler;
         this.logManager = logManager;
         this.kvManager = kvManager;
+        this.kvStandbyManager =
+                new KvStandbyManager(
+                        conf,
+                        scheduler,
+                        zkClient,
+                        logManager.getDataDir().getAbsolutePath(),
+                        remoteLogManager);
         this.serverId = serverId;
         this.metadataCache = metadataCache;
 
@@ -291,6 +300,10 @@ public class ReplicaManager {
 
     public RemoteLogManager getRemoteLogManager() {
         return remoteLogManager;
+    }
+
+    public KvStandbyManager getKvStandbyManager() {
+        return kvStandbyManager;
     }
 
     private void registerMetrics() {
@@ -1013,7 +1026,10 @@ public class ReplicaManager {
                         adjustedMaxBytes,
                         replica.getRowType(),
                         replica.getArrowCompressionInfo(),
-                        fetchReqInfo.getProjectFields());
+                        fetchReqInfo.getProjectFields(),
+                        fetchReqInfo.getKvAppliedOffset() == null
+                                ? -1L
+                                : fetchReqInfo.getKvAppliedOffset());
                 LogReadInfo readInfo = replica.fetchRecords(fetchParams);
 
                 // Once we read from a non-empty bucket, we stop ignoring request and bucket
@@ -1485,7 +1501,8 @@ public class ReplicaManager {
                                 fatalErrorHandler,
                                 bucketMetricGroup,
                                 tableInfo,
-                                clock);
+                                clock,
+                                isKvTable ? kvStandbyManager : null);
                 allReplicas.put(tb, new OnlineReplica(replica));
                 replicaOpt = Optional.of(replica);
             } else if (hostedReplica instanceof OnlineReplica) {
@@ -1578,6 +1595,7 @@ public class ReplicaManager {
         replicaFetcherManager.shutdown();
         delayedWriteManager.shutdown();
         delayedFetchLogManager.shutdown();
+        kvStandbyManager.shutdown();
 
         // Checkpoint highWatermark.
         checkpointHighWatermarks();

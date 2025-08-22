@@ -727,7 +727,7 @@ class CoordinatorEventProcessorTest {
                 ctx -> {
                     ctx.putBucketLeaderAndIsr(
                             tableBucket,
-                            new LeaderAndIsr(
+                            leaderAndIsr(
                                     leader,
                                     leaderAndIsr.leaderEpoch(),
                                     newIsr,
@@ -854,7 +854,7 @@ class CoordinatorEventProcessorTest {
         // change isr in coordinator context
         // leader change from originLeader to follower1.
         LeaderAndIsr newLeaderAndIsr =
-                new LeaderAndIsr(
+                leaderAndIsr(
                         follower1,
                         leaderAndIsr.leaderEpoch() + 1,
                         isr2,
@@ -961,9 +961,9 @@ class CoordinatorEventProcessorTest {
         Map<TableBucket, LeaderAndIsr> leaderAndIsrMap = new HashMap<>();
         CompletableFuture<AdjustIsrResponse> respCallback = new CompletableFuture<>();
         // This isr list equals originReplicas + addingReplicas.
-        leaderAndIsrMap.put(tb0, new LeaderAndIsr(0, 1, Arrays.asList(0, 1, 2, 3), 0, 0));
-        leaderAndIsrMap.put(tb1, new LeaderAndIsr(0, 1, Arrays.asList(0, 1, 2, 3), 0, 0));
-        leaderAndIsrMap.put(tb2, new LeaderAndIsr(1, 1, Arrays.asList(1, 2, 3, 0), 0, 0));
+        leaderAndIsrMap.put(tb0, leaderAndIsr(0, 1, Arrays.asList(0, 1, 2, 3), 0, 0));
+        leaderAndIsrMap.put(tb1, leaderAndIsr(0, 1, Arrays.asList(0, 1, 2, 3), 0, 0));
+        leaderAndIsrMap.put(tb2, leaderAndIsr(1, 1, Arrays.asList(1, 2, 3, 0), 0, 0));
         eventProcessor
                 .getCoordinatorEventManager()
                 .put(new AdjustIsrReceivedEvent(leaderAndIsrMap, respCallback));
@@ -1330,5 +1330,16 @@ class CoordinatorEventProcessorTest {
             this.partitionId = partitionId;
             this.partitionName = partitionName;
         }
+    }
+
+    private LeaderAndIsr leaderAndIsr(
+            int leader, int leaderEpoch, List<Integer> isr, int coordinatorEpoch, int bucketEpoch) {
+        return new LeaderAndIsr.Builder()
+                .leader(leader)
+                .leaderEpoch(leaderEpoch)
+                .isr(isr)
+                .coordinatorEpoch(coordinatorEpoch)
+                .bucketEpoch(bucketEpoch)
+                .build();
     }
 }

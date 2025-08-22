@@ -66,6 +66,10 @@ public final class FetchParams {
 
     private final int minFetchBytes;
     private final long maxWaitMs;
+
+    // This param only used for hotStandbyReplica to fetch log from leader.
+    private long kvAppliedOffset = -1L;
+
     // TODO: add more params like epoch etc.
 
     public FetchParams(int replicaId, int maxFetchBytes) {
@@ -99,7 +103,8 @@ public final class FetchParams {
             int maxFetchBytes,
             RowType schema,
             ArrowCompressionInfo compressionInfo,
-            @Nullable int[] projectedFields) {
+            @Nullable int[] projectedFields,
+            long kvAppliedOffset) {
         this.fetchOffset = fetchOffset;
         this.maxFetchBytes = maxFetchBytes;
         if (projectedFields != null) {
@@ -112,6 +117,7 @@ public final class FetchParams {
         } else {
             projectionEnabled = false;
         }
+        this.kvAppliedOffset = kvAppliedOffset;
     }
 
     /**
@@ -173,6 +179,10 @@ public final class FetchParams {
 
     public long fetchOffset() {
         return fetchOffset;
+    }
+
+    public long kvAppliedOffset() {
+        return kvAppliedOffset;
     }
 
     @Override

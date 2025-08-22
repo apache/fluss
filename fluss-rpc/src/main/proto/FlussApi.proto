@@ -656,6 +656,7 @@ message PbFetchLogReqForBucket {
   // TODO leader epoch
   required int64 fetch_offset = 3;
   required int32 max_fetch_bytes = 4;
+  optional int64 kv_applied_offset = 5;
 }
 
 message PbFetchLogRespForTable {
@@ -742,6 +743,8 @@ message PbAdjustIsrReqForBucket {
   repeated int32 new_isr = 4 [packed = true];
   required int32 coordinator_epoch = 5;
   required int32 bucket_epoch = 6;
+  // inSyncStandbyReplicas
+  repeated int32 new_issr = 7 [packed = true];
 }
 
 message PbAdjustIsrRespForTable {
@@ -759,6 +762,8 @@ message PbAdjustIsrRespForBucket {
   repeated int32 isr = 7 [packed = true];
   optional int32 bucket_epoch = 8;
   optional int32 coordinator_epoch = 9;
+  repeated int32 hot_standby_replicas = 10 [packed = true];
+  repeated int32 issr = 11 [packed = true];
 }
 
 message PbListOffsetsRespForBucket {
@@ -779,6 +784,8 @@ message PbNotifyLeaderAndIsrReqForBucket {
   repeated int32 replicas = 5 [packed = true];
   repeated int32 isr = 6 [packed = true];
   required int32 bucket_epoch = 7;
+  repeated int32 hot_standby_replicas = 8 [packed = true];
+  repeated int32 issr = 9 [packed = true];
 }
 
 message PbNotifyLeaderAndIsrRespForBucket {

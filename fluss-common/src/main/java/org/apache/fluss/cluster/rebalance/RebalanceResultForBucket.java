@@ -19,9 +19,6 @@ package org.apache.fluss.cluster.rebalance;
 
 import org.apache.fluss.annotation.PublicEvolving;
 
-import javax.annotation.Nullable;
-
-import java.util.Collections;
 import java.util.List;
 
 import static org.apache.fluss.cluster.rebalance.RebalanceStatusForBucket.FAILED;
@@ -34,50 +31,31 @@ import static org.apache.fluss.cluster.rebalance.RebalanceStatusForBucket.FAILED
 @PublicEvolving
 public class RebalanceResultForBucket {
 
-    private final @Nullable Integer originalLeader;
-    private final @Nullable Integer targetLeader;
+    private final int originalLeader;
+    private final int newLeader;
     private final List<Integer> originReplicas;
     private final List<Integer> targetReplicas;
     private RebalanceStatusForBucket rebalanceStatusForBucket;
 
     public RebalanceResultForBucket(
-            @Nullable Integer originalLeader,
-            @Nullable Integer targetLeader,
-            RebalanceStatusForBucket rebalanceStatusForBucket) {
-        this(
-                originalLeader,
-                targetLeader,
-                Collections.emptyList(),
-                Collections.emptyList(),
-                rebalanceStatusForBucket);
-    }
-
-    public RebalanceResultForBucket(
-            List<Integer> originReplicas,
-            List<Integer> targetReplicas,
-            RebalanceStatusForBucket rebalanceStatusForBucket) {
-        this(null, null, originReplicas, targetReplicas, rebalanceStatusForBucket);
-    }
-
-    public RebalanceResultForBucket(
-            @Nullable Integer originalLeader,
-            @Nullable Integer targetLeader,
+            int originalLeader,
+            int newLeader,
             List<Integer> originReplicas,
             List<Integer> targetReplicas,
             RebalanceStatusForBucket rebalanceStatusForBucket) {
         this.originalLeader = originalLeader;
-        this.targetLeader = targetLeader;
+        this.newLeader = newLeader;
         this.originReplicas = originReplicas;
         this.targetReplicas = targetReplicas;
         this.rebalanceStatusForBucket = rebalanceStatusForBucket;
     }
 
-    public @Nullable Integer originalLeader() {
+    public int originalLeader() {
         return originalLeader;
     }
 
-    public @Nullable Integer targetLeader() {
-        return targetLeader;
+    public int targetLeader() {
+        return newLeader;
     }
 
     public List<Integer> replicas() {
@@ -98,14 +76,6 @@ public class RebalanceResultForBucket {
         return this;
     }
 
-    public boolean isLeaderAction() {
-        return originalLeader != null && targetLeader != null;
-    }
-
-    public RebalanceStatusForBucket rebalanceStatus() {
-        return rebalanceStatusForBucket;
-    }
-
     public static RebalanceResultForBucket of(
             RebalancePlanForBucket planForBucket, RebalanceStatusForBucket status) {
         return new RebalanceResultForBucket(
@@ -121,8 +91,8 @@ public class RebalanceResultForBucket {
         return "RebalanceResultForBucket{"
                 + "originalLeader="
                 + originalLeader
-                + ", targetLeader="
-                + targetLeader
+                + ", newLeader="
+                + newLeader
                 + ", originReplicas="
                 + originReplicas
                 + ", targetReplicas="

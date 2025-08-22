@@ -68,7 +68,6 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
-import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
@@ -124,7 +123,13 @@ final class ReplicaTest extends ReplicaTestBase {
                                 conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES)
                                         .getBytes());
         fetchParams.setCurrentFetch(
-                DATA1_TABLE_ID, 0, Integer.MAX_VALUE, DATA1_ROW_TYPE, DEFAULT_COMPRESSION, null);
+                DATA1_TABLE_ID,
+                0,
+                Integer.MAX_VALUE,
+                DATA1_ROW_TYPE,
+                DEFAULT_COMPRESSION,
+                null,
+                -1L);
         LogReadInfo logReadInfo = logReplica.fetchRecords(fetchParams);
         assertLogRecordsEquals(DATA1_ROW_TYPE, logReadInfo.getFetchedData().getRecords(), DATA1);
     }
@@ -521,13 +526,12 @@ final class ReplicaTest extends ReplicaTestBase {
                         PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
                         new TableBucket(DATA1_TABLE_ID_PK, 1),
                         Collections.singletonList(TABLET_SERVER_ID),
-                        new LeaderAndIsr(
-                                TABLET_SERVER_ID,
-                                leaderEpoch,
-                                Collections.singletonList(TABLET_SERVER_ID),
-                                INITIAL_COORDINATOR_EPOCH,
-                                // we also use the leader epoch as bucket epoch
-                                leaderEpoch)));
+                        new LeaderAndIsr.Builder()
+                                .leader(TABLET_SERVER_ID)
+                                .leaderEpoch(leaderEpoch)
+                                .isr(Collections.singletonList(TABLET_SERVER_ID))
+                                .bucketEpoch(leaderEpoch)
+                                .build()));
     }
 
     private void makeLeaderReplica(
@@ -538,13 +542,12 @@ final class ReplicaTest extends ReplicaTestBase {
                         PhysicalTablePath.of(tablePath),
                         tableBucket,
                         Collections.singletonList(TABLET_SERVER_ID),
-                        new LeaderAndIsr(
-                                TABLET_SERVER_ID,
-                                leaderEpoch,
-                                Collections.singletonList(TABLET_SERVER_ID),
-                                INITIAL_COORDINATOR_EPOCH,
-                                // we also use the leader epoch as bucket epoch
-                                leaderEpoch)));
+                        new LeaderAndIsr.Builder()
+                                .leader(TABLET_SERVER_ID)
+                                .leaderEpoch(leaderEpoch)
+                                .isr(Collections.singletonList(TABLET_SERVER_ID))
+                                .bucketEpoch(leaderEpoch)
+                                .build()));
     }
 
     private static LogRecords fetchRecords(Replica replica) throws IOException {
@@ -559,7 +562,8 @@ final class ReplicaTest extends ReplicaTestBase {
                 Integer.MAX_VALUE,
                 replica.getRowType(),
                 DEFAULT_COMPRESSION,
-                null);
+                null,
+                -1L);
         LogReadInfo logReadInfo = replica.fetchRecords(fetchParams);
         return logReadInfo.getFetchedData().getRecords();
     }

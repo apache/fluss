@@ -251,12 +251,15 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
                         adjustIsrResultForBucket =
                                 new AdjustIsrResultForBucket(
                                         tb,
-                                        new LeaderAndIsr(
-                                                leaderAndIsr.leader(),
-                                                currentLeaderEpoch,
-                                                leaderAndIsr.isr(),
-                                                leaderAndIsr.coordinatorEpoch(),
-                                                leaderAndIsr.bucketEpoch() + 1));
+                                        new LeaderAndIsr.Builder()
+                                                .leader(leaderAndIsr.leader())
+                                                .leaderEpoch(currentLeaderEpoch)
+                                                .isr(leaderAndIsr.isr())
+                                                .coordinatorEpoch(leaderAndIsr.coordinatorEpoch())
+                                                .bucketEpoch(leaderAndIsr.bucketEpoch() + 1)
+                                                .standbyReplicas(leaderAndIsr.standbyList())
+                                                .issr(leaderAndIsr.issr())
+                                                .build());
                     }
 
                     resultForBuckets.add(adjustIsrResultForBucket);

@@ -31,6 +31,7 @@ import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.NotEnoughReplicasException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -49,8 +50,8 @@ import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.SequenceIDCounter;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.kv.KvApplyLogHelper;
 import org.apache.fluss.server.kv.KvManager;
-import org.apache.fluss.server.kv.KvRecoverHelper;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
@@ -81,6 +82,7 @@ import org.apache.fluss.server.replica.delay.DelayedFetchLog;
 import org.apache.fluss.server.replica.delay.DelayedOperationManager;
 import org.apache.fluss.server.replica.delay.DelayedTableBucketKey;
 import org.apache.fluss.server.replica.delay.DelayedWrite;
+import org.apache.fluss.server.replica.standby.KvStandbyManager;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.server.zk.ZkSequenceIDCounter;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -175,6 +177,7 @@ public final class Replica {
     private final AtomicReference<Integer> leaderReplicaIdOpt = new AtomicReference<>();
     private final ReadWriteLock leaderIsrUpdateLock = new ReentrantReadWriteLock();
     private final Clock clock;
+    private final @Nullable KvStandbyManager kvStandbyManager;
 
     /**
      * storing the remote follower replicas' state, used to update leader's highWatermark and
@@ -185,7 +188,9 @@ public final class Replica {
     private final Map<Integer, FollowerReplica> followerReplicasMap =
             MapUtils.newConcurrentHashMap();
 
-    private volatile IsrState isrState = new IsrState.CommittedIsrState(Collections.emptyList());
+    private volatile IsrState isrState =
+            new IsrState.CommittedIsrState(
+                    Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
     private volatile int leaderEpoch = LeaderAndIsr.INITIAL_LEADER_EPOCH - 1;
     private volatile int bucketEpoch = LeaderAndIsr.INITIAL_BUCKET_EPOCH;
     private volatile int coordinatorEpoch = CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
@@ -193,6 +198,7 @@ public final class Replica {
     // null if table without pk or haven't become leader
     private volatile @Nullable KvTablet kvTablet;
     private volatile @Nullable CloseableRegistry closeableRegistryForKv;
+    private volatile boolean isStandbyReplica = false;
 
     // ------- metrics
     private Counter isrShrinks;
@@ -216,7 +222,8 @@ public final class Replica {
             FatalErrorHandler fatalErrorHandler,
             BucketMetricGroup bucketMetricGroup,
             TableInfo tableInfo,
-            Clock clock)
+            Clock clock,
+            @Nullable KvStandbyManager kvStandbyManager)
             throws Exception {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
@@ -241,6 +248,7 @@ public final class Replica {
 
         this.logTablet = createLog(lazyHighWatermarkCheckpoint);
         this.clock = clock;
+        this.kvStandbyManager = kvStandbyManager;
         registerMetrics();
     }
 
@@ -262,6 +270,19 @@ public final class Replica {
 
     public boolean isKvTable() {
         return kvManager != null;
+    }
+
+    public boolean isStandbyReplica() {
+        return isKvTable() && isStandbyReplica;
+    }
+
+    public boolean isHotStandbyReplica() {
+        if (!isStandbyReplica) {
+            return false;
+        }
+
+        long kvAppliedOffset = kvTablet.getKvAppliedOffset();
+        return kvAppliedOffset == getLocalLogEndOffset();
     }
 
     public RowType getRowType() {
@@ -324,6 +345,10 @@ public final class Replica {
         return logTablet.getWriterIdCount();
     }
 
+    public KvFormat getKvFormat() {
+        return tableConfig.getKvFormat();
+    }
+
     public Path getTabletParentDir() {
         return logManager.getTabletParentDir(physicalPath, tableBucket);
     }
@@ -365,7 +390,12 @@ public final class Replica {
                             long currentTimeMs = clock.milliseconds();
                             // Updating the assignment and ISR state is safe if the bucket epoch is
                             // larger or equal to the current bucket epoch.
-                            updateAssignmentAndIsr(data.getReplicas(), true, data.getIsr());
+                            updateAssignmentAndIsr(
+                                    data.getReplicas(),
+                                    true,
+                                    data.getIsr(),
+                                    data.getHotStandbyReplicas(),
+                                    data.getIssr());
 
                             int requestLeaderEpoch = data.getLeaderEpoch();
                             if (requestLeaderEpoch > leaderEpoch) {
@@ -413,23 +443,43 @@ public final class Replica {
 
                     coordinatorEpoch = data.getCoordinatorEpoch();
 
-                    updateAssignmentAndIsr(Collections.emptyList(), false, Collections.emptyList());
+                    updateAssignmentAndIsr(
+                            Collections.emptyList(),
+                            false,
+                            Collections.emptyList(),
+                            Collections.emptyList(),
+                            Collections.emptyList());
 
+                    boolean toBeHotStandby = toBeNewHotStandby(data.getHotStandbyReplicas());
                     int requestLeaderEpoch = data.getLeaderEpoch();
                     boolean isNewLeaderEpoch = requestLeaderEpoch > leaderEpoch;
                     if (isNewLeaderEpoch) {
                         LOG.info(
-                                "Follower {} starts at leader epoch {} from end offset {}",
+                                "Follower{} {} starts at leader epoch {} from end offset {}",
+                                toBeHotStandby ? " (hotStandby)" : "",
                                 tableBucket,
                                 requestLeaderEpoch,
                                 logTablet.localLogEndOffset());
-                        onBecomeNewFollower();
+                        if (toBeHotStandby) {
+                            onBecomeNewHotStandby();
+                        } else {
+                            onBecomeNewFollower();
+                        }
                     } else if (requestLeaderEpoch == leaderEpoch) {
-                        LOG.info(
-                                "Skipped the become-follower state change for bucket {} since "
-                                        + "it's already the follower with leader epoch {}",
-                                tableBucket,
-                                leaderEpoch);
+                        if (toBeHotStandby) {
+                            LOG.info(
+                                    "Follower (hotStandby) {} starts at leader epoch {} from end offset {}",
+                                    tableBucket,
+                                    requestLeaderEpoch,
+                                    logTablet.localLogEndOffset());
+                            onBecomeNewHotStandby();
+                        } else {
+                            LOG.info(
+                                    "Skipped the become-follower state change for bucket {} since "
+                                            + "it's already the follower with leader epoch {}",
+                                    tableBucket,
+                                    leaderEpoch);
+                        }
                     } else {
                         String errorMessage =
                                 String.format(
@@ -511,12 +561,19 @@ public final class Replica {
         updateLeaderEndOffsetSnapshot();
 
         if (isKvTable()) {
-            // if it's become new leader, we must
-            // first destroy the old kv tablet
-            // if exist. Otherwise, it'll use still the old kv tablet which will cause data loss
-            dropKv();
-            // now, we can create a new kv tablet
-            createKv();
+            if (isStandbyReplica()) {
+                checkNotNull(kvStandbyManager, "kv standby manager should not be null.");
+                kvStandbyManager.stopStandby(tableBucket);
+                isStandbyReplica = false;
+                checkNotNull(kvTablet, "kv tablet should not be null.");
+                kvTablet.setKvAppliedOffset(-1L);
+            } else {
+                // if it's become new leader, we must first destroy the old kv tablet if exists.
+                // Otherwise, it'll use still the old kv tablet which will cause data loss
+                dropKv();
+                // now, we can create a new kv tablet
+                createKv();
+            }
         }
     }
 
@@ -525,6 +582,13 @@ public final class Replica {
             // it should be from leader to follower, we need to destroy the kv tablet
             dropKv();
         }
+    }
+
+    private void onBecomeNewHotStandby() {
+        this.isStandbyReplica = true;
+
+        checkNotNull(kvStandbyManager, "kv standby manager should not be null.");
+        kvStandbyManager.startStandby(this);
     }
 
     @VisibleForTesting
@@ -543,12 +607,12 @@ public final class Replica {
         }
 
         // init kv tablet and get the snapshot it uses to init if have any
-        Optional<CompletedSnapshot> snapshotUsed = initKvTablet();
+        Optional<CompletedSnapshot> snapshotUsed = initKvTablet(true);
         // start periodic kv snapshot
         startPeriodicKvSnapshot(snapshotUsed.orElse(null));
     }
 
-    private void dropKv() {
+    public void dropKv() {
         // close any closeable registry for kv
         if (closeableRegistry.unregisterCloseable(closeableRegistryForKv)) {
             IOUtils.closeQuietly(closeableRegistryForKv);
@@ -561,7 +625,7 @@ public final class Replica {
         }
     }
 
-    private void mayFlushKv(long newHighWatermark) {
+    public void mayFlushKv(long newHighWatermark) {
         KvTablet kvTablet = this.kvTablet;
         if (kvTablet != null) {
             kvTablet.flush(newHighWatermark, fatalErrorHandler);
@@ -573,7 +637,7 @@ public final class Replica {
      *
      * @return the snapshot used to init kv tablet, empty if no any snapshot.
      */
-    private Optional<CompletedSnapshot> initKvTablet() {
+    public Optional<CompletedSnapshot> initKvTablet(boolean needRecover) {
         checkNotNull(kvManager);
         long startTime = clock.milliseconds();
         LOG.info("Start to init kv tablet for {} of table {}.", tableBucket, physicalPath);
@@ -631,7 +695,10 @@ public final class Replica {
             kvTablet.registerMetrics(bucketMetricGroup);
 
             logTablet.updateMinRetainOffset(restoreStartOffset);
-            recoverKvTablet(restoreStartOffset);
+
+            if (needRecover) {
+                recoverKvTablet(restoreStartOffset);
+            }
         } catch (Exception e) {
             throw new KvStorageException(
                     String.format(
@@ -688,20 +755,10 @@ public final class Replica {
         long start = clock.milliseconds();
         checkNotNull(kvTablet, "kv tablet should not be null.");
         try {
-            KvRecoverHelper.KvRecoverContext recoverContext =
-                    new KvRecoverHelper.KvRecoverContext(
-                            getTablePath(),
-                            tableBucket,
-                            snapshotContext.getZooKeeperClient(),
-                            snapshotContext.maxFetchLogSizeInRecoverKv());
-            KvRecoverHelper kvRecoverHelper =
-                    new KvRecoverHelper(
-                            kvTablet,
-                            logTablet,
-                            startRecoverLogOffset,
-                            recoverContext,
-                            tableConfig.getKvFormat());
-            kvRecoverHelper.recover();
+            KvApplyLogHelper kvApplyLogHelper =
+                    new KvApplyLogHelper(this, snapshotContext.getZooKeeperClient());
+            kvApplyLogHelper.recover(
+                    startRecoverLogOffset, snapshotContext.maxFetchLogSizeInRecoverKv());
         } catch (Exception e) {
             throw new KvStorageException(
                     String.format(
@@ -872,6 +929,24 @@ public final class Replica {
                 });
     }
 
+    public LogAppendInfo putRecordsToHotStandby(
+            MemoryLogRecords logRecords, KvApplyLogHelper kvApplyLogHelper) {
+        KvTablet kv = this.kvTablet;
+        checkNotNull(
+                kv,
+                "KvTablet for the replica to put kv records to hotStandbyReplica shouldn't be null.");
+        LogAppendInfo logAppendInfo;
+        try {
+            logAppendInfo = kv.putAsHotStandby(logRecords, kvApplyLogHelper);
+        } catch (Exception e) {
+            LOG.error("Error while putting records to hotStandbyReplica for {}", tableBucket, e);
+            fatalErrorHandler.onFatalError(e);
+            throw new KvStorageException(
+                    "Error while putting records to hotStandbyReplica for " + tableBucket, e);
+        }
+        return logAppendInfo;
+    }
+
     public LogReadInfo fetchRecords(FetchParams fetchParams) throws IOException {
         if (fetchParams.projection() != null && logFormat != LogFormat.ARROW) {
             throw new InvalidColumnProjectionException(
@@ -894,7 +969,8 @@ public final class Replica {
                     followerReplica,
                     logReadInfo.getFetchedData().getFetchOffsetMetadata(),
                     followerFetchTimeMs,
-                    logReadInfo.getLogEndOffset());
+                    logReadInfo.getLogEndOffset(),
+                    fetchParams.kvAppliedOffset());
             return logReadInfo;
         } else {
             return inReadLock(
@@ -980,7 +1056,11 @@ public final class Replica {
     }
 
     private void updateAssignmentAndIsr(
-            List<Integer> replicas, boolean isLeader, List<Integer> isr) {
+            List<Integer> replicas,
+            boolean isLeader,
+            List<Integer> isr,
+            List<Integer> standbyReplicas,
+            List<Integer> issr) {
         if (isLeader) {
             List<Integer> followers =
                     replicas.stream()
@@ -1003,14 +1083,15 @@ public final class Replica {
         }
 
         // update isr info.
-        isrState = new IsrState.CommittedIsrState(isr);
+        isrState = new IsrState.CommittedIsrState(isr, standbyReplicas, issr);
     }
 
     private void updateFollowerFetchState(
             FollowerReplica followerReplica,
             LogOffsetMetadata followerFetchOffsetMetadata,
             long followerFetchTimeMs,
-            long leaderLogEndOffset)
+            long leaderLogEndOffset,
+            long kvAppliedOffset)
             throws IOException {
         long prevFollowerEndOffset = followerReplica.stateSnapshot().getLogEndOffset();
 
@@ -1021,11 +1102,13 @@ public final class Replica {
                 () ->
                         followerReplica.updateFetchState(
                                 followerFetchOffsetMetadata,
+                                kvAppliedOffset,
                                 followerFetchTimeMs,
                                 leaderLogEndOffset));
 
         // Check if this in-sync replica needs to be added to the ISR.
-        maybeExpandISr(followerReplica);
+        maybeExpandIsr(followerReplica);
+        maybeExpandIssr(followerReplica);
 
         // check if the HW of the replica can now be incremented since the replica may already be in
         // the ISR and its LEO has just incremented
@@ -1363,7 +1446,7 @@ public final class Replica {
      *
      * <p>This function can be triggered when a replica's LEO has incremented.
      */
-    private void maybeExpandISr(FollowerReplica followerReplica) {
+    private void maybeExpandIsr(FollowerReplica followerReplica) {
         IsrState currentIsrState = isrState;
         boolean needsIsrUpdate =
                 !currentIsrState.isInflight()
@@ -1379,6 +1462,37 @@ public final class Replica {
                                     if (needsExpandIsr(followerReplica)) {
                                         return Optional.of(
                                                 prepareIsrExpand(
+                                                        (IsrState.CommittedIsrState)
+                                                                currentIsrState,
+                                                        followerReplica.getFollowerId()));
+                                    }
+                                }
+
+                                return Optional.empty();
+                            });
+
+            // Send adjust isr request outside the leaderIsrUpdateLock since the completion
+            // logic may increment the high watermark (and consequently complete delayed
+            // operations).
+            adjustIsrUpdateOpt.map(this::submitAdjustIsr);
+        }
+    }
+
+    private void maybeExpandIssr(FollowerReplica followerReplica) {
+        IsrState currentIsrState = isrState;
+        boolean needsIssrUpdate =
+                !currentIsrState.isInflight()
+                        && inReadLock(leaderIsrUpdateLock, () -> needsExpandIssr(followerReplica));
+        if (needsIssrUpdate) {
+            Optional<IsrState.PendingExpandIsrState> adjustIsrUpdateOpt =
+                    inWriteLock(
+                            leaderIsrUpdateLock,
+                            () -> {
+                                // check if this replica needs to be added to the ISR.
+                                if (currentIsrState instanceof IsrState.CommittedIsrState) {
+                                    if (needsExpandIssr(followerReplica)) {
+                                        return Optional.of(
+                                                prepareIssrExpand(
                                                         (IsrState.CommittedIsrState)
                                                                 currentIsrState,
                                                         followerReplica.getFollowerId()));
@@ -1454,8 +1568,40 @@ public final class Replica {
         // TODO add server epoch to isr.
 
         LeaderAndIsr newLeaderAndIsr =
-                new LeaderAndIsr(
-                        localTabletServerId, leaderEpoch, isrToSend, coordinatorEpoch, bucketEpoch);
+                new LeaderAndIsr.Builder()
+                        .leader(localTabletServerId)
+                        .leaderEpoch(leaderEpoch)
+                        .isr(isrToSend)
+                        .coordinatorEpoch(coordinatorEpoch)
+                        .bucketEpoch(bucketEpoch)
+                        .standbyReplicas(isrState.standbyReplicas())
+                        .issr(isrState.issr())
+                        .build();
+
+        IsrState.PendingExpandIsrState updatedState =
+                new IsrState.PendingExpandIsrState(
+                        newInSyncReplicaId, newLeaderAndIsr, currentState);
+        isrState = updatedState;
+        return updatedState;
+    }
+
+    private IsrState.PendingExpandIsrState prepareIssrExpand(
+            IsrState.CommittedIsrState currentState, int newInSyncReplicaId) {
+        List<Integer> issrToSend = new ArrayList<>(isrState.issr());
+        issrToSend.add(newInSyncReplicaId);
+
+        // TODO add server epoch to isr.
+
+        LeaderAndIsr newLeaderAndIsr =
+                new LeaderAndIsr.Builder()
+                        .leader(localTabletServerId)
+                        .leaderEpoch(leaderEpoch)
+                        .isr(isrState.isr())
+                        .coordinatorEpoch(coordinatorEpoch)
+                        .bucketEpoch(bucketEpoch)
+                        .standbyReplicas(isrState.standbyReplicas())
+                        .issr(issrToSend)
+                        .build();
 
         IsrState.PendingExpandIsrState updatedState =
                 new IsrState.PendingExpandIsrState(
@@ -1476,8 +1622,13 @@ public final class Replica {
         // TODO add server epoch to isr.
 
         LeaderAndIsr newLeaderAndIsr =
-                new LeaderAndIsr(
-                        localTabletServerId, leaderEpoch, isrToSend, coordinatorEpoch, bucketEpoch);
+                new LeaderAndIsr.Builder()
+                        .leader(localTabletServerId)
+                        .leaderEpoch(leaderEpoch)
+                        .isr(isrToSend)
+                        .coordinatorEpoch(coordinatorEpoch)
+                        .bucketEpoch(bucketEpoch)
+                        .build();
         IsrState.PendingShrinkIsrState updatedState =
                 new IsrState.PendingShrinkIsrState(
                         outOfSyncFollowerReplicas, newLeaderAndIsr, currentState);
@@ -1570,7 +1721,9 @@ public final class Replica {
             // proposed and actual state are the same.
             // In both cases, we want to move from Pending to Committed state to ensure new updates
             // are processed.
-            isrState = new IsrState.CommittedIsrState(leaderAndIsr.isr());
+            isrState =
+                    new IsrState.CommittedIsrState(
+                            leaderAndIsr.isr(), leaderAndIsr.standbyList(), leaderAndIsr.issr());
             bucketEpoch = leaderAndIsr.bucketEpoch();
             LOG.info(
                     "ISR updated to {} and bucket epoch updated to {} for bucket {}",
@@ -1660,6 +1813,14 @@ public final class Replica {
     private boolean needsExpandIsr(FollowerReplica followerReplica) {
         return canAddFollowerReplicaToIsr(followerReplica.getFollowerId())
                 && isFollowerInSync(followerReplica);
+    }
+
+    private boolean needsExpandIssr(FollowerReplica followerReplica) {
+        if (!isrState.standbyReplicas().contains(followerReplica.getFollowerId())) {
+            return false;
+        }
+        long kvAppliedOffset = followerReplica.stateSnapshot().getKvAppliedOffset();
+        return kvAppliedOffset >= logTablet.getHighWatermark();
     }
 
     private boolean needsShrinkIsr() {
@@ -1830,6 +1991,10 @@ public final class Replica {
                         .collect(Collectors.toList()));
     }
 
+    private boolean toBeNewHotStandby(List<Integer> hotStandbyList) {
+        return isKvTable() && !isStandbyReplica() && hotStandbyList.contains(localTabletServerId);
+    }
+
     @VisibleForTesting
     public int getBucketEpoch() {
         return bucketEpoch;
@@ -1838,5 +2003,15 @@ public final class Replica {
     @VisibleForTesting
     public List<Integer> getIsr() {
         return isrState.isr();
+    }
+
+    @VisibleForTesting
+    public List<Integer> getStandbyReplicas() {
+        return isrState.standbyReplicas();
+    }
+
+    @VisibleForTesting
+    public List<Integer> getIssr() {
+        return isrState.issr();
     }
 }

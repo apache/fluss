@@ -41,7 +41,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** UT test for adjust isr for tablet server. */
+/** UT test for adjust isr for TabletServer. */
 public class AdjustIsrTest extends ReplicaTestBase {
 
     @Override
@@ -129,7 +129,10 @@ public class AdjustIsrTest extends ReplicaTestBase {
         // To mock we prepare an isr shrink in Replica#maybeShrinkIsr();
         IsrState.PendingShrinkIsrState pendingShrinkIsrState =
                 replica.prepareIsrShrink(
-                        new IsrState.CommittedIsrState(Arrays.asList(1, 2, 3)),
+                        new IsrState.CommittedIsrState(
+                                Arrays.asList(1, 2, 3),
+                                Collections.emptyList(),
+                                Collections.emptyList()),
                         Arrays.asList(1, 2),
                         Collections.singletonList(3));
 
