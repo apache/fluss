@@ -25,6 +25,7 @@ import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.AuthenticationException;
 import com.alibaba.fluss.exception.FlussRuntimeException;
 import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.exception.RetriableException;
@@ -290,7 +291,7 @@ public class MetadataUpdater {
         List<InetSocketAddress> inetSocketAddresses =
                 ClientUtils.parseAndValidateAddresses(conf.get(ConfigOptions.BOOTSTRAP_SERVERS));
         Cluster cluster = null;
-        Exception lastException = null;
+        Throwable lastException = null;
         for (InetSocketAddress address : inetSocketAddresses) {
             try {
                 cluster = tryToInitializeCluster(rpcClient, address);
@@ -300,16 +301,20 @@ public class MetadataUpdater {
                         "Failed to initialize fluss client connection to bootstrap server: {}",
                         address,
                         e);
-                lastException = e;
+                lastException = ExceptionUtils.stripExecutionException(e);
             }
         }
 
         if (cluster == null && lastException != null) {
+            if (lastException instanceof AuthenticationException) {
+                throw (AuthenticationException) lastException;
+            }
+
             String errorMsg =
                     "Failed to initialize fluss client connection to server because no "
                             + "bootstrap server is validate. bootstrap servers: "
                             + inetSocketAddresses;
-            LOG.error(errorMsg);
+            LOG.error(errorMsg, lastException);
             throw new IllegalStateException(errorMsg, lastException);
         }
 

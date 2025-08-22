@@ -133,6 +133,21 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
     }
 
     @Test
+    void testCreateCatalogWithWrongSecurityProtocol() {
+        String createAminCatalogDDL =
+                String.format(
+                        "create catalog %s with ( \n"
+                                + "'type' = 'fluss', \n"
+                                + "'bootstrap.servers' = '%s' \n"
+                                + ")",
+                        "wrong_catalog",
+                        String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS)));
+        assertThatThrownBy(() -> tEnv.executeSql(createAminCatalogDDL).await())
+                .hasMessageContaining(
+                        "The connection has not completed authentication yet. This may be caused by a missing or incorrect configuration of 'client.security.protocol' on the client side.");
+    }
+
+    @Test
     void testShowDatabases() throws Exception {
         assertThat(CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect()))
                 .isEmpty();
