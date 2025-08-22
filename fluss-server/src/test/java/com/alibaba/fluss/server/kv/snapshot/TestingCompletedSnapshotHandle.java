@@ -35,7 +35,7 @@ public class TestingCompletedSnapshotHandle extends CompletedSnapshotHandle {
 
     public TestingCompletedSnapshotHandle(
             CompletedSnapshot snapshot, boolean shouldFailWhenRetrieve) {
-        super(snapshot.getSnapshotLocation(), snapshot.getLogOffset());
+        super(snapshot.getSnapshotID(), snapshot.getSnapshotLocation(), snapshot.getLogOffset());
         this.snapshot = snapshot;
         this.shouldFailWhenRetrieve = shouldFailWhenRetrieve;
     }
