@@ -20,6 +20,7 @@ package com.alibaba.fluss.server;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.exception.KvStorageException;
 import com.alibaba.fluss.exception.LogStorageException;
+import com.alibaba.fluss.exception.SchemaNotExistException;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.SchemaInfo;
 import com.alibaba.fluss.metadata.TableBucket;
@@ -203,7 +204,7 @@ public abstract class TabletManagerBase {
         Optional<SchemaInfo> schemaInfoOpt = zkClient.getSchemaById(tablePath, schemaId);
         SchemaInfo schemaInfo;
         if (!schemaInfoOpt.isPresent()) {
-            throw new LogStorageException(
+            throw new SchemaNotExistException(
                     String.format(
                             "Failed to load table '%s': Table schema not found in zookeeper metadata.",
                             tablePath));
