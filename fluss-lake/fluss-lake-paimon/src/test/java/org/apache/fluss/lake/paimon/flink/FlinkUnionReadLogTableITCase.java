@@ -25,6 +25,7 @@ import org.apache.fluss.row.TimestampNtz;
 
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.types.Row;
+import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -40,6 +41,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -120,6 +122,43 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
 
             assertThat(actualFiltered).containsExactlyInAnyOrderElementsOf(expectedFiltered);
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testReadLogTableInStreamingMode(boolean isPartitioned) throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName = "logTable_" + (isPartitioned ? "partitioned" : "non_partitioned");
+
+        TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
+        List<Row> writtenRows = new ArrayList<>();
+        long tableId = prepareLogTable(t1, DEFAULT_BUCKET_NUM, isPartitioned, writtenRows);
+        // wait until records has been synced
+        waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
+
+        // now, start to read the log table, which will read paimon
+        // may read fluss or not, depends on the log offset of paimon snapshot
+
+        CloseableIterator<Row> actual =
+                streamTEnv.executeSql("select * from " + tableName).collect();
+        assertResultsIgnoreOrder(
+                actual, writtenRows.stream().map(Row::toString).collect(Collectors.toList()), true);
+        //        assertQueryResultExactOrder(streamTEnv, "select * from " + tableName,
+        // writtenRows.stream().map(Row::toString).collect(Collectors.toList()));
+
+        // can database sync job
+        jobClient.cancel().get();
+
+        // write some log data again
+        writtenRows.addAll(writeRows(t1, 3, isPartitioned));
+
+        // query the log table again and check the data
+        // it should read both paimon snapshot and fluss log
+        actual = streamTEnv.executeSql("select * from " + tableName).collect();
+        assertResultsIgnoreOrder(
+                actual, writtenRows.stream().map(Row::toString).collect(Collectors.toList()), true);
     }
 
     private long prepareLogTable(
