@@ -61,9 +61,40 @@ public class MemorySegmentInputView implements InputView {
     }
 
     @Override
+    public int readUnsignedByte() throws IOException {
+        if (position < end) {
+            return segment.get(position++) & 0xff;
+        } else {
+            throw new EOFException();
+        }
+    }
+
+    @Override
     public short readShort() throws IOException {
         if (position >= 0 && position < end - 1) {
             short v = segment.getShort(position);
+            position += 2;
+            return v;
+        } else {
+            throw new EOFException();
+        }
+    }
+
+    @Override
+    public int readUnsignedShort() throws IOException {
+        if (position >= 0 && position < end - 1) {
+            int v = segment.getShort(position) & 0xffff;
+            position += 2;
+            return v;
+        } else {
+            throw new EOFException();
+        }
+    }
+
+    @Override
+    public char readChar() throws IOException {
+        if (position >= 0 && position < end - 1) {
+            char v = segment.getChar(position);
             position += 2;
             return v;
         } else {
@@ -104,6 +135,117 @@ public class MemorySegmentInputView implements InputView {
     }
 
     @Override
+    public String readLine() throws IOException {
+        if (position >= end) {
+            return null;
+        }
+
+        StringBuilder bld = new StringBuilder();
+
+        try {
+            int b;
+            while ((b = readUnsignedByte()) != '\n') {
+                if (b != '\r') {
+                    bld.append((char) b);
+                }
+            }
+        } catch (EOFException ignored) {
+            // End of file reached
+        }
+
+        if (bld.length() == 0 && position >= end) {
+            return null;
+        }
+
+        // trim a trailing carriage return
+        int len = bld.length();
+        if (len > 0 && bld.charAt(len - 1) == '\r') {
+            bld.setLength(len - 1);
+        }
+
+        return bld.toString();
+    }
+
+    @Override
+    public String readUTF() throws IOException {
+        int utflen = readUnsignedShort();
+
+        if (utflen == 0) {
+            return "";
+        }
+
+        byte[] bytearr = new byte[utflen];
+        char[] chararr = new char[utflen];
+
+        int c, char2, char3;
+        int count = 0;
+        int chararrCount = 0;
+
+        readFully(bytearr, 0, utflen);
+
+        // ASCII optimization - fast path for ASCII characters
+        while (count < utflen) {
+            c = (int) bytearr[count] & 0xff;
+            if (c > 127) {
+                break;
+            }
+            count++;
+            chararr[chararrCount++] = (char) c;
+        }
+
+        // Handle multi-byte UTF-8 sequences
+        while (count < utflen) {
+            c = (int) bytearr[count] & 0xff;
+            switch (c >> 4) {
+                case 0:
+                case 1:
+                case 2:
+                case 3:
+                case 4:
+                case 5:
+                case 6:
+                case 7:
+                    /* 0xxxxxxx - 1-byte character */
+                    count++;
+                    chararr[chararrCount++] = (char) c;
+                    break;
+                case 12:
+                case 13:
+                    /* 110x xxxx 10xx xxxx - 2-byte character */
+                    count += 2;
+                    if (count > utflen) {
+                        throw new IOException("malformed input: partial character at end");
+                    }
+                    char2 = (int) bytearr[count - 1];
+                    if ((char2 & 0xC0) != 0x80) {
+                        throw new IOException("malformed input around byte " + count);
+                    }
+                    chararr[chararrCount++] = (char) (((c & 0x1F) << 6) | (char2 & 0x3F));
+                    break;
+                case 14:
+                    /* 1110 xxxx 10xx xxxx 10xx xxxx - 3-byte character */
+                    count += 3;
+                    if (count > utflen) {
+                        throw new IOException("malformed input: partial character at end");
+                    }
+                    char2 = (int) bytearr[count - 2];
+                    char3 = (int) bytearr[count - 1];
+                    if (((char2 & 0xC0) != 0x80) || ((char3 & 0xC0) != 0x80)) {
+                        throw new IOException("malformed input around byte " + (count - 1));
+                    }
+                    chararr[chararrCount++] =
+                            (char) (((c & 0x0F) << 12) | ((char2 & 0x3F) << 6) | (char3 & 0x3F));
+                    break;
+                default:
+                    /* 10xx xxxx, 1111 xxxx */
+                    throw new IOException("malformed input around byte " + count);
+            }
+        }
+
+        return new String(chararr, 0, chararrCount);
+    }
+
+    @Override
     public void readFully(byte[] b) throws IOException {
         readFully(b, 0, b.length);
     }
@@ -124,5 +266,17 @@ public class MemorySegmentInputView implements InputView {
         } else {
             throw new IllegalArgumentException("Length may not be negative.");
         }
+    }
+
+    @Override
+    public int skipBytes(int n) throws IOException {
+        if (n <= 0) {
+            return 0;
+        }
+
+        int remainingBytes = end - position;
+        int bytesToSkip = Math.min(n, remainingBytes);
+        position += bytesToSkip;
+        return bytesToSkip;
     }
 }

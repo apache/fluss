@@ -216,6 +216,11 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
     }
 
     @Override
+    public void write(int b) throws IOException {
+        writeByte(b);
+    }
+
+    @Override
     public void writeBoolean(boolean v) throws IOException {
         writeByte(v ? 1 : 0);
     }
@@ -302,6 +307,27 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
     }
 
     @Override
+    public void writeChar(int v) throws IOException {
+        if (positionInSegment < pageSize - 1) {
+            currentSegment.putCharBigEndian(positionInSegment, (char) v);
+            positionInSegment += 2;
+        } else if (positionInSegment == pageSize) {
+            advance();
+            writeChar(v);
+        } else {
+            writeByte(v >> 8);
+            writeByte(v);
+        }
+    }
+
+    @Override
+    public void writeChars(String s) throws IOException {
+        for (int i = 0; i < s.length(); i++) {
+            writeChar(s.charAt(i));
+        }
+    }
+
+    @Override
     public void write(MemorySegment segment, int off, int len) throws IOException {
         int remaining = pageSize - positionInSegment;
         if (remaining >= len) {
@@ -328,6 +354,25 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
                     break;
                 }
             }
+        }
+    }
+
+    @Override
+    public void writeUTF(String str) throws IOException {
+        if (str == null) {
+            writeInt(-1);
+            return;
+        }
+
+        byte[] bytes = str.getBytes("UTF-8");
+        writeInt(bytes.length);
+        write(bytes);
+    }
+
+    @Override
+    public void writeBytes(String s) throws IOException {
+        for (int i = 0; i < s.length(); i++) {
+            writeByte(s.charAt(i));
         }
     }
 }
