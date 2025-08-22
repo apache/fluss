@@ -41,8 +41,6 @@ import java.util.Set;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static com.alibaba.fluss.server.RpcServiceBase.getPartitionMetadataFromZk;
-import static com.alibaba.fluss.server.RpcServiceBase.getTableMetadataFromZk;
 import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_ID;
 import static com.alibaba.fluss.server.metadata.PartitionMetadata.DELETED_PARTITION_NAME;
 import static com.alibaba.fluss.server.metadata.TableMetadata.DELETED_TABLE_ID;
@@ -121,18 +119,11 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         OptionalLong tableIdOpt = snapshot.getTableId(tablePath);
         List<BucketMetadata> bucketMetadataList;
         if (!tableIdOpt.isPresent()) {
-            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
-            // https://github.com/alibaba/fluss/issues/483
-            // get table assignment from zk.
-            bucketMetadataList =
-                    getTableMetadataFromZk(
-                            zkClient, tablePath, tableInfo.getTableId(), tableInfo.isPartitioned());
-        } else {
-            // get table assignment from cache.
-            bucketMetadataList =
-                    new ArrayList<>(
-                            snapshot.getBucketMetadataForTable(tableIdOpt.getAsLong()).values());
+            return null;
         }
+        bucketMetadataList =
+                new ArrayList<>(
+                        snapshot.getBucketMetadataForTable(tableIdOpt.getAsLong()).values());
 
         return new TableMetadata(tableInfo, bucketMetadataList);
     }
@@ -154,9 +145,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                     partitionId,
                     new ArrayList<>(snapshot.getBucketMetadataForPartition(partitionId).values()));
         } else {
-            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
-            // https://github.com/alibaba/fluss/issues/483
-            return getPartitionMetadataFromZk(partitionPath, zkClient);
+            return null;
         }
     }
 
@@ -284,6 +273,130 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     Collections.emptyMap(),
                                     Collections.emptyMap(),
                                     Collections.emptyMap());
+                });
+    }
+
+    /**
+     * Update a single table metadata to the local cache. This method is thread-safe and will merge
+     * the new table metadata with existing cache.
+     *
+     * @param tableMetadata the table metadata to update
+     */
+    public void updateTableMetadata(TableMetadata tableMetadata) {
+        inLock(
+                metadataLock,
+                () -> {
+                    TableInfo tableInfo = tableMetadata.getTableInfo();
+                    TablePath tablePath = tableInfo.getTablePath();
+                    long tableId = tableInfo.getTableId();
+
+                    // Get current snapshot
+                    ServerMetadataSnapshot currentSnapshot = serverMetadataSnapshot;
+
+                    // Create new maps based on current state
+                    Map<TablePath, Long> tableIdByPath =
+                            new HashMap<>(currentSnapshot.getTableIdByPath());
+                    Map<Long, TablePath> pathByTableId = new HashMap<>();
+                    Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForTables =
+                            new HashMap<>(currentSnapshot.getBucketMetadataMapForTables());
+
+                    // Update table mapping
+                    tableIdByPath.put(tablePath, tableId);
+                    pathByTableId.put(tableId, tablePath);
+
+                    // Update bucket metadata for this table
+                    Map<Integer, BucketMetadata> tableBucketMetadata = new HashMap<>();
+                    for (BucketMetadata bucketMetadata : tableMetadata.getBucketMetadataList()) {
+                        tableBucketMetadata.put(bucketMetadata.getBucketId(), bucketMetadata);
+                    }
+                    bucketMetadataMapForTables.put(tableId, tableBucketMetadata);
+
+                    // Copy other existing data
+                    Map<PhysicalTablePath, Long> partitionIdByPath =
+                            new HashMap<>(currentSnapshot.getPartitionIdByPath());
+                    Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions =
+                            new HashMap<>(currentSnapshot.getBucketMetadataMapForPartitions());
+
+                    // Build pathByTableId from tableIdByPath
+                    tableIdByPath.forEach((path, id) -> pathByTableId.put(id, path));
+
+                    // Create new snapshot
+                    serverMetadataSnapshot =
+                            new ServerMetadataSnapshot(
+                                    currentSnapshot.getCoordinatorServer(),
+                                    currentSnapshot.getAliveTabletServers(),
+                                    tableIdByPath,
+                                    pathByTableId,
+                                    partitionIdByPath,
+                                    bucketMetadataMapForTables,
+                                    bucketMetadataMapForPartitions);
+                });
+    }
+
+    /**
+     * Update a single partition metadata to the local cache. This method is thread-safe and will
+     * merge the new partition metadata with existing cache.
+     *
+     * @param partitionMetadata the partition metadata to update
+     */
+    public void updatePartitionMetadata(PartitionMetadata partitionMetadata) {
+        inLock(
+                metadataLock,
+                () -> {
+                    long tableId = partitionMetadata.getTableId();
+                    String partitionName = partitionMetadata.getPartitionName();
+                    long partitionId = partitionMetadata.getPartitionId();
+
+                    // Get current snapshot
+                    ServerMetadataSnapshot currentSnapshot = serverMetadataSnapshot;
+
+                    // Get table path from tableId
+                    Optional<TablePath> tablePathOpt = currentSnapshot.getTablePath(tableId);
+                    if (!tablePathOpt.isPresent()) {
+                        // If table doesn't exist in cache, we can't update partition metadata
+                        return;
+                    }
+                    TablePath tablePath = tablePathOpt.get();
+                    PhysicalTablePath physicalTablePath =
+                            PhysicalTablePath.of(tablePath, partitionName);
+
+                    // Create new maps based on current state
+                    Map<TablePath, Long> tableIdByPath =
+                            new HashMap<>(currentSnapshot.getTableIdByPath());
+                    Map<Long, TablePath> pathByTableId = new HashMap<>();
+                    Map<PhysicalTablePath, Long> partitionIdByPath =
+                            new HashMap<>(currentSnapshot.getPartitionIdByPath());
+                    Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForPartitions =
+                            new HashMap<>(currentSnapshot.getBucketMetadataMapForPartitions());
+
+                    // Update partition mapping
+                    partitionIdByPath.put(physicalTablePath, partitionId);
+
+                    // Update bucket metadata for this partition
+                    Map<Integer, BucketMetadata> partitionBucketMetadata = new HashMap<>();
+                    for (BucketMetadata bucketMetadata :
+                            partitionMetadata.getBucketMetadataList()) {
+                        partitionBucketMetadata.put(bucketMetadata.getBucketId(), bucketMetadata);
+                    }
+                    bucketMetadataMapForPartitions.put(partitionId, partitionBucketMetadata);
+
+                    // Copy other existing data
+                    Map<Long, Map<Integer, BucketMetadata>> bucketMetadataMapForTables =
+                            new HashMap<>(currentSnapshot.getBucketMetadataMapForTables());
+
+                    // Build pathByTableId from tableIdByPath
+                    tableIdByPath.forEach((path, id) -> pathByTableId.put(id, path));
+
+                    // Create new snapshot
+                    serverMetadataSnapshot =
+                            new ServerMetadataSnapshot(
+                                    currentSnapshot.getCoordinatorServer(),
+                                    currentSnapshot.getAliveTabletServers(),
+                                    tableIdByPath,
+                                    pathByTableId,
+                                    partitionIdByPath,
+                                    bucketMetadataMapForTables,
+                                    bucketMetadataMapForPartitions);
                 });
     }
 }
