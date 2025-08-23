@@ -46,7 +46,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
@@ -93,7 +92,7 @@ class RemoteLogDownloaderTest {
             Path localLogDir = remoteLogDownloader.getLocalLogDir();
             TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
             List<RemoteLogSegment> remoteLogSegments =
-                    buildRemoteLogSegmentList(tb, DATA1_PHYSICAL_TABLE_PATH, 5, conf, false);
+                    buildRemoteLogSegmentList(tb, DATA1_PHYSICAL_TABLE_PATH, 5, conf, 10);
             FsPath remoteLogTabletDir =
                     remoteLogTabletDir(remoteLogDir, DATA1_PHYSICAL_TABLE_PATH, tb);
             List<RemoteLogDownloadFuture> futures =
@@ -168,16 +167,29 @@ class RemoteLogDownloaderTest {
                         fileDownloader,
                         scannerMetricGroup,
                         10L);
+        TableBucket bucket1 = new TableBucket(DATA1_TABLE_ID, 1);
+        TableBucket bucket2 = new TableBucket(DATA1_TABLE_ID, 2);
+        TableBucket bucket3 = new TableBucket(DATA1_TABLE_ID, 3);
+        TableBucket bucket4 = new TableBucket(DATA1_TABLE_ID, 4);
         try {
+            // prepare segments, 4 buckets with different maxTimestamp, total 10 segments
             int totalSegments = 10;
-            TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
             List<RemoteLogSegment> remoteLogSegments =
-                    buildRemoteLogSegmentList(
-                            tb, DATA1_PHYSICAL_TABLE_PATH, totalSegments, conf, true);
-            FsPath remoteLogTabletDir =
-                    remoteLogTabletDir(remoteLogDir, DATA1_PHYSICAL_TABLE_PATH, tb);
+                    buildRemoteLogSegmentList(bucket1, DATA1_PHYSICAL_TABLE_PATH, 6, conf, 10);
+            remoteLogSegments.addAll(
+                    buildRemoteLogSegmentList(bucket3, DATA1_PHYSICAL_TABLE_PATH, 1, conf, 5));
+            remoteLogSegments.addAll(
+                    buildRemoteLogSegmentList(bucket2, DATA1_PHYSICAL_TABLE_PATH, 1, conf, 1));
+            remoteLogSegments.addAll(
+                    buildRemoteLogSegmentList(bucket3, DATA1_PHYSICAL_TABLE_PATH, 1, conf, 15));
+            remoteLogSegments.addAll(
+                    buildRemoteLogSegmentList(bucket4, DATA1_PHYSICAL_TABLE_PATH, 1, conf, 8));
+
             Map<UUID, RemoteLogDownloadFuture> futures = new HashMap<>();
             for (RemoteLogSegment segment : remoteLogSegments) {
+                FsPath remoteLogTabletDir =
+                        remoteLogTabletDir(
+                                remoteLogDir, DATA1_PHYSICAL_TABLE_PATH, segment.tableBucket());
                 RemoteLogDownloadFuture future =
                         remoteLogDownloader.requestRemoteLog(remoteLogTabletDir, segment);
                 futures.put(segment.remoteLogSegmentId(), future);
@@ -303,10 +315,9 @@ class RemoteLogDownloaderTest {
             PhysicalTablePath physicalTablePath,
             int num,
             Configuration conf,
-            boolean randomMaxTimestamp)
+            long maxTimestamp)
             throws Exception {
         List<RemoteLogSegment> remoteLogSegmentList = new ArrayList<>();
-        Random random = new Random();
         for (int i = 0; i < num; i++) {
             long baseOffset = i * 10L;
             UUID segmentId = UUID.randomUUID();
@@ -317,7 +328,7 @@ class RemoteLogDownloaderTest {
                             .remoteLogSegmentId(segmentId)
                             .remoteLogStartOffset(baseOffset)
                             .remoteLogEndOffset(baseOffset + 9)
-                            .maxTimestamp(randomMaxTimestamp ? random.nextLong() : i)
+                            .maxTimestamp(maxTimestamp)
                             .segmentSizeInBytes(Integer.MAX_VALUE)
                             .build();
             genRemoteLogSegmentFile(
