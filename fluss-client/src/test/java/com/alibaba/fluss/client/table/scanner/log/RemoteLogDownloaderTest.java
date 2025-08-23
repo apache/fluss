@@ -20,6 +20,7 @@ package com.alibaba.fluss.client.table.scanner.log;
 import com.alibaba.fluss.client.metrics.ScannerMetricGroup;
 import com.alibaba.fluss.client.metrics.TestingScannerMetricGroup;
 import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
+import com.alibaba.fluss.client.table.scanner.log.RemoteLogDownloader.RemoteLogDownloadRequest;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.fs.FsPath;
@@ -38,6 +39,7 @@ import java.io.IOException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -47,6 +49,7 @@ import java.util.Map;
 import java.util.Random;
 import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 
 import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
@@ -218,6 +221,68 @@ class RemoteLogDownloaderTest {
             IOUtils.closeQuietly(fileDownloader);
             IOUtils.closeQuietly(remoteLogDownloader);
         }
+    }
+
+    @Test
+    void testOrderOfRemoteLogDownloadRequest() {
+        TableBucket bucket1 = new TableBucket(DATA1_TABLE_ID, 1);
+        TableBucket bucket2 = new TableBucket(DATA1_TABLE_ID, 2);
+        TableBucket bucket3 = new TableBucket(DATA1_TABLE_ID, 3);
+
+        List<RemoteLogDownloadRequest> requests =
+                Arrays.asList(
+                        // different offset, same timestamp and bucket
+                        createDownloadRequest(bucket1, 10, 10),
+                        createDownloadRequest(bucket1, 20, 10),
+                        createDownloadRequest(bucket1, 30, 10),
+                        // -1 timestamp
+                        createDownloadRequest(bucket2, 10, -1),
+                        createDownloadRequest(bucket2, 20, -1),
+                        createDownloadRequest(bucket2, 30, -1),
+                        // 0 offset
+                        createDownloadRequest(bucket3, 0, 5),
+                        createDownloadRequest(bucket3, 0, 15),
+                        createDownloadRequest(bucket3, 0, 25));
+
+        // Sort the requests based on the custom comparator
+        Collections.sort(requests);
+        List<String> results =
+                requests.stream()
+                        .map(
+                                r ->
+                                        String.format(
+                                                "(bucket=%s, offset=%s, ts=%s)",
+                                                r.segment.tableBucket().getBucket(),
+                                                r.segment.remoteLogStartOffset(),
+                                                r.segment.maxTimestamp()))
+                        .collect(Collectors.toList());
+        List<String> expected =
+                Arrays.asList(
+                        "(bucket=2, offset=10, ts=-1)",
+                        "(bucket=2, offset=20, ts=-1)",
+                        "(bucket=2, offset=30, ts=-1)",
+                        "(bucket=3, offset=0, ts=5)",
+                        "(bucket=1, offset=10, ts=10)",
+                        "(bucket=1, offset=20, ts=10)",
+                        "(bucket=1, offset=30, ts=10)",
+                        "(bucket=3, offset=0, ts=15)",
+                        "(bucket=3, offset=0, ts=25)");
+        assertThat(results).isEqualTo(expected);
+    }
+
+    private RemoteLogDownloadRequest createDownloadRequest(
+            TableBucket tableBucket, long startOffset, long maxTimestamp) {
+        RemoteLogSegment remoteLogSegment =
+                RemoteLogSegment.Builder.builder()
+                        .tableBucket(tableBucket)
+                        .physicalTablePath(DATA1_PHYSICAL_TABLE_PATH)
+                        .remoteLogSegmentId(UUID.randomUUID())
+                        .remoteLogStartOffset(startOffset)
+                        .remoteLogEndOffset(startOffset + 10)
+                        .maxTimestamp(maxTimestamp)
+                        .segmentSizeInBytes(Integer.MAX_VALUE)
+                        .build();
+        return new RemoteLogDownloadRequest(remoteLogSegment, remoteLogDir);
     }
 
     private List<RemoteLogDownloadFuture> requestRemoteLogs(

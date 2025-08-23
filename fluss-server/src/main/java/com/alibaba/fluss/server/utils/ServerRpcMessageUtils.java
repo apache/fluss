@@ -747,7 +747,8 @@ public class ServerRpcMessageUtils {
                                         .setRemoteLogSegmentId(
                                                 logSegment.remoteLogSegmentId().toString())
                                         .setRemoteLogEndOffset(logSegment.remoteLogEndOffset())
-                                        .setSegmentSizeInBytes(logSegment.segmentSizeInBytes());
+                                        .setSegmentSizeInBytes(logSegment.segmentSizeInBytes())
+                                        .setMaxTimestamp(logSegment.maxTimestamp());
                         remoteLogSegmentList.add(pbRemoteLogSegment);
                     }
                     fetchLogRespForBucket

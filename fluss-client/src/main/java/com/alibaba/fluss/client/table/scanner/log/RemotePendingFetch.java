@@ -28,7 +28,7 @@ import com.alibaba.fluss.remote.RemoteLogSegment;
  */
 class RemotePendingFetch implements PendingFetch {
 
-    private final RemoteLogSegment remoteLogSegment;
+    final RemoteLogSegment remoteLogSegment;
     private final RemoteLogDownloadFuture downloadFuture;
 
     private final int posInLogSegment;
@@ -79,5 +79,19 @@ class RemotePendingFetch implements PendingFetch {
                 isCheckCrc,
                 fetchOffset,
                 downloadFuture.getRecycleCallback());
+    }
+
+    @Override
+    public String toString() {
+        return "RemotePendingFetch{"
+                + "remoteLogSegment="
+                + remoteLogSegment
+                + ", fetchOffset="
+                + fetchOffset
+                + ", posInLogSegment="
+                + posInLogSegment
+                + ", highWatermark="
+                + highWatermark
+                + '}';
     }
 }

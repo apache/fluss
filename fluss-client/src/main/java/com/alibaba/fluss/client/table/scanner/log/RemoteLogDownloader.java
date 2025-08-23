@@ -287,10 +287,10 @@ public class RemoteLogDownloader implements Closeable {
     }
 
     /** Represents a request to download a remote log segment file to local. */
-    private static class RemoteLogDownloadRequest implements Comparable<RemoteLogDownloadRequest> {
-        private final RemoteLogSegment segment;
-        private final FsPath remoteLogTabletDir;
-        private final CompletableFuture<File> future = new CompletableFuture<>();
+    static class RemoteLogDownloadRequest implements Comparable<RemoteLogDownloadRequest> {
+        final RemoteLogSegment segment;
+        final FsPath remoteLogTabletDir;
+        final CompletableFuture<File> future = new CompletableFuture<>();
 
         public RemoteLogDownloadRequest(RemoteLogSegment segment, FsPath remoteLogTabletDir) {
             this.segment = segment;
@@ -303,7 +303,14 @@ public class RemoteLogDownloader implements Closeable {
 
         @Override
         public int compareTo(RemoteLogDownloadRequest o) {
-            return Long.compare(segment.maxTimestamp(), o.segment.maxTimestamp());
+            if (segment.tableBucket().equals(o.segment.tableBucket())) {
+                // strictly download in the offset order if they belong to the same bucket
+                return Long.compare(
+                        segment.remoteLogStartOffset(), o.segment.remoteLogStartOffset());
+            } else {
+                // download segment from old to new across buckets
+                return Long.compare(segment.maxTimestamp(), o.segment.maxTimestamp());
+            }
         }
     }
 }

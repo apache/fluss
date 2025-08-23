@@ -168,6 +168,10 @@ public class CommonRpcMessageUtils {
                 PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tp, partitionName);
                 List<RemoteLogSegment> remoteLogSegmentList = new ArrayList<>();
                 for (PbRemoteLogSegment pbRemoteLogSegment : pbRlfInfo.getRemoteLogSegmentsList()) {
+                    long maxTimestamp =
+                            pbRemoteLogSegment.hasMaxTimestamp()
+                                    ? pbRemoteLogSegment.getMaxTimestamp()
+                                    : -1;
                     RemoteLogSegment remoteLogSegment =
                             RemoteLogSegment.Builder.builder()
                                     .tableBucket(tb)
@@ -179,7 +183,7 @@ public class CommonRpcMessageUtils {
                                     .remoteLogStartOffset(
                                             pbRemoteLogSegment.getRemoteLogStartOffset())
                                     .segmentSizeInBytes(pbRemoteLogSegment.getSegmentSizeInBytes())
-                                    .maxTimestamp(-1L) // not use.
+                                    .maxTimestamp(maxTimestamp)
                                     .build();
                     remoteLogSegmentList.add(remoteLogSegment);
                 }

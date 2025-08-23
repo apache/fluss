@@ -45,10 +45,10 @@ import java.util.concurrent.Executors;
  */
 public class RemoteFileDownloader implements Closeable {
 
-    protected final ExecutorService snapshotDownLoadThreadPool;
+    protected final ExecutorService downloadThreadPool;
 
     public RemoteFileDownloader(int threadNum) {
-        snapshotDownLoadThreadPool =
+        downloadThreadPool =
                 Executors.newFixedThreadPool(
                         threadNum,
                         new ExecutorThreadFactory(
@@ -68,7 +68,7 @@ public class RemoteFileDownloader implements Closeable {
     public CompletableFuture<Long> downloadFileAsync(
             FsPathAndFileName fsPathAndFileName, Path targetDirectory) {
         CompletableFuture<Long> future = new CompletableFuture<>();
-        snapshotDownLoadThreadPool.submit(
+        downloadThreadPool.submit(
                 () -> {
                     try {
                         Path targetFilePath =
@@ -108,7 +108,7 @@ public class RemoteFileDownloader implements Closeable {
 
     @Override
     public void close() throws IOException {
-        snapshotDownLoadThreadPool.shutdownNow();
+        downloadThreadPool.shutdownNow();
     }
 
     public void transferAllToDirectory(
@@ -119,8 +119,6 @@ public class RemoteFileDownloader implements Closeable {
         FileDownloadSpec fileDownloadSpec =
                 new FileDownloadSpec(fsPathAndFileNames, targetDirectory);
         FileDownloadUtils.transferAllDataToDirectory(
-                Collections.singleton(fileDownloadSpec),
-                closeableRegistry,
-                snapshotDownLoadThreadPool);
+                Collections.singleton(fileDownloadSpec), closeableRegistry, downloadThreadPool);
     }
 }
