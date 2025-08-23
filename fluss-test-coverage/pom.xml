@@ -160,13 +160,50 @@
                                             <directory>${project.basedir}/../</directory>
                                             <includes>
                                                 <include>fluss-flink/**/target/classes/**</include>
-                                                <include>fluss-lake/**/target/classes/**</include>
                                             </includes>
                                             <excludes>
                                                 <exclude>fluss-test-coverage/**</exclude>
                                                 <exclude>fluss-test-utils/**</exclude>
-                                                <exclude>fluss-flink/**</exclude>
-                                                <exclude>fluss-flink/**/target/classes/com/alibaba/fluss/flink/adapter/**</exclude>
+                                            </excludes>
+                                        </resource>
+                                    </resources>
+                                    <outputDirectory>${project.build.directory}/classes</outputDirectory>
+                                </configuration>
+                            </execution>
+                        </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
+        <profile>
+            <id>test-lake</id>
+            <build>
+                <plugins>
+                    <!-- required by jacoco for the goal: check to work -->
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-resources-plugin</artifactId>
+                        <executions>
+                            <execution>
+                                <id>copy-class-files</id>
+                                <phase>generate-resources</phase>
+                                <goals>
+                                    <goal>copy-resources</goal>
+                                </goals>
+                                <configuration>
+                                    <overwrite>false</overwrite>
+                                    <resources>
+                                        <resource>
+                                            <directory>${project.basedir}/../</directory>
+                                            <includes>
+                                                <include>fluss-lake/**/target/classes/**</include>
+                                                <include>fluss-flink/fluss-flink-1.19/**/target/classes/**</include>
+                                                <include>fluss-flink/fluss-flink-1.18/**/target/classes/**</include>
+                                            </includes>
+                                            <excludes>
+                                                <exclude>fluss-test-coverage/**</exclude>
+                                                <exclude>fluss-test-utils/**</exclude>
                                             </excludes>
                                         </resource>
                                     </resources>
@@ -311,6 +348,9 @@
                                         <exclude>com.alibaba.fluss.flink.sink.*</exclude>
                                         <exclude>
                                             com.alibaba.fluss.flink.metrics.*
+                                        </exclude>
+                                        <exclude>
+                                            com.alibaba.fluss.flink.adapter.*
                                         </exclude>
                                         <!-- end exclude for flink-connector -->
                                         <exclude>com.alibaba.fluss.fs.hdfs.HadoopFsPlugin

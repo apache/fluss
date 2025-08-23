@@ -19,69 +19,45 @@
 
 STAGE_CORE="core"
 STAGE_FLINK="flink"
+STAGE_LAKE="lake"
 
 MODULES_FLINK="\
 fluss-flink,\
 fluss-flink/fluss-flink-common,\
-fluss-flink/fluss-flink-1.20,\
 fluss-flink/fluss-flink-2.1,\
+fluss-flink/fluss-flink-1.20,\
+"
+
+# we move Flink legacy version tests to "lake" module for balancing testing time
+MODULES_LAKE="\
 fluss-flink/fluss-flink-1.19,\
 fluss-flink/fluss-flink-1.18,\
 fluss-lake,\
 fluss-lake/fluss-lake-paimon,\
 fluss-lake/fluss-lake-iceberg,\
-fluss-lake/fluss-lake-lance\
+fluss-lake/fluss-lake-lance
 "
-
-# modules that are only built with JDK 11
-JDK_11_ONLY="fluss-flink/fluss-flink-2.1,fluss-test-coverage"
 
 function get_test_modules_for_stage() {
     local stage=$1
-    local jdk_version=$2
 
     local modules_flink=$MODULES_FLINK
-
-
-    local included_modules=""
-    local excluded_modules=""
+    local modules_lake=$MODULES_LAKE
+    local negated_flink=\!${MODULES_FLINK//,/,\!}
+    local negated_lake=\!${MODULES_LAKE//,/,\!}
+    local modules_core="$negated_flink,$negated_lake"
 
     case ${stage} in
         (${STAGE_CORE})
-            # For core, we exclude all flink modules
-            excluded_modules="$modules_flink";
+            echo "-pl $modules_core"
         ;;
         (${STAGE_FLINK})
-            included_modules="fluss-test-coverage,$modules_flink"
+            echo "-pl fluss-test-coverage,$modules_flink"
+        ;;
+        (${STAGE_LAKE})
+            echo "-pl fluss-test-coverage,$modules_lake"
         ;;
     esac
-
-    # Add JDK 11 only modules to exclusion list if we're using JDK 8
-    if [[ "$jdk_version" == "8" ]]; then
-        if [[ -n "$excluded_modules" ]]; then
-            excluded_modules="$excluded_modules,$JDK_11_ONLY"
-        else
-            excluded_modules="$JDK_11_ONLY"
-        fi
-    fi
-
-    local result="$included_modules"
-    if [[ -n "$excluded_modules" ]]; then
-        if [[ -n "$result" ]]; then
-            result="$result,\!${excluded_modules//,/,\!}"
-        else
-            result=\!${excluded_modules//,/,\!}
-        fi
-    fi
-
-
-    if [[ -n "$result" ]]; then
-           echo "-pl $result"
-       else
-           # If both included_modules and excluded_modules are empty,
-           # don't specify any module restrictions (build all modules)
-           echo ""
-       fi
 }
 
-get_test_modules_for_stage $1 $2
+get_test_modules_for_stage $1
