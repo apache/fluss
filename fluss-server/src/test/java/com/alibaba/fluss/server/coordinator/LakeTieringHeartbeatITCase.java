@@ -42,6 +42,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
@@ -88,8 +89,17 @@ class LakeTieringHeartbeatITCase {
                 coordinatorGateway.lakeTieringHeartbeat(new LakeTieringHeartbeatRequest()).get();
         assertThat(heartbeatResponse.getCoordinatorEpoch()).isEqualTo(INITIAL_COORDINATOR_EPOCH);
 
+        List<PbLakeTieringTableInfo> lakeTieringTableInfos = new ArrayList<>(tableCounts);
         for (int i = 0; i < tableCounts; i++) {
-            verifyGetTableToTier(i);
+            // collect all tiering tables
+            PbLakeTieringTableInfo pbLakeTieringTableInfo = waitGetLakeTieringTableInfo();
+            lakeTieringTableInfos.add(pbLakeTieringTableInfo);
+        }
+        // sort by table id
+        lakeTieringTableInfos.sort(Comparator.comparingLong(PbLakeTieringTableInfo::getTableId));
+        // verify collected tiering table info
+        for (int i = 0; i < tableCounts; i++) {
+            verifyLakeTieringTableInfo(lakeTieringTableInfos.get(i), i);
         }
         // now, no table to tier
         verifyNoAnyTableToTier();
@@ -210,11 +220,6 @@ class LakeTieringHeartbeatITCase {
         LakeTieringHeartbeatRequest heartbeatRequest = new LakeTieringHeartbeatRequest();
         heartbeatRequest.setRequestTable(true);
         return heartbeatRequest;
-    }
-
-    private void verifyGetTableToTier(long expectTableId) {
-        PbLakeTieringTableInfo pbLakeTieringTableInfo = waitGetLakeTieringTableInfo();
-        verifyLakeTieringTableInfo(pbLakeTieringTableInfo, expectTableId);
     }
 
     private void verifyFencedTieringEpochException(
