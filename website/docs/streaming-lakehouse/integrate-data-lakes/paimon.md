@@ -74,12 +74,12 @@ To read only data stored in Paimon, use the `$lake` suffix in the table name. Th
 -- Assume we have a table named `orders`
 
 -- Read from Paimon
-SELECT COUNT(*) FROM orders$lake;
+SELECT COUNT(*) FROM `orders`$lake;
 ```
 
 ```sql title="Flink SQL"
 -- We can also query the system tables
-SELECT * FROM orders$lake$snapshots;
+SELECT * FROM `orders`$lake$snapshots;
 ```
 
 When you specify the `$lake` suffix in a query, the table behaves like a standard Paimon table and inherits all its capabilities.  
@@ -99,7 +99,7 @@ This query may run slower than reading only from Paimon, but it returns the most
 
 ### Reading with other Engines
 
-Since the data tiered to Paimon from Fluss is stored as a standard Paimon table, you can use any engine that supports Paimon to read it. Below is an example using [StarRocks](https://paimon.apache.org/docs/master/engines/starrocks/):
+Since the data tiered to Paimon from Fluss is stored as a standard Paimon table, you can use any engine that supports Paimon to read it. Below is an example using [StarRocks](https://paimon.apache.org/docs/master/ecosystem/starrocks/):
 
 First, create a Paimon catalog in StarRocks:
 

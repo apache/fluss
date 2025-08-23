@@ -18,8 +18,7 @@ With these data lake formats, you will get into a contradictory situation:
 
 1. If you require low latency, then you must write and commit frequently, resulting in many small Parquet files. This becomes inefficient for
 reads which must now deal with masses of small files.
-2. If you require reading efficiency, then you accumulate data until you can write to large Parquet files, but this introduces
-but this results in much higher latency.
+2. If you require reading efficiency, then you accumulate data until you can write to large Parquet files, but this results in much higher latency.
 
 Overall, these data lake formats typically achieve data freshness at best within minute-level granularity, even under optimal usage conditions.
 
