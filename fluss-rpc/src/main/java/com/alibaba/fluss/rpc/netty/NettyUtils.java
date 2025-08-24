@@ -17,19 +17,19 @@
 
 package com.alibaba.fluss.rpc.netty;
 
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.Channel;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.epoll.Epoll;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.epoll.EpollEventLoopGroup;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.epoll.EpollServerSocketChannel;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.epoll.EpollSocketChannel;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.nio.NioEventLoopGroup;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.ServerSocketChannel;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.nio.NioServerSocketChannel;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.nio.NioSocketChannel;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.unix.Errors;
-import com.alibaba.fluss.shaded.netty4.io.netty.util.concurrent.DefaultThreadFactory;
+import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.fluss.shaded.netty4.io.netty.channel.epoll.Epoll;
+import org.apache.fluss.shaded.netty4.io.netty.channel.epoll.EpollEventLoopGroup;
+import org.apache.fluss.shaded.netty4.io.netty.channel.epoll.EpollServerSocketChannel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.epoll.EpollSocketChannel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.nio.NioEventLoopGroup;
+import org.apache.fluss.shaded.netty4.io.netty.channel.socket.ServerSocketChannel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.socket.nio.NioServerSocketChannel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.socket.nio.NioSocketChannel;
+import org.apache.fluss.shaded.netty4.io.netty.channel.unix.Errors;
+import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.DefaultThreadFactory;
 
 import java.util.concurrent.CompletableFuture;
 

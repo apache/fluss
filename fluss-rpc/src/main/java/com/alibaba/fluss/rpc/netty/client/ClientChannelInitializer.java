@@ -18,8 +18,9 @@
 package com.alibaba.fluss.rpc.netty.client;
 
 import com.alibaba.fluss.rpc.netty.NettyChannelInitializer;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
+
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
+import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 
 /**
  * A specialized {@link ChannelInitializer} for initializing {@link SocketChannel} instances that

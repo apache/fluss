@@ -53,8 +53,6 @@ import com.alibaba.fluss.row.encode.CompactedRowEncoder;
 import com.alibaba.fluss.row.encode.RowEncoder;
 import com.alibaba.fluss.row.encode.ValueEncoder;
 import com.alibaba.fluss.row.indexed.IndexedRow;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.DataTypeRoot;
 import com.alibaba.fluss.types.RowType;
@@ -62,6 +60,9 @@ import com.alibaba.fluss.utils.BytesUtils;
 import com.alibaba.fluss.utils.CloseableIterator;
 import com.alibaba.fluss.utils.FlussPaths;
 import com.alibaba.fluss.utils.types.Tuple2;
+
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 
 import java.io.File;
 import java.util.ArrayList;

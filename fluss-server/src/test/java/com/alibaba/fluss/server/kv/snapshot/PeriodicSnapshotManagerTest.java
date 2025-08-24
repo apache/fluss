@@ -37,8 +37,8 @@ import java.util.concurrent.ExecutionException;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RunnableFuture;
 
-import static com.alibaba.fluss.shaded.guava32.com.google.common.collect.Iterators.getOnlyElement;
 import static java.util.concurrent.TimeUnit.MILLISECONDS;
+import static org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators.getOnlyElement;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link PeriodicSnapshotManager} . */

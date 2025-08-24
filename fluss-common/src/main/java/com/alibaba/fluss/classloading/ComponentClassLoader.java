@@ -18,8 +18,9 @@
 package com.alibaba.fluss.classloading;
 
 import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Iterators;
 import com.alibaba.fluss.utils.function.FunctionWithException;
+
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 
 import java.io.IOException;
 import java.io.InputStream;

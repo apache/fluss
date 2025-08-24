@@ -18,13 +18,14 @@
 package com.alibaba.fluss.testutils;
 
 import com.alibaba.fluss.record.send.Send;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelOutboundInvoker;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelProgressivePromise;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelPromise;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.FileRegion;
-import com.alibaba.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
+
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOutboundInvoker;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelProgressivePromise;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelPromise;
+import org.apache.fluss.shaded.netty4.io.netty.channel.FileRegion;
+import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -33,7 +34,7 @@ import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.nio.channels.WritableByteChannel;
 
-import static com.alibaba.fluss.shaded.netty4.io.netty.buffer.Unpooled.wrappedBuffer;
+import static org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled.wrappedBuffer;
 
 /** A testing implementation of {@link ChannelOutboundInvoker} that writes to a {@link ByteBuf}. */
 public class ByteBufChannel implements ChannelOutboundInvoker {

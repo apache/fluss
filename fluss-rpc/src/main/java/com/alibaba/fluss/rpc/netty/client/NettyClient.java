@@ -29,13 +29,13 @@ import com.alibaba.fluss.rpc.netty.NettyUtils;
 import com.alibaba.fluss.rpc.protocol.ApiKeys;
 import com.alibaba.fluss.security.auth.AuthenticationFactory;
 import com.alibaba.fluss.security.auth.ClientAuthenticator;
-import com.alibaba.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelOption;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
 import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.concurrent.FutureUtils;
 
+import org.apache.fluss.shaded.netty4.io.netty.bootstrap.Bootstrap;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOption;
+import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

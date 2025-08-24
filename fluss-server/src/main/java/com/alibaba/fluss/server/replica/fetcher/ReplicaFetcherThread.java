@@ -39,12 +39,12 @@ import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
 import com.alibaba.fluss.server.replica.Replica;
 import com.alibaba.fluss.server.replica.ReplicaManager;
 import com.alibaba.fluss.server.replica.fetcher.LeaderEndpoint.FetchData;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.FlussPaths;
 import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
 import com.alibaba.fluss.utils.log.FairBucketStatusMap;
 
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

@@ -20,8 +20,9 @@ package com.alibaba.fluss.utils.json;
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.metadata.Schema;
 import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 
 import java.io.IOException;
 import java.util.ArrayList;

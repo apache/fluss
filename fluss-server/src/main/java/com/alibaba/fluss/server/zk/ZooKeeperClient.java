@@ -65,13 +65,13 @@ import com.alibaba.fluss.server.zk.data.ZkData.TableSequenceIdZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.TableZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.TablesZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.WriterIdZNode;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.api.transaction.CuratorOp;
-import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
-import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
-import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 import com.alibaba.fluss.utils.types.Tuple2;
 
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.transaction.CuratorOp;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

@@ -17,7 +17,7 @@
 
 package com.alibaba.fluss.tools.ci.utils.shared;
 
-import com.alibaba.fluss.shaded.guava32.com.google.common.graph.Traverser;
+import org.apache.fluss.shaded.guava32.com.google.common.graph.Traverser;
 
 import javax.annotation.Nullable;
 

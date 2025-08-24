@@ -92,12 +92,12 @@
         <skip.on.java8>false</skip.on.java8>
 
         <!-- library versions in fluss-shaded -->
-        <fluss.shaded.version>2.2</fluss.shaded.version>
+        <fluss.shaded.version>1.0-incubating</fluss.shaded.version>
         <guava.version>32.1.3-jre</guava.version>
         <jackson.version>2.15.3</jackson.version>
         <zookeeper.version>3.8.3</zookeeper.version>
         <curator.version>5.4.0</curator.version>
-        <netty.version>4.1.104</netty.version>
+        <netty.version>4.1.104.Final</netty.version>
         <arrow.version>15.0.0</arrow.version>
         <paimon.version>1.2.0</paimon.version>
         <!--    todo: Revisit to add support as per Iceberg 1.9.1 post #1195 merge for Java 11 support-->
@@ -314,19 +314,19 @@
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-guava</artifactId>
                 <version>${guava.version}-${fluss.shaded.version}</version>
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-jackson</artifactId>
                 <version>${jackson.version}-${fluss.shaded.version}</version>
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-zookeeper</artifactId>
                 <version>${zookeeper.version}-${fluss.shaded.version}</version>
             </dependency>
@@ -339,13 +339,13 @@
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-netty</artifactId>
                 <version>${netty.version}-${fluss.shaded.version}</version>
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-arrow</artifactId>
                 <version>${arrow.version}-${fluss.shaded.version}</version>
             </dependency>

@@ -27,13 +27,13 @@ import com.alibaba.fluss.memory.TestingMemorySegmentPool;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import com.alibaba.fluss.testutils.DataTestUtils;
 import com.alibaba.fluss.utils.CloseableIterator;
 
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.commons.lang3.StringUtils;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

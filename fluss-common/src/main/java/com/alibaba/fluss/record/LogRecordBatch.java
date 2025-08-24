@@ -19,10 +19,11 @@ package com.alibaba.fluss.record;
 
 import com.alibaba.fluss.annotation.PublicEvolving;
 import com.alibaba.fluss.metadata.LogFormat;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.CloseableIterator;
+
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 
 import java.util.Iterator;
 

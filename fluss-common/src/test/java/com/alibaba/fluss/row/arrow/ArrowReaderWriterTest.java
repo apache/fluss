@@ -28,14 +28,14 @@ import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
 import com.alibaba.fluss.row.columnar.ColumnarRow;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.utils.ArrowUtils;
 
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;

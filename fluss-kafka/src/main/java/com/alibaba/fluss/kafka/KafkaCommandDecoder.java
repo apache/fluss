@@ -18,14 +18,14 @@
 package com.alibaba.fluss.kafka;
 
 import com.alibaba.fluss.rpc.netty.server.RequestChannel;
-import com.alibaba.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
-import com.alibaba.fluss.shaded.netty4.io.netty.channel.SimpleChannelInboundHandler;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
-import com.alibaba.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
-import com.alibaba.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
 import com.alibaba.fluss.utils.MathUtils;
 
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
+import org.apache.fluss.shaded.netty4.io.netty.channel.SimpleChannelInboundHandler;
+import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
+import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
+import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
 import org.apache.kafka.common.errors.LeaderNotAvailableException;
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.requests.AbstractRequest;

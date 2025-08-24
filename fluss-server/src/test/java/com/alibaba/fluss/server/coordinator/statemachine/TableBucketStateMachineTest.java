@@ -40,10 +40,10 @@ import com.alibaba.fluss.server.zk.NOPErrorHandler;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
 import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
-import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Sets;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
 
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Sets;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

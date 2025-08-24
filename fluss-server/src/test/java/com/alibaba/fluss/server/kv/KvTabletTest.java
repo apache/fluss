@@ -48,13 +48,13 @@ import com.alibaba.fluss.server.log.FetchIsolation;
 import com.alibaba.fluss.server.log.LogAppendInfo;
 import com.alibaba.fluss.server.log.LogTablet;
 import com.alibaba.fluss.server.log.LogTestUtils;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import com.alibaba.fluss.types.DataTypes;
 import com.alibaba.fluss.types.RowType;
 import com.alibaba.fluss.types.StringType;
 import com.alibaba.fluss.utils.clock.SystemClock;
 import com.alibaba.fluss.utils.concurrent.FlussScheduler;
 
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

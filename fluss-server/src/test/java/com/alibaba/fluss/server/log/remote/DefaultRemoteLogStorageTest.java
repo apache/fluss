@@ -24,9 +24,9 @@ import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.server.log.LogTablet;
 import com.alibaba.fluss.server.log.remote.RemoteLogStorage.IndexType;
-import com.alibaba.fluss.shaded.guava32.com.google.common.io.Files;
 import com.alibaba.fluss.utils.FlussPaths;
 
+import org.apache.fluss.shaded.guava32.com.google.common.io.Files;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;

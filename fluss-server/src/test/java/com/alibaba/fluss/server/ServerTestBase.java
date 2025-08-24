@@ -27,9 +27,9 @@ import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.server.zk.ZooKeeperExtension;
 import com.alibaba.fluss.server.zk.data.ZkData.CoordinatorZNode;
 import com.alibaba.fluss.server.zk.data.ZkData.ServerIdZNode;
-import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
 
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;

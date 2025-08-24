@@ -17,8 +17,9 @@
 
 package com.alibaba.fluss.server.zk.data;
 
-import com.alibaba.fluss.shaded.guava32.com.google.common.collect.Maps;
 import com.alibaba.fluss.utils.json.JsonSerdeTestBase;
+
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Maps;
 
 import java.util.Collections;
 

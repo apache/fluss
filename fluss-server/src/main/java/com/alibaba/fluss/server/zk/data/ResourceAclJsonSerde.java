@@ -21,10 +21,11 @@ import com.alibaba.fluss.security.acl.AccessControlEntry;
 import com.alibaba.fluss.security.acl.FlussPrincipal;
 import com.alibaba.fluss.security.acl.OperationType;
 import com.alibaba.fluss.security.acl.PermissionType;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import com.alibaba.fluss.utils.json.JsonDeserializer;
 import com.alibaba.fluss.utils.json.JsonSerializer;
+
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 
 import java.io.IOException;
 import java.util.Collection;

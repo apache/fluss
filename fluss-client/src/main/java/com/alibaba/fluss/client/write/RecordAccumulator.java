@@ -35,12 +35,12 @@ import com.alibaba.fluss.metrics.MetricNames;
 import com.alibaba.fluss.record.LogRecordBatch;
 import com.alibaba.fluss.row.arrow.ArrowWriter;
 import com.alibaba.fluss.row.arrow.ArrowWriterPool;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import com.alibaba.fluss.utils.CopyOnWriteMap;
 import com.alibaba.fluss.utils.MathUtils;
 import com.alibaba.fluss.utils.clock.Clock;
 
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
