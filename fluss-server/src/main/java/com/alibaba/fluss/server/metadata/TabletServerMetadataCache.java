@@ -21,6 +21,7 @@ import com.alibaba.fluss.annotation.VisibleForTesting;
 import com.alibaba.fluss.cluster.ServerNode;
 import com.alibaba.fluss.cluster.TabletServerInfo;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
+import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.coordinator.MetadataManager;
@@ -158,6 +159,10 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
             // https://github.com/alibaba/fluss/issues/483
             return getPartitionMetadataFromZk(partitionPath, zkClient);
         }
+    }
+
+    public boolean contains(TableBucket tableBucket) {
+        return serverMetadataSnapshot.contains(tableBucket);
     }
 
     public void updateClusterMetadata(ClusterMetadata clusterMetadata) {
