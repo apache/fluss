@@ -9,15 +9,15 @@ supports HDFS as a remote storage.
 
 
 ## Configurations setup
-To enabled HDFS as remote storage, you need to define the hdfs path as remote storage in Fluss' `server.yaml`:
+To enable HDFS as remote storage, you need to define the hdfs path as remote storage in Fluss' `server.yaml`:
 ```yaml title="conf/server.yaml"
-# The dir that used to be as the remote storage of Fluss
+# The directory used as the remote storage for Fluss
 remote.data.dir: hdfs://namenode:50010/path/to/remote/storage
 ```
 
 ### Configure Hadoop related configurations
 
-Sometimes, you may want to configure how Fluss accesses your Hadoop filesystem, Fluss supports three methods for loading Hadoop configuration, listed in order of priority (highest to lowest):
+Sometimes, you may want to configure how Fluss accesses your Hadoop filesystem. Fluss supports three methods for loading Hadoop configuration, listed in order of priority (highest to lowest):
 
 1. **Fluss Configuration with `fluss.hadoop.*` Prefix.** Any configuration key prefixed with `fluss.hadoop.` in your `server.yaml` will be passed directly to Hadoop configuration, with the prefix stripped.
 2. **Environment Variables.** The system automatically searches for Hadoop configuration files in these locations:
@@ -30,8 +30,8 @@ Sometimes, you may want to configure how Fluss accesses your Hadoop filesystem, 
 Here's an example of setting up the hadoop configuration in server.yaml:
 
 ```yaml title="conf/server.yaml"
-# The all following hadoop related configurations is just for a demonstration of how 
-# to configure hadoop related configurations in `server.yaml`, you may not need configure them
+# All the following Hadoop-related configurations are just for demonstration of how 
+# to configure hadoop related configurations in `server.yaml`, you may not need to configure them
 
 # Basic HA Hadoop configuration using fluss.hadoop.* prefix  
 fluss.hadoop.fs.defaultFS: hdfs://mycluster
