@@ -230,40 +230,40 @@ public class FlinkSourceEnumerator
         }
 
         if (isPartitioned) {
-            if (streaming && !lakeEnabled && scanPartitionDiscoveryIntervalMs > 0) {
-                // should do partition discovery
-                LOG.info(
-                        "Starting the FlussSourceEnumerator for table {} "
-                                + "with new partition discovery interval of {} ms.",
-                        tablePath,
-                        scanPartitionDiscoveryIntervalMs);
-                // discover new partitions and handle new partitions
-                context.callAsync(
-                        this::listPartitions,
-                        this::checkPartitionChanges,
-                        0,
-                        scanPartitionDiscoveryIntervalMs);
-            } else if (streaming && !lakeEnabled && scanPartitionDiscoveryIntervalMs <= 0) {
-                // just call once
-                LOG.info(
-                        "Starting the FlussSourceEnumerator for table {} without partition discovery.",
-                        tablePath);
-                context.callAsync(this::listPartitions, this::checkPartitionChanges);
+            if (streaming) {
+                if (scanPartitionDiscoveryIntervalMs > 0) {
+                    // should do partition discovery
+                    LOG.info(
+                            "Starting the FlussSourceEnumerator for table {} "
+                                    + "with new partition discovery interval of {} ms.",
+                            tablePath,
+                            scanPartitionDiscoveryIntervalMs);
+                    // discover new partitions and handle new partitions
+                    context.callAsync(
+                            this::listPartitions,
+                            this::checkAndHandlePartitionChanges,
+                            0,
+                            scanPartitionDiscoveryIntervalMs);
+                } else {
+                    // just call once
+                    LOG.info(
+                            "Starting the FlussSourceEnumerator for table {} without partition discovery.",
+                            tablePath);
+                    context.callAsync(this::listPartitions, this::checkAndHandlePartitionChanges);
+                }
             } else {
-                genHybridLakeAndFlussSplits();
+                genHybridSplitsInBatchMode();
             }
-
         } else {
-            if (streaming && !lakeEnabled) {
-                // init bucket splits and assign
-                context.callAsync(this::initNonPartitionedSplits, this::handleSplitsAdd);
+            if (streaming) {
+                genHybridSplitsInStreamNonPartitionedMode();
             } else {
-                genHybridLakeAndFlussSplits();
+                genHybridSplitsInBatchMode();
             }
         }
     }
 
-    private void genHybridLakeAndFlussSplits() {
+    private void genHybridSplitsInBatchMode() {
         if (lakeEnabled) {
             context.callAsync(this::getLakeSplit, this::handleSplitsAdd);
         } else {
@@ -271,6 +271,32 @@ public class FlinkSourceEnumerator
                     String.format(
                             "Batch only supports when table option '%s' is set to true.",
                             ConfigOptions.TABLE_DATALAKE_ENABLED));
+        }
+    }
+
+    private void genHybridSplitsInStreamNonPartitionedMode() {
+        if (lakeEnabled) {
+            context.callAsync(this::getLakeSplit, this::handleSplitsAdd);
+        } else {
+            // init bucket splits and assign
+            context.callAsync(this::initNonPartitionedSplits, this::handleSplitsAdd);
+        }
+    }
+
+    private void genHybridSplitsInStreamPartitionedMode(PartitionChange partitionChange) {
+        if (lakeEnabled) {
+            Map<Long, String> newPartitionsNameById =
+                    partitionChange.newPartitions.stream()
+                            .collect(
+                                    Collectors.toMap(
+                                            Partition::getPartitionId,
+                                            Partition::getPartitionName));
+
+            context.callAsync(() -> getLakeSplit(newPartitionsNameById), this::handleSplitsAdd);
+        } else {
+            context.callAsync(
+                    () -> initPartitionedSplits(partitionChange.newPartitions),
+                    this::handleSplitsAdd);
         }
     }
 
@@ -332,7 +358,7 @@ public class FlinkSourceEnumerator
     }
 
     /** Init the splits for Fluss. */
-    private void checkPartitionChanges(Set<PartitionInfo> partitionInfos, Throwable t) {
+    private void checkAndHandlePartitionChanges(Set<PartitionInfo> partitionInfos, Throwable t) {
         if (closed) {
             // skip if the enumerator is closed to avoid unnecessary error logs
             return;
@@ -350,8 +376,7 @@ public class FlinkSourceEnumerator
         handlePartitionsRemoved(partitionChange.removedPartitions);
 
         // handle new partitions
-        context.callAsync(
-                () -> initPartitionedSplits(partitionChange.newPartitions), this::handleSplitsAdd);
+        genHybridSplitsInStreamPartitionedMode(partitionChange);
     }
 
     private PartitionChange getPartitionChange(Set<PartitionInfo> fetchedPartitionInfos) {
@@ -510,7 +535,8 @@ public class FlinkSourceEnumerator
         return splits;
     }
 
-    private List<SourceSplitBase> getLakeSplit() throws Exception {
+    private List<SourceSplitBase> getLakeSplit(Map<Long, String> newPartitionsNameById)
+            throws Exception {
         LakeSplitGenerator lakeSplitGenerator =
                 new LakeSplitGenerator(
                         tableInfo,
@@ -520,7 +546,11 @@ public class FlinkSourceEnumerator
                         stoppingOffsetsInitializer,
                         tableInfo.getNumBuckets(),
                         this::listPartitions);
-        return lakeSplitGenerator.generateHybridLakeSplits();
+        return lakeSplitGenerator.generateHybridLakeSplits(newPartitionsNameById);
+    }
+
+    private List<SourceSplitBase> getLakeSplit() throws Exception {
+        return getLakeSplit(Collections.EMPTY_MAP);
     }
 
     private boolean ignoreTableBucket(TableBucket tableBucket) {
