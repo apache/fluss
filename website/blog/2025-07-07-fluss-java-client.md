@@ -382,4 +382,4 @@ This IoT sensor scenario is just one example of Fluss in action and also highlig
 Fluss's ability to handle high-throughput append streams and fast key-based lookups makes it well-suited for real-time analytics use cases like this and many others. 
 With this foundation, you can explore more advanced features of Fluss to build robust real-time data applications. Happy streaming! 🌊 
 
-And before you go 😊 don’t forget to give Fluss 🌊 some ❤️ via ⭐ on [GitHub](https://github.com/alibaba/fluss)
+And before you go 😊 don’t forget to give Fluss 🌊 some ❤️ via ⭐ on [GitHub](https://github.com/apache/fluss)
