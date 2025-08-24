@@ -411,7 +411,7 @@
                                         <exclude>com.alibaba.fluss.flink.tiering.committer.CommittableMessageTypeInfo*
                                         </exclude>
                                         <exclude>
-                                            com.alibaba.fluss.flink.tiering.committer.LakeTieringCommitOperatorFactory
+                                            com.alibaba.fluss.flink.tiering.LakeTieringJobBuilder
                                         </exclude>
                                         <exclude>com.alibaba.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <!-- end exclude for flink tiering service -->
