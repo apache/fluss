@@ -12,10 +12,10 @@ sidebar_position: 3
 
 ## Configurations setup
 
-To enabled OSS as remote storage, there are some required configurations that must be add to Fluss' `server.yaml`:
+To enable OSS as remote storage, there are some required configurations that must be added to Fluss' `server.yaml`:
 
 ```yaml
-# The dir that used to be as the remote storage of Fluss
+# The directory used as the remote storage for Fluss
 remote.data.dir: oss://<your-bucket>/path/to/remote/storage
 # Aliyun OSS endpoint to connect to, such as: oss-cn-hangzhou.aliyuncs.com
 fs.oss.endpoint: <your-endpoint>
@@ -35,7 +35,7 @@ fs.oss.accessKeySecret: <your-secret-key>
 # Option 2: Secure credential provider
 fs.oss.credentials.provider: <your-credentials-provider>
 ```
-To avoid exposing sensitive access key information directly in the `server.yaml`, you can choose option2 to use a credential provider by setting the `fs.oss.credentials.provider` property.
+To avoid exposing sensitive access key information directly in the `server.yaml`, you can choose option 2 to use a credential provider by setting the `fs.oss.credentials.provider` property.
 
 For example, to use environment variables for credential management:
 ```yaml
@@ -50,14 +50,10 @@ This approach enhances security by keeping sensitive credentials out of configur
 
 ## Token-based Authentication
 
-For client to access the remote storage such as reading snapshot or tiered log, client must obtain a STS token from Fluss cluster. So you must
-configure `fs.oss.sts.endpoint` and `fs.oss.roleArn`.
-`fs.oss.sts.endpoint` is the STS endpoint to obtain a STS token, such as `sts.cn-hangzhou.aliyuncs.com` for hangzhou region, you can 
-find different endpoints for different regions in [Aliyun STS Endpoint](https://help.aliyun.com/zh/ram/developer-reference/api-sts-2015-04-01-endpoint).
-`fs.oss.roleArn` is for the role of the STS token obtained from the STS endpoint, it should be in the format of `acs:ram::<aliyun-account-id>:role/<role-name>`, 
-such as `acs:ram::123456789012:role/testrole`. Since client will use the STS token to read the remote storage, the role must be granted with the read permission of the remote storage. 
-See more detail in [AssumeRole](https://help.aliyun.com/zh/ram/developer-reference/api-sts-2015-04-01-assumerole).
+For a client to access the remote storage, such as reading a snapshot or tiered log, it must obtain an STS token from the Fluss cluster. You must configure both `fs.oss.sts.endpoint` and `fs.oss.roleArn`.
 
-Apart from the above configurations, you can also define the configuration keys mentioned in the [Hadoop OSS documentation](http://hadoop.apache.org/docs/current/hadoop-aliyun/tools/hadoop-aliyun/index.html)
-in the Fluss' `server.yaml`. These configurations defines in Hadoop OSS documentation are advanced configurations which are usually used by performance tuning.
+`fs.oss.sts.endpoint` is the STS endpoint to obtain an STS token, such as `sts.cn-hangzhou.aliyuncs.com` for the Hangzhou region. You can find endpoints for other regions in the [Aliyun STS Endpoint documentation](https://www.alibabacloud.com/help/en/ram/developer-reference/api-sts-2015-04-01-endpoint).
+`fs.oss.roleArn` is for the role of the STS token obtained from the STS endpoint. It should be in the format of `acs:ram::<aliyun-account-id>:role/<role-name>`, such as `acs:ram::123456789012:role/testrole`. Since the client will use the STS token to read the remote storage, the role must be granted read permission for the remote storage. See more details in [AssumeRole](https://www.alibabacloud.com/help/en/ram/developer-reference/api-sts-2015-04-01-assumerole).
 
+Apart from the above configurations, you can also define the configuration keys mentioned in the [Hadoop OSS documentation](http://hadoop.apache.org/docs/current/hadoop-aliyun/tools/hadoop-aliyun/index.html) in the Fluss' `server.yaml`. 
+These configurations defined in the Hadoop OSS documentation are advanced configurations, usually used for performance tuning.
