@@ -74,12 +74,12 @@ To read only data stored in Paimon, use the `$lake` suffix in the table name. Th
 -- Assume we have a table named `orders`
 
 -- Read from Paimon
-SELECT COUNT(*) FROM `orders`$lake;
+SELECT COUNT(*) FROM orders$lake;
 ```
 
 ```sql title="Flink SQL"
 -- We can also query the system tables
-SELECT * FROM `orders`$lake$snapshots;
+SELECT * FROM orders$lake$snapshots;
 ```
 
 When you specify the `$lake` suffix in a query, the table behaves like a standard Paimon table and inherits all its capabilities.  
