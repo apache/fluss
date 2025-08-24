@@ -28,6 +28,7 @@ import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -37,6 +38,7 @@ import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.ArrayList;
+import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -126,14 +128,14 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testReadLogTableInStreamingMode(boolean isPartitioned) throws Exception {
+    void testReadLogTableInStreamMode(boolean isPartitioned) throws Exception {
         // first of all, start tiering
         JobClient jobClient = buildTieringJob(execEnv);
 
         String tableName = "stream_logTable_" + (isPartitioned ? "partitioned" : "non_partitioned");
 
         TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
-        List<Row> writtenRows = new ArrayList<>();
+        List<Row> writtenRows = new LinkedList<>();
         long tableId = prepareLogTable(t1, DEFAULT_BUCKET_NUM, isPartitioned, writtenRows);
         // wait until records has been synced
         waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
@@ -145,8 +147,6 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
                 streamTEnv.executeSql("select * from " + tableName).collect();
         assertResultsIgnoreOrder(
                 actual, writtenRows.stream().map(Row::toString).collect(Collectors.toList()), true);
-        //        assertQueryResultExactOrder(streamTEnv, "select * from " + tableName,
-        // writtenRows.stream().map(Row::toString).collect(Collectors.toList()));
 
         // can database sync job
         jobClient.cancel().get();
@@ -161,6 +161,30 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
                 actual, writtenRows.stream().map(Row::toString).collect(Collectors.toList()), true);
     }
 
+    @Test
+    void testReadLogTableInStreamDiscoveryPartitionedMode() throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName = "stream_logTable_discovery_partitioned";
+
+        TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
+        List<Row> writtenRows = new LinkedList<>();
+        long tableId = prepareLogTable(t1, DEFAULT_BUCKET_NUM, true, writtenRows);
+        // wait until records has been synced
+        waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, true);
+
+        CloseableIterator<Row> actual =
+                streamTEnv.executeSql("select * from " + tableName).collect();
+        assertResultsIgnoreOrder(
+                actual, writtenRows.stream().map(Row::toString).collect(Collectors.toList()), true);
+
+        writtenRows.addAll(writeFullTypeRows(t1, 10, "2027"));
+        actual = streamTEnv.executeSql("select * from " + tableName).collect();
+        assertResultsIgnoreOrder(
+                actual, writtenRows.stream().map(Row::toString).collect(Collectors.toList()), true);
+    }
+
     private long prepareLogTable(
             TablePath tablePath, int bucketNum, boolean isPartitioned, List<Row> flinkRows)
             throws Exception {
@@ -168,7 +192,8 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         long t1Id = createFullTypeLogTable(tablePath, bucketNum, isPartitioned);
         if (isPartitioned) {
             Map<Long, String> partitionNameById = waitUntilPartitions(tablePath);
-            for (String partition : partitionNameById.values()) {
+            for (String partition :
+                    partitionNameById.values().stream().sorted().collect(Collectors.toList())) {
                 for (int i = 0; i < 3; i++) {
                     flinkRows.addAll(writeFullTypeRows(tablePath, 10, partition));
                 }
