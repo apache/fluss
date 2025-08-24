@@ -75,7 +75,8 @@ public class LakeSplitGenerator {
         this.listPartitionSupplier = listPartitionSupplier;
     }
 
-    public List<SourceSplitBase> generateHybridLakeSplits() throws Exception {
+    public List<SourceSplitBase> generateHybridLakeSplits(Map<Long, String> newPartitionNameById)
+            throws Exception {
         // get the file store
         LakeSnapshot lakeSnapshotInfo =
                 flussAdmin.getLatestLakeSnapshot(tableInfo.getTablePath()).get();
@@ -95,13 +96,19 @@ public class LakeSplitGenerator {
         }
 
         if (isPartitioned) {
-            Set<PartitionInfo> partitionInfos = listPartitionSupplier.get();
-            Map<Long, String> partitionNameById =
-                    partitionInfos.stream()
-                            .collect(
-                                    Collectors.toMap(
-                                            PartitionInfo::getPartitionId,
-                                            PartitionInfo::getPartitionName));
+            Map<Long, String> partitionNameById;
+            if (newPartitionNameById.isEmpty()) {
+                Set<PartitionInfo> partitionInfos = listPartitionSupplier.get();
+                partitionNameById =
+                        partitionInfos.stream()
+                                .collect(
+                                        Collectors.toMap(
+                                                PartitionInfo::getPartitionId,
+                                                PartitionInfo::getPartitionName));
+            } else {
+                partitionNameById = newPartitionNameById;
+            }
+
             return generatePartitionTableSplit(
                     lakeSplits,
                     isLogTable,
