@@ -17,6 +17,7 @@
 
 package com.alibaba.fluss.flink.source.reader.fetcher;
 
+import com.alibaba.fluss.flink.adapter.SingleThreadFetcherManagerAdapter;
 import com.alibaba.fluss.flink.source.reader.FlinkSourceSplitReader;
 import com.alibaba.fluss.flink.source.reader.RecordAndPos;
 import com.alibaba.fluss.flink.source.split.SourceSplitBase;
@@ -26,7 +27,6 @@ import org.apache.flink.annotation.Internal;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.SourceReaderBase;
-import org.apache.flink.connector.base.source.reader.fetcher.SingleThreadFetcherManager;
 import org.apache.flink.connector.base.source.reader.fetcher.SplitFetcher;
 import org.apache.flink.connector.base.source.reader.fetcher.SplitFetcherTask;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
@@ -46,10 +46,17 @@ import java.util.function.Supplier;
  */
 @Internal
 public class FlinkSourceFetcherManager
-        extends SingleThreadFetcherManager<RecordAndPos, SourceSplitBase> {
+        extends SingleThreadFetcherManagerAdapter<RecordAndPos, SourceSplitBase> {
 
     private static final Logger LOG = LoggerFactory.getLogger(FlinkSourceFetcherManager.class);
 
+    /**
+     * Creates a new SplitFetcherManager with a single I/O threads.
+     *
+     * @param splitReaderSupplier The factory for the split reader that connects to the source
+     *     system.
+     * @param splitFinishedHook Hook for handling finished splits in split fetchers.
+     */
     /**
      * Creates a new SplitFetcherManager with a single I/O threads.
      *

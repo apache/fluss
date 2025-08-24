@@ -1,22 +1,19 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
+  ~  Copyright (c) 2025 Alibaba Group Holding Ltd.
+  ~
+  ~  Licensed under the Apache License, Version 2.0 (the "License");
+  ~  you may not use this file except in compliance with the License.
+  ~  You may obtain a copy of the License at
+  ~
+  ~      http://www.apache.org/licenses/LICENSE-2.0
+  ~
+  ~  Unless required by applicable law or agreed to in writing, software
+  ~  distributed under the License is distributed on an "AS IS" BASIS,
+  ~  WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+  ~  See the License for the specific language governing permissions and
+  ~  limitations under the License.
+  -->
 <project xmlns="http://maven.apache.org/POM/4.0.0"
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
@@ -27,13 +24,11 @@
         <version>0.8-SNAPSHOT</version>
     </parent>
 
-    <artifactId>fluss-flink-1.18</artifactId>
-
-    <name>Fluss : Engine Flink : 1.18</name>
-
+    <artifactId>fluss-flink-2.1</artifactId>
+    <name>Fluss : Engine Flink : 2.1 </name>
     <properties>
-        <flink.major.version>1.18</flink.major.version>
-        <flink.minor.version>1.18.1</flink.minor.version>
+        <flink.major.version>2.1</flink.major.version>
+        <flink.minor.version>2.1.0</flink.minor.version>
     </properties>
 
     <dependencies>
@@ -71,13 +66,6 @@
             <scope>provided</scope>
         </dependency>
 
-        <dependency>
-            <groupId>org.apache.flink</groupId>
-            <artifactId>flink-streaming-java</artifactId>
-            <version>${flink.minor.version}</version>
-            <scope>provided</scope>
-        </dependency>
-
         <!-- test dependency -->
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
@@ -105,9 +93,8 @@
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-connector-base</artifactId>
             <version>${flink.minor.version}</version>
-            <scope>provided</scope>
+            <scope>test</scope>
         </dependency>
-
 
         <dependency>
             <groupId>com.alibaba.fluss</groupId>
@@ -167,6 +154,17 @@
         <plugins>
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <!-- compilation of main sources -->
+                    <skipMain>${skip.on.java8}</skipMain>
+                    <!-- compilation of test sources -->
+                    <skip>${skip.on.java8}</skip>
+                </configuration>
+            </plugin>
+
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-surefire-plugin</artifactId>
                 <version>3.0.0-M5</version>
                 <executions>
@@ -179,6 +177,7 @@
                             <goal>test</goal>
                         </goals>
                         <configuration>
+                            <skip>${skip.on.java8}</skip>
                             <includes>
                                 <include>**/*ITCase.*</include>
                             </includes>
@@ -195,6 +194,7 @@
                             <goal>test</goal>
                         </goals>
                         <configuration>
+                            <skip>${skip.on.java8}</skip>
                             <excludes>
                                 <exclude>**/*ITCase.*</exclude>
                             </excludes>
@@ -202,6 +202,7 @@
                     </execution>
                 </executions>
             </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-shade-plugin</artifactId>

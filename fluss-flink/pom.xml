@@ -36,6 +36,7 @@
         <module>fluss-flink-1.20</module>
         <module>fluss-flink-1.19</module>
         <module>fluss-flink-1.18</module>
+        <module>fluss-flink-2.1</module>
         <module>fluss-flink-tiering</module>
     </modules>
 

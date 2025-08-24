@@ -89,6 +89,7 @@
         <test.skip.coverage>true</test.skip.coverage>
         <fluss.forkCount>2</fluss.forkCount>
         <fluss.reuseForks>true</fluss.reuseForks>
+        <skip.on.java8>false</skip.on.java8>
 
         <!-- library versions in fluss-shaded -->
         <fluss.shaded.version>2.2</fluss.shaded.version>
@@ -448,6 +449,7 @@
             <id>java8</id>
             <properties>
                 <target.java.version>1.8</target.java.version>
+                <skip.on.java8>true</skip.on.java8>
             </properties>
             <build>
                 <plugins>
@@ -467,6 +469,7 @@
                 </plugins>
             </build>
         </profile>
+
         <profile>
             <id>test-coverage</id>
             <properties>
