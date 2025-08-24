@@ -164,6 +164,8 @@
                                             <excludes>
                                                 <exclude>fluss-test-coverage/**</exclude>
                                                 <exclude>fluss-test-utils/**</exclude>
+                                                <!-- exclude adapter classes to avoid Jacoco error: "Can't add different class with same name" -->
+                                                <exclude>fluss-flink/**/target/classes/com/alibaba/fluss/flink/adapter/**</exclude>
                                             </excludes>
                                         </resource>
                                     </resources>
@@ -204,6 +206,8 @@
                                             <excludes>
                                                 <exclude>fluss-test-coverage/**</exclude>
                                                 <exclude>fluss-test-utils/**</exclude>
+                                                <!-- exclude adapter classes to avoid Jacoco error: "Can't add different class with same name" -->
+                                                <exclude>fluss-flink/**/target/classes/com/alibaba/fluss/flink/adapter/**</exclude>
                                             </excludes>
                                         </resource>
                                     </resources>
@@ -348,9 +352,6 @@
                                         <exclude>com.alibaba.fluss.flink.sink.*</exclude>
                                         <exclude>
                                             com.alibaba.fluss.flink.metrics.*
-                                        </exclude>
-                                        <exclude>
-                                            com.alibaba.fluss.flink.adapter.*
                                         </exclude>
                                         <!-- end exclude for flink-connector -->
                                         <exclude>com.alibaba.fluss.fs.hdfs.HadoopFsPlugin
