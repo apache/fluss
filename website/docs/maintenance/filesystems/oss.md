@@ -15,8 +15,8 @@ sidebar_position: 3
 To enable OSS as remote storage, there are some required configurations that must be added to Fluss' `server.yaml`:
 
 ```yaml
-# The directory used as the remote storage for Fluss
-remote.data.dir: oss://<your-bucket>/path/to/remote/storage
+# The OSS bucket path used as the remote storage for Fluss
+remote.data.dir: oss://<your-bucket-name>/path/to/remote/storage
 # Aliyun OSS endpoint to connect to, such as: oss-cn-hangzhou.aliyuncs.com
 fs.oss.endpoint: <your-endpoint>
 # Aliyun STS endpoint to connect to obtain a STS token, such as: sts.cn-hangzhou.aliyuncs.com
@@ -27,9 +27,9 @@ fs.oss.roleArn: <your-role-arn>
 # Authentication (choose one option below)
 
 # Option 1: Direct credentials
-# Aliyun access key ID
+# Aliyun Access Key ID
 fs.oss.accessKeyId: <your-access-key>
-# Aliyun access key secret
+# Aliyun Access Key Secret
 fs.oss.accessKeySecret: <your-secret-key>
 
 # Option 2: Secure credential provider
