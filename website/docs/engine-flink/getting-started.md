@@ -38,7 +38,7 @@ For Flink's Table API, Fluss supports the following features:
 | [SQL update](writes.md#update)                    | ✔️    | Only in batch mode.                    |
 | [SQL lookup join](lookups.md)                     | ✔️    |                                        |
 
-For Flink's DataStream API, you can see [DataStream API](docs/flink-engine/datastream.mdx) for more details.
+For Flink's DataStream API, you can see [DataStream API](docs/engine-flink/datastream.mdx) for more details.
 
 ## Preparation when using Flink SQL Client
 - **Download Flink**

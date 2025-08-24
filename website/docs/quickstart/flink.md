@@ -9,7 +9,7 @@ This guide will get you up and running with Apache Flink to do real-time analyti
 including integrating with Paimon.
 The guide is derived from [TPC-H](https://www.tpc.org/tpch/) **Q5**.
 
-For more information on working with Flink, refer to the [Apache Flink Engine](flink-engine/getting-started.md) section.
+For more information on working with Flink, refer to the [Apache Flink Engine](engine-flink/getting-started.md) section.
 
 ## Environment Setup
 ### Prerequisites
@@ -117,7 +117,7 @@ The Docker Compose environment consists of the following containers:
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
 
 **Note:** The `fluss/quickstart-flink` image is based on [flink:1.20.1-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256:bf1af6406c4f4ad8faa46efe2b3d0a0bf811d1034849c42c1e3484712bc83505) and
-includes the [fluss-flink](flink-engine/getting-started.md), [paimon-flink](https://paimon.apache.org/docs/1.0/flink/quick-start/) and
+includes the [fluss-flink](engine-flink/getting-started.md), [paimon-flink](https://paimon.apache.org/docs/1.0/flink/quick-start/) and
 [flink-connector-faker](https://flink-packages.org/packages/flink-faker) to simplify this guide.
 
 3. To start all containers, run:
@@ -508,4 +508,4 @@ docker compose down -v
 to stop all containers.
 
 ## Learn more
-Now that you're up and running with Fluss and Flink, check out the [Apache Flink Engine](flink-engine/getting-started.md) docs to learn more features with Flink or [this guide](/maintenance/observability/quickstart.md) to learn how to set up an observability stack for Fluss and Flink.
+Now that you're up and running with Fluss and Flink, check out the [Apache Flink Engine](engine-flink/getting-started.md) docs to learn more features with Flink or [this guide](/maintenance/observability/quickstart.md) to learn how to set up an observability stack for Fluss and Flink.

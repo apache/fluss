@@ -270,4 +270,4 @@ For more details about Fluss partitioned table, see [Partitioned Tables](table-d
 
 ## Lookup Options
 
-Fluss lookup join supports various configuration options. For more details, please refer to the [Connector Options](flink-engine/options.md#lookup-options) page.
+Fluss lookup join supports various configuration options. For more details, please refer to the [Connector Options](engine-flink/options.md#lookup-options) page.

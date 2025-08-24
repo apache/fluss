@@ -124,7 +124,7 @@ tar -xzf fluss-0.6.0-bin.tgz
 
 - Use paths relative to the docs/ directory
 ``` markdown
-[Flink Engine](flink-engine/getting-started.md)
+[Flink Engine](engine-flink/getting-started.md)
 ```
 
 

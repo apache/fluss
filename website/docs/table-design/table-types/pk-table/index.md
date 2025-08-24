@@ -146,13 +146,13 @@ For primary key tables, Fluss supports various kinds of querying abilities.
 For a primary key table, the default read method is a full snapshot followed by incremental data. First, the
 snapshot data of the table is consumed, followed by the changelog data of the table.
 
-It is also possible to only consume the changelog data of the table. For more details, please refer to the [Flink Reads](../../../flink-engine/reads.md)
+It is also possible to only consume the changelog data of the table. For more details, please refer to the [Flink Reads](../../../engine-flink/reads.md)
 
 ### Lookup
 
-Fluss primary key table can lookup data by the primary keys. If the key exists in Fluss, lookup will return a unique row. It is always used in [Flink Lookup Join](../../../flink-engine/lookups.md#lookup).
+Fluss primary key table can lookup data by the primary keys. If the key exists in Fluss, lookup will return a unique row. It is always used in [Flink Lookup Join](../../../engine-flink/lookups.md#lookup).
 
 ### Prefix Lookup
 
 Fluss primary key table can also do prefix lookup by the prefix subset primary keys. Unlike lookup, prefix lookup
-will scan data based on the prefix of primary keys and may return multiple rows. It is always used in [Flink Prefix Lookup Join](../../../flink-engine/lookups.md#prefix-lookup).
+will scan data based on the prefix of primary keys and may return multiple rows. It is always used in [Flink Prefix Lookup Join](../../../engine-flink/lookups.md#prefix-lookup).

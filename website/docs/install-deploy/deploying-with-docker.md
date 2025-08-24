@@ -332,7 +332,7 @@ The following subsections will show you how to use 'Docker' to build a Flink clu
 to interact with Fluss.
 
 #### Start Flink Cluster
-You can start a Flink standalone cluster refer to [Flink Environment Preparation](flink-engine/getting-started.md#preparation-when-using-flink-sql-client)
+You can start a Flink standalone cluster refer to [Flink Environment Preparation](engine-flink/getting-started.md#preparation-when-using-flink-sql-client)
 
 **Note**: Make sure the [Fluss connector jar](/downloads/) already has copied to the `lib` directory of your Flink home.
 ```shell
@@ -363,4 +363,4 @@ USE CATALOG fluss_catalog;
 ### Do more with Fluss
 
 After the catalog is created, you can use Flink SQL Client to do more with Fluss, for example, create a table, insert data, query data, etc.
-More details please refer to [Flink Getting started](flink-engine/getting-started.md)
+More details please refer to [Flink Getting started](engine-flink/getting-started.md)
