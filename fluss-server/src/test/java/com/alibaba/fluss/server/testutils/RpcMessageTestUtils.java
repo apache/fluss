@@ -27,6 +27,7 @@ import com.alibaba.fluss.record.KvRecordBatch;
 import com.alibaba.fluss.record.MemoryLogRecords;
 import com.alibaba.fluss.record.bytesview.MemorySegmentBytesView;
 import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
+import com.alibaba.fluss.rpc.messages.AlterTableRequest;
 import com.alibaba.fluss.rpc.messages.CreateDatabaseRequest;
 import com.alibaba.fluss.rpc.messages.CreatePartitionRequest;
 import com.alibaba.fluss.rpc.messages.CreateTableRequest;
@@ -137,6 +138,18 @@ public class RpcMessageTestUtils {
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
         return createTableRequest;
+    }
+
+    public static AlterTableRequest newAlterTableRequest(
+            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists) {
+        AlterTableRequest alterTableRequest = new AlterTableRequest();
+        alterTableRequest
+                .setIgnoreIfNotExists(ignoreIfExists)
+                .setTableJson(tableDescriptor.toJsonBytes())
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        return alterTableRequest;
     }
 
     public static MetadataRequest newMetadataRequest(List<TablePath> tablePaths) {
