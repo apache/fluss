@@ -19,12 +19,15 @@ package com.alibaba.fluss.client.table.scanner.log;
 
 import com.alibaba.fluss.annotation.Internal;
 import com.alibaba.fluss.annotation.VisibleForTesting;
+import com.alibaba.fluss.client.metadata.MetadataUpdater;
 import com.alibaba.fluss.client.metrics.ScannerMetricGroup;
 import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.PartitionNotExistException;
 import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.FsPathAndFileName;
+import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.remote.RemoteLogSegment;
 import com.alibaba.fluss.utils.CloseableRegistry;
@@ -44,6 +47,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Collections;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
@@ -83,15 +87,24 @@ public class RemoteLogDownloader implements Closeable {
 
     private final ScannerMetricGroup scannerMetricGroup;
 
+    private final MetadataUpdater metadataUpdater;
+
     private final long pollTimeout;
 
     public RemoteLogDownloader(
             TablePath tablePath,
             Configuration conf,
             RemoteFileDownloader remoteFileDownloader,
-            ScannerMetricGroup scannerMetricGroup) {
+            ScannerMetricGroup scannerMetricGroup,
+            MetadataUpdater metadataUpdater) {
         // default we give a 5s long interval to avoid frequent loop
-        this(tablePath, conf, remoteFileDownloader, scannerMetricGroup, POLL_TIMEOUT);
+        this(
+                tablePath,
+                conf,
+                remoteFileDownloader,
+                scannerMetricGroup,
+                metadataUpdater,
+                POLL_TIMEOUT);
     }
 
     @VisibleForTesting
@@ -100,12 +113,14 @@ public class RemoteLogDownloader implements Closeable {
             Configuration conf,
             RemoteFileDownloader remoteFileDownloader,
             ScannerMetricGroup scannerMetricGroup,
+            MetadataUpdater metadataUpdater,
             long pollTimeout) {
         this.segmentsToFetch = new LinkedBlockingQueue<>();
         this.segmentsToRecycle = new LinkedBlockingQueue<>();
         this.fetchedFiles = MapUtils.newConcurrentHashMap();
         this.remoteFileDownloader = remoteFileDownloader;
         this.scannerMetricGroup = scannerMetricGroup;
+        this.metadataUpdater = metadataUpdater;
         this.pollTimeout = pollTimeout;
         this.prefetchSemaphore =
                 new Semaphore(conf.getInt(ConfigOptions.CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM));
@@ -175,9 +190,57 @@ public class RemoteLogDownloader implements Closeable {
             request.future.complete(localFile);
         } catch (Throwable t) {
             prefetchSemaphore.release();
+            scannerMetricGroup.remoteFetchErrorCount().inc();
+
+            // check if the partition is already deleted
+            // TODO: Standardize FileSystem exceptions to handle "No such file or directory"
+            // generically and distinguish partition deletion from other causes.
+            TableBucket requestTableBucket = request.segment.tableBucket();
+            if (request.segment.tableBucket().getPartitionId() != null) {
+                Optional<Long> partitionIdOpt =
+                        metadataUpdater.getPartitionId(request.segment.physicalTablePath());
+                if (!partitionIdOpt.isPresent()) {
+                    LOG.warn(
+                            "The partition {} of table {} does not exist when downloading remote log segment, it maybe already deleted, "
+                                    + "skip the download request.",
+                            requestTableBucket.getPartitionId(),
+                            requestTableBucket.getTableId());
+                    request.future.completeExceptionally(
+                            new PartitionNotExistException(
+                                    "The partition "
+                                            + requestTableBucket.getPartitionId()
+                                            + " of table "
+                                            + requestTableBucket.getTableId()
+                                            + " does not exist when downloading remote log segment, it maybe already deleted."));
+                    return;
+                } else {
+                    if (!partitionIdOpt
+                            .get()
+                            .equals(request.segment.tableBucket().getPartitionId())) {
+                        LOG.warn(
+                                "The partition {} of table {} does not match the actual partition id {} in the request, the origin partition maybe already deleted, "
+                                        + "skip the download request.",
+                                requestTableBucket.getPartitionId(),
+                                requestTableBucket.getTableId(),
+                                partitionIdOpt.get());
+                        request.future.completeExceptionally(
+                                new PartitionNotExistException(
+                                        "The request partition "
+                                                + requestTableBucket.getPartitionId()
+                                                + " of table "
+                                                + requestTableBucket.getTableId()
+                                                + " in the request does not match the actual partition id "
+                                                + partitionIdOpt.get()
+                                                + " with same physical table path "
+                                                + request.segment.physicalTablePath()
+                                                + ", the origin partition maybe already deleted."));
+                        return;
+                    }
+                }
+            }
+
             // add back the request to the queue
             segmentsToFetch.add(request);
-            scannerMetricGroup.remoteFetchErrorCount().inc();
             // log the error and continue instead of shutdown the download thread
             LOG.error("Failed to download remote log segment.", t);
         }
