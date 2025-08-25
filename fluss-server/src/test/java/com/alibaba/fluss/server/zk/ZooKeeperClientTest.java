@@ -49,6 +49,8 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -177,38 +179,44 @@ class ZooKeeperClientTest {
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).isEmpty();
     }
 
-    @Test
-    void testBatchCreateAndUpdateLeaderAndIsr() throws Exception {
-        // non-partition table
-        List<RegisterTableBucketLeadAndIsrInfo> noPartitionTableBucket = new ArrayList<>();
-        List<LeaderAndIsr> noPartitionleaderAndIsrList = new ArrayList<>();
+    @ParameterizedTest
+    @ValueSource(booleans = {true, false})
+    void testBatchCreateAndUpdateLeaderAndIsr(boolean isPartitionTable) throws Exception {
+        List<RegisterTableBucketLeadAndIsrInfo> tableBucketInfo = new ArrayList<>();
+        List<LeaderAndIsr> leaderAndIsrList = new ArrayList<>();
         for (int i = 0; i < 100; i++) {
-            TableBucket tableBucket = new TableBucket(1, i);
+            TableBucket tableBucket =
+                    isPartitionTable ? new TableBucket(1, 2L, i) : new TableBucket(1, i);
             LeaderAndIsr leaderAndIsr =
                     new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
-            noPartitionleaderAndIsrList.add(leaderAndIsr);
-            noPartitionTableBucket.add(
-                    new RegisterTableBucketLeadAndIsrInfo(tableBucket, leaderAndIsr, null, null));
+            leaderAndIsrList.add(leaderAndIsr);
+            RegisterTableBucketLeadAndIsrInfo info =
+                    isPartitionTable
+                            ? new RegisterTableBucketLeadAndIsrInfo(
+                                    tableBucket, leaderAndIsr, "partition" + i, null)
+                            : new RegisterTableBucketLeadAndIsrInfo(
+                                    tableBucket, leaderAndIsr, null, null);
+            tableBucketInfo.add(info);
         }
         // batch create
-        zookeeperClient.batchRegisterLeaderAndIsrForTablePartition(noPartitionTableBucket);
+        zookeeperClient.batchRegisterLeaderAndIsrForTablePartition(tableBucketInfo);
 
         for (int i = 0; i < 100; i++) {
             // each should register successful
             Optional<LeaderAndIsr> optionalLeaderAndIsr =
-                    zookeeperClient.getLeaderAndIsr(noPartitionTableBucket.get(i).getTableBucket());
+                    zookeeperClient.getLeaderAndIsr(tableBucketInfo.get(i).getTableBucket());
             assertThat(optionalLeaderAndIsr.isPresent()).isTrue();
-            assertThat(optionalLeaderAndIsr.get()).isIn(noPartitionleaderAndIsrList);
+            assertThat(optionalLeaderAndIsr.get()).isIn(leaderAndIsrList);
         }
 
-        Map<TableBucket, LeaderAndIsr> noPartitionUpdateMap =
-                noPartitionTableBucket.stream()
+        Map<TableBucket, LeaderAndIsr> updateMap =
+                tableBucketInfo.stream()
                         .collect(
                                 Collectors.toMap(
                                         RegisterTableBucketLeadAndIsrInfo::getTableBucket,
                                         RegisterTableBucketLeadAndIsrInfo::getLeaderAndIsr));
-        List<LeaderAndIsr> noPartitionleaderAndIsrUpdateList = new ArrayList<>();
-        noPartitionUpdateMap
+        List<LeaderAndIsr> leaderAndIsrUpdateList = new ArrayList<>();
+        updateMap
                 .entrySet()
                 .forEach(
                         entry -> {
@@ -217,68 +225,17 @@ class ZooKeeperClientTest {
                                     originalLeaderAndIsr.newLeaderAndIsr(
                                             LeaderAndIsr.NO_LEADER,
                                             originalLeaderAndIsr.isr().subList(0, 1));
-                            noPartitionleaderAndIsrUpdateList.add(adjustLeaderAndIsr);
+                            leaderAndIsrUpdateList.add(adjustLeaderAndIsr);
                             entry.setValue(adjustLeaderAndIsr);
                         });
         // batch update
-        zookeeperClient.batchUpdateLeaderAndIsr(noPartitionUpdateMap);
+        zookeeperClient.batchUpdateLeaderAndIsr(updateMap);
         for (int i = 0; i < 100; i++) {
             // each should update successful
             Optional<LeaderAndIsr> optionalLeaderAndIsr =
-                    zookeeperClient.getLeaderAndIsr(noPartitionTableBucket.get(i).getTableBucket());
+                    zookeeperClient.getLeaderAndIsr(tableBucketInfo.get(i).getTableBucket());
             assertThat(optionalLeaderAndIsr.isPresent()).isTrue();
-            assertThat(optionalLeaderAndIsr.get()).isIn(noPartitionleaderAndIsrUpdateList);
-        }
-
-        // partition table
-        List<RegisterTableBucketLeadAndIsrInfo> partitionTableBucket = new ArrayList<>();
-        List<LeaderAndIsr> partitionleaderAndIsrList = new ArrayList<>();
-        for (int i = 0; i < 100; i++) {
-            TableBucket tableBucket = new TableBucket(1, 2L, i);
-            LeaderAndIsr leaderAndIsr =
-                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
-            partitionleaderAndIsrList.add(leaderAndIsr);
-            partitionTableBucket.add(
-                    new RegisterTableBucketLeadAndIsrInfo(
-                            tableBucket, leaderAndIsr, "partition" + i, null));
-        }
-        // batch create
-        zookeeperClient.batchRegisterLeaderAndIsrForTablePartition(partitionTableBucket);
-        for (int i = 0; i < 100; i++) {
-            // each should register successful
-            Optional<LeaderAndIsr> optionalLeaderAndIsr =
-                    zookeeperClient.getLeaderAndIsr(partitionTableBucket.get(i).getTableBucket());
-            assertThat(optionalLeaderAndIsr.isPresent()).isTrue();
-            assertThat(optionalLeaderAndIsr.get()).isIn(partitionleaderAndIsrList);
-        }
-
-        Map<TableBucket, LeaderAndIsr> partitionUpdateMap =
-                partitionTableBucket.stream()
-                        .collect(
-                                Collectors.toMap(
-                                        RegisterTableBucketLeadAndIsrInfo::getTableBucket,
-                                        RegisterTableBucketLeadAndIsrInfo::getLeaderAndIsr));
-        List<LeaderAndIsr> partitionleaderAndIsrUpdateList = new ArrayList<>();
-        partitionUpdateMap
-                .entrySet()
-                .forEach(
-                        entry -> {
-                            LeaderAndIsr originalLeaderAndIsr = entry.getValue();
-                            LeaderAndIsr adjustLeaderAndIsr =
-                                    originalLeaderAndIsr.newLeaderAndIsr(
-                                            LeaderAndIsr.NO_LEADER,
-                                            originalLeaderAndIsr.isr().subList(0, 1));
-                            partitionleaderAndIsrUpdateList.add(adjustLeaderAndIsr);
-                            entry.setValue(adjustLeaderAndIsr);
-                        });
-        // batch update
-        zookeeperClient.batchUpdateLeaderAndIsr(partitionUpdateMap);
-        for (int i = 0; i < 100; i++) {
-            // each should update successful
-            Optional<LeaderAndIsr> optionalLeaderAndIsr =
-                    zookeeperClient.getLeaderAndIsr(partitionTableBucket.get(i).getTableBucket());
-            assertThat(optionalLeaderAndIsr.isPresent()).isTrue();
-            assertThat(optionalLeaderAndIsr.get()).isIn(partitionleaderAndIsrUpdateList);
+            assertThat(optionalLeaderAndIsr.get()).isIn(leaderAndIsrUpdateList);
         }
     }
 

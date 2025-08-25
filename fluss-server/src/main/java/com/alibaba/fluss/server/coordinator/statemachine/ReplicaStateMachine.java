@@ -418,13 +418,20 @@ public class ReplicaStateMachine {
         for (TableBucketReplica tableBucketReplica : tableBucketReplicas) {
             TableBucket tableBucket = tableBucketReplica.getTableBucket();
             int replicaId = tableBucketReplica.getReplica();
-            Optional<LeaderAndIsr> optLeaderAndIsr =
-                    coordinatorContext.getBucketLeaderAndIsr(tableBucket);
-            if (!optLeaderAndIsr.isPresent()) {
-                // no leader and isr for this table bucket, skip
-                continue;
+
+            LeaderAndIsr leaderAndIsr = null;
+            if (toUpdateLeaderAndIsrList.get(tableBucket) != null) {
+                leaderAndIsr = toUpdateLeaderAndIsrList.get(tableBucket);
+            } else {
+                Optional<LeaderAndIsr> optLeaderAndIsr =
+                        coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+                if (!optLeaderAndIsr.isPresent()) {
+                    // no leader and isr for this table bucket, skip
+                    continue;
+                }
+                leaderAndIsr = optLeaderAndIsr.get();
             }
-            LeaderAndIsr leaderAndIsr = optLeaderAndIsr.get();
+
             if (!leaderAndIsr.isr().contains(replicaId)) {
                 // isr doesn't contain the replica, skip
                 continue;
