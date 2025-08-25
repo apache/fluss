@@ -78,9 +78,5 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
             }
             tableByPath.put(tablePath, tableDescriptor);
         }
-
-        public TableDescriptor getTable(TablePath tablePath) {
-            return tableByPath.get(tablePath);
-        }
     }
 }
