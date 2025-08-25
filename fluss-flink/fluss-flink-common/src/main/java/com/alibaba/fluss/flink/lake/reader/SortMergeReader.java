@@ -16,12 +16,18 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/lake/reader/SortMergeReader.java
 package com.alibaba.fluss.flink.lake.reader;
 
 import com.alibaba.fluss.record.LogRecord;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.row.ProjectedRow;
 import com.alibaba.fluss.utils.CloseableIterator;
+========
+package org.apache.fluss.flink.lakehouse.paimon.reader;
+
+import org.apache.fluss.utils.CloseableIterator;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/paimon/reader/SortMergeReader.java
 
 import javax.annotation.Nullable;
 
@@ -65,8 +71,16 @@ class SortMergeReader {
     }
 
     @Nullable
+<<<<<<<< HEAD:fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/lake/reader/SortMergeReader.java
     public CloseableIterator<InternalRow> readBatch() {
         if (!lakeRecordIterator.hasNext()) {
+========
+    public org.apache.fluss.utils.CloseableIterator<org.apache.fluss.row.InternalRow> readBatch()
+            throws IOException {
+        RecordReader.RecordIterator<InternalRow> nextBatch = paimonReader.readBatch();
+        // no any snapshot record, now, read log
+        if (nextBatch == null) {
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/paimon/reader/SortMergeReader.java
             return changeLogIterator.hasNext()
                     ? changeLogIteratorWrapper.replace(changeLogIterator)
                     : null;
@@ -78,11 +92,21 @@ class SortMergeReader {
         }
     }
 
+<<<<<<<< HEAD:fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/lake/reader/SortMergeReader.java
     /** A concat record iterator to concat multiple record iterator. */
     private static class ConcatRecordIterator implements CloseableIterator<LogRecord> {
         private final PriorityQueue<SingleElementHeadIterator<LogRecord>> priorityQueue;
         private final ProjectedRow snapshotProjectedPkRow1;
         private final ProjectedRow snapshotProjectedPkRow2;
+========
+    /**
+     * The IteratorWrapper to wrap Paimon's RecordReader.RecordIterator which emit the merged rows
+     * with paimon snapshot and fluss change log.
+     */
+    private class SnapshotMergedRowIteratorWrapper
+            implements CloseableIterator<org.apache.fluss.row.InternalRow> {
+        private RecordReader.RecordIterator<SortMergeRows> currentBatch;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/paimon/reader/SortMergeReader.java
 
         public ConcatRecordIterator(
                 List<CloseableIterator<LogRecord>> iteratorList,
@@ -141,14 +165,29 @@ class SortMergeReader {
         }
 
         @Override
+<<<<<<<< HEAD:fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/lake/reader/SortMergeReader.java
         public LogRecord next() {
             if (!hasNext()) {
                 throw new NoSuchElementException();
+========
+        public org.apache.fluss.row.InternalRow next() {
+            InternalRow returnedRow =
+                    projectedRow == null
+                            ? this.returnedRow
+                            : projectedRow.replaceRow(this.returnedRow);
+            // now, we can set the internalRow to null,
+            // if no any row remain in current merged row, set the currentMergedRows to null
+            // to enable fetch next merged rows
+            this.returnedRow = null;
+            if (currentMergedRows != null && !currentMergedRows.hasNext()) {
+                currentMergedRows = null;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/paimon/reader/SortMergeReader.java
             }
             return priorityQueue.peek().next();
         }
     }
 
+<<<<<<<< HEAD:fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/lake/reader/SortMergeReader.java
     private SortMergeRows sortMergeWithChangeLog(InternalRow lakeSnapshotRow) {
         // no log record, we return the snapshot record
         if (!changeLogIterator.hasNext()) {
@@ -282,6 +321,10 @@ class SortMergeReader {
     }
 
     private static class ChangeLogIteratorWrapper implements CloseableIterator<InternalRow> {
+========
+    private class ChangeLogIteratorWrapper
+            implements CloseableIterator<org.apache.fluss.row.InternalRow> {
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/paimon/reader/SortMergeReader.java
         private CloseableIterator<KeyValueRow> changeLogRecordIterator;
 
         public ChangeLogIteratorWrapper() {}
@@ -305,8 +348,17 @@ class SortMergeReader {
         }
 
         @Override
+<<<<<<<< HEAD:fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/lake/reader/SortMergeReader.java
         public InternalRow next() {
             return changeLogRecordIterator.next().valueRow();
+========
+        public org.apache.fluss.row.InternalRow next() {
+            InternalRow returnedRow = changeLogRecordIterator.next().valueRow();
+            if (projectedRow != null) {
+                returnedRow = projectedRow.replaceRow(returnedRow);
+            }
+            return new PaimonRowWrapper(returnedRow);
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/paimon/reader/SortMergeReader.java
         }
     }
 

@@ -15,9 +15,9 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.fs.hdfs.utils;
+package org.apache.fluss.fs.hdfs.utils;
 
-import com.alibaba.fluss.testutils.common.CommonTestUtils;
+import org.apache.fluss.testutils.common.CommonTestUtils;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.security.token.delegation.DelegationTokenIdentifier;
@@ -33,7 +33,7 @@ import java.nio.file.Paths;
 import java.util.HashMap;
 import java.util.Map;
 
-import static com.alibaba.fluss.fs.hdfs.utils.HadoopUtils.HDFS_DELEGATION_TOKEN_KIND;
+import static org.apache.fluss.fs.hdfs.utils.HadoopUtils.HDFS_DELEGATION_TOKEN_KIND;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Unit tests for Hadoop utils. */
@@ -159,8 +159,8 @@ class HadoopUtilsTest {
         newEnv.put("HADOOP_HOME", testHadoopHomeDir);
         CommonTestUtils.setEnv(newEnv);
         try {
-            com.alibaba.fluss.config.Configuration configuration =
-                    new com.alibaba.fluss.config.Configuration();
+            org.apache.fluss.config.Configuration configuration =
+                    new org.apache.fluss.config.Configuration();
             Configuration hadoopConf = HadoopUtils.getHadoopConfiguration(configuration);
             assertThat(hadoopConf.get("cp_conf_key")).isEqualTo("oompf!");
         } finally {
@@ -171,8 +171,8 @@ class HadoopUtilsTest {
         newEnv.put("HADOOP_CONF_DIR", testHadoopHomeDir);
         CommonTestUtils.setEnv(newEnv);
         try {
-            com.alibaba.fluss.config.Configuration configuration =
-                    new com.alibaba.fluss.config.Configuration();
+            org.apache.fluss.config.Configuration configuration =
+                    new org.apache.fluss.config.Configuration();
             Configuration hadoopConf = HadoopUtils.getHadoopConfiguration(configuration);
             assertThat(hadoopConf.get("cp_conf_key")).isEqualTo("oompf!");
         } finally {
@@ -182,8 +182,8 @@ class HadoopUtilsTest {
 
     @Test
     void testGetConfigurationFromFlussConfig() {
-        com.alibaba.fluss.config.Configuration configuration =
-                new com.alibaba.fluss.config.Configuration();
+        org.apache.fluss.config.Configuration configuration =
+                new org.apache.fluss.config.Configuration();
         configuration.setString("fluss.hadoop.k1", "v1");
         Configuration hadoopConf = HadoopUtils.getHadoopConfiguration(configuration);
         assertThat(hadoopConf.get("k1")).isEqualTo("v1");

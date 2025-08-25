@@ -15,7 +15,11 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-flink/fluss-flink-2.1/src/test/java/com/alibaba/fluss/flink/catalog/Flink21CatalogITCase.java
 package com.alibaba.fluss.flink.catalog;
+========
+package org.apache.fluss.flink;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-1.19/src/main/java/org/apache/fluss/flink/DummyClass119.java
 
 /** IT case for catalog in Flink 2.1. */
 public class Flink21CatalogITCase extends FlinkCatalogITCase {}

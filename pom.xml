@@ -27,15 +27,15 @@
         <version>30</version>
     </parent>
 
-    <groupId>com.alibaba.fluss</groupId>
+    <groupId>org.apache.fluss</groupId>
     <artifactId>fluss</artifactId>
     <version>0.8-SNAPSHOT</version>
 
     <name>Fluss :</name>
     <packaging>pom</packaging>
     <description>The Streaming Storage for Real-Time Analytics</description>
-    <url>https://github.com/alibaba/fluss</url>
-    <inceptionYear>2023</inceptionYear>
+    <url>https://github.com/apache/fluss</url>
+    <inceptionYear>2025</inceptionYear>
 
     <licenses>
         <license>
@@ -46,8 +46,8 @@
     </licenses>
 
     <scm>
-        <url>https://github.com/alibaba/fluss</url>
-        <connection>git@github.com:alibaba/fluss.git</connection>
+        <url>https://github.com/apache/fluss</url>
+        <connection>git@github.com:apache/fluss.git</connection>
     </scm>
 
     <distributionManagement>
@@ -332,7 +332,7 @@
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-test-utils</artifactId>
                 <version>${project.version}</version>
                 <scope>test</scope>
@@ -996,7 +996,7 @@
                             <!-- \# refers to the static imports -->
                             <importOrder>
                                 <order>
-                                    com.alibaba.fluss,,javax,java,scala,\#
+                                    org.apache.fluss,,javax,java,scala,\#
                                 </order>
                             </importOrder>
 
@@ -1092,13 +1092,13 @@
                         </execution>
                     </executions>
                     <configuration>
-                        <mainClass>com.alibaba.fluss.tools.ci.licensecheck.LicenseChecker</mainClass>
+                        <mainClass>org.apache.fluss.tools.ci.licensecheck.LicenseChecker</mainClass>
                         <includePluginDependencies>true</includePluginDependencies>
                         <includeProjectDependencies>false</includeProjectDependencies>
                     </configuration>
                     <dependencies>
                         <dependency>
-                            <groupId>com.alibaba.fluss</groupId>
+                            <groupId>org.apache.fluss</groupId>
                             <artifactId>fluss-ci-tools</artifactId>
                             <version>${project.version}</version>
                         </dependency>

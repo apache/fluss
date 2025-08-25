@@ -15,11 +15,17 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/lake/state/LakeSnapshotSplitState.java
 package com.alibaba.fluss.flink.lake.state;
 
 import com.alibaba.fluss.flink.lake.split.LakeSnapshotSplit;
 import com.alibaba.fluss.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.flink.source.split.SourceSplitState;
+========
+package org.apache.fluss.flink.lakehouse.paimon.split;
+
+import org.apache.fluss.flink.source.split.SourceSplitState;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/paimon/split/PaimonSnapshotAndFlussLogSplitState.java
 
 /** The state of {@link LakeSnapshotSplit}. */
 public class LakeSnapshotSplitState extends SourceSplitState {

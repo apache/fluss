@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/lake/LakeRecordRecordEmitter.java
 package com.alibaba.fluss.flink.lake;
 
 import com.alibaba.fluss.client.table.scanner.ScanRecord;
@@ -22,6 +23,15 @@ import com.alibaba.fluss.flink.lake.state.LakeSnapshotAndFlussLogSplitState;
 import com.alibaba.fluss.flink.lake.state.LakeSnapshotSplitState;
 import com.alibaba.fluss.flink.source.reader.RecordAndPos;
 import com.alibaba.fluss.flink.source.split.SourceSplitState;
+========
+package org.apache.fluss.flink.lakehouse;
+
+import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplitState;
+import org.apache.fluss.flink.lakehouse.paimon.split.PaimonSnapshotSplitState;
+import org.apache.fluss.flink.source.reader.RecordAndPos;
+import org.apache.fluss.flink.source.split.SourceSplitState;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/LakeRecordRecordEmitter.java
 
 import org.apache.flink.api.connector.source.SourceOutput;
 

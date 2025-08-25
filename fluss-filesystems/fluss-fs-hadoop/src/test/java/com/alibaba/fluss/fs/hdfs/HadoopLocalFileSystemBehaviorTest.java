@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.fs.hdfs;
+package org.apache.fluss.fs.hdfs;
 
-import com.alibaba.fluss.fs.FileSystem;
-import com.alibaba.fluss.fs.FileSystemBehaviorTestSuite;
-import com.alibaba.fluss.fs.FsPath;
-import com.alibaba.fluss.fs.local.LocalFileSystem;
+import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FileSystemBehaviorTestSuite;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.fs.local.LocalFileSystem;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.RawLocalFileSystem;

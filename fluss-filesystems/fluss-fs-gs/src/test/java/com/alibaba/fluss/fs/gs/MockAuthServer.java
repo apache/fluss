@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.fs.gs;
+package org.apache.fluss.fs.gs;
 
 import org.apache.fluss.shaded.netty4.io.netty.bootstrap.ServerBootstrap;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;

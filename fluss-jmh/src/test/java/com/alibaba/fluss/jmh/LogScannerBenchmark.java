@@ -15,23 +15,27 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-jmh/src/test/java/com/alibaba/fluss/jmh/LogScannerBenchmark.java
 package com.alibaba.fluss.jmh;
+========
+package org.apache.fluss.benchmark;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-benchmark/src/test/java/org/apache/fluss/benchmark/LogScannerBenchmark.java
 
-import com.alibaba.fluss.client.Connection;
-import com.alibaba.fluss.client.ConnectionFactory;
-import com.alibaba.fluss.client.admin.Admin;
-import com.alibaba.fluss.client.table.Table;
-import com.alibaba.fluss.client.table.scanner.log.LogScanner;
-import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
-import com.alibaba.fluss.client.table.writer.AppendWriter;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.metadata.DatabaseDescriptor;
-import com.alibaba.fluss.metadata.Schema;
-import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.row.GenericRow;
-import com.alibaba.fluss.server.testutils.FlussClusterExtension;
-import com.alibaba.fluss.types.DataTypes;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.types.DataTypes;
 
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.Fork;
@@ -52,8 +56,8 @@ import org.openjdk.jmh.runner.options.VerboseMode;
 import java.time.Duration;
 import java.util.concurrent.TimeUnit;
 
-import static com.alibaba.fluss.testutils.DataTestUtils.row;
 import static org.apache.commons.lang3.RandomStringUtils.randomAlphanumeric;
+import static org.apache.fluss.testutils.DataTestUtils.row;
 
 /**
  * Benchmark for log fetching via Netty.
