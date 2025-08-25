@@ -94,7 +94,6 @@ class IcebergKeyEncoderTest {
         // Encode with Iceberg's implementation
         ByteBuffer icebergBuffer = Conversions.toByteBuffer(Types.LongType.get(), testValue);
         byte[] icebergEncoded = toByteArray(icebergBuffer);
-
         assertThat(ourEncoded).isEqualTo(icebergEncoded);
     }
 
