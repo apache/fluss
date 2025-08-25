@@ -21,11 +21,7 @@ import org.apache.fluss.metadata.TableBucket;
 
 import org.junit.jupiter.api.Test;
 
-import java.util.Arrays;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Map;
-import java.util.Set;
+import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -37,7 +33,7 @@ class SourceEnumeratorStateSerializerTest {
     @Test
     void testPendingSplitsCheckpointSerde() throws Exception {
         FlussSourceEnumeratorStateSerializer serializer =
-                FlussSourceEnumeratorStateSerializer.INSTANCE;
+                new FlussSourceEnumeratorStateSerializer(null);
 
         Set<TableBucket> assignedBuckets =
                 new HashSet<>(Arrays.asList(new TableBucket(1, 0), new TableBucket(1, 4L, 1)));
@@ -46,7 +42,11 @@ class SourceEnumeratorStateSerializerTest {
         assignedPartitions.put(2L, "partition2");
 
         SourceEnumeratorState sourceEnumeratorState =
-                new SourceEnumeratorState(assignedBuckets, assignedPartitions);
+                new SourceEnumeratorState(
+                        assignedBuckets,
+                        assignedPartitions,
+                        Collections.emptyList(),
+                        Collections.emptyMap());
 
         // serialize assigned buckets
         byte[] serialized = serializer.serialize(sourceEnumeratorState);

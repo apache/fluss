@@ -24,6 +24,7 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.lake.LakeSplitGenerator;
+import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
 import org.apache.fluss.flink.source.enumerator.initializer.BucketOffsetsRetrieverImpl;
 import org.apache.fluss.flink.source.enumerator.initializer.NoStoppingOffsetsInitializer;
 import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
@@ -111,6 +112,10 @@ public class FlinkSourceEnumerator
     /** buckets that have been assigned to readers. */
     private final Set<TableBucket> assignedTableBuckets;
 
+    private final List<LakeSnapshotSplit> remainingLakeSnapshotSplits;
+
+    private final Map<TableBucket, Long> tableBucketsOffset;
+
     private final long scanPartitionDiscoveryIntervalMs;
 
     private final boolean streaming;
@@ -128,6 +133,8 @@ public class FlinkSourceEnumerator
     private boolean noMoreNewSplits = false;
 
     private boolean lakeEnabled = false;
+
+    private boolean loadLakeSplits = true;
 
     private volatile boolean closed = false;
 
@@ -177,6 +184,8 @@ public class FlinkSourceEnumerator
                 context,
                 Collections.emptySet(),
                 Collections.emptyMap(),
+                Collections.emptyList(),
+                Collections.emptyMap(),
                 startingOffsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 streaming,
@@ -192,6 +201,8 @@ public class FlinkSourceEnumerator
             SplitEnumeratorContext<SourceSplitBase> context,
             Set<TableBucket> assignedTableBuckets,
             Map<Long, String> assignedPartitions,
+            List<LakeSnapshotSplit> remainingLakeSnapshotSplits,
+            Map<TableBucket, Long> tableBucketsOffset,
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
@@ -206,6 +217,8 @@ public class FlinkSourceEnumerator
         this.assignedTableBuckets = new HashSet<>(assignedTableBuckets);
         this.startingOffsetsInitializer = startingOffsetsInitializer;
         this.assignedPartitions = new HashMap<>(assignedPartitions);
+        this.remainingLakeSnapshotSplits = new ArrayList<>(remainingLakeSnapshotSplits);
+        this.tableBucketsOffset = new HashMap<>(tableBucketsOffset);
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.streaming = streaming;
         this.partitionFilters = checkNotNull(partitionFilters);
@@ -276,7 +289,14 @@ public class FlinkSourceEnumerator
 
     private void genHybridSplitsInStreamNonPartitionedMode() {
         if (lakeEnabled) {
-            context.callAsync(this::getLakeSplit, this::handleSplitsAdd);
+            context.callAsync(
+                    () ->
+                            getLakeSplit(
+                                    Collections.EMPTY_MAP,
+                                    true,
+                                    remainingLakeSnapshotSplits,
+                                    tableBucketsOffset),
+                    this::handleSplitsAdd);
         } else {
             // init bucket splits and assign
             context.callAsync(this::initNonPartitionedSplits, this::handleSplitsAdd);
@@ -292,7 +312,15 @@ public class FlinkSourceEnumerator
                                             Partition::getPartitionId,
                                             Partition::getPartitionName));
 
-            context.callAsync(() -> getLakeSplit(newPartitionsNameById), this::handleSplitsAdd);
+            context.callAsync(
+                    () ->
+                            getLakeSplit(
+                                    newPartitionsNameById,
+                                    loadLakeSplits,
+                                    remainingLakeSnapshotSplits,
+                                    tableBucketsOffset),
+                    this::handleSplitsAdd);
+            loadLakeSplits = false;
         } else {
             context.callAsync(
                     () -> initPartitionedSplits(partitionChange.newPartitions),
@@ -535,7 +563,11 @@ public class FlinkSourceEnumerator
         return splits;
     }
 
-    private List<SourceSplitBase> getLakeSplit(Map<Long, String> newPartitionsNameById)
+    private List<SourceSplitBase> getLakeSplit(
+            Map<Long, String> newPartitionsNameById,
+            boolean loadLakeSplits,
+            List<LakeSnapshotSplit> remainingLakeSnapshotSplits,
+            Map<TableBucket, Long> tableBucketsOffset)
             throws Exception {
         LakeSplitGenerator lakeSplitGenerator =
                 new LakeSplitGenerator(
@@ -546,11 +578,17 @@ public class FlinkSourceEnumerator
                         stoppingOffsetsInitializer,
                         tableInfo.getNumBuckets(),
                         this::listPartitions);
-        return lakeSplitGenerator.generateHybridLakeSplits(newPartitionsNameById);
+        List<LakeSplit> remainingLakeSplits =
+                remainingLakeSnapshotSplits.stream()
+                        .map(LakeSnapshotSplit::getLakeSplit)
+                        .collect(Collectors.toList());
+        return lakeSplitGenerator.generateHybridLakeSplits(
+                newPartitionsNameById, loadLakeSplits, remainingLakeSplits, tableBucketsOffset);
     }
 
     private List<SourceSplitBase> getLakeSplit() throws Exception {
-        return getLakeSplit(Collections.EMPTY_MAP);
+        return getLakeSplit(
+                Collections.EMPTY_MAP, true, Collections.emptyList(), Collections.emptyMap());
     }
 
     private boolean ignoreTableBucket(TableBucket tableBucket) {
@@ -640,6 +678,19 @@ public class FlinkSourceEnumerator
                 incrementalAssignment
                         .computeIfAbsent(pendingReader, (ignored) -> new ArrayList<>())
                         .addAll(pendingAssignmentForReader);
+                remainingLakeSnapshotSplits.addAll(
+                        pendingAssignmentForReader.stream()
+                                .filter(SourceSplitBase::isLakeSplit)
+                                .map(x -> (LakeSnapshotSplit) x)
+                                .collect(Collectors.toList()));
+
+                Map<TableBucket, Long> tableBucketRecordsToSplit =
+                        remainingLakeSnapshotSplits.stream()
+                                .collect(
+                                        Collectors.toMap(
+                                                SourceSplitBase::getTableBucket,
+                                                LakeSnapshotSplit::getRecordsToSplit));
+                tableBucketsOffset.putAll(tableBucketRecordsToSplit);
 
                 // Mark pending bucket assignment as already assigned
                 pendingAssignmentForReader.forEach(
@@ -657,6 +708,9 @@ public class FlinkSourceEnumerator
                                                 split.getPartitionName(),
                                                 "partition name shouldn't be null for the splits of partitioned table.");
                                 assignedPartitions.put(partitionId, partitionName);
+                            }
+                            if (split.isLakeSplit()) {
+                                remainingLakeSnapshotSplits.remove((LakeSnapshotSplit) split);
                             }
                         });
             }
@@ -783,7 +837,11 @@ public class FlinkSourceEnumerator
     @Override
     public SourceEnumeratorState snapshotState(long checkpointId) {
         final SourceEnumeratorState enumeratorState =
-                new SourceEnumeratorState(assignedTableBuckets, assignedPartitions);
+                new SourceEnumeratorState(
+                        assignedTableBuckets,
+                        assignedPartitions,
+                        remainingLakeSnapshotSplits,
+                        tableBucketsOffset);
         LOG.debug("Source Checkpoint is {}", enumeratorState);
         return enumeratorState;
     }

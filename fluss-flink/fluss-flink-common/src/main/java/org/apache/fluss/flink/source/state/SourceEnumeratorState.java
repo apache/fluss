@@ -17,8 +17,10 @@
 
 package org.apache.fluss.flink.source.state;
 
+import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
 import org.apache.fluss.metadata.TableBucket;
 
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -33,10 +35,19 @@ public class SourceEnumeratorState {
     // mapping from partition id to partition name
     private final Map<Long, String> assignedPartitions;
 
+    private final List<LakeSnapshotSplit> remainingLakeSnapshotSplits;
+
+    private final Map<TableBucket, Long> tableBucketsOffset;
+
     public SourceEnumeratorState(
-            Set<TableBucket> assignedBuckets, Map<Long, String> assignedPartitions) {
+            Set<TableBucket> assignedBuckets,
+            Map<Long, String> assignedPartitions,
+            List<LakeSnapshotSplit> remainingLakeSnapshotSplits,
+            Map<TableBucket, Long> tableBucketsOffset) {
         this.assignedBuckets = assignedBuckets;
         this.assignedPartitions = assignedPartitions;
+        this.remainingLakeSnapshotSplits = remainingLakeSnapshotSplits;
+        this.tableBucketsOffset = tableBucketsOffset;
     }
 
     public Set<TableBucket> getAssignedBuckets() {
@@ -45,6 +56,14 @@ public class SourceEnumeratorState {
 
     public Map<Long, String> getAssignedPartitions() {
         return assignedPartitions;
+    }
+
+    public Map<TableBucket, Long> getTableBucketsOffset() {
+        return tableBucketsOffset;
+    }
+
+    public List<LakeSnapshotSplit> getRemainingLakeSnapshotSplits() {
+        return remainingLakeSnapshotSplits;
     }
 
     @Override

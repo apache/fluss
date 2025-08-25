@@ -75,7 +75,11 @@ public class LakeSplitGenerator {
         this.listPartitionSupplier = listPartitionSupplier;
     }
 
-    public List<SourceSplitBase> generateHybridLakeSplits(Map<Long, String> newPartitionNameById)
+    public List<SourceSplitBase> generateHybridLakeSplits(
+            Map<Long, String> newPartitionNameById,
+            boolean loadLakeSplits,
+            List<LakeSplit> remainingLakeSplits,
+            Map<TableBucket, Long> tableBucketsOffsetState)
             throws Exception {
         // get the file store
         LakeSnapshot lakeSnapshotInfo =
@@ -84,17 +88,32 @@ public class LakeSplitGenerator {
         boolean isLogTable = !tableInfo.hasPrimaryKey();
         boolean isPartitioned = tableInfo.isPartitioned();
 
-        Map<String, Map<Integer, List<LakeSplit>>> lakeSplits =
-                groupLakeSplits(
-                        lakeSource
-                                .createPlanner(
-                                        (LakeSource.PlannerContext) lakeSnapshotInfo::getSnapshotId)
-                                .plan());
-
-        if (lakeSplits.isEmpty()) {
-            return Collections.emptyList();
+        Map<String, Map<Integer, List<LakeSplit>>> lakeSplits;
+        if (remainingLakeSplits.isEmpty()) {
+            if (loadLakeSplits) {
+                lakeSplits = Collections.emptyMap();
+            } else {
+                lakeSplits =
+                        groupLakeSplits(
+                                lakeSource
+                                        .createPlanner(
+                                                (LakeSource.PlannerContext)
+                                                        lakeSnapshotInfo::getSnapshotId)
+                                        .plan());
+            }
+        } else {
+            lakeSplits = groupLakeSplits(remainingLakeSplits);
         }
 
+        // TODO 注释掉是否有问题, 看单元测试结果
+        //        if (lakeSplits.isEmpty()) {
+        //            return Collections.emptyList();
+        //        }
+        Map<TableBucket, Long> tableBucketsOffset = lakeSnapshotInfo.getTableBucketsOffset();
+        if (!tableBucketsOffsetState.isEmpty()) {
+            // TODO tableBucketsOffsetState 未赋值
+            tableBucketsOffset = tableBucketsOffsetState;
+        }
         if (isPartitioned) {
             Map<Long, String> partitionNameById;
             if (newPartitionNameById.isEmpty()) {
@@ -110,16 +129,13 @@ public class LakeSplitGenerator {
             }
 
             return generatePartitionTableSplit(
-                    lakeSplits,
-                    isLogTable,
-                    lakeSnapshotInfo.getTableBucketsOffset(),
-                    partitionNameById);
+                    lakeSplits, isLogTable, tableBucketsOffset, partitionNameById);
         } else {
             Map<Integer, List<LakeSplit>> nonPartitionLakeSplits =
                     lakeSplits.values().iterator().next();
             // non-partitioned table
             return generateNoPartitionedTableSplit(
-                    nonPartitionLakeSplits, isLogTable, lakeSnapshotInfo.getTableBucketsOffset());
+                    nonPartitionLakeSplits, isLogTable, tableBucketsOffset);
         }
     }
 
@@ -224,10 +240,12 @@ public class LakeSplitGenerator {
             Map<Integer, Long> bucketEndOffset) {
         List<SourceSplitBase> splits = new ArrayList<>();
         if (isLogTable) {
+            int needInitOffsetBucketsNum = bucketCount;
             if (lakeSplits != null) {
                 splits.addAll(toLakeSnapshotSplits(lakeSplits, partitionName, partitionId));
+                needInitOffsetBucketsNum = lakeSplits.size();
             }
-            for (int bucket = 0; bucket < bucketCount; bucket++) {
+            for (int bucket = 0; bucket < needInitOffsetBucketsNum; bucket++) {
                 TableBucket tableBucket =
                         new TableBucket(tableInfo.getTableId(), partitionId, bucket);
                 Long snapshotLogOffset = tableBucketSnapshotLogOffset.get(tableBucket);
