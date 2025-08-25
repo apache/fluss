@@ -75,7 +75,8 @@ public class LakeSplitGenerator {
         this.listPartitionSupplier = listPartitionSupplier;
     }
 
-    public List<SourceSplitBase> generateHybridLakeSplits() throws Exception {
+    public List<SourceSplitBase> generateHybridLakeSplits(Map<Long, String> newPartitionNameById)
+            throws Exception {
         // get the file store
         LakeSnapshot lakeSnapshotInfo =
                 flussAdmin.getLatestLakeSnapshot(tableInfo.getTablePath()).get();
@@ -95,13 +96,19 @@ public class LakeSplitGenerator {
         }
 
         if (isPartitioned) {
-            Set<PartitionInfo> partitionInfos = listPartitionSupplier.get();
-            Map<Long, String> partitionNameById =
-                    partitionInfos.stream()
-                            .collect(
-                                    Collectors.toMap(
-                                            PartitionInfo::getPartitionId,
-                                            PartitionInfo::getPartitionName));
+            Map<Long, String> partitionNameById;
+            if (newPartitionNameById.isEmpty()) {
+                Set<PartitionInfo> partitionInfos = listPartitionSupplier.get();
+                partitionNameById =
+                        partitionInfos.stream()
+                                .collect(
+                                        Collectors.toMap(
+                                                PartitionInfo::getPartitionId,
+                                                PartitionInfo::getPartitionName));
+            } else {
+                partitionNameById = newPartitionNameById;
+            }
+
             return generatePartitionTableSplit(
                     lakeSplits,
                     isLogTable,
@@ -189,7 +196,7 @@ public class LakeSplitGenerator {
         // iterate remain fluss splits
         for (Map.Entry<String, Long> partitionIdByNameEntry : flussPartitionIdByName.entrySet()) {
             String partitionName = partitionIdByNameEntry.getKey();
-            long partitionId = partitionIdByNameEntry.getValue();
+            Long partitionId = partitionIdByNameEntry.getValue();
             Map<Integer, Long> bucketEndOffset =
                     stoppingOffsetInitializer.getBucketOffsets(
                             partitionName,
@@ -224,7 +231,7 @@ public class LakeSplitGenerator {
                 TableBucket tableBucket =
                         new TableBucket(tableInfo.getTableId(), partitionId, bucket);
                 Long snapshotLogOffset = tableBucketSnapshotLogOffset.get(tableBucket);
-                long stoppingOffset = bucketEndOffset.get(bucket);
+                Long stoppingOffset = bucketEndOffset.get(bucket);
                 if (snapshotLogOffset == null) {
                     // no any data commit to this bucket, scan from fluss log
                     splits.add(
@@ -248,7 +255,7 @@ public class LakeSplitGenerator {
                 TableBucket tableBucket =
                         new TableBucket(tableInfo.getTableId(), partitionId, bucket);
                 Long snapshotLogOffset = tableBucketSnapshotLogOffset.get(tableBucket);
-                long stoppingOffset = bucketEndOffset.get(bucket);
+                Long stoppingOffset = bucketEndOffset.get(bucket);
                 splits.add(
                         generateSplitForPrimaryKeyTableBucket(
                                 lakeSplits != null ? lakeSplits.get(bucket) : null,
