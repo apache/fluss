@@ -585,6 +585,7 @@
                 <inherited>false</inherited>
                 <executions>
                     <execution>
+                        <id>rat-check</id>
                         <phase>validate</phase>
                         <goals>
                             <goal>check</goal>
@@ -619,12 +620,27 @@
                                 <pattern>Licensed to the Apache Software Foundation (ASF) under one</pattern>
                             </patterns>
                         </license>
+                        <license>
+                            <!-- Explicitly forbid Alibaba license to catch non-compliant headers during our migration from Alibaba to ASF.
+                                We must add this check because an Alibaba license header may contain Apache text and be wrongly marked as approved. -->
+                            <family>BAN</family>
+                            <text>Alibaba Group Holding Ltd</text>
+                        </license>
                     </licenses>
+                    <families>
+                        <family>
+                            <id>BAN</id>
+                            <name>The license not allowed in this project.</name>
+                        </family>
+                    </families>
                     <licenseFamilies>
                         <licenseFamily implementation="org.apache.rat.license.SimpleLicenseFamily">
                             <familyName>Apache License 2.0</familyName>
                         </licenseFamily>
                     </licenseFamilies>
+                    <approvedLicenses>
+                        <id>AL2</id>
+                    </approvedLicenses>
                     <excludes>
                         <!-- Additional files like .gitignore etc.-->
                         <exclude>**/.*/**</exclude>
