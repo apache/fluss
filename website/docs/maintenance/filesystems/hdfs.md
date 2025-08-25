@@ -3,6 +3,24 @@ title: HDFS
 sidebar_position: 2
 ---
 
+<!--
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-->
+
 # HDFS
 [HDFS (Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) is the primary storage system used by Hadoop applications. Fluss
 supports HDFS as a remote storage.
@@ -52,4 +70,18 @@ fluss.hadoop.dfs.datanode.kerberos.principal: hdfs/_HOST@REALM.COM
 fluss.hadoop.dfs.web.authentication.kerberos.principal: HTTP/_HOST@REALM.COM
 # Client principal and keytab (adjust paths as needed)  
 fluss.hadoop.hadoop.security.kerberos.ticket.cache.path: /tmp/krb5cc_1000
+```
+
+#### Use Machine Hadoop Environment Configuration
+
+Fluss includes bundled Hadoop libraries with version 3.3.4 for deploying Fluss in machine without Hadoop installed. 
+For most use cases, these work perfectly. However, you should configure your machine's native Hadoop environment if:
+1. Your HDFS uses kerberos security
+2. You need to avoid version conflicts between Fluss's bundled hadoop libraries and your HDFS cluster
+
+Fluss automatically loads HDFS dependencies on the machine via the HADOOP_CLASSPATH environment variable.
+Make sure that the HADOOP_CLASSPATH environment variable is set up (it can be checked by running echo $HADOOP_CLASSPATH).
+If not, set it up using
+```bash
+export HADOOP_CLASSPATH=`hadoop classpath`
 ```
