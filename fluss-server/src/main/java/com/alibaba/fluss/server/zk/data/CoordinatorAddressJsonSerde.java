@@ -52,7 +52,7 @@ public class CoordinatorAddressJsonSerde
             throws IOException {
         generator.writeStartObject();
         writeVersion(generator);
-        generator.writeStringField(ID, coordinatorAddress.getId());
+        generator.writeNumberField(ID, coordinatorAddress.getId());
         generator.writeStringField(
                 LISTENERS, Endpoint.toListenersString(coordinatorAddress.getEndpoints()));
         generator.writeEndObject();
@@ -61,7 +61,7 @@ public class CoordinatorAddressJsonSerde
     @Override
     public CoordinatorAddress deserialize(JsonNode node) {
         int version = node.get(VERSION_KEY).asInt();
-        String id = node.get(ID).asText();
+        int id = node.get(ID).asInt();
         List<Endpoint> endpoints;
         if (version == 1) {
             String host = node.get(HOST).asText();
