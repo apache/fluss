@@ -59,19 +59,17 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 class KvReplicaRestoreITCase {
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(initConfig())
+            .build();
 
     private ZooKeeperCompletedSnapshotHandleStore completedSnapshotHandleStore;
 
     @BeforeEach
     void beforeEach() {
         completedSnapshotHandleStore =
-                new ZooKeeperCompletedSnapshotHandleStore(
-                        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient());
+                new ZooKeeperCompletedSnapshotHandleStore(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient());
     }
 
     @Test
@@ -82,8 +80,7 @@ class KvReplicaRestoreITCase {
         List<TableBucket> tableBuckets = new ArrayList<>();
         for (int i = 0; i < tableNum; i++) {
             TablePath tablePath = TablePath.of("test_db", "test_table_" + i);
-            long tableId =
-                    createTable(FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
+            long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
             for (int bucket = 0; bucket < bucketNum; bucket++) {
                 tableBuckets.add(new TableBucket(tableId, bucket));
             }
@@ -94,8 +91,7 @@ class KvReplicaRestoreITCase {
             FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tableBucket);
             int leaderServer = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tableBucket);
 
-            KvRecordBatch kvRecordBatch =
-                    genKvRecordBatch(new Object[] {1, "k1"}, new Object[] {2, "k2"});
+            KvRecordBatch kvRecordBatch = genKvRecordBatch(new Object[] {1, "k1"}, new Object[] {2, "k2"});
 
             putRecordBatch(tableBucket, leaderServer, kvRecordBatch);
         }
@@ -104,7 +100,9 @@ class KvReplicaRestoreITCase {
         for (TableBucket tableBucket : tableBuckets) {
             final long snapshot1Id = 0;
             waitUntil(
-                    () -> completedSnapshotHandleStore.get(tableBucket, snapshot1Id).isPresent(),
+                    () -> completedSnapshotHandleStore
+                            .get(tableBucket, snapshot1Id)
+                            .isPresent(),
                     Duration.ofMinutes(2),
                     "Fail to wait for the snapshot 0 for bucket " + tableBucket);
         }
@@ -144,8 +142,7 @@ class KvReplicaRestoreITCase {
                         + ", restored leader is "
                         + newLeaderServer.get());
         // wait the new replica become leader
-        TabletServerGateway leaderGateway =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(newLeaderServer.get());
+        TabletServerGateway leaderGateway = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(newLeaderServer.get());
 
         // although the records have been put into kv, but has been written to log,
         // once restore in another server, it should also restore the records to kv
@@ -155,21 +152,18 @@ class KvReplicaRestoreITCase {
         waitUntil(
                 () -> {
                     try {
-                        PbLookupRespForBucket pbLookupRespForBucket =
-                                leaderGateway
-                                        .lookup(
-                                                newLookupRequest(
-                                                        tableBucket.getTableId(),
-                                                        tableBucket.getBucket(),
-                                                        expectedKeyValues.get(recordsNum - 1).f0))
-                                        .get()
-                                        .getBucketsRespAt(0);
+                        PbLookupRespForBucket pbLookupRespForBucket = leaderGateway
+                                .lookup(newLookupRequest(
+                                        tableBucket.getTableId(),
+                                        tableBucket.getBucket(),
+                                        expectedKeyValues.get(recordsNum - 1).f0))
+                                .get()
+                                .getBucketsRespAt(0);
 
                         return pbLookupRespForBucket.getValuesCount() > 0
                                 && pbLookupRespForBucket.getValueAt(0).hasValues();
                     } catch (Exception e) {
-                        if (ExceptionUtils.stripExecutionException(e)
-                                instanceof NotLeaderOrFollowerException) {
+                        if (ExceptionUtils.stripExecutionException(e) instanceof NotLeaderOrFollowerException) {
                             // the new leader is not ready yet.
                             return false;
                         }
@@ -183,11 +177,7 @@ class KvReplicaRestoreITCase {
         for (Tuple2<byte[], byte[]> keyValue : expectedKeyValues) {
             assertLookupResponse(
                     leaderGateway
-                            .lookup(
-                                    newLookupRequest(
-                                            tableBucket.getTableId(),
-                                            tableBucket.getBucket(),
-                                            keyValue.f0))
+                            .lookup(newLookupRequest(tableBucket.getTableId(), tableBucket.getBucket(), keyValue.f0))
                             .get(),
                     keyValue.f1);
         }
@@ -206,13 +196,10 @@ class KvReplicaRestoreITCase {
         return conf;
     }
 
-    private void putRecordBatch(
-            TableBucket tableBucket, int leaderServer, KvRecordBatch kvRecordBatch) {
+    private void putRecordBatch(TableBucket tableBucket, int leaderServer, KvRecordBatch kvRecordBatch) {
         PutKvRequest putKvRequest =
-                newPutKvRequest(
-                        tableBucket.getTableId(), tableBucket.getBucket(), -1, kvRecordBatch);
-        TabletServerGateway leaderGateway =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
+                newPutKvRequest(tableBucket.getTableId(), tableBucket.getBucket(), -1, kvRecordBatch);
+        TabletServerGateway leaderGateway = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
         leaderGateway.putKv(putKvRequest);
     }
 }

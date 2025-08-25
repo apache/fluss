@@ -46,58 +46,48 @@ class FlussSinkBuilderTest {
     @Test
     void testConfigurationValidation() throws Exception {
         // Test missing bootstrap servers
-        assertThatThrownBy(
-                        () ->
-                                new FlussSinkBuilder<Order>()
-                                        .setDatabase("testDb")
-                                        .setTable("testTable")
-                                        .build())
+        assertThatThrownBy(() -> new FlussSinkBuilder<Order>()
+                        .setDatabase("testDb")
+                        .setTable("testTable")
+                        .build())
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("BootstrapServers is required but not provided.");
 
         // Test missing database
-        assertThatThrownBy(
-                        () ->
-                                new FlussSinkBuilder<Order>()
-                                        .setBootstrapServers(bootstrapServers)
-                                        .setTable(tableName)
-                                        .setSerializationSchema(new OrderSerializationSchema())
-                                        .build())
+        assertThatThrownBy(() -> new FlussSinkBuilder<Order>()
+                        .setBootstrapServers(bootstrapServers)
+                        .setTable(tableName)
+                        .setSerializationSchema(new OrderSerializationSchema())
+                        .build())
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("Database is required but not provided.");
 
         // Test empty database
-        assertThatThrownBy(
-                        () ->
-                                new FlussSinkBuilder<Order>()
-                                        .setBootstrapServers(bootstrapServers)
-                                        .setDatabase("")
-                                        .setTable(tableName)
-                                        .setSerializationSchema(new OrderSerializationSchema())
-                                        .build())
+        assertThatThrownBy(() -> new FlussSinkBuilder<Order>()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase("")
+                        .setTable(tableName)
+                        .setSerializationSchema(new OrderSerializationSchema())
+                        .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Database cannot be empty");
 
         // Test missing table name
-        assertThatThrownBy(
-                        () ->
-                                new FlussSinkBuilder<Order>()
-                                        .setBootstrapServers(bootstrapServers)
-                                        .setDatabase("testDb")
-                                        .setSerializationSchema(new OrderSerializationSchema())
-                                        .build())
+        assertThatThrownBy(() -> new FlussSinkBuilder<Order>()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase("testDb")
+                        .setSerializationSchema(new OrderSerializationSchema())
+                        .build())
                 .isInstanceOf(NullPointerException.class)
                 .hasMessageContaining("Table name is required");
 
         // Test empty table name
-        assertThatThrownBy(
-                        () ->
-                                new FlussSinkBuilder<Order>()
-                                        .setBootstrapServers(bootstrapServers)
-                                        .setDatabase("testDb")
-                                        .setTable("")
-                                        .setSerializationSchema(new OrderSerializationSchema())
-                                        .build())
+        assertThatThrownBy(() -> new FlussSinkBuilder<Order>()
+                        .setBootstrapServers(bootstrapServers)
+                        .setDatabase("testDb")
+                        .setTable("")
+                        .setSerializationSchema(new OrderSerializationSchema())
+                        .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Table name cannot be empty");
     }
@@ -164,14 +154,13 @@ class FlussSinkBuilderTest {
     @Test
     void testFluentChaining() {
         // Test that all methods can be chained
-        FlussSinkBuilder<Order> chainedBuilder =
-                new FlussSinkBuilder<Order>()
-                        .setBootstrapServers(bootstrapServers)
-                        .setDatabase(databaseName)
-                        .setTable(tableName)
-                        .setOption("key1", "value1")
-                        .setOptions(new HashMap<>())
-                        .setShuffleByBucketId(false);
+        FlussSinkBuilder<Order> chainedBuilder = new FlussSinkBuilder<Order>()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(databaseName)
+                .setTable(tableName)
+                .setOption("key1", "value1")
+                .setOptions(new HashMap<>())
+                .setShuffleByBucketId(false);
 
         // Verify the builder instance is returned
         assertThat(chainedBuilder).isInstanceOf(FlussSinkBuilder.class);

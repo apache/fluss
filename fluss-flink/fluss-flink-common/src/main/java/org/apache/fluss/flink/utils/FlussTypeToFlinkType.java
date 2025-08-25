@@ -78,8 +78,7 @@ class FlussTypeToFlinkType implements DataTypeVisitor<DataType> {
     @Override
     public DataType visit(DecimalType decimalType) {
         return withNullability(
-                DataTypes.DECIMAL(decimalType.getPrecision(), decimalType.getScale()),
-                decimalType.isNullable());
+                DataTypes.DECIMAL(decimalType.getPrecision(), decimalType.getScale()), decimalType.isNullable());
     }
 
     @Override
@@ -124,8 +123,7 @@ class FlussTypeToFlinkType implements DataTypeVisitor<DataType> {
 
     @Override
     public DataType visit(TimestampType timestampType) {
-        return withNullability(
-                DataTypes.TIMESTAMP(timestampType.getPrecision()), timestampType.isNullable());
+        return withNullability(DataTypes.TIMESTAMP(timestampType.getPrecision()), timestampType.isNullable());
     }
 
     @Override
@@ -137,15 +135,15 @@ class FlussTypeToFlinkType implements DataTypeVisitor<DataType> {
 
     @Override
     public DataType visit(ArrayType arrayType) {
-        return withNullability(
-                DataTypes.ARRAY(arrayType.getElementType().accept(this)), arrayType.isNullable());
+        return withNullability(DataTypes.ARRAY(arrayType.getElementType().accept(this)), arrayType.isNullable());
     }
 
     @Override
     public DataType visit(MapType mapType) {
         return withNullability(
                 DataTypes.MAP(
-                        mapType.getKeyType().accept(this), mapType.getValueType().accept(this)),
+                        mapType.getKeyType().accept(this),
+                        mapType.getValueType().accept(this)),
                 mapType.isNullable());
     }
 
@@ -155,11 +153,10 @@ class FlussTypeToFlinkType implements DataTypeVisitor<DataType> {
         for (DataField field : rowType.getFields()) {
             DataTypes.Field dataTypeField;
             if (field.getDescription().isPresent()) {
-                dataTypeField =
-                        DataTypes.FIELD(
-                                field.getName(),
-                                field.getType().accept(this),
-                                field.getDescription().get());
+                dataTypeField = DataTypes.FIELD(
+                        field.getName(),
+                        field.getType().accept(this),
+                        field.getDescription().get());
             } else {
                 dataTypeField = DataTypes.FIELD(field.getName(), field.getType().accept(this));
             }

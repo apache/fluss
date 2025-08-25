@@ -46,14 +46,8 @@ class FlinkRowDataChannelComputerTest {
     @Test
     void testSelectChanel() {
 
-        FlinkRowDataChannelComputer<RowData> channelComputer =
-                new FlinkRowDataChannelComputer<>(
-                        DATA1_ROW_TYPE,
-                        Collections.singletonList("a"),
-                        Collections.emptyList(),
-                        null,
-                        10,
-                        serializationSchema);
+        FlinkRowDataChannelComputer<RowData> channelComputer = new FlinkRowDataChannelComputer<>(
+                DATA1_ROW_TYPE, Collections.singletonList("a"), Collections.emptyList(), null, 10, serializationSchema);
 
         for (int numChannel = 1; numChannel <= 10; numChannel++) {
             channelComputer.setup(numChannel);
@@ -76,14 +70,13 @@ class FlinkRowDataChannelComputerTest {
 
     @Test
     void testSelectChanelForPartitionedTable() {
-        FlinkRowDataChannelComputer<RowData> channelComputer =
-                new FlinkRowDataChannelComputer<>(
-                        DATA1_ROW_TYPE,
-                        Collections.singletonList("a"),
-                        Collections.singletonList("b"),
-                        null,
-                        10,
-                        serializationSchema);
+        FlinkRowDataChannelComputer<RowData> channelComputer = new FlinkRowDataChannelComputer<>(
+                DATA1_ROW_TYPE,
+                Collections.singletonList("a"),
+                Collections.singletonList("b"),
+                null,
+                10,
+                serializationSchema);
 
         for (int numChannel = 1; numChannel <= 10; numChannel++) {
             channelComputer.setup(numChannel);

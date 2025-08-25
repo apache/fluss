@@ -311,16 +311,14 @@ public class VarLengthUtils {
     }
 
     private static IllegalArgumentException illegalVarIntException(int value) {
-        throw new IllegalArgumentException(
-                "VarInt is too long, the most significant bit in the 5th byte is set, "
-                        + "converted value: "
-                        + Integer.toHexString(value));
+        throw new IllegalArgumentException("VarInt is too long, the most significant bit in the 5th byte is set, "
+                + "converted value: "
+                + Integer.toHexString(value));
     }
 
     private static IllegalArgumentException illegalVarLongException(long value) {
-        throw new IllegalArgumentException(
-                "VarLong is too long, most significant bit in the 10th byte is set, "
-                        + "converted value: "
-                        + Long.toHexString(value));
+        throw new IllegalArgumentException("VarLong is too long, most significant bit in the 10th byte is set, "
+                + "converted value: "
+                + Long.toHexString(value));
     }
 }

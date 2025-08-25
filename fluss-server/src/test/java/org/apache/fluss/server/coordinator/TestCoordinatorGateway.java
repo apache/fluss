@@ -138,8 +138,7 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     }
 
     @Override
-    public CompletableFuture<CreatePartitionResponse> createPartition(
-            CreatePartitionRequest request) {
+    public CompletableFuture<CreatePartitionResponse> createPartition(CreatePartitionRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -160,8 +159,7 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     }
 
     @Override
-    public CompletableFuture<GetDatabaseInfoResponse> getDatabaseInfo(
-            GetDatabaseInfoRequest request) {
+    public CompletableFuture<GetDatabaseInfoResponse> getDatabaseInfo(GetDatabaseInfoRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -196,8 +194,7 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     }
 
     @Override
-    public CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(
-            GetLatestKvSnapshotsRequest request) {
+    public CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(GetLatestKvSnapshotsRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -214,8 +211,7 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     }
 
     @Override
-    public CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(
-            ListPartitionInfosRequest request) {
+    public CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(ListPartitionInfosRequest request) {
         return null;
     }
 
@@ -224,39 +220,32 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
         Map<TableBucket, LeaderAndIsr> adjustIsrData = getAdjustIsrData(request);
         List<AdjustIsrResultForBucket> resultForBuckets = new ArrayList<>();
 
-        adjustIsrData.forEach(
-                (tb, leaderAndIsr) -> {
-                    Integer currentLeaderEpoch = this.currentLeaderEpoch.getOrDefault(tb, 0);
-                    int requestLeaderEpoch = leaderAndIsr.leaderEpoch();
+        adjustIsrData.forEach((tb, leaderAndIsr) -> {
+            Integer currentLeaderEpoch = this.currentLeaderEpoch.getOrDefault(tb, 0);
+            int requestLeaderEpoch = leaderAndIsr.leaderEpoch();
 
-                    AdjustIsrResultForBucket adjustIsrResultForBucket;
-                    if (requestLeaderEpoch < currentLeaderEpoch) {
-                        adjustIsrResultForBucket =
-                                new AdjustIsrResultForBucket(
-                                        tb,
-                                        ApiError.fromThrowable(
-                                                new FencedLeaderEpochException(
-                                                        "request leader epoch is fenced.")));
-                    } else {
-                        adjustIsrResultForBucket =
-                                new AdjustIsrResultForBucket(
-                                        tb,
-                                        new LeaderAndIsr(
-                                                leaderAndIsr.leader(),
-                                                currentLeaderEpoch,
-                                                leaderAndIsr.isr(),
-                                                leaderAndIsr.coordinatorEpoch(),
-                                                leaderAndIsr.bucketEpoch() + 1));
-                    }
+            AdjustIsrResultForBucket adjustIsrResultForBucket;
+            if (requestLeaderEpoch < currentLeaderEpoch) {
+                adjustIsrResultForBucket = new AdjustIsrResultForBucket(
+                        tb, ApiError.fromThrowable(new FencedLeaderEpochException("request leader epoch is fenced.")));
+            } else {
+                adjustIsrResultForBucket = new AdjustIsrResultForBucket(
+                        tb,
+                        new LeaderAndIsr(
+                                leaderAndIsr.leader(),
+                                currentLeaderEpoch,
+                                leaderAndIsr.isr(),
+                                leaderAndIsr.coordinatorEpoch(),
+                                leaderAndIsr.bucketEpoch() + 1));
+            }
 
-                    resultForBuckets.add(adjustIsrResultForBucket);
-                });
+            resultForBuckets.add(adjustIsrResultForBucket);
+        });
         return CompletableFuture.completedFuture(makeAdjustIsrResponse(resultForBuckets));
     }
 
     @Override
-    public CompletableFuture<CommitKvSnapshotResponse> commitKvSnapshot(
-            CommitKvSnapshotRequest request) {
+    public CompletableFuture<CommitKvSnapshotResponse> commitKvSnapshot(CommitKvSnapshotRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -264,12 +253,10 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     public CompletableFuture<CommitRemoteLogManifestResponse> commitRemoteLogManifest(
             CommitRemoteLogManifestRequest request) {
         if (commitRemoteLogManifestFail.get()) {
-            return CompletableFuture.completedFuture(
-                    new CommitRemoteLogManifestResponse().setCommitSuccess(false));
+            return CompletableFuture.completedFuture(new CommitRemoteLogManifestResponse().setCommitSuccess(false));
         }
         checkNotNull(zkClient, "zkClient is null");
-        CommitRemoteLogManifestData commitRemoteLogManifestData =
-                getCommitRemoteLogManifestData(request);
+        CommitRemoteLogManifestData commitRemoteLogManifestData = getCommitRemoteLogManifestData(request);
         CommitRemoteLogManifestResponse response = new CommitRemoteLogManifestResponse();
         try {
             zkClient.upsertRemoteLogManifestHandle(
@@ -291,8 +278,7 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     }
 
     @Override
-    public CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(
-            LakeTieringHeartbeatRequest request) {
+    public CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(LakeTieringHeartbeatRequest request) {
         throw new UnsupportedOperationException();
     }
 

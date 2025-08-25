@@ -47,13 +47,10 @@ public class ConfigurationParserUtilsTest {
         final String arg1 = "arg1";
         final String arg2 = "arg2";
 
-        final String[] args = {
-            "--configDir", confDir, String.format("-D%s=%s", key, value), arg1, arg2
-        };
+        final String[] args = {"--configDir", confDir, String.format("-D%s=%s", key, value), arg1, arg2};
 
-        Configuration configuration =
-                ConfigurationParserUtils.loadCommonConfiguration(
-                        args, ConfigurationParserUtilsTest.class.getSimpleName());
+        Configuration configuration = ConfigurationParserUtils.loadCommonConfiguration(
+                args, ConfigurationParserUtilsTest.class.getSimpleName());
         // should respect the configurations in args
         assertThat(configuration.getString(ConfigBuilder.key(key).stringType().noDefaultValue()))
                 .isEqualTo(value);
@@ -74,27 +71,20 @@ public class ConfigurationParserUtilsTest {
         final String configKey = GlobalConfiguration.FLUSS_CONF_FILENAME;
         final String configValue = userDefinedConfigFile.toString();
 
-        final String[] args = {
-            "--configDir", confDir, String.format("-D%s=%s", configKey, configValue)
-        };
-        Configuration configuration =
-                ConfigurationParserUtils.loadCommonConfiguration(
-                        args, ConfigurationParserUtilsTest.class.getSimpleName());
+        final String[] args = {"--configDir", confDir, String.format("-D%s=%s", configKey, configValue)};
+        Configuration configuration = ConfigurationParserUtils.loadCommonConfiguration(
+                args, ConfigurationParserUtilsTest.class.getSimpleName());
         // should use the configurations in the user-defined-server.yaml
-        assertThat(
-                        configuration.get(
-                                ConfigBuilder.key("coordinator.port").intType().noDefaultValue()))
+        assertThat(configuration.get(
+                        ConfigBuilder.key("coordinator.port").intType().noDefaultValue()))
                 .isEqualTo(1000);
     }
 
     @Test
     void testLoadCommonConfigurationThrowException() {
         // should throw exception when miss options 'c'('configDir')
-        assertThatThrownBy(
-                        () ->
-                                ConfigurationParserUtils.loadCommonConfiguration(
-                                        new String[0],
-                                        ConfigurationParserUtilsTest.class.getSimpleName()))
+        assertThatThrownBy(() -> ConfigurationParserUtils.loadCommonConfiguration(
+                        new String[0], ConfigurationParserUtilsTest.class.getSimpleName()))
                 .isInstanceOf(FlussParseException.class)
                 .hasMessageContaining("Failed to parse the command line arguments")
                 .cause()

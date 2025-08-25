@@ -36,11 +36,8 @@ class RocksDBKvTest {
         File instanceBasePath = tempDir.toFile();
         RocksDBResourceContainer rocksDBResourceContainer =
                 new RocksDBResourceContainer(new Configuration(), instanceBasePath);
-        RocksDBKvBuilder rocksDBKvBuilder =
-                new RocksDBKvBuilder(
-                        instanceBasePath,
-                        rocksDBResourceContainer,
-                        rocksDBResourceContainer.getColumnOptions());
+        RocksDBKvBuilder rocksDBKvBuilder = new RocksDBKvBuilder(
+                instanceBasePath, rocksDBResourceContainer, rocksDBResourceContainer.getColumnOptions());
 
         try (RocksDBKv rocksDBKv = rocksDBKvBuilder.build()) {
             // put the k/v

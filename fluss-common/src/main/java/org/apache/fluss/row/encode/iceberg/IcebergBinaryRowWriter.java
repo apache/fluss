@@ -216,8 +216,7 @@ class IcebergBinaryRowWriter {
                 return (writer, value) -> writer.writeBytes((byte[]) value, true);
 
             default:
-                throw new IllegalArgumentException(
-                        "Unsupported type for Iceberg binary row writer: " + fieldType);
+                throw new IllegalArgumentException("Unsupported type for Iceberg binary row writer: " + fieldType);
         }
     }
 

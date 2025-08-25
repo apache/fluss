@@ -111,8 +111,7 @@ public class TestTabletServerGateway implements TabletServerGateway {
 
     // Use concurrent queue for storing request and related completable future response so that
     // requests may be queried from a different thread.
-    private final Queue<Tuple2<ApiMessage, CompletableFuture<?>>> requests =
-            new ConcurrentLinkedDeque<>();
+    private final Queue<Tuple2<ApiMessage, CompletableFuture<?>>> requests = new ConcurrentLinkedDeque<>();
 
     public TestTabletServerGateway(boolean alwaysFail) {
         this.alwaysFail = alwaysFail;
@@ -124,8 +123,7 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
-    public CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(
-            GetLatestKvSnapshotsRequest request) {
+    public CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(GetLatestKvSnapshotsRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -142,8 +140,7 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
-    public CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(
-            ListPartitionInfosRequest request) {
+    public CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(ListPartitionInfosRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -164,12 +161,11 @@ public class TestTabletServerGateway implements TabletServerGateway {
     public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
         Map<TableBucket, FetchReqInfo> fetchLogData = getFetchLogData(request);
         Map<TableBucket, FetchLogResultForBucket> resultForBucketMap = new HashMap<>();
-        fetchLogData.forEach(
-                (tableBucket, fetchData) -> {
-                    FetchLogResultForBucket fetchLogResultForBucket =
-                            new FetchLogResultForBucket(tableBucket, MemoryLogRecords.EMPTY, 0L);
-                    resultForBucketMap.put(tableBucket, fetchLogResultForBucket);
-                });
+        fetchLogData.forEach((tableBucket, fetchData) -> {
+            FetchLogResultForBucket fetchLogResultForBucket =
+                    new FetchLogResultForBucket(tableBucket, MemoryLogRecords.EMPTY, 0L);
+            resultForBucketMap.put(tableBucket, fetchLogResultForBucket);
+        });
         return CompletableFuture.completedFuture(makeFetchLogResponse(resultForBucketMap));
     }
 
@@ -209,8 +205,7 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
-    public CompletableFuture<GetDatabaseInfoResponse> getDatabaseInfo(
-            GetDatabaseInfoRequest request) {
+    public CompletableFuture<GetDatabaseInfoResponse> getDatabaseInfo(GetDatabaseInfoRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -251,19 +246,16 @@ public class TestTabletServerGateway implements TabletServerGateway {
             List<PbNotifyLeaderAndIsrRespForBucket> bucketsResps = new ArrayList<>();
             for (PbNotifyLeaderAndIsrReqForBucket pbNotifyLeaderForBucket :
                     notifyLeaderAndIsrRequest.getNotifyBucketsLeaderReqsList()) {
-                PbNotifyLeaderAndIsrRespForBucket pbNotifyLeaderRespForBucket =
-                        new PbNotifyLeaderAndIsrRespForBucket();
+                PbNotifyLeaderAndIsrRespForBucket pbNotifyLeaderRespForBucket = new PbNotifyLeaderAndIsrRespForBucket();
                 pbNotifyLeaderRespForBucket
                         .setTableBucket()
                         .setTableId(pbNotifyLeaderForBucket.getTableBucket().getTableId())
                         .setBucketId(pbNotifyLeaderForBucket.getTableBucket().getBucketId());
                 pbNotifyLeaderRespForBucket.setErrorCode(1);
-                pbNotifyLeaderRespForBucket.setErrorMessage(
-                        "mock notifyLeaderAndIsr fail for test purpose.");
+                pbNotifyLeaderRespForBucket.setErrorMessage("mock notifyLeaderAndIsr fail for test purpose.");
                 bucketsResps.add(pbNotifyLeaderRespForBucket);
             }
-            NotifyLeaderAndIsrResponse notifyLeaderAndIsrResponse =
-                    new NotifyLeaderAndIsrResponse();
+            NotifyLeaderAndIsrResponse notifyLeaderAndIsrResponse = new NotifyLeaderAndIsrResponse();
             notifyLeaderAndIsrResponse.addAllNotifyBucketsLeaderResps(bucketsResps);
             return CompletableFuture.completedFuture(notifyLeaderAndIsrResponse);
         } else {
@@ -272,13 +264,11 @@ public class TestTabletServerGateway implements TabletServerGateway {
     }
 
     @Override
-    public CompletableFuture<StopReplicaResponse> stopReplica(
-            StopReplicaRequest stopReplicaRequest) {
+    public CompletableFuture<StopReplicaResponse> stopReplica(StopReplicaRequest stopReplicaRequest) {
         StopReplicaResponse stopReplicaResponse;
         if (alwaysFail) {
             stopReplicaResponse =
-                    mockStopReplicaResponse(
-                            stopReplicaRequest, 1, "mock stopReplica fail for test purpose.");
+                    mockStopReplicaResponse(stopReplicaRequest, 1, "mock stopReplica fail for test purpose.");
         } else {
             stopReplicaResponse = mockStopReplicaResponse(stopReplicaRequest, null, null);
         }
@@ -287,8 +277,7 @@ public class TestTabletServerGateway implements TabletServerGateway {
 
     @Override
     public CompletableFuture<InitWriterResponse> initWriter(InitWriterRequest request) {
-        return CompletableFuture.completedFuture(
-                new InitWriterResponse().setWriterId(writerId.getAndIncrement()));
+        return CompletableFuture.completedFuture(new InitWriterResponse().setWriterId(writerId.getAndIncrement()));
     }
 
     @Override
@@ -329,8 +318,7 @@ public class TestTabletServerGateway implements TabletServerGateway {
 
         // Index out of bounds check.
         if (index >= requests.size()) {
-            throw new IllegalArgumentException(
-                    "Index " + index + " is out of bounds for requests queue.");
+            throw new IllegalArgumentException("Index " + index + " is out of bounds for requests queue.");
         }
 
         if (index == 0) {
@@ -354,14 +342,12 @@ public class TestTabletServerGateway implements TabletServerGateway {
 
         // Index out of bounds check.
         if (index >= requests.size()) {
-            throw new IllegalArgumentException(
-                    "Index " + index + " is out of bounds for requests queue.");
+            throw new IllegalArgumentException("Index " + index + " is out of bounds for requests queue.");
         }
 
         CompletableFuture<ApiMessage> result = null;
         int currentIndex = 0;
-        for (Iterator<Tuple2<ApiMessage, CompletableFuture<?>>> it = requests.iterator();
-                it.hasNext(); ) {
+        for (Iterator<Tuple2<ApiMessage, CompletableFuture<?>>> it = requests.iterator(); it.hasNext(); ) {
             Tuple2<ApiMessage, CompletableFuture<?>> tuple = it.next();
             if (currentIndex == index) {
                 result = (CompletableFuture<ApiMessage>) tuple.f1;
@@ -374,25 +360,19 @@ public class TestTabletServerGateway implements TabletServerGateway {
         if (result != null) {
             result.complete(response);
         } else {
-            throw new IllegalStateException(
-                    "The future to complete was not found at index " + index);
+            throw new IllegalStateException("The future to complete was not found at index " + index);
         }
     }
 
     private StopReplicaResponse mockStopReplicaResponse(
-            StopReplicaRequest stopReplicaRequest,
-            @Nullable Integer errCode,
-            @Nullable String errMsg) {
+            StopReplicaRequest stopReplicaRequest, @Nullable Integer errCode, @Nullable String errMsg) {
         List<PbStopReplicaRespForBucket> protoStopReplicaRespForBuckets = new ArrayList<>();
-        for (PbStopReplicaReqForBucket protoStopReplicaForBucket :
-                stopReplicaRequest.getStopReplicasReqsList()) {
-            PbStopReplicaRespForBucket pbStopReplicaRespForBucket =
-                    new PbStopReplicaRespForBucket();
-            PbTableBucket pbTableBucket =
-                    pbStopReplicaRespForBucket
-                            .setTableBucket()
-                            .setTableId(protoStopReplicaForBucket.getTableBucket().getTableId())
-                            .setBucketId(protoStopReplicaForBucket.getTableBucket().getBucketId());
+        for (PbStopReplicaReqForBucket protoStopReplicaForBucket : stopReplicaRequest.getStopReplicasReqsList()) {
+            PbStopReplicaRespForBucket pbStopReplicaRespForBucket = new PbStopReplicaRespForBucket();
+            PbTableBucket pbTableBucket = pbStopReplicaRespForBucket
+                    .setTableBucket()
+                    .setTableId(protoStopReplicaForBucket.getTableBucket().getTableId())
+                    .setBucketId(protoStopReplicaForBucket.getTableBucket().getBucketId());
             if (protoStopReplicaForBucket.getTableBucket().hasPartitionId()) {
                 pbTableBucket.setPartitionId(
                         protoStopReplicaForBucket.getTableBucket().getPartitionId());

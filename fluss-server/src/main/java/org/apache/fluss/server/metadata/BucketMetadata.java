@@ -31,10 +31,7 @@ public class BucketMetadata {
     private final List<Integer> replicas;
 
     public BucketMetadata(
-            int bucketId,
-            @Nullable Integer leaderId,
-            @Nullable Integer leaderEpoch,
-            List<Integer> replicas) {
+            int bucketId, @Nullable Integer leaderId, @Nullable Integer leaderEpoch, List<Integer> replicas) {
         this.bucketId = bucketId;
         this.leaderId = leaderId;
         this.leaderEpoch = leaderEpoch;

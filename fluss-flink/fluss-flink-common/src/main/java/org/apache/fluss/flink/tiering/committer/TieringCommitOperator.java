@@ -80,8 +80,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  */
 public class TieringCommitOperator<WriteResult, Committable>
         extends AbstractStreamOperator<CommittableMessage<Committable>>
-        implements OneInputStreamOperator<
-                TableBucketWriteResult<WriteResult>, CommittableMessage<Committable>> {
+        implements OneInputStreamOperator<TableBucketWriteResult<WriteResult>, CommittableMessage<Committable>> {
 
     private static final long serialVersionUID = 1L;
 
@@ -96,8 +95,7 @@ public class TieringCommitOperator<WriteResult, Committable>
     private final OperatorEventGateway operatorEventGateway;
 
     // tableid -> write results
-    private final Map<Long, List<TableBucketWriteResult<WriteResult>>>
-            collectedTableBucketWriteResults;
+    private final Map<Long, List<TableBucketWriteResult<WriteResult>>> collectedTableBucketWriteResults;
 
     public TieringCommitOperator(
             StreamOperatorParameters<CommittableMessage<Committable>> parameters,
@@ -107,14 +105,10 @@ public class TieringCommitOperator<WriteResult, Committable>
         this.flussTableLakeSnapshotCommitter = new FlussTableLakeSnapshotCommitter(flussConf);
         this.collectedTableBucketWriteResults = new HashMap<>();
         this.flussConfig = flussConf;
-        this.setup(
-                parameters.getContainingTask(),
-                parameters.getStreamConfig(),
-                parameters.getOutput());
-        operatorEventGateway =
-                parameters
-                        .getOperatorEventDispatcher()
-                        .getOperatorEventGateway(TieringSource.TIERING_SOURCE_OPERATOR_UID);
+        this.setup(parameters.getContainingTask(), parameters.getStreamConfig(), parameters.getOutput());
+        operatorEventGateway = parameters
+                .getOperatorEventDispatcher()
+                .getOperatorEventGateway(TieringSource.TIERING_SOURCE_OPERATOR_UID);
     }
 
     @Override
@@ -125,37 +119,29 @@ public class TieringCommitOperator<WriteResult, Committable>
     }
 
     @Override
-    public void processElement(StreamRecord<TableBucketWriteResult<WriteResult>> streamRecord)
-            throws Exception {
+    public void processElement(StreamRecord<TableBucketWriteResult<WriteResult>> streamRecord) throws Exception {
         TableBucketWriteResult<WriteResult> tableBucketWriteResult = streamRecord.getValue();
         TableBucket tableBucket = tableBucketWriteResult.tableBucket();
         long tableId = tableBucket.getTableId();
         registerTableBucketWriteResult(tableId, tableBucketWriteResult);
 
         // may collect all write results for the table
-        List<TableBucketWriteResult<WriteResult>> committableWriteResults =
-                collectTableAllBucketWriteResult(tableId);
+        List<TableBucketWriteResult<WriteResult>> committableWriteResults = collectTableAllBucketWriteResult(tableId);
 
         if (committableWriteResults != null) {
             try {
                 Committable committable =
-                        commitWriteResults(
-                                tableId,
-                                tableBucketWriteResult.tablePath(),
-                                committableWriteResults);
+                        commitWriteResults(tableId, tableBucketWriteResult.tablePath(), committableWriteResults);
                 // only emit when committable is not-null
                 if (committable != null) {
                     output.collect(new StreamRecord<>(new CommittableMessage<>(committable)));
                 }
                 // notify that the table id has been finished tier
-                operatorEventGateway.sendEventToCoordinator(
-                        new SourceEventWrapper(new FinishedTieringEvent(tableId)));
+                operatorEventGateway.sendEventToCoordinator(new SourceEventWrapper(new FinishedTieringEvent(tableId)));
             } catch (Exception e) {
                 // if any exception happens, send to source coordinator to mark it as failed
                 operatorEventGateway.sendEventToCoordinator(
-                        new SourceEventWrapper(
-                                new FailedTieringEvent(
-                                        tableId, ExceptionUtils.stringifyException(e))));
+                        new SourceEventWrapper(new FailedTieringEvent(tableId, ExceptionUtils.stringifyException(e))));
             } finally {
                 collectedTableBucketWriteResults.remove(tableId);
             }
@@ -164,17 +150,12 @@ public class TieringCommitOperator<WriteResult, Committable>
 
     @Nullable
     private Committable commitWriteResults(
-            long tableId,
-            TablePath tablePath,
-            List<TableBucketWriteResult<WriteResult>> committableWriteResults)
+            long tableId, TablePath tablePath, List<TableBucketWriteResult<WriteResult>> committableWriteResults)
             throws Exception {
         // filter out non-null write result
-        committableWriteResults =
-                committableWriteResults.stream()
-                        .filter(
-                                writeResultTableBucketWriteResult ->
-                                        writeResultTableBucketWriteResult.writeResult() != null)
-                        .collect(Collectors.toList());
+        committableWriteResults = committableWriteResults.stream()
+                .filter(writeResultTableBucketWriteResult -> writeResultTableBucketWriteResult.writeResult() != null)
+                .collect(Collectors.toList());
 
         // empty, means all write result is null, which is a empty commit,
         // return null to skip the empty commit
@@ -182,17 +163,14 @@ public class TieringCommitOperator<WriteResult, Committable>
             return null;
         }
         try (LakeCommitter<WriteResult, Committable> lakeCommitter =
-                lakeTieringFactory.createLakeCommitter(
-                        new TieringCommitterInitContext(tablePath))) {
-            List<WriteResult> writeResults =
-                    committableWriteResults.stream()
-                            .map(TableBucketWriteResult::writeResult)
-                            .collect(Collectors.toList());
+                lakeTieringFactory.createLakeCommitter(new TieringCommitterInitContext(tablePath))) {
+            List<WriteResult> writeResults = committableWriteResults.stream()
+                    .map(TableBucketWriteResult::writeResult)
+                    .collect(Collectors.toList());
 
             LakeSnapshot flussCurrentLakeSnapshot = getLatestLakeSnapshot(tablePath);
             Map<String, String> logOffsetsProperty =
-                    toBucketOffsetsProperty(
-                            tablePath, flussCurrentLakeSnapshot, committableWriteResults);
+                    toBucketOffsetsProperty(tablePath, flussCurrentLakeSnapshot, committableWriteResults);
             // to committable
             Committable committable = lakeCommitter.toCommittable(writeResults);
             // before commit to lake, check fluss not missing any lake snapshot committed by fluss
@@ -200,13 +178,10 @@ public class TieringCommitOperator<WriteResult, Committable>
                     tablePath,
                     lakeCommitter,
                     committable,
-                    flussCurrentLakeSnapshot == null
-                            ? null
-                            : flussCurrentLakeSnapshot.getSnapshotId());
+                    flussCurrentLakeSnapshot == null ? null : flussCurrentLakeSnapshot.getSnapshotId());
             long committedSnapshotId = lakeCommitter.commit(committable, logOffsetsProperty);
             // commit to fluss
-            FlussTableLakeSnapshot flussTableLakeSnapshot =
-                    new FlussTableLakeSnapshot(tableId, committedSnapshotId);
+            FlussTableLakeSnapshot flussTableLakeSnapshot = new FlussTableLakeSnapshot(tableId, committedSnapshotId);
             for (TableBucketWriteResult<WriteResult> writeResult : committableWriteResults) {
                 TableBucket tableBucket = writeResult.tableBucket();
                 if (writeResult.tableBucket().getPartitionId() == null) {
@@ -239,13 +214,11 @@ public class TieringCommitOperator<WriteResult, Committable>
         }
 
         for (TableBucketWriteResult<WriteResult> tableBucketWriteResult : currentWriteResults) {
-            tableBucketOffsets.put(
-                    tableBucketWriteResult.tableBucket(), tableBucketWriteResult.logEndOffset());
+            tableBucketOffsets.put(tableBucketWriteResult.tableBucket(), tableBucketWriteResult.logEndOffset());
             if (tableBucketWriteResult.tableBucket().getPartitionId() != null
                     && tableBucketWriteResult.partitionName() != null) {
                 partitionNameById.put(
-                        tableBucketWriteResult.tableBucket().getPartitionId(),
-                        tableBucketWriteResult.partitionName());
+                        tableBucketWriteResult.tableBucket().getPartitionId(), tableBucketWriteResult.partitionName());
             }
         }
 
@@ -259,9 +232,7 @@ public class TieringCommitOperator<WriteResult, Committable>
     }
 
     public static Map<String, String> toBucketOffsetsProperty(
-            Map<TableBucket, Long> tableBucketOffsets,
-            Map<Long, String> partitionNameById,
-            List<String> partitionKeys)
+            Map<TableBucket, Long> tableBucketOffsets, Map<Long, String> partitionNameById, List<String> partitionKeys)
             throws IOException {
         StringWriter sw = new StringWriter();
         try (JsonGenerator gen = JACKSON_FACTORY.createGenerator(sw)) {
@@ -272,10 +243,9 @@ public class TieringCommitOperator<WriteResult, Committable>
                 if (partitionId != null) {
                     // the partitionName is 2025$12$03, we need to convert to
                     // qualified name year=2025/month=12/day=03
-                    partitionQualifiedName =
-                            ResolvedPartitionSpec.fromPartitionName(
-                                            partitionKeys, partitionNameById.get(partitionId))
-                                    .getPartitionQualifiedName();
+                    partitionQualifiedName = ResolvedPartitionSpec.fromPartitionName(
+                                    partitionKeys, partitionNameById.get(partitionId))
+                            .getPartitionQualifiedName();
                 }
                 BucketOffsetJsonSerde.INSTANCE.serialize(
                         new BucketOffset(
@@ -319,8 +289,7 @@ public class TieringCommitOperator<WriteResult, Committable>
             throws Exception {
 
         // get Fluss missing lake snapshot in Lake
-        CommittedLakeSnapshot missingCommittedSnapshot =
-                lakeCommitter.getMissingLakeSnapshot(flussCurrentLakeSnapshot);
+        CommittedLakeSnapshot missingCommittedSnapshot = lakeCommitter.getMissingLakeSnapshot(flussCurrentLakeSnapshot);
 
         // fluss's known snapshot is less than lake snapshot committed by fluss
         // fail this commit since the data is read from the log end-offset of a invalid fluss
@@ -329,20 +298,18 @@ public class TieringCommitOperator<WriteResult, Committable>
         if (missingCommittedSnapshot != null) {
             // commit this missing snapshot to fluss
             TableInfo tableInfo = admin.getTableInfo(tablePath).get();
-            flussTableLakeSnapshotCommitter.commit(
-                    tableInfo.getTableId(), missingCommittedSnapshot);
+            flussTableLakeSnapshotCommitter.commit(tableInfo.getTableId(), missingCommittedSnapshot);
             // abort this committable to delete the written files
             lakeCommitter.abort(committable);
-            throw new IllegalStateException(
-                    String.format(
-                            "The current Fluss's lake snapshot %d is less than"
-                                    + " lake actual snapshot %d committed by Fluss for table: {tablePath=%s, tableId=%d},"
-                                    + " missing snapshot: %s.",
-                            flussCurrentLakeSnapshot,
-                            missingCommittedSnapshot.getLakeSnapshotId(),
-                            tableInfo.getTablePath(),
-                            tableInfo.getTableId(),
-                            missingCommittedSnapshot));
+            throw new IllegalStateException(String.format(
+                    "The current Fluss's lake snapshot %d is less than"
+                            + " lake actual snapshot %d committed by Fluss for table: {tablePath=%s, tableId=%d},"
+                            + " missing snapshot: %s.",
+                    flussCurrentLakeSnapshot,
+                    missingCommittedSnapshot.getLakeSnapshotId(),
+                    tableInfo.getTablePath(),
+                    tableInfo.getTableId(),
+                    missingCommittedSnapshot));
         }
     }
 
@@ -354,8 +321,7 @@ public class TieringCommitOperator<WriteResult, Committable>
     }
 
     @Nullable
-    private List<TableBucketWriteResult<WriteResult>> collectTableAllBucketWriteResult(
-            long tableId) {
+    private List<TableBucketWriteResult<WriteResult>> collectTableAllBucketWriteResult(long tableId) {
         Set<TableBucket> collectedBuckets = new HashSet<>();
         Integer numberOfWriteResults = null;
         List<TableBucketWriteResult<WriteResult>> writeResults = new ArrayList<>();
@@ -365,10 +331,9 @@ public class TieringCommitOperator<WriteResult, Committable>
                 // it means the write results contain more than two write result
                 // for same table, it shouldn't happen, let's throw exception to
                 // avoid unexpected behavior
-                throw new IllegalStateException(
-                        String.format(
-                                "Found duplicate write results for bucket %s of table %s.",
-                                tableBucketWriteResult.tableBucket(), tableId));
+                throw new IllegalStateException(String.format(
+                        "Found duplicate write results for bucket %s of table %s.",
+                        tableBucketWriteResult.tableBucket(), tableId));
             }
             if (numberOfWriteResults == null) {
                 numberOfWriteResults = tableBucketWriteResult.numberOfWriteResults();

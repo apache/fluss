@@ -59,9 +59,7 @@ public class JMXService {
                     jmxServer = startJMXServerWithPortRanges(ports);
                 }
                 if (jmxServer == null) {
-                    LOG.error(
-                            "Could not start JMX server on any configured port(s) in: {}",
-                            portsConfig);
+                    LOG.error("Could not start JMX server on any configured port(s) in: {}", portsConfig);
                 }
             }
         } else {

@@ -75,14 +75,12 @@ public class ServerMetadataSnapshot {
 
         this.partitionIdByPath = Collections.unmodifiableMap(partitionIdByPath);
         Map<Long, PhysicalTablePath> tempPhysicalPathByPartitionId = new HashMap<>();
-        partitionIdByPath.forEach(
-                ((physicalTablePath, partitionId) ->
-                        tempPhysicalPathByPartitionId.put(partitionId, physicalTablePath)));
+        partitionIdByPath.forEach(((physicalTablePath, partitionId) ->
+                tempPhysicalPathByPartitionId.put(partitionId, physicalTablePath)));
         this.physicalPathByPartitionId = Collections.unmodifiableMap(tempPhysicalPathByPartitionId);
 
         this.bucketMetadataMapForTables = Collections.unmodifiableMap(bucketMetadataMapForTables);
-        this.bucketMetadataMapForPartitions =
-                Collections.unmodifiableMap(bucketMetadataMapForPartitions);
+        this.bucketMetadataMapForPartitions = Collections.unmodifiableMap(bucketMetadataMapForPartitions);
     }
 
     /** Create an empty cluster instance with no nodes and no table-buckets. */
@@ -122,10 +120,7 @@ public class ServerMetadataSnapshot {
         Set<TabletServerInfo> tabletServerInfos = new HashSet<>();
         aliveTabletServers
                 .values()
-                .forEach(
-                        serverInfo ->
-                                tabletServerInfos.add(
-                                        new TabletServerInfo(serverInfo.id(), serverInfo.rack())));
+                .forEach(serverInfo -> tabletServerInfos.add(new TabletServerInfo(serverInfo.id(), serverInfo.rack())));
         return Collections.unmodifiableSet(tabletServerInfos);
     }
 

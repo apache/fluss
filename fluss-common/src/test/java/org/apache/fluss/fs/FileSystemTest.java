@@ -46,8 +46,7 @@ class FileSystemTest {
     void testGet() throws URISyntaxException, IOException {
         String scheme = "file";
 
-        assertThat(getFileSystemWithoutSafetyNet(scheme + ":///test/test"))
-                .isInstanceOf(LocalFileSystem.class);
+        assertThat(getFileSystemWithoutSafetyNet(scheme + ":///test/test")).isInstanceOf(LocalFileSystem.class);
 
         try {
             getFileSystemWithoutSafetyNet(scheme + "://test/test");
@@ -55,11 +54,9 @@ class FileSystemTest {
             assertThat(ioe.getMessage()).startsWith("Found local file path with authority '");
         }
 
-        assertThat(getFileSystemWithoutSafetyNet(scheme + ":/test/test"))
-                .isInstanceOf(LocalFileSystem.class);
+        assertThat(getFileSystemWithoutSafetyNet(scheme + ":/test/test")).isInstanceOf(LocalFileSystem.class);
 
-        assertThat(getFileSystemWithoutSafetyNet(scheme + ":test/test"))
-                .isInstanceOf(LocalFileSystem.class);
+        assertThat(getFileSystemWithoutSafetyNet(scheme + ":test/test")).isInstanceOf(LocalFileSystem.class);
 
         assertThat(getFileSystemWithoutSafetyNet("/test/test")).isInstanceOf(LocalFileSystem.class);
 
@@ -74,27 +71,23 @@ class FileSystemTest {
         fileSystemPlugins.put(
                 FileSystemPlugin.class,
                 Collections.singletonList(
-                                new TestPluginFileSystemPlugin(
-                                        testPluginSchema, LocalFileSystem.getSharedInstance()))
+                                new TestPluginFileSystemPlugin(testPluginSchema, LocalFileSystem.getSharedInstance()))
                         .iterator());
 
         FileSystem.initialize(new Configuration(), new TestingPluginManager(fileSystemPlugins));
 
         // check the gotten filesystem
         FileSystem fileSystem = FileSystem.get(URI.create(testPluginSchema + ":///a/b/c"));
-        assertThat(fileSystem)
-                .isInstanceOf(PluginFileSystemWrapper.ClassLoaderFixingFileSystem.class);
+        assertThat(fileSystem).isInstanceOf(PluginFileSystemWrapper.ClassLoaderFixingFileSystem.class);
 
         // the filesystem should wrap LocalFileSystem
         PluginFileSystemWrapper.ClassLoaderFixingFileSystem classLoaderFixingFileSystem =
                 (PluginFileSystemWrapper.ClassLoaderFixingFileSystem) fileSystem;
-        assertThat(classLoaderFixingFileSystem.getWrappedDelegate())
-                .isInstanceOf(LocalFileSystem.class);
+        assertThat(classLoaderFixingFileSystem.getWrappedDelegate()).isInstanceOf(LocalFileSystem.class);
 
         // now, try to check the operations of the FileSystem is fine
         FsPath path = new FsPath(tempDir.toString(), "test");
-        final FSDataOutputStream outputStream =
-                fileSystem.create(path, FileSystem.WriteMode.OVERWRITE);
+        final FSDataOutputStream outputStream = fileSystem.create(path, FileSystem.WriteMode.OVERWRITE);
         final byte[] testbytes = {1, 2, 3, 4, 5};
         outputStream.write(testbytes);
         outputStream.close();
@@ -120,10 +113,10 @@ class FileSystemTest {
         // now try to list the files, it should be empty
         assertThat(fileSystem.listStatus(new FsPath(tempDir.toString()))).isEmpty();
         // get the status of the file should throw exception
-        assertThatThrownBy(() -> fileSystem.getFileStatus(path))
-                .isInstanceOf(FileNotFoundException.class);
+        assertThatThrownBy(() -> fileSystem.getFileStatus(path)).isInstanceOf(FileNotFoundException.class);
         // rename should return false
-        assertThat(fileSystem.rename(path, new FsPath(tempDir.toString(), "test1"))).isFalse();
+        assertThat(fileSystem.rename(path, new FsPath(tempDir.toString(), "test1")))
+                .isFalse();
     }
 
     @Test
@@ -157,8 +150,7 @@ class FileSystemTest {
         }
     }
 
-    private static FileSystem getFileSystemWithoutSafetyNet(final String uri)
-            throws URISyntaxException, IOException {
+    private static FileSystem getFileSystemWithoutSafetyNet(final String uri) throws URISyntaxException, IOException {
         final FileSystem fileSystem = FileSystem.get(new URI(uri));
 
         if (fileSystem instanceof WrappingProxy) {

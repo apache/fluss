@@ -41,15 +41,10 @@ class NoticeFileCheckerTest {
         bundleDependencies.put(moduleName, Collections.singleton(bundledDependency));
         final Set<String> deployedModules = Collections.singleton(moduleName);
         final Optional<NoticeContents> noticeContents =
-                Optional.of(
-                        new NoticeContents(
-                                moduleName, Collections.singletonList(bundledDependency)));
+                Optional.of(new NoticeContents(moduleName, Collections.singletonList(bundledDependency)));
 
-        assertThat(
-                        NoticeFileChecker.run(
-                                bundleDependencies,
-                                deployedModules,
-                                Collections.singletonMap(moduleName, noticeContents)))
+        assertThat(NoticeFileChecker.run(
+                        bundleDependencies, deployedModules, Collections.singletonMap(moduleName, noticeContents)))
                 .isEqualTo(0);
     }
 
@@ -62,11 +57,8 @@ class NoticeFileCheckerTest {
         final Set<String> deployedModules = Collections.singleton(moduleName);
         final Optional<NoticeContents> missingNotice = Optional.empty();
 
-        assertThat(
-                        NoticeFileChecker.run(
-                                bundleDependencies,
-                                deployedModules,
-                                Collections.singletonMap(moduleName, missingNotice)))
+        assertThat(NoticeFileChecker.run(
+                        bundleDependencies, deployedModules, Collections.singletonMap(moduleName, missingNotice)))
                 .isEqualTo(1);
     }
 
@@ -80,11 +72,8 @@ class NoticeFileCheckerTest {
         final Optional<NoticeContents> emptyNotice =
                 Optional.of(new NoticeContents(moduleName, Collections.emptyList()));
 
-        assertThat(
-                        NoticeFileChecker.run(
-                                bundleDependencies,
-                                deployedModules,
-                                Collections.singletonMap(moduleName, emptyNotice)))
+        assertThat(NoticeFileChecker.run(
+                        bundleDependencies, deployedModules, Collections.singletonMap(moduleName, emptyNotice)))
                 .isEqualTo(1);
     }
 
@@ -99,11 +88,8 @@ class NoticeFileCheckerTest {
         final Optional<NoticeContents> emptyNotice =
                 Optional.of(new NoticeContents(moduleName, Collections.emptyList()));
 
-        assertThat(
-                        NoticeFileChecker.run(
-                                bundleDependencies,
-                                deployedModules,
-                                Collections.singletonMap(moduleName, emptyNotice)))
+        assertThat(NoticeFileChecker.run(
+                        bundleDependencies, deployedModules, Collections.singletonMap(moduleName, emptyNotice)))
                 .isEqualTo(0);
     }
 
@@ -114,8 +100,7 @@ class NoticeFileCheckerTest {
 
         // a module that is not deployed but bundles another dependency with an empty NOTICE
         final String nonDeployedModuleName = "nonDeployed";
-        final Dependency nonDeployedDependency =
-                Dependency.create("a", nonDeployedModuleName, "c", null);
+        final Dependency nonDeployedDependency = Dependency.create("a", nonDeployedModuleName, "c", null);
         final Dependency bundledDependency = Dependency.create("a", "b", "c", null);
         bundledDependencies.put(nonDeployedModuleName, Collections.singleton(bundledDependency));
         // this would usually not be a problem, but since the module is not bundled it's not OK!
@@ -127,9 +112,7 @@ class NoticeFileCheckerTest {
         final String bundlingModule = "bundling";
         bundledDependencies.put(bundlingModule, Collections.singleton(nonDeployedDependency));
         final Optional<NoticeContents> correctNotice =
-                Optional.of(
-                        new NoticeContents(
-                                bundlingModule, Collections.singletonList(nonDeployedDependency)));
+                Optional.of(new NoticeContents(bundlingModule, Collections.singletonList(nonDeployedDependency)));
         notices.put(bundlingModule, correctNotice);
 
         final Set<String> deployedModules = Collections.singleton(bundlingModule);
@@ -145,12 +128,10 @@ class NoticeFileCheckerTest {
         final Map<String, Set<Dependency>> bundleDependencies = new HashMap<>();
         bundleDependencies.put(moduleName, Collections.singleton(bundledDependency));
 
-        assertThat(
-                        NoticeFileChecker.checkNoticeFile(
-                                bundleDependencies,
-                                moduleName,
-                                new NoticeContents(
-                                        moduleName, Collections.singletonList(bundledDependency))))
+        assertThat(NoticeFileChecker.checkNoticeFile(
+                        bundleDependencies,
+                        moduleName,
+                        new NoticeContents(moduleName, Collections.singletonList(bundledDependency))))
                 .isEmpty();
     }
 
@@ -164,11 +145,10 @@ class NoticeFileCheckerTest {
     void testCheckNoticeFileToleratesModuleNameMismatch() {
         final String moduleName = "test";
 
-        assertThat(
-                        NoticeFileChecker.checkNoticeFile(
-                                Collections.emptyMap(),
-                                moduleName,
-                                new NoticeContents(moduleName + "2", Collections.emptyList())))
+        assertThat(NoticeFileChecker.checkNoticeFile(
+                        Collections.emptyMap(),
+                        moduleName,
+                        new NoticeContents(moduleName + "2", Collections.emptyList())))
                 .containsOnlyKeys(NoticeFileChecker.Severity.TOLERATED);
     }
 
@@ -176,18 +156,16 @@ class NoticeFileCheckerTest {
     void testCheckNoticeFileRejectsDuplicateLine() {
         final String moduleName = "test";
         final Map<String, Set<Dependency>> bundleDependencies = new HashMap<>();
-        bundleDependencies.put(
-                moduleName, Collections.singleton(Dependency.create("a", "b", "c", null)));
+        bundleDependencies.put(moduleName, Collections.singleton(Dependency.create("a", "b", "c", null)));
 
-        assertThat(
-                        NoticeFileChecker.checkNoticeFile(
-                                bundleDependencies,
+        assertThat(NoticeFileChecker.checkNoticeFile(
+                        bundleDependencies,
+                        moduleName,
+                        new NoticeContents(
                                 moduleName,
-                                new NoticeContents(
-                                        moduleName,
-                                        Arrays.asList(
-                                                Dependency.create("a", "b", "c", null),
-                                                Dependency.create("a", "b", "c", null)))))
+                                Arrays.asList(
+                                        Dependency.create("a", "b", "c", null),
+                                        Dependency.create("a", "b", "c", null)))))
                 .containsOnlyKeys(NoticeFileChecker.Severity.CRITICAL);
     }
 
@@ -195,14 +173,10 @@ class NoticeFileCheckerTest {
     void testCheckNoticeFileRejectsMissingDependency() {
         final String moduleName = "test";
         final Map<String, Set<Dependency>> bundleDependencies = new HashMap<>();
-        bundleDependencies.put(
-                moduleName, Collections.singleton(Dependency.create("a", "b", "c", null)));
+        bundleDependencies.put(moduleName, Collections.singleton(Dependency.create("a", "b", "c", null)));
 
-        assertThat(
-                        NoticeFileChecker.checkNoticeFile(
-                                bundleDependencies,
-                                moduleName,
-                                new NoticeContents(moduleName, Collections.emptyList())))
+        assertThat(NoticeFileChecker.checkNoticeFile(
+                        bundleDependencies, moduleName, new NoticeContents(moduleName, Collections.emptyList())))
                 .containsOnlyKeys(NoticeFileChecker.Severity.CRITICAL);
     }
 }

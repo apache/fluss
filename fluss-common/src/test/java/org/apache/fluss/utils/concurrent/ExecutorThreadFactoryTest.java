@@ -32,17 +32,14 @@ public class ExecutorThreadFactoryTest {
     @Test
     void testThreadWithWithCustomExceptionHandler() throws Exception {
         CompletableFuture<Throwable> errorFuture = new CompletableFuture<>();
-        ExecutorThreadFactory executorThreadFactory =
-                new ExecutorThreadFactory.Builder()
-                        .setPoolName("test-executor-thread-factory-pool-custom")
-                        .setThreadPriority(1)
-                        .setExceptionHandler(new TestExceptionHandler(errorFuture))
-                        .build();
-        Thread thread =
-                executorThreadFactory.newThread(
-                        () -> {
-                            throw new RuntimeException("throw exception");
-                        });
+        ExecutorThreadFactory executorThreadFactory = new ExecutorThreadFactory.Builder()
+                .setPoolName("test-executor-thread-factory-pool-custom")
+                .setThreadPriority(1)
+                .setExceptionHandler(new TestExceptionHandler(errorFuture))
+                .build();
+        Thread thread = executorThreadFactory.newThread(() -> {
+            throw new RuntimeException("throw exception");
+        });
         thread.start();
 
         Throwable throwable = errorFuture.get(1, TimeUnit.MINUTES);
@@ -52,17 +49,14 @@ public class ExecutorThreadFactoryTest {
     @Test
     void testThreadWithWithCustomClassloader() {
         ClassLoader customClassloader = new URLClassLoader(new URL[0], null);
-        ExecutorThreadFactory executorThreadFactory =
-                new ExecutorThreadFactory.Builder()
-                        .setPoolName("test-executor-thread-factory-pool-custom")
-                        .setThreadPriority(1)
-                        .setThreadContextClassloader(customClassloader)
-                        .build();
-        Thread thread =
-                executorThreadFactory.newThread(
-                        () -> {
-                            // do nothing
-                        });
+        ExecutorThreadFactory executorThreadFactory = new ExecutorThreadFactory.Builder()
+                .setPoolName("test-executor-thread-factory-pool-custom")
+                .setThreadPriority(1)
+                .setThreadContextClassloader(customClassloader)
+                .build();
+        Thread thread = executorThreadFactory.newThread(() -> {
+            // do nothing
+        });
         assertThat(thread.getContextClassLoader()).isEqualTo(customClassloader);
     }
 

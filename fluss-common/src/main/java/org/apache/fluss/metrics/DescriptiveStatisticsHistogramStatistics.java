@@ -56,7 +56,9 @@ public class DescriptiveStatisticsHistogramStatistics extends HistogramStatistic
 
     @Override
     public long[] getValues() {
-        return Arrays.stream(statisticsSummary.getValues()).mapToLong(i -> (long) i).toArray();
+        return Arrays.stream(statisticsSummary.getValues())
+                .mapToLong(i -> (long) i)
+                .toArray();
     }
 
     @Override
@@ -108,8 +110,7 @@ public class DescriptiveStatisticsHistogramStatistics extends HistogramStatistic
         }
 
         @Override
-        public double evaluate(double[] values, int begin, int length)
-                throws MathIllegalArgumentException {
+        public double evaluate(double[] values, int begin, int length) throws MathIllegalArgumentException {
             this.data = values;
 
             SimpleStats secondMoment = new SimpleStats();

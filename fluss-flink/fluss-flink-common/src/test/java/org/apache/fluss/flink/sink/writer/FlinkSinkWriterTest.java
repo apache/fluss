@@ -60,38 +60,31 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class FlinkSinkWriterTest extends FlinkTestBase {
     private static final String DEFAULT_SINK_DB = "test-sink-db";
 
-    private static final TablePath DEFAULT_SINK_TABLE_PATH =
-            TablePath.of(DEFAULT_SINK_DB, "test-sink-table");
+    private static final TablePath DEFAULT_SINK_TABLE_PATH = TablePath.of(DEFAULT_SINK_DB, "test-sink-table");
 
-    private static final TableDescriptor TABLE_DESCRIPTOR =
-            TableDescriptor.builder()
-                    .schema(
-                            Schema.newBuilder()
-                                    .column("id", org.apache.fluss.types.DataTypes.INT())
-                                    .column("name", org.apache.fluss.types.DataTypes.CHAR(10))
-                                    .build())
-                    .build();
+    private static final TableDescriptor TABLE_DESCRIPTOR = TableDescriptor.builder()
+            .schema(Schema.newBuilder()
+                    .column("id", org.apache.fluss.types.DataTypes.INT())
+                    .column("name", org.apache.fluss.types.DataTypes.CHAR(10))
+                    .build())
+            .build();
 
     @ParameterizedTest
     @ValueSource(strings = {"", "1"})
     void testSinkMetrics(String clientId) throws Exception {
-        admin.createDatabase(
-                DEFAULT_SINK_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, true);
+        admin.createDatabase(DEFAULT_SINK_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, true);
         createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR);
 
         Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
         flussConf.set(ConfigOptions.CLIENT_ID, clientId);
 
-        InterceptingOperatorMetricGroup interceptingOperatorMetricGroup =
-                new InterceptingOperatorMetricGroup();
-        MockWriterInitContext mockWriterInitContext =
-                new MockWriterInitContext(interceptingOperatorMetricGroup);
+        InterceptingOperatorMetricGroup interceptingOperatorMetricGroup = new InterceptingOperatorMetricGroup();
+        MockWriterInitContext mockWriterInitContext = new MockWriterInitContext(interceptingOperatorMetricGroup);
         FlinkSinkWriter<RowData> flinkSinkWriter =
                 createSinkWriter(flussConf, mockWriterInitContext.getMailboxExecutor());
 
         flinkSinkWriter.initialize(mockWriterInitContext.metricGroup());
-        flinkSinkWriter.write(
-                GenericRowData.of(1, StringData.fromString("a")), new MockSinkWriterContext());
+        flinkSinkWriter.write(GenericRowData.of(1, StringData.fromString("a")), new MockSinkWriterContext());
         flinkSinkWriter.flush(false);
 
         Metric currentSendTime = interceptingOperatorMetricGroup.get(MetricNames.CURRENT_SEND_TIME);
@@ -108,65 +101,54 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
 
     @Test
     void testWriteExceptionWhenFlussUnavailable() throws Exception {
-        testExceptionWhenFlussUnavailable(
-                (writer, mailboxExecutor) -> {
-                    // Flush client here to make sure last write is finished but not check
-                    // exception.
-                    writer.getTableWriter().flush();
-                    assertThatThrownBy(
-                                    () ->
-                                            writer.write(
-                                                    GenericRowData.of(
-                                                            2, StringData.fromString("b")),
-                                                    new MockSinkWriterContext()))
-                            .hasRootCauseExactlyInstanceOf(NetworkException.class);
-                });
+        testExceptionWhenFlussUnavailable((writer, mailboxExecutor) -> {
+            // Flush client here to make sure last write is finished but not check
+            // exception.
+            writer.getTableWriter().flush();
+            assertThatThrownBy(() ->
+                            writer.write(GenericRowData.of(2, StringData.fromString("b")), new MockSinkWriterContext()))
+                    .hasRootCauseExactlyInstanceOf(NetworkException.class);
+        });
     }
 
     @Test
     void testFlushExceptionWhenFlussUnavailable() throws Exception {
-        testExceptionWhenFlussUnavailable(
-                (writer, mailboxExecutor) -> {
-                    // Flush SinkWriter here to make sure last write finish and also check
-                    // exception.
-                    assertThatThrownBy(() -> writer.flush(true))
-                            .hasRootCauseExactlyInstanceOf(NetworkException.class);
-                });
+        testExceptionWhenFlussUnavailable((writer, mailboxExecutor) -> {
+            // Flush SinkWriter here to make sure last write finish and also check
+            // exception.
+            assertThatThrownBy(() -> writer.flush(true)).hasRootCauseExactlyInstanceOf(NetworkException.class);
+        });
     }
 
     @Test
     void testCloseExceptionWhenFlussUnavailable() throws Exception {
-        testExceptionWhenFlussUnavailable(
-                (writer, mailboxExecutor) -> {
-                    // Flush client here to make sure last write is finished but not check
-                    // exception.
-                    writer.getTableWriter().flush();
-                    assertThatThrownBy(writer::close)
-                            .hasRootCauseExactlyInstanceOf(NetworkException.class);
-                });
+        testExceptionWhenFlussUnavailable((writer, mailboxExecutor) -> {
+            // Flush client here to make sure last write is finished but not check
+            // exception.
+            writer.getTableWriter().flush();
+            assertThatThrownBy(writer::close).hasRootCauseExactlyInstanceOf(NetworkException.class);
+        });
     }
 
     @Test
     void testMailBoxExceptionWhenFlussUnavailable() throws Exception {
-        testExceptionWhenFlussUnavailable(
-                (writer, mailboxExecutor) -> {
-                    // Flush client here to make sure last write is finished but not check
-                    // exception.
-                    writer.getTableWriter().flush();
-                    assertThatThrownBy(
-                                    () -> {
-                                        while (mailboxExecutor.tryYield()) {
-                                            // execute all mails
-                                        }
-                                    })
-                            .hasRootCauseExactlyInstanceOf(NetworkException.class);
-                });
+        testExceptionWhenFlussUnavailable((writer, mailboxExecutor) -> {
+            // Flush client here to make sure last write is finished but not check
+            // exception.
+            writer.getTableWriter().flush();
+            assertThatThrownBy(() -> {
+                        while (mailboxExecutor.tryYield()) {
+                            // execute all mails
+                        }
+                    })
+                    .hasRootCauseExactlyInstanceOf(NetworkException.class);
+        });
     }
 
     private void testExceptionWhenFlussUnavailable(
-            BiConsumer<FlinkSinkWriter<RowData>, MailboxExecutor> actionAfterFlussUnavailable)
-            throws Exception {
-        FlussClusterExtension flussClusterExtension = FlussClusterExtension.builder().build();
+            BiConsumer<FlinkSinkWriter<RowData>, MailboxExecutor> actionAfterFlussUnavailable) throws Exception {
+        FlussClusterExtension flussClusterExtension =
+                FlussClusterExtension.builder().build();
         try {
             flussClusterExtension.start();
 
@@ -176,12 +158,10 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
             clientConfig.set(ConfigOptions.CLIENT_WRITER_ENABLE_IDEMPOTENCE, false);
             try (Connection connection = ConnectionFactory.createConnection(clientConfig);
                     Admin admin = connection.getAdmin()) {
-                admin.createDatabase(
-                                DEFAULT_SINK_TABLE_PATH.getDatabaseName(),
-                                DatabaseDescriptor.EMPTY,
-                                true)
+                admin.createDatabase(DEFAULT_SINK_TABLE_PATH.getDatabaseName(), DatabaseDescriptor.EMPTY, true)
                         .get();
-                admin.createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR, true).get();
+                admin.createTable(DEFAULT_SINK_TABLE_PATH, TABLE_DESCRIPTOR, true)
+                        .get();
             }
 
             MockWriterInitContext mockWriterInitContext =
@@ -191,32 +171,22 @@ public class FlinkSinkWriterTest extends FlinkTestBase {
                     createSinkWriter(clientConfig, mockWriterInitContext.getMailboxExecutor())) {
                 writer.initialize(mockWriterInitContext.metricGroup());
                 flussClusterExtension.close();
-                writer.write(
-                        GenericRowData.of(1, StringData.fromString("a")),
-                        new MockSinkWriterContext());
-                actionAfterFlussUnavailable.accept(
-                        writer, mockWriterInitContext.getMailboxExecutor());
+                writer.write(GenericRowData.of(1, StringData.fromString("a")), new MockSinkWriterContext());
+                actionAfterFlussUnavailable.accept(writer, mockWriterInitContext.getMailboxExecutor());
             }
         } finally {
             flussClusterExtension.close();
         }
     }
 
-    private FlinkSinkWriter<RowData> createSinkWriter(
-            Configuration configuration, MailboxExecutor mailboxExecutor) throws Exception {
+    private FlinkSinkWriter<RowData> createSinkWriter(Configuration configuration, MailboxExecutor mailboxExecutor)
+            throws Exception {
         RowType tableRowType =
-                RowType.of(
-                        new LogicalType[] {new IntType(), new CharType(10)},
-                        new String[] {"id", "name"});
-        RowDataSerializationSchema serializationSchema =
-                new RowDataSerializationSchema(true, false);
+                RowType.of(new LogicalType[] {new IntType(), new CharType(10)}, new String[] {"id", "name"});
+        RowDataSerializationSchema serializationSchema = new RowDataSerializationSchema(true, false);
         serializationSchema.open(new SerializerInitContextImpl(toFlussRowType(tableRowType)));
         return new AppendSinkWriter<>(
-                DEFAULT_SINK_TABLE_PATH,
-                configuration,
-                tableRowType,
-                mailboxExecutor,
-                serializationSchema);
+                DEFAULT_SINK_TABLE_PATH, configuration, tableRowType, mailboxExecutor, serializationSchema);
     }
 
     static class MockSinkWriterContext implements SinkWriter.Context {

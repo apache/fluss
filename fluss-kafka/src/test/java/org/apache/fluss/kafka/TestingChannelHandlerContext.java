@@ -144,8 +144,7 @@ public class TestingChannelHandlerContext implements ChannelHandlerContext {
     }
 
     @Override
-    public ChannelFuture connect(
-            SocketAddress remoteAddress, SocketAddress localAddress, ChannelPromise promise) {
+    public ChannelFuture connect(SocketAddress remoteAddress, SocketAddress localAddress, ChannelPromise promise) {
         return null;
     }
 

@@ -45,8 +45,7 @@ import org.apache.paimon.types.DataTypes;
 /** Convert from Fluss's data type to Paimon's data type. */
 public class FlussDataTypeToPaimonDataType implements DataTypeVisitor<DataType> {
 
-    public static final FlussDataTypeToPaimonDataType INSTANCE =
-            new FlussDataTypeToPaimonDataType();
+    public static final FlussDataTypeToPaimonDataType INSTANCE = new FlussDataTypeToPaimonDataType();
 
     @Override
     public DataType visit(CharType charType) {
@@ -76,8 +75,7 @@ public class FlussDataTypeToPaimonDataType implements DataTypeVisitor<DataType> 
     @Override
     public DataType visit(DecimalType decimalType) {
         return withNullability(
-                DataTypes.DECIMAL(decimalType.getPrecision(), decimalType.getScale()),
-                decimalType.isNullable());
+                DataTypes.DECIMAL(decimalType.getPrecision(), decimalType.getScale()), decimalType.isNullable());
     }
 
     @Override
@@ -122,8 +120,7 @@ public class FlussDataTypeToPaimonDataType implements DataTypeVisitor<DataType> 
 
     @Override
     public DataType visit(TimestampType timestampType) {
-        return withNullability(
-                DataTypes.TIMESTAMP(timestampType.getPrecision()), timestampType.isNullable());
+        return withNullability(DataTypes.TIMESTAMP(timestampType.getPrecision()), timestampType.isNullable());
     }
 
     @Override
@@ -135,22 +132,21 @@ public class FlussDataTypeToPaimonDataType implements DataTypeVisitor<DataType> 
 
     @Override
     public DataType visit(ArrayType arrayType) {
-        return withNullability(
-                DataTypes.ARRAY(arrayType.getElementType().accept(this)), arrayType.isNullable());
+        return withNullability(DataTypes.ARRAY(arrayType.getElementType().accept(this)), arrayType.isNullable());
     }
 
     @Override
     public DataType visit(MapType mapType) {
         return withNullability(
                 DataTypes.MAP(
-                        mapType.getKeyType().accept(this), mapType.getValueType().accept(this)),
+                        mapType.getKeyType().accept(this),
+                        mapType.getValueType().accept(this)),
                 mapType.isNullable());
     }
 
     @Override
     public DataType visit(RowType rowType) {
-        org.apache.paimon.types.RowType.Builder rowTypeBuilder =
-                org.apache.paimon.types.RowType.builder();
+        org.apache.paimon.types.RowType.Builder rowTypeBuilder = org.apache.paimon.types.RowType.builder();
         for (DataField field : rowType.getFields()) {
             rowTypeBuilder.field(
                     field.getName(),

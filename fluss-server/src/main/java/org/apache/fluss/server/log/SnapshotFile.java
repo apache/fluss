@@ -47,9 +47,7 @@ public class SnapshotFile {
         if (deleted) {
             LOG.info("Deleted writer state snapshot {}", file.getAbsolutePath());
         } else {
-            LOG.info(
-                    "Failed to delete writer snapshot {} because it does not exist.",
-                    file.getAbsolutePath());
+            LOG.info("Failed to delete writer snapshot {} because it does not exist.", file.getAbsolutePath());
         }
         return deleted;
     }

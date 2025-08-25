@@ -135,9 +135,7 @@ public final class Crc32C {
         static {
             try {
                 Class<?> cls = Class.forName("java.util.zip.CRC32C");
-                CONSTRUCTOR =
-                        MethodHandles.publicLookup()
-                                .findConstructor(cls, MethodType.methodType(void.class));
+                CONSTRUCTOR = MethodHandles.publicLookup().findConstructor(cls, MethodType.methodType(void.class));
             } catch (ReflectiveOperationException e) {
                 // Should never happen
                 throw new RuntimeException(e);

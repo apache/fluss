@@ -107,8 +107,12 @@ public class MessagesTest {
         Messages.M.KV pbmKv2 =
                 Messages.M.KV.newBuilder().setK("k2").setV("v2").setXx(pbmXx).build();
 
-        Messages.M pbm =
-                Messages.M.newBuilder().setX(pbmx).addItems(pbmKv1).addItems(pbmKv2).build();
+        Messages.M pbm = Messages.M
+                .newBuilder()
+                .setX(pbmx)
+                .addItems(pbmKv1)
+                .addItems(pbmKv2)
+                .build();
 
         assertThat(lpm.totalSize()).isEqualTo(pbm.getSerializedSize());
 

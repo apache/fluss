@@ -82,11 +82,7 @@ public class Tuple2<T0, T1> extends Tuple {
      */
     @Override
     public String toString() {
-        return "("
-                + StringUtils.arrayAwareToString(this.f0)
-                + ","
-                + StringUtils.arrayAwareToString(this.f1)
-                + ")";
+        return "(" + StringUtils.arrayAwareToString(this.f0) + "," + StringUtils.arrayAwareToString(this.f1) + ")";
     }
 
     /**

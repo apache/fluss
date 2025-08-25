@@ -79,11 +79,10 @@ public class FlinkPaimonTieringTestBase {
     protected static final String DEFAULT_DB = "fluss";
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setClusterConf(initConfig())
-                    .setNumOfTabletServers(3)
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setClusterConf(initConfig())
+            .setNumOfTabletServers(3)
+            .build();
 
     protected static final String CATALOG_NAME = "testcatalog";
     protected StreamExecutionEnvironment execEnv;
@@ -102,10 +101,9 @@ public class FlinkPaimonTieringTestBase {
         conf.setString("datalake.format", "paimon");
         conf.setString("datalake.paimon.metastore", "filesystem");
         try {
-            warehousePath =
-                    Files.createTempDirectory("fluss-testing-datalake-tiered")
-                            .resolve("warehouse")
-                            .toString();
+            warehousePath = Files.createTempDirectory("fluss-testing-datalake-tiered")
+                    .resolve("warehouse")
+                    .toString();
         } catch (Exception e) {
             throw new FlussRuntimeException("Failed to create warehouse path");
         }
@@ -158,8 +156,7 @@ public class FlinkPaimonTieringTestBase {
         }
     }
 
-    protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
-            throws Exception {
+    protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor) throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
         return admin.getTableInfo(tablePath).get().getTableId();
     }
@@ -171,8 +168,7 @@ public class FlinkPaimonTieringTestBase {
         }
     }
 
-    protected void writeRows(TablePath tablePath, List<InternalRow> rows, boolean append)
-            throws Exception {
+    protected void writeRows(TablePath tablePath, List<InternalRow> rows, boolean append) throws Exception {
         try (Table table = conn.getTable(tablePath)) {
             TableWriter tableWriter;
             if (append) {
@@ -192,18 +188,13 @@ public class FlinkPaimonTieringTestBase {
     }
 
     protected Map<String, List<InternalRow>> writeRowsIntoPartitionedTable(
-            TablePath tablePath,
-            TableDescriptor tableDescriptor,
-            Map<Long, String> partitionNameByIds)
+            TablePath tablePath, TableDescriptor tableDescriptor, Map<Long, String> partitionNameByIds)
             throws Exception {
         List<InternalRow> rows = new ArrayList<>();
         Map<String, List<InternalRow>> writtenRowsByPartition = new HashMap<>();
         for (String partitionName : partitionNameByIds.values()) {
-            List<InternalRow> partitionRows =
-                    Arrays.asList(
-                            row(11, "v1", partitionName),
-                            row(12, "v2", partitionName),
-                            row(13, "v3", partitionName));
+            List<InternalRow> partitionRows = Arrays.asList(
+                    row(11, "v1", partitionName), row(12, "v2", partitionName), row(13, "v3", partitionName));
             rows.addAll(partitionRows);
             writtenRowsByPartition.put(partitionName, partitionRows);
         }
@@ -216,12 +207,9 @@ public class FlinkPaimonTieringTestBase {
      * Wait until the default number of partitions is created. Return the map from partition id to
      * partition name. .
      */
-    public static Map<Long, String> waitUntilPartitions(
-            ZooKeeperClient zooKeeperClient, TablePath tablePath) {
+    public static Map<Long, String> waitUntilPartitions(ZooKeeperClient zooKeeperClient, TablePath tablePath) {
         return waitUntilPartitions(
-                zooKeeperClient,
-                tablePath,
-                ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.defaultValue());
+                zooKeeperClient, tablePath, ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.defaultValue());
     }
 
     public static Map<Long, String> waitUntilPartitions(TablePath tablePath) {
@@ -239,11 +227,8 @@ public class FlinkPaimonTieringTestBase {
             ZooKeeperClient zooKeeperClient, TablePath tablePath, int expectPartitions) {
         return waitValue(
                 () -> {
-                    Map<Long, String> gotPartitions =
-                            zooKeeperClient.getPartitionIdAndNames(tablePath);
-                    return expectPartitions == gotPartitions.size()
-                            ? Optional.of(gotPartitions)
-                            : Optional.empty();
+                    Map<Long, String> gotPartitions = zooKeeperClient.getPartitionIdAndNames(tablePath);
+                    return expectPartitions == gotPartitions.size() ? Optional.of(gotPartitions) : Optional.empty();
                 },
                 Duration.ofMinutes(1),
                 String.format("expect %d table partition has not been created", expectPartitions));
@@ -266,60 +251,53 @@ public class FlinkPaimonTieringTestBase {
         return createLogTable(tablePath, bucketNum, false);
     }
 
-    protected long createLogTable(TablePath tablePath, int bucketNum, boolean isPartitioned)
-            throws Exception {
+    protected long createLogTable(TablePath tablePath, int bucketNum, boolean isPartitioned) throws Exception {
         Schema.Builder schemaBuilder =
                 Schema.newBuilder().column("a", DataTypes.INT()).column("b", DataTypes.STRING());
 
-        TableDescriptor.Builder tableBuilder =
-                TableDescriptor.builder()
-                        .distributedBy(bucketNum, "a")
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        TableDescriptor.Builder tableBuilder = TableDescriptor.builder()
+                .distributedBy(bucketNum, "a")
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
 
         if (isPartitioned) {
             schemaBuilder.column("c", DataTypes.STRING());
             tableBuilder.property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
             tableBuilder.partitionedBy("c");
-            tableBuilder.property(
-                    ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR);
+            tableBuilder.property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR);
         }
         tableBuilder.schema(schemaBuilder.build());
         return createTable(tablePath, tableBuilder.build());
     }
 
-    protected long createFullTypeLogTable(TablePath tablePath, int bucketNum, boolean isPartitioned)
-            throws Exception {
-        Schema.Builder schemaBuilder =
-                Schema.newBuilder()
-                        .column("f_boolean", DataTypes.BOOLEAN())
-                        .column("f_byte", DataTypes.TINYINT())
-                        .column("f_short", DataTypes.SMALLINT())
-                        .column("f_int", DataTypes.INT())
-                        .column("f_long", DataTypes.BIGINT())
-                        .column("f_float", DataTypes.FLOAT())
-                        .column("f_double", DataTypes.DOUBLE())
-                        .column("f_string", DataTypes.STRING())
-                        .column("f_decimal1", DataTypes.DECIMAL(5, 2))
-                        .column("f_decimal2", DataTypes.DECIMAL(20, 0))
-                        .column("f_timestamp_ltz1", DataTypes.TIMESTAMP_LTZ(3))
-                        .column("f_timestamp_ltz2", DataTypes.TIMESTAMP_LTZ(6))
-                        .column("f_timestamp_ntz1", DataTypes.TIMESTAMP(3))
-                        .column("f_timestamp_ntz2", DataTypes.TIMESTAMP(6))
-                        .column("f_binary", DataTypes.BINARY(4));
+    protected long createFullTypeLogTable(TablePath tablePath, int bucketNum, boolean isPartitioned) throws Exception {
+        Schema.Builder schemaBuilder = Schema.newBuilder()
+                .column("f_boolean", DataTypes.BOOLEAN())
+                .column("f_byte", DataTypes.TINYINT())
+                .column("f_short", DataTypes.SMALLINT())
+                .column("f_int", DataTypes.INT())
+                .column("f_long", DataTypes.BIGINT())
+                .column("f_float", DataTypes.FLOAT())
+                .column("f_double", DataTypes.DOUBLE())
+                .column("f_string", DataTypes.STRING())
+                .column("f_decimal1", DataTypes.DECIMAL(5, 2))
+                .column("f_decimal2", DataTypes.DECIMAL(20, 0))
+                .column("f_timestamp_ltz1", DataTypes.TIMESTAMP_LTZ(3))
+                .column("f_timestamp_ltz2", DataTypes.TIMESTAMP_LTZ(6))
+                .column("f_timestamp_ntz1", DataTypes.TIMESTAMP(3))
+                .column("f_timestamp_ntz2", DataTypes.TIMESTAMP(6))
+                .column("f_binary", DataTypes.BINARY(4));
 
-        TableDescriptor.Builder tableBuilder =
-                TableDescriptor.builder()
-                        .distributedBy(bucketNum, "f_int")
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        TableDescriptor.Builder tableBuilder = TableDescriptor.builder()
+                .distributedBy(bucketNum, "f_int")
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
 
         if (isPartitioned) {
             schemaBuilder.column("p", DataTypes.STRING());
             tableBuilder.property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
             tableBuilder.partitionedBy("p");
-            tableBuilder.property(
-                    ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR);
+            tableBuilder.property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR);
         }
         tableBuilder.schema(schemaBuilder.build());
         return createTable(tablePath, tableBuilder.build());
@@ -330,18 +308,16 @@ public class FlinkPaimonTieringTestBase {
     }
 
     protected long createPkTable(TablePath tablePath, int bucketNum) throws Exception {
-        TableDescriptor table1Descriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("a", DataTypes.INT())
-                                        .column("b", DataTypes.STRING())
-                                        .primaryKey("a")
-                                        .build())
-                        .distributedBy(bucketNum)
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
-                        .build();
+        TableDescriptor table1Descriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .primaryKey("a")
+                        .build())
+                .distributedBy(bucketNum)
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                .build();
         return createTable(tablePath, table1Descriptor);
     }
 
@@ -383,19 +359,15 @@ public class FlinkPaimonTieringTestBase {
     }
 
     protected void assertReplicaStatus(TableBucket tb, long expectedLogEndOffset) {
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    Replica replica = getLeaderReplica(tb);
-                    // datalake snapshot id should be updated
-                    assertThat(replica.getLogTablet().getLakeTableSnapshotId())
-                            .isGreaterThanOrEqualTo(0);
-                    assertThat(replica.getLakeLogEndOffset()).isEqualTo(expectedLogEndOffset);
-                });
+        retry(Duration.ofMinutes(1), () -> {
+            Replica replica = getLeaderReplica(tb);
+            // datalake snapshot id should be updated
+            assertThat(replica.getLogTablet().getLakeTableSnapshotId()).isGreaterThanOrEqualTo(0);
+            assertThat(replica.getLakeLogEndOffset()).isEqualTo(expectedLogEndOffset);
+        });
     }
 
-    protected void waitUntilBucketSynced(
-            TablePath tablePath, long tableId, int bucketCount, boolean isPartition) {
+    protected void waitUntilBucketSynced(TablePath tablePath, long tableId, int bucketCount, boolean isPartition) {
         if (isPartition) {
             Map<Long, String> partitionById = waitUntilPartitions(tablePath);
             for (Long partitionId : partitionById.keySet()) {
@@ -422,21 +394,20 @@ public class FlinkPaimonTieringTestBase {
                 "bucket " + tb + "not synced");
     }
 
-    protected void checkDataInPaimonPrimayKeyTable(
-            TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
-        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
-                getPaimonRowCloseableIterator(tablePath);
+    protected void checkDataInPaimonPrimayKeyTable(TablePath tablePath, List<InternalRow> expectedRows)
+            throws Exception {
+        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator = getPaimonRowCloseableIterator(tablePath);
         for (InternalRow expectedRow : expectedRows) {
             org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
             assertThat(row.getInt(0)).isEqualTo(expectedRow.getInt(0));
-            assertThat(row.getString(1).toString()).isEqualTo(expectedRow.getString(1).toString());
+            assertThat(row.getString(1).toString())
+                    .isEqualTo(expectedRow.getString(1).toString());
         }
     }
 
-    protected CloseableIterator<org.apache.paimon.data.InternalRow> getPaimonRowCloseableIterator(
-            TablePath tablePath) throws Exception {
-        Identifier tableIdentifier =
-                Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
+    protected CloseableIterator<org.apache.paimon.data.InternalRow> getPaimonRowCloseableIterator(TablePath tablePath)
+            throws Exception {
+        Identifier tableIdentifier = Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
 
         paimonCatalog = getPaimonCatalog();
 
@@ -447,15 +418,10 @@ public class FlinkPaimonTieringTestBase {
         return reader.toCloseableIterator();
     }
 
-    protected void checkSnapshotPropertyInPaimon(
-            TablePath tablePath, Map<String, String> expectedProperties) throws Exception {
-        FileStoreTable table =
-                (FileStoreTable)
-                        getPaimonCatalog()
-                                .getTable(
-                                        Identifier.create(
-                                                tablePath.getDatabaseName(),
-                                                tablePath.getTableName()));
+    protected void checkSnapshotPropertyInPaimon(TablePath tablePath, Map<String, String> expectedProperties)
+            throws Exception {
+        FileStoreTable table = (FileStoreTable)
+                getPaimonCatalog().getTable(Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName()));
         Snapshot snapshot = table.snapshotManager().latestSnapshot();
         assertThat(snapshot).isNotNull();
         assertThat(snapshot.properties()).isEqualTo(expectedProperties);

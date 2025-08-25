@@ -42,38 +42,35 @@ class AbstractMetricGroupTest {
     void testGetAllVariables() throws Exception {
         MetricRegistry registry = MetricRegistry.create(new Configuration(), null);
 
-        AbstractMetricGroup group =
-                new AbstractMetricGroup(registry, new String[0], null) {
+        AbstractMetricGroup group = new AbstractMetricGroup(registry, new String[0], null) {
 
-                    @Override
-                    protected String getGroupName(CharacterFilter filter) {
-                        return "test";
-                    }
-                };
+            @Override
+            protected String getGroupName(CharacterFilter filter) {
+                return "test";
+            }
+        };
         assertThat(group.getAllVariables()).isEmpty();
 
-        group =
-                new GenericMetricGroup(registry, null, "test") {
-                    @Override
-                    protected void putVariables(Map<String, String> variables) {
-                        variables.put("k1", "v1");
-                        variables.put("k2", "v2");
-                    }
-                };
+        group = new GenericMetricGroup(registry, null, "test") {
+            @Override
+            protected void putVariables(Map<String, String> variables) {
+                variables.put("k1", "v1");
+                variables.put("k2", "v2");
+            }
+        };
 
         Map<String, String> expected = new HashMap<>();
         expected.put("k1", "v1");
         expected.put("k2", "v2");
         assertThat(group.getAllVariables()).containsAllEntriesOf(expected);
 
-        group =
-                new GenericMetricGroup(registry, group, "test2") {
-                    @Override
-                    protected void putVariables(Map<String, String> variables) {
-                        variables.put("k3", "v3");
-                        variables.put("k4", "v4");
-                    }
-                };
+        group = new GenericMetricGroup(registry, group, "test2") {
+            @Override
+            protected void putVariables(Map<String, String> variables) {
+                variables.put("k3", "v3");
+                variables.put("k4", "v4");
+            }
+        };
         expected.put("k3", "v3");
         expected.put("k4", "v4");
         assertThat(group.getAllVariables()).containsAllEntriesOf(expected);
@@ -93,11 +90,11 @@ class AbstractMetricGroupTest {
         String counterName = "1";
         CollectingMetricsReporter reporter1 = new CollectingMetricsReporter("reporter1", FILTER_B);
         CollectingMetricsReporter reporter2 = new CollectingMetricsReporter("reporter2", FILTER_C);
-        MetricRegistryImpl testRegistry =
-                new MetricRegistryImpl(Arrays.asList(reporter1, reporter2));
+        MetricRegistryImpl testRegistry = new MetricRegistryImpl(Arrays.asList(reporter1, reporter2));
         try {
-            MetricGroup testGroup =
-                    new GenericMetricGroup(testRegistry, null, "test").addGroup("B").addGroup("C");
+            MetricGroup testGroup = new GenericMetricGroup(testRegistry, null, "test")
+                    .addGroup("B")
+                    .addGroup("C");
             testGroup.counter(counterName);
             assertThat(testRegistry.getNumberReporters())
                     .withFailMessage("Reporters were not properly instantiated")

@@ -38,10 +38,7 @@ public class MetricViewUpdater {
 
     public MetricViewUpdater(ScheduledExecutorService executor) {
         executor.scheduleWithFixedDelay(
-                new MeterViewUpdaterTask(lock, toAdd, toRemove),
-                5,
-                UPDATE_INTERVAL_SECONDS,
-                TimeUnit.SECONDS);
+                new MeterViewUpdaterTask(lock, toAdd, toRemove), 5, UPDATE_INTERVAL_SECONDS, TimeUnit.SECONDS);
     }
 
     /**

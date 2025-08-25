@@ -38,7 +38,6 @@ public class FrontMetricGroup<P extends AbstractMetricGroup> extends ProxyMetric
 
     @Override
     public String getLogicalScope(CharacterFilter filter, char delimiter) {
-        return parentMetricGroup.getLogicalScope(
-                filter, delimiter, this.settings.getReporterIndex());
+        return parentMetricGroup.getLogicalScope(filter, delimiter, this.settings.getReporterIndex());
     }
 }

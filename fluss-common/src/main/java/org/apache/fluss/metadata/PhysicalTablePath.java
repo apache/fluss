@@ -59,8 +59,7 @@ public class PhysicalTablePath implements Serializable {
         return new PhysicalTablePath(tablePath, partitionName);
     }
 
-    public static PhysicalTablePath of(
-            String databaseName, String tableName, @Nullable String partitionName) {
+    public static PhysicalTablePath of(String databaseName, String tableName, @Nullable String partitionName) {
         return new PhysicalTablePath(TablePath.of(databaseName, tableName), partitionName);
     }
 
@@ -110,8 +109,7 @@ public class PhysicalTablePath implements Serializable {
             return false;
         }
         PhysicalTablePath that = (PhysicalTablePath) o;
-        return Objects.equals(tablePath, that.tablePath)
-                && Objects.equals(partitionName, that.partitionName);
+        return Objects.equals(tablePath, that.tablePath) && Objects.equals(partitionName, that.partitionName);
     }
 
     @Override
@@ -128,8 +126,6 @@ public class PhysicalTablePath implements Serializable {
 
     @Override
     public String toString() {
-        return partitionName == null
-                ? tablePath.toString()
-                : tablePath + "(p=" + partitionName + ")";
+        return partitionName == null ? tablePath.toString() : tablePath + "(p=" + partitionName + ")";
     }
 }

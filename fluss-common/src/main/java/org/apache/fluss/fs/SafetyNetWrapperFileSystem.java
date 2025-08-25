@@ -44,8 +44,7 @@ public class SafetyNetWrapperFileSystem extends FileSystem implements WrappingPr
     private final SafetyNetCloseableRegistry registry;
     private final FileSystem unsafeFileSystem;
 
-    public SafetyNetWrapperFileSystem(
-            FileSystem unsafeFileSystem, SafetyNetCloseableRegistry registry) {
+    public SafetyNetWrapperFileSystem(FileSystem unsafeFileSystem, SafetyNetCloseableRegistry registry) {
         this.registry = checkNotNull(registry);
         this.unsafeFileSystem = checkNotNull(unsafeFileSystem);
     }

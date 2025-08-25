@@ -41,9 +41,7 @@ class OBSWithCredentialsProviderFileSystemBehaviorITCase extends FileSystemBehav
 
         // use EnvironmentVariableObsCredentialsProvider
         final Configuration conf = new Configuration();
-        conf.setString(
-                CREDENTIALS_PROVIDER,
-                EnvironmentVariableObsCredentialsProvider.class.getCanonicalName());
+        conf.setString(CREDENTIALS_PROVIDER, EnvironmentVariableObsCredentialsProvider.class.getCanonicalName());
         conf.setString("fs.obs.endpoint", OBSTestCredentials.getOBSEndpoint());
         conf.setString("fs.obs.region", OBSTestCredentials.getOBSRegion());
 

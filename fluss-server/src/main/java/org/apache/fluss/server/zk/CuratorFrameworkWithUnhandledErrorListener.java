@@ -34,8 +34,7 @@ public class CuratorFrameworkWithUnhandledErrorListener implements Closeable {
 
     private final UnhandledErrorListener listener;
 
-    public CuratorFrameworkWithUnhandledErrorListener(
-            CuratorFramework client, UnhandledErrorListener listener) {
+    public CuratorFrameworkWithUnhandledErrorListener(CuratorFramework client, UnhandledErrorListener listener) {
         this.client = checkNotNull(client);
         this.listener = checkNotNull(listener);
     }

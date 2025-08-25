@@ -58,16 +58,13 @@ public class ArrowLogWriteBatch extends WriteBatch {
             long createdMs) {
         super(bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
-        this.recordsBuilder =
-                MemoryLogRecordsArrowBuilder.builder(schemaId, arrowWriter, outputView, true);
+        this.recordsBuilder = MemoryLogRecordsArrowBuilder.builder(schemaId, arrowWriter, outputView, true);
     }
 
     @Override
     public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
         InternalRow row = writeRecord.getRow();
-        checkArgument(
-                writeRecord.getTargetColumns() == null,
-                "target columns must be null for log record");
+        checkArgument(writeRecord.getTargetColumns() == null, "target columns must be null for log record");
         checkArgument(writeRecord.getKey() == null, "key must be null for log record");
         checkNotNull(row != null, "row must not be null for log record");
         checkNotNull(callback, "write callback must be not null");

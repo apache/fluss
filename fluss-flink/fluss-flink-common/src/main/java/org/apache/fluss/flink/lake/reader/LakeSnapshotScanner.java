@@ -38,8 +38,7 @@ public class LakeSnapshotScanner implements BatchScanner {
 
     private CloseableIterator<InternalRow> rowsIterator;
 
-    public LakeSnapshotScanner(
-            LakeSource<LakeSplit> lakeSource, LakeSnapshotSplit lakeSnapshotSplit) {
+    public LakeSnapshotScanner(LakeSource<LakeSplit> lakeSource, LakeSnapshotSplit lakeSnapshotSplit) {
         this.lakeSource = lakeSource;
         this.lakeSnapshotSplit = lakeSnapshotSplit;
     }
@@ -48,13 +47,9 @@ public class LakeSnapshotScanner implements BatchScanner {
     @Override
     public CloseableIterator<InternalRow> pollBatch(Duration timeout) throws IOException {
         if (rowsIterator == null) {
-            rowsIterator =
-                    InternalRowIterator.wrap(
-                            lakeSource
-                                    .createRecordReader(
-                                            (LakeSource.ReaderContext<LakeSplit>)
-                                                    lakeSnapshotSplit::getLakeSplit)
-                                    .read());
+            rowsIterator = InternalRowIterator.wrap(lakeSource
+                    .createRecordReader((LakeSource.ReaderContext<LakeSplit>) lakeSnapshotSplit::getLakeSplit)
+                    .read());
         }
         return rowsIterator.hasNext() ? rowsIterator : null;
     }
@@ -70,8 +65,7 @@ public class LakeSnapshotScanner implements BatchScanner {
 
         private final CloseableIterator<LogRecord> recordCloseableIterator;
 
-        private static InternalRowIterator wrap(
-                CloseableIterator<LogRecord> recordCloseableIterator) {
+        private static InternalRowIterator wrap(CloseableIterator<LogRecord> recordCloseableIterator) {
             return new InternalRowIterator(recordCloseableIterator);
         }
 

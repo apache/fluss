@@ -31,16 +31,14 @@ class SharedKvFileRegistryTest {
         TestKvHandle firstHandle = new TestKvHandle("first");
 
         // register one handle
-        KvFileHandle result =
-                sharedKvFileRegistry.registerReference(
-                        SharedKvFileRegistryKey.fromKvFileHandle(firstHandle), firstHandle, 0);
+        KvFileHandle result = sharedKvFileRegistry.registerReference(
+                SharedKvFileRegistryKey.fromKvFileHandle(firstHandle), firstHandle, 0);
         assertThat(result).isSameAs(firstHandle);
 
         // register another handle
         TestKvHandle secondHandle = new TestKvHandle("second");
-        result =
-                sharedKvFileRegistry.registerReference(
-                        SharedKvFileRegistryKey.fromKvFileHandle(secondHandle), secondHandle, 0);
+        result = sharedKvFileRegistry.registerReference(
+                SharedKvFileRegistryKey.fromKvFileHandle(secondHandle), secondHandle, 0);
         assertThat(result).isSameAs(secondHandle);
         assertThat(firstHandle.discarded).isFalse();
         assertThat(secondHandle.discarded).isFalse();
@@ -53,13 +51,11 @@ class SharedKvFileRegistryTest {
         sharedKvFileRegistry.close();
         sharedKvFileRegistry = new SharedKvFileRegistry();
         TestKvHandle testKvHandle = new TestKvHandle("test");
-        KvFileHandle handle =
-                sharedKvFileRegistry.registerReference(
-                        SharedKvFileRegistryKey.fromKvFileHandle(testKvHandle), testKvHandle, 0);
+        KvFileHandle handle = sharedKvFileRegistry.registerReference(
+                SharedKvFileRegistryKey.fromKvFileHandle(testKvHandle), testKvHandle, 0);
 
         KvFileHandle placeHolder = new PlaceholderKvFileHandler(handle);
-        sharedKvFileRegistry.registerReference(
-                SharedKvFileRegistryKey.fromKvFileHandle(placeHolder), placeHolder, 1);
+        sharedKvFileRegistry.registerReference(SharedKvFileRegistryKey.fromKvFileHandle(placeHolder), placeHolder, 1);
         sharedKvFileRegistry.unregisterUnusedKvFile(1L);
         // the handle shouldn't be discarded since snapshot1 is still referring to it
         assertThat(testKvHandle.discarded).isFalse();

@@ -56,19 +56,15 @@ public class NettyMetricsTest {
     public void setup() throws Exception {
         Configuration conf = new Configuration();
         try (NetUtils.Port availablePort = getAvailablePort()) {
-            ServerNode serverNode =
-                    new ServerNode(1, "localhost", availablePort.getPort(), ServerType.COORDINATOR);
+            ServerNode serverNode = new ServerNode(1, "localhost", availablePort.getPort(), ServerType.COORDINATOR);
             MetricGroup serverMetricGroup = NOPMetricsGroup.newInstance();
             serverGroup = serverMetricGroup.addGroup(NettyMetrics.NETTY_METRIC_GROUP);
-            nettyServer =
-                    new NettyServer(
-                            conf,
-                            Collections.singleton(
-                                    new Endpoint(serverNode.host(), serverNode.port(), "INTERNAL")),
-                            new TestingGatewayService(),
-                            serverMetricGroup,
-                            RequestsMetrics.createCoordinatorServerRequestMetrics(
-                                    serverMetricGroup));
+            nettyServer = new NettyServer(
+                    conf,
+                    Collections.singleton(new Endpoint(serverNode.host(), serverNode.port(), "INTERNAL")),
+                    new TestingGatewayService(),
+                    serverMetricGroup,
+                    RequestsMetrics.createCoordinatorServerRequestMetrics(serverMetricGroup));
             nettyServer.start();
         }
         ClientMetricGroup clientMetricGroup = TestingClientMetricGroup.newInstance();
@@ -97,6 +93,7 @@ public class NettyMetricsTest {
         assertThat(metrics.get(MetricNames.NETTY_USED_DIRECT_MEMORY)).isNotNull();
         assertThat(metrics.get(MetricNames.NETTY_NUM_DIRECT_ARENAS)).isNotNull();
         assertThat(metrics.get(MetricNames.NETTY_NUM_ALLOCATIONS_PER_SECONDS)).isNotNull();
-        assertThat(metrics.get(MetricNames.NETTY_NUM_HUGE_ALLOCATIONS_PER_SECONDS)).isNotNull();
+        assertThat(metrics.get(MetricNames.NETTY_NUM_HUGE_ALLOCATIONS_PER_SECONDS))
+                .isNotNull();
     }
 }

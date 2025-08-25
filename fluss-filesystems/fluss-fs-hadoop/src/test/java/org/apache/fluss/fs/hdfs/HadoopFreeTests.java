@@ -39,21 +39,16 @@ public class HadoopFreeTests {
         assertThatThrownBy(() -> Class.forName("org.apache.hadoop.fs.FileSystem"))
                 .isInstanceOf(ClassNotFoundException.class);
 
-        assertThatThrownBy(
-                        () -> {
-                            Class.forName("org.apache.hadoop.conf.Configuration");
-                        })
+        assertThatThrownBy(() -> {
+                    Class.forName("org.apache.hadoop.conf.Configuration");
+                })
                 .isInstanceOf(ClassNotFoundException.class);
 
         // this method should complete without a linkage error
         final HadoopFsPlugin plugin = new HadoopFsPlugin();
 
         // this method should also complete without a linkage error
-        assertThatThrownBy(
-                        () ->
-                                plugin.create(
-                                        new URI("hdfs://somehost:9000/root/dir"),
-                                        new Configuration()))
+        assertThatThrownBy(() -> plugin.create(new URI("hdfs://somehost:9000/root/dir"), new Configuration()))
                 .isInstanceOf(UnsupportedFileSystemSchemeException.class);
     }
 }

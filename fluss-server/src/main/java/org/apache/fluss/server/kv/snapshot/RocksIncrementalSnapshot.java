@@ -59,13 +59,16 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
     public static final String SST_FILE_SUFFIX = ".sst";
 
     /** RocksDB instance from the backend. */
-    @Nonnull protected RocksDB db;
+    @Nonnull
+    protected RocksDB db;
 
     /** Resource guard for the RocksDB instance. */
-    @Nonnull protected final ResourceGuard rocksDBResourceGuard;
+    @Nonnull
+    protected final ResourceGuard rocksDBResourceGuard;
 
     /** Base path of the RocksDB instance. */
-    @Nonnull protected final File instanceBasePath;
+    @Nonnull
+    protected final File instanceBasePath;
 
     /** The identifier of the last completed snapshot. */
     private long lastCompletedSnapshotId;
@@ -180,7 +183,8 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
     private final class RocksDBIncrementalSnapshotOperation implements SnapshotResultSupplier {
 
         /** All sst files that were part of the last previously completed snapshot. */
-        @Nonnull private final PreviousSnapshot previousSnapshot;
+        @Nonnull
+        private final PreviousSnapshot previousSnapshot;
 
         private final File localSnapshotDirectory;
 
@@ -188,9 +192,11 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
         private final long logOffset;
 
         /** The target snapshot location and factory that creates the output streams to DFS. */
-        @Nonnull private final SnapshotLocation snapshotLocation;
+        @Nonnull
+        private final SnapshotLocation snapshotLocation;
 
-        @Nonnull private final CloseableRegistry tmpResourcesRegistry;
+        @Nonnull
+        private final CloseableRegistry tmpResourcesRegistry;
 
         public RocksDBIncrementalSnapshotOperation(
                 long snapshotId,
@@ -216,14 +222,12 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
             // Handles to the misc files in the current snapshot will go here
             final List<KvFileHandleAndLocalPath> miscFiles = new ArrayList<>();
             try {
-                long snapshotIncrementalSize =
-                        uploadSnapshotFiles(sstFiles, miscFiles, snapshotCloseableRegistry);
+                long snapshotIncrementalSize = uploadSnapshotFiles(sstFiles, miscFiles, snapshotCloseableRegistry);
                 completed = true;
                 // We make the 'sstFiles' as the 'shared' in KvSnapshotHandle,
                 final KvSnapshotHandle kvSnapshotHandle =
                         new KvSnapshotHandle(sstFiles, miscFiles, snapshotIncrementalSize);
-                return new SnapshotResult(
-                        kvSnapshotHandle, snapshotLocation.getSnapshotDirectory(), logOffset);
+                return new SnapshotResult(kvSnapshotHandle, snapshotLocation.getSnapshotDirectory(), logOffset);
             } finally {
                 if (!completed) {
                     cleanupIncompleteSnapshot(tmpResourcesRegistry);
@@ -247,32 +251,24 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
             long size = 0;
 
             // sst should be uploaded to share directory
-            List<KvFileHandleAndLocalPath> sstFilesUploadResult =
-                    kvSnapshotDataUploader.uploadFilesToSnapshotLocation(
-                            sstFilePaths,
-                            snapshotLocation,
-                            SnapshotFileScope.SHARED,
-                            closeableRegistry,
-                            tmpResourcesRegistry);
-            size +=
-                    sstFilesUploadResult.stream()
-                            .mapToLong(e -> e.getKvFileHandle().getSize())
-                            .sum();
+            List<KvFileHandleAndLocalPath> sstFilesUploadResult = kvSnapshotDataUploader.uploadFilesToSnapshotLocation(
+                    sstFilePaths, snapshotLocation, SnapshotFileScope.SHARED, closeableRegistry, tmpResourcesRegistry);
+            size += sstFilesUploadResult.stream()
+                    .mapToLong(e -> e.getKvFileHandle().getSize())
+                    .sum();
 
             sstFiles.addAll(sstFilesUploadResult);
 
             // others, should be uploaded to private directory
-            List<KvFileHandleAndLocalPath> miscFilesUploadResult =
-                    kvSnapshotDataUploader.uploadFilesToSnapshotLocation(
-                            miscFilePaths,
-                            snapshotLocation,
-                            SnapshotFileScope.EXCLUSIVE,
-                            closeableRegistry,
-                            tmpResourcesRegistry);
-            size +=
-                    miscFilesUploadResult.stream()
-                            .mapToLong(e -> e.getKvFileHandle().getSize())
-                            .sum();
+            List<KvFileHandleAndLocalPath> miscFilesUploadResult = kvSnapshotDataUploader.uploadFilesToSnapshotLocation(
+                    miscFilePaths,
+                    snapshotLocation,
+                    SnapshotFileScope.EXCLUSIVE,
+                    closeableRegistry,
+                    tmpResourcesRegistry);
+            size += miscFilesUploadResult.stream()
+                    .mapToLong(e -> e.getKvFileHandle().getSize())
+                    .sum();
             miscFiles.addAll(miscFilesUploadResult);
 
             uploadedSstFiles.put(snapshotId, Collections.unmodifiableList(sstFiles));
@@ -311,12 +307,13 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
     /** A {@link SnapshotResources} for native rocksdb snapshot. */
     public static class NativeRocksDBSnapshotResources implements SnapshotResources {
 
-        @Nonnull protected final File snapshotDirectory;
+        @Nonnull
+        protected final File snapshotDirectory;
 
-        @Nonnull protected final PreviousSnapshot previousSnapshot;
+        @Nonnull
+        protected final PreviousSnapshot previousSnapshot;
 
-        protected NativeRocksDBSnapshotResources(
-                File snapshotDirectory, PreviousSnapshot previousSnapshot) {
+        protected NativeRocksDBSnapshotResources(File snapshotDirectory, PreviousSnapshot previousSnapshot) {
             this.snapshotDirectory = snapshotDirectory;
             this.previousSnapshot = previousSnapshot;
         }
@@ -325,9 +322,7 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
         public void release() {
             try {
                 if (snapshotDirectory.exists()) {
-                    LOG.trace(
-                            "Running cleanup for local RocksDB backup directory {}.",
-                            snapshotDirectory);
+                    LOG.trace("Running cleanup for local RocksDB backup directory {}.", snapshotDirectory);
                     FileUtils.deleteDirectory(snapshotDirectory);
                 }
             } catch (IOException e) {
@@ -339,17 +334,15 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
     /** Previous snapshot with uploaded sst files. */
     protected static class PreviousSnapshot {
 
-        @Nonnull private final Map<String, KvFileHandle> confirmedSstFiles;
+        @Nonnull
+        private final Map<String, KvFileHandle> confirmedSstFiles;
 
         private PreviousSnapshot(@Nullable Collection<KvFileHandleAndLocalPath> confirmedSstFiles) {
-            this.confirmedSstFiles =
-                    confirmedSstFiles != null
-                            ? confirmedSstFiles.stream()
-                                    .collect(
-                                            Collectors.toMap(
-                                                    KvFileHandleAndLocalPath::getLocalPath,
-                                                    KvFileHandleAndLocalPath::getKvFileHandle))
-                            : Collections.emptyMap();
+            this.confirmedSstFiles = confirmedSstFiles != null
+                    ? confirmedSstFiles.stream()
+                            .collect(Collectors.toMap(
+                                    KvFileHandleAndLocalPath::getLocalPath, KvFileHandleAndLocalPath::getKvFileHandle))
+                    : Collections.emptyMap();
         }
 
         private Optional<KvFileHandle> getUploaded(String fileName) {

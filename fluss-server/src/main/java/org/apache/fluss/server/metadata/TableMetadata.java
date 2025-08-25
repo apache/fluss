@@ -67,12 +67,7 @@ public class TableMetadata {
 
     @Override
     public String toString() {
-        return "TableMetadata{"
-                + "tableInfo="
-                + tableInfo
-                + ", bucketMetadataList="
-                + bucketMetadataList
-                + '}';
+        return "TableMetadata{" + "tableInfo=" + tableInfo + ", bucketMetadataList=" + bucketMetadataList + '}';
     }
 
     @Override

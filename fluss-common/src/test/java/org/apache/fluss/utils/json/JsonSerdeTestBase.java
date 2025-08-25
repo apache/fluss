@@ -66,15 +66,13 @@ public abstract class JsonSerdeTestBase<T> {
     }
 
     private static void checkFieldNameLowerCase(JsonNode jsonNode) {
-        jsonNode.fields()
-                .forEachRemaining(
-                        field -> {
-                            String name = field.getKey();
-                            assertThat(name)
-                                    .as("json field name should be snake case, not camel case")
-                                    .isEqualTo(camelToSnake(name));
-                            checkFieldNameLowerCase(field.getValue());
-                        });
+        jsonNode.fields().forEachRemaining(field -> {
+            String name = field.getKey();
+            assertThat(name)
+                    .as("json field name should be snake case, not camel case")
+                    .isEqualTo(camelToSnake(name));
+            checkFieldNameLowerCase(field.getValue());
+        });
     }
 
     public static String camelToSnake(String str) {

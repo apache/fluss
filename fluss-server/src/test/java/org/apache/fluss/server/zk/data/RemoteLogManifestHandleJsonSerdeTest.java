@@ -21,8 +21,7 @@ import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.utils.json.JsonSerdeTestBase;
 
 /** Test for {@link org.apache.fluss.server.zk.data.RemoteLogManifestHandleJsonSerde}. */
-public class RemoteLogManifestHandleJsonSerdeTest
-        extends JsonSerdeTestBase<RemoteLogManifestHandle> {
+public class RemoteLogManifestHandleJsonSerdeTest extends JsonSerdeTestBase<RemoteLogManifestHandle> {
     RemoteLogManifestHandleJsonSerdeTest() {
         super(RemoteLogManifestHandleJsonSerde.INSTANCE);
     }

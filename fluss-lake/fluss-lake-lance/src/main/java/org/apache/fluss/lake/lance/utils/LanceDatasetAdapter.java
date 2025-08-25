@@ -63,11 +63,10 @@ public class LanceDatasetAdapter {
         String uri = config.getDatasetUri();
         ReadOptions options = LanceConfig.genReadOptionFromConfig(config);
         try (Dataset dataset = Dataset.open(allocator, uri, options)) {
-            Transaction transaction =
-                    dataset.newTransactionBuilder()
-                            .operation(Append.builder().fragments(fragments).build())
-                            .transactionProperties(properties)
-                            .build();
+            Transaction transaction = dataset.newTransactionBuilder()
+                    .operation(Append.builder().fragments(fragments).build())
+                    .transactionProperties(properties)
+                    .build();
             try (Dataset appendedDataset = transaction.commit()) {
                 // note: lance dataset version starts from 1
                 return appendedDataset.version();
@@ -79,8 +78,7 @@ public class LanceDatasetAdapter {
         return new LanceArrowWriter(allocator, schema, batchSize, rowType);
     }
 
-    public static List<FragmentMetadata> createFragment(
-            String datasetUri, ArrowReader reader, WriteParams params) {
+    public static List<FragmentMetadata> createFragment(String datasetUri, ArrowReader reader, WriteParams params) {
         try (ArrowArrayStream arrowStream = ArrowArrayStream.allocateNew(allocator)) {
             Data.exportArrayStream(allocator, reader, arrowStream);
             return Fragment.create(datasetUri, arrowStream, params);

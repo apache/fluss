@@ -85,8 +85,7 @@ public abstract class AbstractIndex implements Closeable {
     /** The number of entries in this index. */
     private volatile int entries;
 
-    public AbstractIndex(File file, long baseOffset, int maxIndexSize, boolean writable)
-            throws IOException {
+    public AbstractIndex(File file, long baseOffset, int maxIndexSize, boolean writable) throws IOException {
         Objects.requireNonNull(file);
         this.file = file;
         this.baseOffset = baseOffset;
@@ -117,8 +116,7 @@ public abstract class AbstractIndex implements Closeable {
             }
 
             long length = raf.length();
-            MappedByteBuffer mmap =
-                    createMappedBuffer(raf, newlyCreated, length, writable, entrySize());
+            MappedByteBuffer mmap = createMappedBuffer(raf, newlyCreated, length, writable, entrySize());
 
             this.length = length;
             this.mmap = mmap;
@@ -201,48 +199,38 @@ public abstract class AbstractIndex implements Closeable {
     public boolean resize(int newSize) throws IOException {
         return inLock(
                 lock,
-                () ->
-                        inWriteLock(
-                                remapLock,
-                                () -> {
-                                    int roundedNewSize =
-                                            roundDownToExactMultiple(newSize, entrySize());
+                () -> inWriteLock(remapLock, () -> {
+                    int roundedNewSize = roundDownToExactMultiple(newSize, entrySize());
 
-                                    if (length == roundedNewSize) {
-                                        LOG.debug(
-                                                "Index {} was not resized because it already has size {}",
-                                                file.getAbsolutePath(),
-                                                roundedNewSize);
-                                        return false;
-                                    } else {
-                                        RandomAccessFile raf = new RandomAccessFile(file, "rw");
-                                        try {
-                                            int position = mmap.position();
+                    if (length == roundedNewSize) {
+                        LOG.debug(
+                                "Index {} was not resized because it already has size {}",
+                                file.getAbsolutePath(),
+                                roundedNewSize);
+                        return false;
+                    } else {
+                        RandomAccessFile raf = new RandomAccessFile(file, "rw");
+                        try {
+                            int position = mmap.position();
 
-                                            safeForceUnmap();
-                                            raf.setLength(roundedNewSize);
-                                            this.length = roundedNewSize;
-                                            mmap =
-                                                    raf.getChannel()
-                                                            .map(
-                                                                    FileChannel.MapMode.READ_WRITE,
-                                                                    0,
-                                                                    roundedNewSize);
-                                            this.maxEntries = mmap.limit() / entrySize();
-                                            mmap.position(position);
-                                            LOG.debug(
-                                                    "Resized {} to {}, position is {} and limit is {}",
-                                                    file.getAbsolutePath(),
-                                                    roundedNewSize,
-                                                    mmap.position(),
-                                                    mmap.limit());
-                                            return true;
-                                        } finally {
-                                            IOUtils.closeQuietly(
-                                                    raf, "index file " + file.getName());
-                                        }
-                                    }
-                                }));
+                            safeForceUnmap();
+                            raf.setLength(roundedNewSize);
+                            this.length = roundedNewSize;
+                            mmap = raf.getChannel().map(FileChannel.MapMode.READ_WRITE, 0, roundedNewSize);
+                            this.maxEntries = mmap.limit() / entrySize();
+                            mmap.position(position);
+                            LOG.debug(
+                                    "Resized {} to {}, position is {} and limit is {}",
+                                    file.getAbsolutePath(),
+                                    roundedNewSize,
+                                    mmap.position(),
+                                    mmap.limit());
+                            return true;
+                        } finally {
+                            IOUtils.closeQuietly(raf, "index file " + file.getName());
+                        }
+                    }
+                }));
     }
 
     /**
@@ -312,14 +300,8 @@ public abstract class AbstractIndex implements Closeable {
     /** Get offset relative to base offset of this index. */
     public int relativeOffset(long offset) {
         OptionalInt relativeOffset = toRelative(offset);
-        return relativeOffset.orElseThrow(
-                () ->
-                        new IndexOffsetOverflowException(
-                                "Integer overflow for offset: "
-                                        + offset
-                                        + " ("
-                                        + file.getAbsoluteFile()
-                                        + ")"));
+        return relativeOffset.orElseThrow(() -> new IndexOffsetOverflowException(
+                "Integer overflow for offset: " + offset + " (" + file.getAbsoluteFile() + ")"));
     }
 
     /**
@@ -437,8 +419,7 @@ public abstract class AbstractIndex implements Closeable {
      * @return The slot found or -1 if the least entry in the index is larger than the target key or
      *     the index is empty
      */
-    protected int largestLowerBoundSlotFor(
-            ByteBuffer idx, long target, IndexSearchType searchEntity) {
+    protected int largestLowerBoundSlotFor(ByteBuffer idx, long target, IndexSearchType searchEntity) {
         return indexSlotRangeFor(idx, target, searchEntity, SearchResultType.LARGEST_LOWER_BOUND);
     }
 
@@ -446,8 +427,7 @@ public abstract class AbstractIndex implements Closeable {
      * Find the smallest entry greater than or equal the target key or value. If none can be found,
      * -1 is returned.
      */
-    protected int smallestUpperBoundSlotFor(
-            ByteBuffer idx, long target, IndexSearchType searchEntity) {
+    protected int smallestUpperBoundSlotFor(ByteBuffer idx, long target, IndexSearchType searchEntity) {
         return indexSlotRangeFor(idx, target, searchEntity, SearchResultType.SMALLEST_UPPER_BOUND);
     }
 
@@ -460,11 +440,7 @@ public abstract class AbstractIndex implements Closeable {
     }
 
     private static MappedByteBuffer createMappedBuffer(
-            RandomAccessFile raf,
-            boolean newlyCreated,
-            long length,
-            boolean writable,
-            int entrySize)
+            RandomAccessFile raf, boolean newlyCreated, long length, boolean writable, int entrySize)
             throws IOException {
         MappedByteBuffer idx;
         if (writable) {
@@ -486,10 +462,7 @@ public abstract class AbstractIndex implements Closeable {
 
     /** Lookup lower or upper bounds for the given target. */
     private int indexSlotRangeFor(
-            ByteBuffer idx,
-            long target,
-            IndexSearchType searchEntity,
-            SearchResultType searchResultType) {
+            ByteBuffer idx, long target, IndexSearchType searchEntity, SearchResultType searchResultType) {
         // check if the index is empty
         if (entries == 0) {
             return -1;
@@ -498,8 +471,7 @@ public abstract class AbstractIndex implements Closeable {
         int firstHotEntry = Math.max(0, entries - 1 - warmEntries());
         // check if the target offset is in the warm section of the index
         if (compareIndexEntry(parseEntry(idx, firstHotEntry), target, searchEntity) < 0) {
-            return binarySearch(
-                    idx, target, searchEntity, searchResultType, firstHotEntry, entries - 1);
+            return binarySearch(idx, target, searchEntity, searchResultType, firstHotEntry, entries - 1);
         }
 
         // check if the target offset is smaller than the least offset
@@ -551,8 +523,7 @@ public abstract class AbstractIndex implements Closeable {
         }
     }
 
-    private int compareIndexEntry(
-            IndexEntry indexEntry, long target, IndexSearchType searchEntity) {
+    private int compareIndexEntry(IndexEntry indexEntry, long target, IndexSearchType searchEntity) {
         int result;
         switch (searchEntity) {
             case KEY:

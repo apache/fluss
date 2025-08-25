@@ -57,11 +57,8 @@ public class CompletedSnapshotStoreManager {
     private final Executor ioExecutor;
 
     public CompletedSnapshotStoreManager(
-            int maxNumberOfSnapshotsToRetain,
-            Executor ioExecutor,
-            ZooKeeperClient zooKeeperClient) {
-        checkArgument(
-                maxNumberOfSnapshotsToRetain > 0, "maxNumberOfSnapshotsToRetain must be positive");
+            int maxNumberOfSnapshotsToRetain, Executor ioExecutor, ZooKeeperClient zooKeeperClient) {
+        checkArgument(maxNumberOfSnapshotsToRetain > 0, "maxNumberOfSnapshotsToRetain must be positive");
         this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
         this.zooKeeperClient = zooKeeperClient;
         this.bucketCompletedSnapshotStores = new HashMap<>();
@@ -69,27 +66,18 @@ public class CompletedSnapshotStoreManager {
     }
 
     public CompletedSnapshotStore getOrCreateCompletedSnapshotStore(TableBucket tableBucket) {
-        return bucketCompletedSnapshotStores.computeIfAbsent(
-                tableBucket,
-                (bucket) -> {
-                    try {
-                        LOG.info("Creating snapshot store for table bucket {}.", bucket);
-                        long start = System.currentTimeMillis();
-                        CompletedSnapshotStore snapshotStore =
-                                createCompletedSnapshotStore(tableBucket, ioExecutor);
-                        long end = System.currentTimeMillis();
-                        LOG.info(
-                                "Created snapshot store for table bucket {} in {} ms.",
-                                bucket,
-                                end - start);
-                        return snapshotStore;
-                    } catch (Exception e) {
-                        throw new RuntimeException(
-                                "Failed to create completed snapshot store for table bucket "
-                                        + bucket,
-                                e);
-                    }
-                });
+        return bucketCompletedSnapshotStores.computeIfAbsent(tableBucket, (bucket) -> {
+            try {
+                LOG.info("Creating snapshot store for table bucket {}.", bucket);
+                long start = System.currentTimeMillis();
+                CompletedSnapshotStore snapshotStore = createCompletedSnapshotStore(tableBucket, ioExecutor);
+                long end = System.currentTimeMillis();
+                LOG.info("Created snapshot store for table bucket {} in {} ms.", bucket, end - start);
+                return snapshotStore;
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to create completed snapshot store for table bucket " + bucket, e);
+            }
+        });
     }
 
     public void removeCompletedSnapshotStoreByTableBuckets(Set<TableBucket> tableBuckets) {
@@ -98,8 +86,8 @@ public class CompletedSnapshotStoreManager {
         }
     }
 
-    private CompletedSnapshotStore createCompletedSnapshotStore(
-            TableBucket tableBucket, Executor ioExecutor) throws Exception {
+    private CompletedSnapshotStore createCompletedSnapshotStore(TableBucket tableBucket, Executor ioExecutor)
+            throws Exception {
         final CompletedSnapshotHandleStore completedSnapshotHandleStore =
                 new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient);
 
@@ -114,8 +102,7 @@ public class CompletedSnapshotStoreManager {
                 numberOfInitialSnapshots,
                 completedSnapshotHandleStore.getClass().getSimpleName());
 
-        final List<CompletedSnapshot> retrievedSnapshots =
-                new ArrayList<>(numberOfInitialSnapshots);
+        final List<CompletedSnapshot> retrievedSnapshots = new ArrayList<>(numberOfInitialSnapshots);
 
         LOG.info("Trying to fetch {} snapshots from storage.", numberOfInitialSnapshots);
 

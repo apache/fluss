@@ -22,47 +22,39 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class DependencyTreeTest {
-    private static final Dependency DEPENDENCY =
-            Dependency.create("groupId", "artifactId", "version", null);
+    private static final Dependency DEPENDENCY = Dependency.create("groupId", "artifactId", "version", null);
 
     @Test
     void testDependencyKeyIncludesGroupId() {
-        testDependencyKeyInclusion(
-                Dependency.create(
-                        "xxx",
-                        DEPENDENCY.getArtifactId(),
-                        DEPENDENCY.getVersion(),
-                        DEPENDENCY.getClassifier().orElse(null)));
+        testDependencyKeyInclusion(Dependency.create(
+                "xxx",
+                DEPENDENCY.getArtifactId(),
+                DEPENDENCY.getVersion(),
+                DEPENDENCY.getClassifier().orElse(null)));
     }
 
     @Test
     void testDependencyKeyIncludesArtifactId() {
-        testDependencyKeyInclusion(
-                Dependency.create(
-                        DEPENDENCY.getGroupId(),
-                        "xxx",
-                        DEPENDENCY.getVersion(),
-                        DEPENDENCY.getClassifier().orElse(null)));
+        testDependencyKeyInclusion(Dependency.create(
+                DEPENDENCY.getGroupId(),
+                "xxx",
+                DEPENDENCY.getVersion(),
+                DEPENDENCY.getClassifier().orElse(null)));
     }
 
     @Test
     void testDependencyKeyIncludesVersion() {
-        testDependencyKeyInclusion(
-                Dependency.create(
-                        DEPENDENCY.getGroupId(),
-                        DEPENDENCY.getArtifactId(),
-                        "xxx",
-                        DEPENDENCY.getClassifier().orElse(null)));
+        testDependencyKeyInclusion(Dependency.create(
+                DEPENDENCY.getGroupId(),
+                DEPENDENCY.getArtifactId(),
+                "xxx",
+                DEPENDENCY.getClassifier().orElse(null)));
     }
 
     @Test
     void testDependencyKeyIncludesClassifier() {
         testDependencyKeyInclusion(
-                Dependency.create(
-                        DEPENDENCY.getGroupId(),
-                        DEPENDENCY.getArtifactId(),
-                        DEPENDENCY.getVersion(),
-                        "xxx"));
+                Dependency.create(DEPENDENCY.getGroupId(), DEPENDENCY.getArtifactId(), DEPENDENCY.getVersion(), "xxx"));
     }
 
     private static void testDependencyKeyInclusion(Dependency modifiedDependency) {
@@ -75,21 +67,19 @@ class DependencyTreeTest {
 
     @Test
     void testDependencyKeyIgnoresScopeAndOptionalFlag() {
-        final Dependency dependencyWithScopeAndOptionalFlag =
-                Dependency.create(
-                        DEPENDENCY.getGroupId(),
-                        DEPENDENCY.getArtifactId(),
-                        DEPENDENCY.getVersion(),
-                        DEPENDENCY.getClassifier().orElse(null),
-                        "compile",
-                        true);
+        final Dependency dependencyWithScopeAndOptionalFlag = Dependency.create(
+                DEPENDENCY.getGroupId(),
+                DEPENDENCY.getArtifactId(),
+                DEPENDENCY.getVersion(),
+                DEPENDENCY.getClassifier().orElse(null),
+                "compile",
+                true);
 
         final DependencyTree dependencyTree = new DependencyTree();
         dependencyTree.addDirectDependency(DEPENDENCY);
         dependencyTree.addDirectDependency(dependencyWithScopeAndOptionalFlag);
 
         assertThat(dependencyTree.flatten()).containsExactly(DEPENDENCY);
-        assertThat(dependencyTree.getPathTo(dependencyWithScopeAndOptionalFlag))
-                .containsExactly(DEPENDENCY);
+        assertThat(dependencyTree.getPathTo(dependencyWithScopeAndOptionalFlag)).containsExactly(DEPENDENCY);
     }
 }

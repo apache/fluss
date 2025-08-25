@@ -48,11 +48,9 @@ class LakeSplitSerializerTest {
 
     private static final int STOPPING_OFFSET = 1024;
 
-    private static final LakeSplit LAKE_SPLIT =
-            new TestLakeSplit(0, Collections.singletonList("2025-08-18"));
+    private static final LakeSplit LAKE_SPLIT = new TestLakeSplit(0, Collections.singletonList("2025-08-18"));
 
-    private final SimpleVersionedSerializer<LakeSplit> sourceSplitSerializer =
-            new TestSimpleVersionedSerializer();
+    private final SimpleVersionedSerializer<LakeSplit> sourceSplitSerializer = new TestSimpleVersionedSerializer();
 
     private TableBucket tableBucket = new TableBucket(0, 1L, 0);
 
@@ -61,18 +59,16 @@ class LakeSplitSerializerTest {
     @Test
     void testSerializeAndDeserializeLakeSnapshotSplit() throws IOException {
         // Prepare test data
-        LakeSnapshotSplit originalSplit =
-                new LakeSnapshotSplit(tableBucket, "2025-08-18", LAKE_SPLIT);
+        LakeSnapshotSplit originalSplit = new LakeSnapshotSplit(tableBucket, "2025-08-18", LAKE_SPLIT);
 
         DataOutputSerializer output = new DataOutputSerializer(STOPPING_OFFSET);
         serializer.serialize(output, originalSplit);
 
-        SourceSplitBase deserializedSplit =
-                serializer.deserialize(
-                        LAKE_SNAPSHOT_SPLIT_KIND,
-                        tableBucket,
-                        "2025-08-18",
-                        new DataInputDeserializer(output.getCopyOfBuffer()));
+        SourceSplitBase deserializedSplit = serializer.deserialize(
+                LAKE_SNAPSHOT_SPLIT_KIND,
+                tableBucket,
+                "2025-08-18",
+                new DataInputDeserializer(output.getCopyOfBuffer()));
 
         assertThat(deserializedSplit instanceof LakeSnapshotSplit).isTrue();
         LakeSnapshotSplit result = (LakeSnapshotSplit) deserializedSplit;
@@ -84,23 +80,17 @@ class LakeSplitSerializerTest {
 
     @Test
     void testSerializeAndDeserializeLakeSnapshotAndFlussLogSplit() throws IOException {
-        LakeSnapshotAndFlussLogSplit originalSplit =
-                new LakeSnapshotAndFlussLogSplit(
-                        tableBucket,
-                        "2025-08-18",
-                        Collections.singletonList(LAKE_SPLIT),
-                        EARLIEST_OFFSET,
-                        STOPPING_OFFSET);
+        LakeSnapshotAndFlussLogSplit originalSplit = new LakeSnapshotAndFlussLogSplit(
+                tableBucket, "2025-08-18", Collections.singletonList(LAKE_SPLIT), EARLIEST_OFFSET, STOPPING_OFFSET);
 
         DataOutputSerializer output = new DataOutputSerializer(STOPPING_OFFSET);
         serializer.serialize(output, originalSplit);
 
-        SourceSplitBase deserializedSplit =
-                serializer.deserialize(
-                        LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND,
-                        tableBucket,
-                        "2025-08-18",
-                        new DataInputDeserializer(output.getCopyOfBuffer()));
+        SourceSplitBase deserializedSplit = serializer.deserialize(
+                LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND,
+                tableBucket,
+                "2025-08-18",
+                new DataInputDeserializer(output.getCopyOfBuffer()));
 
         assertThat(deserializedSplit instanceof LakeSnapshotAndFlussLogSplit).isTrue();
         LakeSnapshotAndFlussLogSplit result = (LakeSnapshotAndFlussLogSplit) deserializedSplit;
@@ -117,19 +107,13 @@ class LakeSplitSerializerTest {
         DataOutputSerializer output = new DataOutputSerializer(1024);
         output.writeInt(0);
 
-        assertThatThrownBy(
-                        () ->
-                                serializer.deserialize(
-                                        (byte) 99,
-                                        tableBucket,
-                                        "2023-10-01",
-                                        new DataInputDeserializer(output.getCopyOfBuffer())))
+        assertThatThrownBy(() -> serializer.deserialize(
+                        (byte) 99, tableBucket, "2023-10-01", new DataInputDeserializer(output.getCopyOfBuffer())))
                 .withFailMessage(() -> "Unsupported split kind: ")
                 .isInstanceOf(UnsupportedOperationException.class);
     }
 
-    private static class TestSimpleVersionedSerializer
-            implements SimpleVersionedSerializer<LakeSplit> {
+    private static class TestSimpleVersionedSerializer implements SimpleVersionedSerializer<LakeSplit> {
 
         @Override
         public byte[] serialize(LakeSplit split) throws IOException {

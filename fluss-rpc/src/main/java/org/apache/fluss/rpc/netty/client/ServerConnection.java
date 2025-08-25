@@ -170,30 +170,25 @@ final class ServerConnection {
             }
 
             if (channel != null) {
-                channel.close()
-                        .addListener(
-                                (ChannelFutureListener)
-                                        future -> {
+                channel.close().addListener((ChannelFutureListener) future -> {
 
-                                            // when finishing, if netty successfully closes the
-                                            // channel, then the provided exception is used as
-                                            // the reason for the closing. If there was something
-                                            // wrong at the netty side, then that exception is
-                                            // prioritized over the provided one.
-                                            if (future.isSuccess()) {
-                                                if (cause instanceof ClosedChannelException) {
-                                                    // the ClosedChannelException is expected
-                                                    closeFuture.complete(null);
-                                                } else {
-                                                    closeFuture.completeExceptionally(cause);
-                                                }
-                                            } else {
-                                                LOG.warn(
-                                                        "Something went wrong when trying to close connection due to : ",
-                                                        cause);
-                                                closeFuture.completeExceptionally(future.cause());
-                                            }
-                                        });
+                    // when finishing, if netty successfully closes the
+                    // channel, then the provided exception is used as
+                    // the reason for the closing. If there was something
+                    // wrong at the netty side, then that exception is
+                    // prioritized over the provided one.
+                    if (future.isSuccess()) {
+                        if (cause instanceof ClosedChannelException) {
+                            // the ClosedChannelException is expected
+                            closeFuture.complete(null);
+                        } else {
+                            closeFuture.completeExceptionally(cause);
+                        }
+                    } else {
+                        LOG.warn("Something went wrong when trying to close connection due to : ", cause);
+                        closeFuture.completeExceptionally(future.cause());
+                    }
+                });
             } else {
                 // TODO all return completeExceptionally will let some test cases blocked, so we
                 // need to find why the test cases are blocked and remove the if statement.
@@ -236,9 +231,7 @@ final class ServerConnection {
             InflightRequest request = inflightRequests.remove(requestId);
             if (request != null && !request.responseFuture.isDone()) {
                 connectionMetricGroup.updateMetricsAfterGetResponse(
-                        ApiKeys.forId(request.apiKey),
-                        request.requestStartTime,
-                        response.totalSize());
+                        ApiKeys.forId(request.apiKey), request.requestStartTime, response.totalSize());
                 request.responseFuture.complete(response);
             }
         }
@@ -266,17 +259,12 @@ final class ServerConnection {
             if (future.isSuccess()) {
                 LOG.debug("Established connection to server {}.", node);
                 channel = future.channel();
-                channel.pipeline()
-                        .addLast(
-                                "handler",
-                                new NettyClientHandler(new ResponseCallback(), isInnerClient));
+                channel.pipeline().addLast("handler", new NettyClientHandler(new ResponseCallback(), isInnerClient));
                 // start checking api versions
                 switchState(ConnectionState.CHECKING_API_VERSIONS);
                 // TODO: set correct client software name and version, used for metrics in server
                 ApiVersionsRequest request =
-                        new ApiVersionsRequest()
-                                .setClientSoftwareName("fluss")
-                                .setClientSoftwareVersion("0.1.0");
+                        new ApiVersionsRequest().setClientSoftwareName("fluss").setClientSoftwareVersion("0.1.0");
                 doSend(ApiKeys.API_VERSIONS, request, new CompletableFuture<>(), true)
                         .whenComplete(this::handleApiVersionsResponse);
             } else {
@@ -293,12 +281,8 @@ final class ServerConnection {
             boolean isInternalRequest) {
         synchronized (lock) {
             if (state.isDisconnected()) {
-                Exception exception =
-                        new NetworkException(
-                                new DisconnectException(
-                                        "Cannot send request to server "
-                                                + node
-                                                + " because it is disconnected."));
+                Exception exception = new NetworkException(new DisconnectException(
+                        "Cannot send request to server " + node + " because it is disconnected."));
                 responseFuture.completeExceptionally(exception);
                 return responseFuture;
             }
@@ -306,8 +290,7 @@ final class ServerConnection {
             // 2. connection is established but not ready: internal requests are processed, other
             // requests are queued
             if (!state.isEstablished() || (!state.isReady() && !isInternalRequest)) {
-                pendingRequests.add(
-                        new PendingRequest(apiKey, rawRequest, isInternalRequest, responseFuture));
+                pendingRequests.add(new PendingRequest(apiKey, rawRequest, isInternalRequest, responseFuture));
                 return responseFuture;
             }
 
@@ -324,8 +307,7 @@ final class ServerConnection {
             }
 
             InflightRequest inflight =
-                    new InflightRequest(
-                            apiKey.id, version, requestCount++, rawRequest, responseFuture);
+                    new InflightRequest(apiKey.id, version, requestCount++, rawRequest, responseFuture);
             inflightRequests.put(inflight.requestId, inflight);
 
             // TODO: maybe we need to add timeout for the inflight requests
@@ -335,36 +317,28 @@ final class ServerConnection {
             } catch (Exception e) {
                 LOG.error("Failed to encode request for '{}'.", ApiKeys.forId(inflight.apiKey), e);
                 inflightRequests.remove(inflight.requestId);
-                responseFuture.completeExceptionally(
-                        new FlussRuntimeException(
-                                String.format(
-                                        "Failed to encode request for '%s'",
-                                        ApiKeys.forId(inflight.apiKey)),
-                                e));
+                responseFuture.completeExceptionally(new FlussRuntimeException(
+                        String.format("Failed to encode request for '%s'", ApiKeys.forId(inflight.apiKey)), e));
                 return responseFuture;
             }
 
             connectionMetricGroup.updateMetricsBeforeSendRequest(apiKey, rawRequest.totalSize());
 
-            channel.writeAndFlush(byteBuf)
-                    .addListener(
-                            (ChannelFutureListener)
-                                    future -> {
-                                        if (!future.isSuccess()) {
-                                            connectionMetricGroup.updateMetricsAfterGetResponse(
-                                                    apiKey, inflight.requestStartTime, 0);
-                                            Throwable cause = future.cause();
-                                            if (cause instanceof IOException) {
-                                                // when server close the channel, the cause will be
-                                                // IOException, if the cause is IOException, we wrap
-                                                // it as retryable NetworkException to retry to
-                                                // connect
-                                                cause = new NetworkException(cause);
-                                            }
-                                            inflight.responseFuture.completeExceptionally(cause);
-                                            inflightRequests.remove(inflight.requestId);
-                                        }
-                                    });
+            channel.writeAndFlush(byteBuf).addListener((ChannelFutureListener) future -> {
+                if (!future.isSuccess()) {
+                    connectionMetricGroup.updateMetricsAfterGetResponse(apiKey, inflight.requestStartTime, 0);
+                    Throwable cause = future.cause();
+                    if (cause instanceof IOException) {
+                        // when server close the channel, the cause will be
+                        // IOException, if the cause is IOException, we wrap
+                        // it as retryable NetworkException to retry to
+                        // connect
+                        cause = new NetworkException(cause);
+                    }
+                    inflight.responseFuture.completeExceptionally(cause);
+                    inflightRequests.remove(inflight.requestId);
+                }
+            });
             return inflight.responseFuture;
         }
     }
@@ -380,8 +354,7 @@ final class ServerConnection {
         }
 
         synchronized (lock) {
-            serverApiVersions =
-                    new ServerApiVersions(((ApiVersionsResponse) response).getApiVersionsList());
+            serverApiVersions = new ServerApiVersions(((ApiVersionsResponse) response).getApiVersionsList());
             // send initial token
             sendInitialToken();
         }
@@ -403,16 +376,13 @@ final class ServerConnection {
     private void sendAuthenticateRequest(byte[] challenge, boolean initialToken) {
         try {
             if (!authenticator.isCompleted()) {
-                byte[] token =
-                        initialToken && !authenticator.hasInitialTokenResponse()
-                                ? challenge
-                                : authenticator.authenticate(challenge);
+                byte[] token = initialToken && !authenticator.hasInitialTokenResponse()
+                        ? challenge
+                        : authenticator.authenticate(challenge);
                 if (token != null) {
                     switchState(ConnectionState.AUTHENTICATING);
                     AuthenticateRequest request =
-                            new AuthenticateRequest()
-                                    .setToken(token)
-                                    .setProtocol(authenticator.protocol());
+                            new AuthenticateRequest().setToken(token).setProtocol(authenticator.protocol());
                     doSend(ApiKeys.AUTHENTICATE, request, new CompletableFuture<>(), true)
                             .whenComplete(this::handleAuthenticateResponse);
                     return;
@@ -424,9 +394,7 @@ final class ServerConnection {
 
         } catch (Exception e) {
             LOG.error("Authentication failed when authenticating challenge。", e);
-            close(
-                    new FlussRuntimeException(
-                            "Authentication failed when authenticating challenge", e));
+            close(new FlussRuntimeException("Authentication failed when authenticating challenge", e));
         }
     }
 
@@ -436,10 +404,7 @@ final class ServerConnection {
                 if (cause instanceof RetriableAuthenticationException) {
                     LOG.warn("Authentication failed, retrying {} times", retryAuthCount, cause);
                     channel.eventLoop()
-                            .schedule(
-                                    this::sendInitialToken,
-                                    backoff.backoff(retryAuthCount++),
-                                    TimeUnit.MILLISECONDS);
+                            .schedule(this::sendInitialToken, backoff.backoff(retryAuthCount++), TimeUnit.MILLISECONDS);
                 } else {
                     close(cause);
                 }
@@ -456,9 +421,8 @@ final class ServerConnection {
             } else if (authenticator.isCompleted()) {
                 switchState(ConnectionState.READY);
             } else {
-                close(
-                        new IllegalStateException(
-                                "client authenticator is not completed while server generate no challenge."));
+                close(new IllegalStateException(
+                        "client authenticator is not completed while server generate no challenge."));
             }
         }
     }
@@ -470,11 +434,7 @@ final class ServerConnection {
             // process pending requests
             PendingRequest pending;
             while ((pending = pendingRequests.pollFirst()) != null) {
-                doSend(
-                        pending.apikey,
-                        pending.request,
-                        pending.responseFuture,
-                        pending.isInternalRequest);
+                doSend(pending.apikey, pending.request, pending.responseFuture, pending.isInternalRequest);
             }
         }
     }

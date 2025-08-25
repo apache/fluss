@@ -63,12 +63,9 @@ public class DropAclProcedure extends AbstractAclProcedure {
             OperationType operationType,
             String host)
             throws Exception {
-        admin.dropAcls(
-                        Collections.singletonList(
-                                new AclBindingFilter(
-                                        new ResourceFilter(resource.getType(), resource.getName()),
-                                        new AccessControlEntryFilter(
-                                                flussPrincipal, host, operationType, permission))))
+        admin.dropAcls(Collections.singletonList(new AclBindingFilter(
+                        new ResourceFilter(resource.getType(), resource.getName()),
+                        new AccessControlEntryFilter(flussPrincipal, host, operationType, permission))))
                 .all()
                 .get();
         return new String[] {"success"};

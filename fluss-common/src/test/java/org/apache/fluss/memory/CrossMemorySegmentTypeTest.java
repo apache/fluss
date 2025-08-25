@@ -30,8 +30,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  * org.apache.fluss.memory.MemorySegment}.
  */
 public class CrossMemorySegmentTypeTest {
-    private static final long BYTE_ARRAY_BASE_OFFSET =
-            MemoryUtils.UNSAFE.arrayBaseOffset(byte[].class);
+    private static final long BYTE_ARRAY_BASE_OFFSET = MemoryUtils.UNSAFE.arrayBaseOffset(byte[].class);
 
     private final int pageSize = 32 * 1024;
 
@@ -77,10 +76,7 @@ public class CrossMemorySegmentTypeTest {
             int pos1 = random.nextInt(bytes1.length);
             int pos2 = random.nextInt(bytes2.length);
 
-            int len =
-                    Math.min(
-                            Math.min(bytes1.length - pos1, bytes2.length - pos2),
-                            random.nextInt(pageSize / 50));
+            int len = Math.min(Math.min(bytes1.length - pos1, bytes2.length - pos2), random.nextInt(pageSize / 50));
 
             int cmp = seg1.compare(seg2, pos1, pos2, len);
 
@@ -154,9 +150,7 @@ public class CrossMemorySegmentTypeTest {
     }
 
     private static MemorySegment[] createSegments(int size) {
-        return new MemorySegment[] {
-            MemorySegment.allocateHeapMemory(size), MemorySegment.allocateOffHeapMemory(size)
-        };
+        return new MemorySegment[] {MemorySegment.allocateHeapMemory(size), MemorySegment.allocateOffHeapMemory(size)};
     }
 
     private void testCopy(MemorySegment seg1, MemorySegment seg2, Random random) {
@@ -185,13 +179,12 @@ public class CrossMemorySegmentTypeTest {
 
             seg1.put(thisPos, bytes);
             seg1.copyTo(thisPos, seg2, otherPos, numBytes);
-            seg1.copyToUnsafe(
-                    thisPos, unsafeCopy, (int) (otherPos + BYTE_ARRAY_BASE_OFFSET), numBytes);
+            seg1.copyToUnsafe(thisPos, unsafeCopy, (int) (otherPos + BYTE_ARRAY_BASE_OFFSET), numBytes);
 
             int otherPos2 = random.nextInt(pageSize - numBytes);
-            unsafeCopySeg.copyFromUnsafe(
-                    otherPos2, unsafeCopy, (int) (otherPos + BYTE_ARRAY_BASE_OFFSET), numBytes);
-            assertThat(unsafeCopySeg.equalTo(seg2, otherPos2, otherPos, numBytes)).isTrue();
+            unsafeCopySeg.copyFromUnsafe(otherPos2, unsafeCopy, (int) (otherPos + BYTE_ARRAY_BASE_OFFSET), numBytes);
+            assertThat(unsafeCopySeg.equalTo(seg2, otherPos2, otherPos, numBytes))
+                    .isTrue();
         }
 
         seg2.get(0, actual);
@@ -200,14 +193,10 @@ public class CrossMemorySegmentTypeTest {
         // test out of bound conditions
 
         final int[] validOffsets = {0, 1, pageSize / 10 * 9};
-        final int[] invalidOffsets = {
-            -1, pageSize + 1, -pageSize, Integer.MAX_VALUE, Integer.MIN_VALUE
-        };
+        final int[] invalidOffsets = {-1, pageSize + 1, -pageSize, Integer.MAX_VALUE, Integer.MIN_VALUE};
 
         final int[] validLengths = {0, 1, pageSize / 10, pageSize};
-        final int[] invalidLengths = {
-            -1, -pageSize, pageSize + 1, Integer.MAX_VALUE, Integer.MIN_VALUE
-        };
+        final int[] invalidLengths = {-1, -pageSize, pageSize + 1, Integer.MAX_VALUE, Integer.MIN_VALUE};
 
         for (int off1 : validOffsets) {
             for (int off2 : validOffsets) {

@@ -85,8 +85,7 @@ public class ComponentClassLoader extends URLClassLoader {
         this.knownPackagePrefixesModuleAssociation = knownPackagePrefixesModuleAssociation;
 
         ownerFirstResourcePrefixes = convertPackagePrefixesToPathPrefixes(ownerFirstPackages);
-        componentFirstResourcePrefixes =
-                convertPackagePrefixesToPathPrefixes(componentFirstPackages);
+        componentFirstResourcePrefixes = convertPackagePrefixesToPathPrefixes(componentFirstPackages);
     }
 
     // ----------------------------------------------------------------------------------------------
@@ -94,8 +93,7 @@ public class ComponentClassLoader extends URLClassLoader {
     // ----------------------------------------------------------------------------------------------
 
     @Override
-    protected Class<?> loadClass(final String name, final boolean resolve)
-            throws ClassNotFoundException {
+    protected Class<?> loadClass(final String name, final boolean resolve) throws ClassNotFoundException {
         synchronized (getClassLoadingLock(name)) {
             try {
                 final Class<?> loadedClass = findLoadedClass(name);
@@ -116,11 +114,10 @@ public class ComponentClassLoader extends URLClassLoader {
                 return loadClassFromComponentOnly(name, resolve);
             } catch (ClassNotFoundException e) {
                 // If we know the package of this class
-                Optional<String> foundAssociatedModule =
-                        knownPackagePrefixesModuleAssociation.entrySet().stream()
-                                .filter(entry -> name.startsWith(entry.getKey()))
-                                .map(Map.Entry::getValue)
-                                .findFirst();
+                Optional<String> foundAssociatedModule = knownPackagePrefixesModuleAssociation.entrySet().stream()
+                        .filter(entry -> name.startsWith(entry.getKey()))
+                        .map(Map.Entry::getValue)
+                        .findFirst();
                 if (foundAssociatedModule.isPresent()) {
                     throw new ClassNotFoundException(
                             String.format(
@@ -162,13 +159,11 @@ public class ComponentClassLoader extends URLClassLoader {
         }
     }
 
-    private Class<?> loadClassFromOwnerOnly(final String name, final boolean resolve)
-            throws ClassNotFoundException {
+    private Class<?> loadClassFromOwnerOnly(final String name, final boolean resolve) throws ClassNotFoundException {
         return resolveIfNeeded(resolve, ownerClassLoader.loadClass(name));
     }
 
-    private Class<?> loadClassFromOwnerFirst(final String name, final boolean resolve)
-            throws ClassNotFoundException {
+    private Class<?> loadClassFromOwnerFirst(final String name, final boolean resolve) throws ClassNotFoundException {
         try {
             return loadClassFromOwnerOnly(name, resolve);
         } catch (ClassNotFoundException | NoClassDefFoundError e) {
@@ -229,8 +224,7 @@ public class ComponentClassLoader extends URLClassLoader {
     }
 
     private Enumeration<URL> loadResourceFromComponentFirst(final String name) throws IOException {
-        return loadResourcesInOrder(
-                name, this::loadResourceFromComponentOnly, this::loadResourceFromOwnerOnly);
+        return loadResourcesInOrder(name, this::loadResourceFromComponentOnly, this::loadResourceFromOwnerOnly);
     }
 
     private Enumeration<URL> loadResourceFromOwnerOnly(final String name) throws IOException {
@@ -238,22 +232,17 @@ public class ComponentClassLoader extends URLClassLoader {
     }
 
     private Enumeration<URL> loadResourceFromOwnerFirst(final String name) throws IOException {
-        return loadResourcesInOrder(
-                name, this::loadResourceFromOwnerOnly, this::loadResourceFromComponentOnly);
+        return loadResourcesInOrder(name, this::loadResourceFromOwnerOnly, this::loadResourceFromComponentOnly);
     }
 
-    private interface ResourceLoadingFunction
-            extends FunctionWithException<String, Enumeration<URL>, IOException> {}
+    private interface ResourceLoadingFunction extends FunctionWithException<String, Enumeration<URL>, IOException> {}
 
     private Enumeration<URL> loadResourcesInOrder(
-            String name,
-            ResourceLoadingFunction firstClassLoader,
-            ResourceLoadingFunction secondClassLoader)
+            String name, ResourceLoadingFunction firstClassLoader, ResourceLoadingFunction secondClassLoader)
             throws IOException {
-        final Iterator<URL> iterator =
-                Iterators.concat(
-                        Iterators.forEnumeration(firstClassLoader.apply(name)),
-                        Iterators.forEnumeration(secondClassLoader.apply(name)));
+        final Iterator<URL> iterator = Iterators.concat(
+                Iterators.forEnumeration(firstClassLoader.apply(name)),
+                Iterators.forEnumeration(secondClassLoader.apply(name)));
 
         return new IteratorBackedEnumeration<>(iterator);
     }
@@ -290,9 +279,8 @@ public class ComponentClassLoader extends URLClassLoader {
     static {
         ClassLoader platformLoader = null;
         try {
-            platformLoader =
-                    (ClassLoader)
-                            ClassLoader.class.getMethod("getPlatformClassLoader").invoke(null);
+            platformLoader = (ClassLoader)
+                    ClassLoader.class.getMethod("getPlatformClassLoader").invoke(null);
         } catch (NoSuchMethodException e) {
             // on Java 8 this method does not exist, but using null indicates the bootstrap
             // loader that we want to have

@@ -287,8 +287,7 @@ public class CompactedRowWriter {
 
     // ------------------------------------------------------------------------------------------
 
-    public static void serializeCompactedRow(CompactedRow row, OutputView target)
-            throws IOException {
+    public static void serializeCompactedRow(CompactedRow row, OutputView target) throws IOException {
         int sizeInBytes = row.getSizeInBytes();
         if (target instanceof MemorySegmentWritable) {
             ((MemorySegmentWritable) target).write(row.getSegment(), row.getOffset(), sizeInBytes);
@@ -320,9 +319,7 @@ public class CompactedRowWriter {
                 break;
             case DECIMAL:
                 final int decimalPrecision = getPrecision(fieldType);
-                fieldWriter =
-                        (writer, pos, value) ->
-                                writer.writeDecimal((Decimal) value, decimalPrecision);
+                fieldWriter = (writer, pos, value) -> writer.writeDecimal((Decimal) value, decimalPrecision);
                 break;
             case TINYINT:
                 fieldWriter = (writer, pos, value) -> writer.writeByte((byte) value);
@@ -347,16 +344,12 @@ public class CompactedRowWriter {
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 final int timestampNtzPrecision = getPrecision(fieldType);
                 fieldWriter =
-                        (writer, pos, value) ->
-                                writer.writeTimestampNtz(
-                                        (TimestampNtz) value, timestampNtzPrecision);
+                        (writer, pos, value) -> writer.writeTimestampNtz((TimestampNtz) value, timestampNtzPrecision);
                 break;
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 final int timestampLtzPrecision = getPrecision(fieldType);
                 fieldWriter =
-                        (writer, pos, value) ->
-                                writer.writeTimestampLtz(
-                                        (TimestampLtz) value, timestampLtzPrecision);
+                        (writer, pos, value) -> writer.writeTimestampLtz((TimestampLtz) value, timestampLtzPrecision);
                 break;
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);

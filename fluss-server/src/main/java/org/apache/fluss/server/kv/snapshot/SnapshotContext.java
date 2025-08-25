@@ -61,8 +61,7 @@ public interface SnapshotContext {
      * Get the provider of latest CompletedSnapshot for a table bucket. When no completed snapshot
      * exists, the CompletedSnapshot provided will be null.
      */
-    FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-            getLatestCompletedSnapshotProvider();
+    FunctionWithException<TableBucket, CompletedSnapshot, Exception> getLatestCompletedSnapshotProvider();
 
     /**
      * Get the max fetch size for fetching log to apply kv during recovering kv. The kv may apply

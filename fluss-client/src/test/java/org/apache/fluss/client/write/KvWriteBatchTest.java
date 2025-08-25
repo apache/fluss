@@ -76,19 +76,11 @@ class KvWriteBatchTest {
     @Test
     void testTryAppendWithWriteLimit() throws Exception {
         int writeLimit = 100;
-        KvWriteBatch kvProducerBatch =
-                createKvWriteBatch(
-                        new TableBucket(DATA1_TABLE_ID_PK, 0),
-                        writeLimit,
-                        MemorySegment.allocateHeapMemory(writeLimit));
+        KvWriteBatch kvProducerBatch = createKvWriteBatch(
+                new TableBucket(DATA1_TABLE_ID_PK, 0), writeLimit, MemorySegment.allocateHeapMemory(writeLimit));
 
-        for (int i = 0;
-                i
-                        < (writeLimit - DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE)
-                                / estimatedSizeInBytes;
-                i++) {
-            boolean appendResult =
-                    kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
+        for (int i = 0; i < (writeLimit - DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE) / estimatedSizeInBytes; i++) {
+            boolean appendResult = kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
 
             assertThat(appendResult).isTrue();
         }
@@ -104,8 +96,7 @@ class KvWriteBatchTest {
 
         boolean appendResult = kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isTrue();
-        DefaultKvRecordBatch kvRecords =
-                DefaultKvRecordBatch.pointToBytesView(kvProducerBatch.build());
+        DefaultKvRecordBatch kvRecords = DefaultKvRecordBatch.pointToBytesView(kvProducerBatch.build());
         assertDefaultKvRecordBatchEquals(kvRecords);
     }
 
@@ -119,8 +110,7 @@ class KvWriteBatchTest {
         assertThat(kvWriteBatch.complete()).isTrue();
         assertThatThrownBy(kvWriteBatch::complete)
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(
-                        "A SUCCEEDED batch must not attempt another state change to SUCCEEDED");
+                .hasMessageContaining("A SUCCEEDED batch must not attempt another state change to SUCCEEDED");
     }
 
     @Test
@@ -153,25 +143,20 @@ class KvWriteBatchTest {
     @Test
     void testBatchAborted() throws Exception {
         int writeLimit = 10240;
-        KvWriteBatch kvProducerBatch =
-                createKvWriteBatch(
-                        new TableBucket(DATA1_TABLE_ID_PK, 0),
-                        writeLimit,
-                        MemorySegment.allocateHeapMemory(writeLimit));
+        KvWriteBatch kvProducerBatch = createKvWriteBatch(
+                new TableBucket(DATA1_TABLE_ID_PK, 0), writeLimit, MemorySegment.allocateHeapMemory(writeLimit));
 
         int recordCount = 5;
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         for (int i = 0; i < recordCount; i++) {
             CompletableFuture<Void> future = new CompletableFuture<>();
-            kvProducerBatch.tryAppend(
-                    createWriteRecord(),
-                    exception -> {
-                        if (exception != null) {
-                            future.completeExceptionally(exception);
-                        } else {
-                            future.complete(null);
-                        }
-                    });
+            kvProducerBatch.tryAppend(createWriteRecord(), exception -> {
+                if (exception != null) {
+                    future.completeExceptionally(exception);
+                } else {
+                    future.complete(null);
+                }
+            });
             futures.add(future);
         }
 
@@ -181,8 +166,7 @@ class KvWriteBatchTest {
         // first try to append.
         assertThatThrownBy(() -> kvProducerBatch.tryAppend(createWriteRecord(), newWriteCallback()))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(
-                        "Tried to append a record, but KvRecordBatchBuilder has already been aborted");
+                .hasMessageContaining("Tried to append a record, but KvRecordBatchBuilder has already been aborted");
 
         // try to build.
         assertThatThrownBy(kvProducerBatch::build)
@@ -199,16 +183,15 @@ class KvWriteBatchTest {
     }
 
     protected WriteRecord createWriteRecord() {
-        return WriteRecord.forUpsert(
-                PhysicalTablePath.of(DATA1_TABLE_PATH_PK), row, key, key, null);
+        return WriteRecord.forUpsert(PhysicalTablePath.of(DATA1_TABLE_PATH_PK), row, key, key, null);
     }
 
     private KvWriteBatch createKvWriteBatch(TableBucket tb) throws Exception {
         return createKvWriteBatch(tb, Integer.MAX_VALUE, memoryPool.nextSegment());
     }
 
-    private KvWriteBatch createKvWriteBatch(
-            TableBucket tb, int writeLimit, MemorySegment memorySegment) throws Exception {
+    private KvWriteBatch createKvWriteBatch(TableBucket tb, int writeLimit, MemorySegment memorySegment)
+            throws Exception {
         PreAllocatedPagedOutputView outputView =
                 new PreAllocatedPagedOutputView(Collections.singletonList(memorySegment));
         return new KvWriteBatch(
@@ -234,12 +217,9 @@ class KvWriteBatchTest {
         assertThat(recordBatch.getRecordCount()).isEqualTo(1);
 
         DataType[] dataTypes = DATA1_ROW_TYPE.getChildren().toArray(new DataType[0]);
-        Iterator<KvRecord> iterator =
-                recordBatch
-                        .records(
-                                KvRecordReadContext.createReadContext(
-                                        KvFormat.COMPACTED, dataTypes))
-                        .iterator();
+        Iterator<KvRecord> iterator = recordBatch
+                .records(KvRecordReadContext.createReadContext(KvFormat.COMPACTED, dataTypes))
+                .iterator();
         assertThat(iterator.hasNext()).isTrue();
         KvRecord kvRecord = iterator.next();
         assertThat(toArray(kvRecord.getKey())).isEqualTo(key);

@@ -235,8 +235,7 @@ public abstract class FileSystem {
      */
     private static Configuration configuration = new Configuration();
 
-    private static void initializeWithoutPlugins(Configuration config)
-            throws IllegalConfigurationException {
+    private static void initializeWithoutPlugins(Configuration config) throws IllegalConfigurationException {
         initialize(config, null);
     }
 
@@ -253,43 +252,32 @@ public abstract class FileSystem {
      */
     public static void initialize(Configuration config, @Nullable PluginManager pluginManager)
             throws IllegalConfigurationException {
-        inLock(
-                LOCK,
-                () -> {
-                    // make sure file systems are re-instantiated after re-configuration
-                    CACHE.clear();
-                    FS_PLUGINS.clear();
+        inLock(LOCK, () -> {
+            // make sure file systems are re-instantiated after re-configuration
+            CACHE.clear();
+            FS_PLUGINS.clear();
 
-                    // set the configuration
-                    configuration = config;
+            // set the configuration
+            configuration = config;
 
-                    Collection<Supplier<Iterator<FileSystemPlugin>>> pluginSuppliers =
-                            new ArrayList<>(2);
-                    pluginSuppliers.add(
-                            () ->
-                                    ServiceLoader.load(
-                                                    FileSystemPlugin.class,
-                                                    FileSystem.class.getClassLoader())
-                                            .iterator());
+            Collection<Supplier<Iterator<FileSystemPlugin>>> pluginSuppliers = new ArrayList<>(2);
+            pluginSuppliers.add(() -> ServiceLoader.load(FileSystemPlugin.class, FileSystem.class.getClassLoader())
+                    .iterator());
 
-                    if (pluginManager != null) {
-                        pluginSuppliers.add(
-                                () ->
-                                        Iterators.transform(
-                                                pluginManager.load(FileSystemPlugin.class),
-                                                PluginFileSystemWrapper::of));
-                    }
+            if (pluginManager != null) {
+                pluginSuppliers.add(() ->
+                        Iterators.transform(pluginManager.load(FileSystemPlugin.class), PluginFileSystemWrapper::of));
+            }
 
-                    final List<FileSystemPlugin> fileSystemFactories =
-                            loadFileSystemPlugins(pluginSuppliers);
+            final List<FileSystemPlugin> fileSystemFactories = loadFileSystemPlugins(pluginSuppliers);
 
-                    // cache all filesystem plugin
-                    for (FileSystemPlugin plugin : fileSystemFactories) {
-                        String scheme = plugin.getScheme();
+            // cache all filesystem plugin
+            for (FileSystemPlugin plugin : fileSystemFactories) {
+                String scheme = plugin.getScheme();
 
-                        FS_PLUGINS.put(scheme, plugin);
-                    }
-                });
+                FS_PLUGINS.put(scheme, plugin);
+            }
+        });
     }
 
     /**
@@ -307,128 +295,117 @@ public abstract class FileSystem {
 
     public static FileSystem getUnguardedFileSystem(final URI fsUri) throws IOException {
         checkNotNull(fsUri, "file system URI");
-        return inLock(
-                LOCK,
-                () -> {
-                    final URI uri;
+        return inLock(LOCK, () -> {
+            final URI uri;
 
-                    if (fsUri.getScheme() != null) {
-                        uri = fsUri;
-                    } else {
-                        // use local FileSystem urI as default
-                        final URI defaultUri = LocalFileSystem.getLocalFsURI();
-                        URI rewrittenUri = null;
+            if (fsUri.getScheme() != null) {
+                uri = fsUri;
+            } else {
+                // use local FileSystem urI as default
+                final URI defaultUri = LocalFileSystem.getLocalFsURI();
+                URI rewrittenUri = null;
 
+                try {
+                    rewrittenUri = new URI(
+                            defaultUri.getScheme(),
+                            null,
+                            defaultUri.getHost(),
+                            defaultUri.getPort(),
+                            fsUri.getPath(),
+                            null,
+                            null);
+                } catch (URISyntaxException e) {
+                    // for local URIs, we make one more try to repair the path by making it
+                    // absolute
+                    if (defaultUri.getScheme().equals("file")) {
                         try {
-                            rewrittenUri =
-                                    new URI(
-                                            defaultUri.getScheme(),
-                                            null,
-                                            defaultUri.getHost(),
-                                            defaultUri.getPort(),
-                                            fsUri.getPath(),
-                                            null,
-                                            null);
-                        } catch (URISyntaxException e) {
-                            // for local URIs, we make one more try to repair the path by making it
-                            // absolute
-                            if (defaultUri.getScheme().equals("file")) {
-                                try {
-                                    rewrittenUri =
-                                            new URI(
-                                                    "file",
-                                                    null,
-                                                    new FsPath(
-                                                                    new File(fsUri.getPath())
-                                                                            .getAbsolutePath())
-                                                            .toUri()
-                                                            .getPath(),
-                                                    null);
-                                } catch (URISyntaxException ignored) {
-                                    // could not help it...
-                                }
-                            }
-                        }
-
-                        if (rewrittenUri != null) {
-                            uri = rewrittenUri;
-                        } else {
-                            throw new IOException(
-                                    "The file system URI '"
-                                            + fsUri
-                                            + "' declares no scheme and cannot be interpreted relative to the default file system URI ("
-                                            + defaultUri
-                                            + ").");
+                            rewrittenUri = new URI(
+                                    "file",
+                                    null,
+                                    new FsPath(new File(fsUri.getPath()).getAbsolutePath())
+                                            .toUri()
+                                            .getPath(),
+                                    null);
+                        } catch (URISyntaxException ignored) {
+                            // could not help it...
                         }
                     }
+                }
 
-                    // print a helpful pointer for malformed local URIs (happens a lot to new users)
-                    if (uri.getScheme().equals("file")
-                            && uri.getAuthority() != null
-                            && !uri.getAuthority().isEmpty()) {
-                        String supposedUri = "file:///" + uri.getAuthority() + uri.getPath();
+                if (rewrittenUri != null) {
+                    uri = rewrittenUri;
+                } else {
+                    throw new IOException("The file system URI '"
+                            + fsUri
+                            + "' declares no scheme and cannot be interpreted relative to the default file system URI ("
+                            + defaultUri
+                            + ").");
+                }
+            }
 
-                        throw new IOException(
-                                "Found local file path with authority '"
-                                        + uri.getAuthority()
-                                        + "' in path '"
-                                        + uri
-                                        + "'. Hint: Did you forget a slash? (correct path would be '"
-                                        + supposedUri
-                                        + "')");
-                    }
+            // print a helpful pointer for malformed local URIs (happens a lot to new users)
+            if (uri.getScheme().equals("file")
+                    && uri.getAuthority() != null
+                    && !uri.getAuthority().isEmpty()) {
+                String supposedUri = "file:///" + uri.getAuthority() + uri.getPath();
 
-                    final FSKey key = new FSKey(uri.getScheme(), uri.getAuthority());
+                throw new IOException("Found local file path with authority '"
+                        + uri.getAuthority()
+                        + "' in path '"
+                        + uri
+                        + "'. Hint: Did you forget a slash? (correct path would be '"
+                        + supposedUri
+                        + "')");
+            }
 
-                    // See if there is a file system object in the cache
-                    {
-                        FileSystem cached = CACHE.get(key);
-                        if (cached != null) {
-                            return cached;
-                        }
-                    }
+            final FSKey key = new FSKey(uri.getScheme(), uri.getAuthority());
 
-                    // this "default" initialization makes sure that the FileSystem class works
-                    // even when not configured with an explicit Fluss configuration
-                    if (FS_PLUGINS.isEmpty()) {
-                        initializeWithoutPlugins(new Configuration());
-                    }
+            // See if there is a file system object in the cache
+            {
+                FileSystem cached = CACHE.get(key);
+                if (cached != null) {
+                    return cached;
+                }
+            }
 
-                    // Try to create a new file system
-                    final FileSystem fs;
-                    final FileSystemPlugin fileSystemPlugin = FS_PLUGINS.get(uri.getScheme());
+            // this "default" initialization makes sure that the FileSystem class works
+            // even when not configured with an explicit Fluss configuration
+            if (FS_PLUGINS.isEmpty()) {
+                initializeWithoutPlugins(new Configuration());
+            }
 
-                    if (fileSystemPlugin != null) {
-                        ClassLoader classLoader = fileSystemPlugin.getClassLoader();
-                        try (TemporaryClassLoaderContext ignored =
-                                TemporaryClassLoaderContext.of(classLoader)) {
-                            fs = fileSystemPlugin.create(uri, configuration);
-                        }
-                    } else {
-                        if (DIRECTLY_SUPPORTED_FILESYSTEM.containsKey(uri.getScheme())) {
-                            final Collection<String> plugins =
-                                    DIRECTLY_SUPPORTED_FILESYSTEM.get(uri.getScheme());
-                            // todo: may need to add message like flink
-                            // "See
-                            // https://nightlies.apache.org/flink/flink-docs-stable/docs/deployment/filesystems/plugins/ "
-                            // for more information.",
-                            throw new UnsupportedFileSystemSchemeException(
-                                    String.format(
-                                            "Could not find a file system implementation for scheme '%s'. File system schemes "
-                                                    + "are supported by Fluss through the following plugin(s): %s. "
-                                                    + "No file system to support this scheme could be loaded. Please ensure that each plugin is "
-                                                    + "configured properly and resides within its own subfolder in the plugins directory. ",
-                                            uri.getScheme(), String.join(", ", plugins)));
-                        } else {
-                            throw new UnsupportedFileSystemSchemeException(
-                                    "Could not find a file system implementation for scheme '"
-                                            + uri.getScheme()
-                                            + "'. The scheme is not directly supported by Fluss.");
-                        }
-                    }
-                    CACHE.put(key, fs);
-                    return fs;
-                });
+            // Try to create a new file system
+            final FileSystem fs;
+            final FileSystemPlugin fileSystemPlugin = FS_PLUGINS.get(uri.getScheme());
+
+            if (fileSystemPlugin != null) {
+                ClassLoader classLoader = fileSystemPlugin.getClassLoader();
+                try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(classLoader)) {
+                    fs = fileSystemPlugin.create(uri, configuration);
+                }
+            } else {
+                if (DIRECTLY_SUPPORTED_FILESYSTEM.containsKey(uri.getScheme())) {
+                    final Collection<String> plugins = DIRECTLY_SUPPORTED_FILESYSTEM.get(uri.getScheme());
+                    // todo: may need to add message like flink
+                    // "See
+                    // https://nightlies.apache.org/flink/flink-docs-stable/docs/deployment/filesystems/plugins/ "
+                    // for more information.",
+                    throw new UnsupportedFileSystemSchemeException(String.format(
+                            "Could not find a file system implementation for scheme '%s'. File system schemes "
+                                    + "are supported by Fluss through the following plugin(s): %s. "
+                                    + "No file system to support this scheme could be loaded. Please ensure that each plugin is "
+                                    + "configured properly and resides within its own subfolder in the plugins directory. ",
+                            uri.getScheme(), String.join(", ", plugins)));
+                } else {
+                    throw new UnsupportedFileSystemSchemeException(
+                            "Could not find a file system implementation for scheme '"
+                                    + uri.getScheme()
+                                    + "'. The scheme is not directly supported by Fluss.");
+                }
+            }
+            CACHE.put(key, fs);
+            return fs;
+        });
     }
 
     /**
@@ -550,8 +527,7 @@ public abstract class FileSystem {
 
         LOG.debug("Loading extension file systems via services");
 
-        for (Supplier<Iterator<FileSystemPlugin>> pluginIteratorsSupplier :
-                pluginIteratorsSuppliers) {
+        for (Supplier<Iterator<FileSystemPlugin>> pluginIteratorsSupplier : pluginIteratorsSuppliers) {
             try {
                 addAllPluginsToList(pluginIteratorsSupplier.get(), list);
             } catch (Throwable t) {
@@ -565,8 +541,7 @@ public abstract class FileSystem {
         return Collections.unmodifiableList(list);
     }
 
-    private static void addAllPluginsToList(
-            Iterator<FileSystemPlugin> iter, List<FileSystemPlugin> list) {
+    private static void addAllPluginsToList(Iterator<FileSystemPlugin> iter, List<FileSystemPlugin> list) {
         // we explicitly use an iterator here (rather than for-each) because that way
         // we can catch errors in individual service instantiations
 
@@ -596,7 +571,8 @@ public abstract class FileSystem {
         private final String scheme;
 
         /** The authority of the file system. */
-        @Nullable private final String authority;
+        @Nullable
+        private final String authority;
 
         /**
          * Creates a file system key from a given scheme and an authority.
@@ -618,8 +594,7 @@ public abstract class FileSystem {
                 return this.scheme.equals(that.scheme)
                         && (this.authority == null
                                 ? that.authority == null
-                                : (that.authority != null
-                                        && this.authority.equals(that.authority)));
+                                : (that.authority != null && this.authority.equals(that.authority)));
             } else {
                 return false;
             }

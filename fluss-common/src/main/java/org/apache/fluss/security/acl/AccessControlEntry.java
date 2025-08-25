@@ -49,10 +49,7 @@ public class AccessControlEntry {
     private final OperationType operationType;
 
     public AccessControlEntry(
-            FlussPrincipal principal,
-            String host,
-            OperationType operationType,
-            PermissionType permissionType) {
+            FlussPrincipal principal, String host, OperationType operationType, PermissionType permissionType) {
         this.principal = checkNotNull(principal);
         this.host = checkNotNull(host);
         this.permissionType = checkNotNull(permissionType);

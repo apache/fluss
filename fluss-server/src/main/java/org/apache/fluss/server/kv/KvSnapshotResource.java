@@ -87,33 +87,28 @@ public class KvSnapshotResource {
     }
 
     public static KvSnapshotResource create(int serverId, Configuration conf) {
-        ExecutorService dataTransferThreadPool =
-                Executors.newFixedThreadPool(
-                        conf.getInt(ConfigOptions.KV_SNAPSHOT_TRANSFER_THREAD_NUM),
-                        new ExecutorThreadFactory("fluss-kv-snapshot-data-transfer"));
+        ExecutorService dataTransferThreadPool = Executors.newFixedThreadPool(
+                conf.getInt(ConfigOptions.KV_SNAPSHOT_TRANSFER_THREAD_NUM),
+                new ExecutorThreadFactory("fluss-kv-snapshot-data-transfer"));
 
-        KvSnapshotDataUploader kvSnapshotDataUploader =
-                new KvSnapshotDataUploader(dataTransferThreadPool);
+        KvSnapshotDataUploader kvSnapshotDataUploader = new KvSnapshotDataUploader(dataTransferThreadPool);
 
-        KvSnapshotDataDownloader kvSnapshotDataDownloader =
-                new KvSnapshotDataDownloader(dataTransferThreadPool);
+        KvSnapshotDataDownloader kvSnapshotDataDownloader = new KvSnapshotDataDownloader(dataTransferThreadPool);
 
-        ScheduledExecutorService kvSnapshotScheduler =
-                Executors.newScheduledThreadPool(
-                        conf.getInt(ConfigOptions.KV_SNAPSHOT_SCHEDULER_THREAD_NUM),
-                        new ExecutorThreadFactory("periodic-snapshot-scheduler-" + serverId));
+        ScheduledExecutorService kvSnapshotScheduler = Executors.newScheduledThreadPool(
+                conf.getInt(ConfigOptions.KV_SNAPSHOT_SCHEDULER_THREAD_NUM),
+                new ExecutorThreadFactory("periodic-snapshot-scheduler-" + serverId));
 
         // the parameter to create thread pool is from Flink. todo: may adjust according Fluss's
         // workload
         // create a thread pool for the async part of kv snapshot
-        ExecutorService asyncOperationsThreadPool =
-                new ThreadPoolExecutor(
-                        0,
-                        3,
-                        60L,
-                        TimeUnit.SECONDS,
-                        new LinkedBlockingQueue<>(),
-                        new ExecutorThreadFactory("fluss-kv-snapshot-async-operations"));
+        ExecutorService asyncOperationsThreadPool = new ThreadPoolExecutor(
+                0,
+                3,
+                60L,
+                TimeUnit.SECONDS,
+                new LinkedBlockingQueue<>(),
+                new ExecutorThreadFactory("fluss-kv-snapshot-async-operations"));
         return new KvSnapshotResource(
                 kvSnapshotScheduler,
                 dataTransferThreadPool,

@@ -26,28 +26,27 @@ public class DataTypeVisitorTest {
 
     @Test
     void testDataTypeDefaultVisitor() {
-        DataType[] allTypes =
-                new DataType[] {
-                    DataTypes.BOOLEAN(),
-                    DataTypes.TINYINT(),
-                    DataTypes.SMALLINT(),
-                    DataTypes.INT(),
-                    DataTypes.BIGINT(),
-                    DataTypes.DECIMAL(2, 1),
-                    DataTypes.FLOAT(),
-                    DataTypes.DOUBLE(),
-                    DataTypes.DATE(),
-                    DataTypes.TIME(),
-                    DataTypes.TIMESTAMP(),
-                    DataTypes.TIMESTAMP_LTZ(),
-                    DataTypes.CHAR(5),
-                    DataTypes.BINARY(10),
-                    DataTypes.STRING(),
-                    DataTypes.BYTES(),
-                    DataTypes.ARRAY(DataTypes.INT()),
-                    DataTypes.MAP(DataTypes.INT(), DataTypes.INT()),
-                    DataTypes.ROW(DataTypes.FIELD("a", DataTypes.INT()))
-                };
+        DataType[] allTypes = new DataType[] {
+            DataTypes.BOOLEAN(),
+            DataTypes.TINYINT(),
+            DataTypes.SMALLINT(),
+            DataTypes.INT(),
+            DataTypes.BIGINT(),
+            DataTypes.DECIMAL(2, 1),
+            DataTypes.FLOAT(),
+            DataTypes.DOUBLE(),
+            DataTypes.DATE(),
+            DataTypes.TIME(),
+            DataTypes.TIMESTAMP(),
+            DataTypes.TIMESTAMP_LTZ(),
+            DataTypes.CHAR(5),
+            DataTypes.BINARY(10),
+            DataTypes.STRING(),
+            DataTypes.BYTES(),
+            DataTypes.ARRAY(DataTypes.INT()),
+            DataTypes.MAP(DataTypes.INT(), DataTypes.INT()),
+            DataTypes.ROW(DataTypes.FIELD("a", DataTypes.INT()))
+        };
 
         String[] typeStrings = {
             "BOOLEAN",

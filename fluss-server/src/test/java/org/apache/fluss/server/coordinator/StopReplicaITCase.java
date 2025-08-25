@@ -51,11 +51,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** ITCase for stop replica. */
 public class StopReplicaITCase {
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(initConfig())
+            .build();
 
     private ZooKeeperClient zkClient;
     private CoordinatorGateway coordinatorGateway;
@@ -70,16 +69,13 @@ public class StopReplicaITCase {
     @ValueSource(booleans = {true, false})
     void testStopReplica(boolean isPkTable) throws Exception {
         TablePath tablePath = isPkTable ? DATA1_TABLE_PATH_PK : DATA1_TABLE_PATH;
-        TableDescriptor tableDescriptor =
-                isPkTable ? DATA1_TABLE_DESCRIPTOR_PK : DATA1_TABLE_DESCRIPTOR;
+        TableDescriptor tableDescriptor = isPkTable ? DATA1_TABLE_DESCRIPTOR_PK : DATA1_TABLE_DESCRIPTOR;
 
         // wait until all the gateway has same metadata because the follower fetcher manager need
         // to get the leader address from server metadata while make follower.
         FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
 
-        long tableId =
-                RpcMessageTestUtils.createTable(
-                        FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
+        long tableId = RpcMessageTestUtils.createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb = new TableBucket(tableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
 
@@ -87,17 +83,14 @@ public class StopReplicaITCase {
         List<Path> tableDirs = assertReplicaExistAndGetTableOrPartitionDirs(tb, isr, isPkTable);
         // drop table.
         coordinatorGateway
-                .dropTable(
-                        RpcMessageTestUtils.newDropTableRequest(
-                                tablePath.getDatabaseName(), tablePath.getTableName(), false))
+                .dropTable(RpcMessageTestUtils.newDropTableRequest(
+                        tablePath.getDatabaseName(), tablePath.getTableName(), false))
                 .get();
         retryUtilReplicaNotExist(tb, isr, tableDirs);
         assertThat(zkClient.tableExist(tablePath)).isFalse();
 
         // create this table again.
-        tableId =
-                RpcMessageTestUtils.createTable(
-                        FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
+        tableId = RpcMessageTestUtils.createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb1 = new TableBucket(tableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb1);
 
@@ -105,16 +98,13 @@ public class StopReplicaITCase {
         tableDirs = assertReplicaExistAndGetTableOrPartitionDirs(tb1, isr, isPkTable);
         // drop table.
         coordinatorGateway
-                .dropTable(
-                        RpcMessageTestUtils.newDropTableRequest(
-                                tablePath.getDatabaseName(), tablePath.getTableName(), false))
+                .dropTable(RpcMessageTestUtils.newDropTableRequest(
+                        tablePath.getDatabaseName(), tablePath.getTableName(), false))
                 .get();
         assertThat(zkClient.tableExist(tablePath)).isFalse();
 
         // create this table even if the drop table operation may not be completed.
-        tableId =
-                RpcMessageTestUtils.createTable(
-                        FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
+        tableId = RpcMessageTestUtils.createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb2 = new TableBucket(tableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb2);
 
@@ -122,9 +112,8 @@ public class StopReplicaITCase {
         List<Path> tableDirs2 = assertReplicaExistAndGetTableOrPartitionDirs(tb2, isr2, isPkTable);
         // drop table.
         coordinatorGateway
-                .dropTable(
-                        RpcMessageTestUtils.newDropTableRequest(
-                                tablePath.getDatabaseName(), tablePath.getTableName(), false))
+                .dropTable(RpcMessageTestUtils.newDropTableRequest(
+                        tablePath.getDatabaseName(), tablePath.getTableName(), false))
                 .get();
         assertThat(zkClient.tableExist(tablePath)).isFalse();
 
@@ -134,10 +123,7 @@ public class StopReplicaITCase {
 
     private List<Integer> waitAndGetIsr(TableBucket tb) {
         LeaderAndIsr leaderAndIsr =
-                waitValue(
-                        () -> zkClient.getLeaderAndIsr(tb),
-                        Duration.ofMinutes(1),
-                        "leaderAndIsr is not ready");
+                waitValue(() -> zkClient.getLeaderAndIsr(tb), Duration.ofMinutes(1), "leaderAndIsr is not ready");
         return leaderAndIsr.isr();
     }
 
@@ -147,8 +133,7 @@ public class StopReplicaITCase {
         for (int replicaId : isr) {
             ReplicaManager replicaManager =
                     FLUSS_CLUSTER_EXTENSION.getTabletServerById(replicaId).getReplicaManager();
-            assertThat(replicaManager.getReplica(tableBucket))
-                    .isInstanceOf(ReplicaManager.OnlineReplica.class);
+            assertThat(replicaManager.getReplica(tableBucket)).isInstanceOf(ReplicaManager.OnlineReplica.class);
             Replica replica = replicaManager.getReplicaOrException(tableBucket);
             Path dir = replica.getTabletParentDir();
             assertThat(dir).exists();
@@ -157,8 +142,7 @@ public class StopReplicaITCase {
             assertThat(replica.getLogTablet().getLogDir()).exists();
             if (isKvTable) {
                 // wait the replica become leader, so that we can get the kv tablet
-                Replica kvReplica =
-                        FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(replica.getTableBucket());
+                Replica kvReplica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(replica.getTableBucket());
                 assertThat(kvReplica.getKvTablet()).isNotNull();
                 assertThat(kvReplica.getKvTablet().getKvTabletDir()).exists();
             }
@@ -167,29 +151,22 @@ public class StopReplicaITCase {
         return tableDirs;
     }
 
-    private void retryUtilReplicaNotExist(
-            TableBucket tableBucket, List<Integer> isr, List<Path> tableDirs) {
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    // the local table dir should be removed
-                    tableDirs.forEach(tableDir -> assertThat(tableDir).doesNotExist());
+    private void retryUtilReplicaNotExist(TableBucket tableBucket, List<Integer> isr, List<Path> tableDirs) {
+        retry(Duration.ofMinutes(1), () -> {
+            // the local table dir should be removed
+            tableDirs.forEach(tableDir -> assertThat(tableDir).doesNotExist());
 
-                    // Replicas in TabletServers should be shutdown
-                    isr.forEach(
-                            replicaId -> {
-                                ReplicaManager replicaManager =
-                                        FLUSS_CLUSTER_EXTENSION
-                                                .getTabletServerById(replicaId)
-                                                .getReplicaManager();
-                                assertThat(replicaManager.getReplica(tableBucket))
-                                        .isInstanceOf(ReplicaManager.NoneReplica.class);
-                            });
+            // Replicas in TabletServers should be shutdown
+            isr.forEach(replicaId -> {
+                ReplicaManager replicaManager =
+                        FLUSS_CLUSTER_EXTENSION.getTabletServerById(replicaId).getReplicaManager();
+                assertThat(replicaManager.getReplica(tableBucket)).isInstanceOf(ReplicaManager.NoneReplica.class);
+            });
 
-                    // at last, when all Replicas are shutdown, the zk data should be removed.
-                    assertThat(zkClient.getTableAssignment(tableBucket.getTableId())).isEmpty();
-                    assertThat(zkClient.getLeaderAndIsr(tableBucket)).isEmpty();
-                });
+            // at last, when all Replicas are shutdown, the zk data should be removed.
+            assertThat(zkClient.getTableAssignment(tableBucket.getTableId())).isEmpty();
+            assertThat(zkClient.getLeaderAndIsr(tableBucket)).isEmpty();
+        });
     }
 
     private static Configuration initConfig() {

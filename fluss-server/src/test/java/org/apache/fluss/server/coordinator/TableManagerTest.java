@@ -84,9 +84,7 @@ class TableManagerTest {
     @BeforeAll
     static void baseBeforeAll() {
         zookeeperClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+                ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getZooKeeperClient(NOPErrorHandler.INSTANCE);
         ioExecutor = Executors.newFixedThreadPool(1);
     }
 
@@ -114,48 +112,41 @@ class TableManagerTest {
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         CoordinatorRequestBatch coordinatorRequestBatch =
-                new CoordinatorRequestBatch(
-                        testCoordinatorChannelManager, testingEventManager, coordinatorContext);
+                new CoordinatorRequestBatch(testCoordinatorChannelManager, testingEventManager, coordinatorContext);
         ReplicaStateMachine replicaStateMachine =
-                new ReplicaStateMachine(
-                        coordinatorContext, coordinatorRequestBatch, zookeeperClient);
+                new ReplicaStateMachine(coordinatorContext, coordinatorRequestBatch, zookeeperClient);
         TableBucketStateMachine tableBucketStateMachine =
-                new TableBucketStateMachine(
-                        coordinatorContext, coordinatorRequestBatch, zookeeperClient);
+                new TableBucketStateMachine(coordinatorContext, coordinatorRequestBatch, zookeeperClient);
         MetadataManager metadataManager = new MetadataManager(zookeeperClient, new Configuration());
-        tableManager =
-                new TableManager(
-                        metadataManager,
-                        coordinatorContext,
-                        replicaStateMachine,
-                        tableBucketStateMachine,
-                        new RemoteStorageCleaner(conf, ioExecutor));
+        tableManager = new TableManager(
+                metadataManager,
+                coordinatorContext,
+                replicaStateMachine,
+                tableBucketStateMachine,
+                new RemoteStorageCleaner(conf, ioExecutor));
         tableManager.startup();
 
-        coordinatorContext.setLiveTabletServers(
-                CoordinatorTestUtils.createServers(Arrays.asList(0, 1, 2)));
+        coordinatorContext.setLiveTabletServers(CoordinatorTestUtils.createServers(Arrays.asList(0, 1, 2)));
         CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
                 coordinatorContext, testCoordinatorChannelManager);
     }
 
     @Test
     void testCreateTable() throws Exception {
-        TableAssignment assignment =
-                TableAssignment.builder()
-                        .add(0, BucketAssignment.of(0, 1, 2))
-                        .add(1, BucketAssignment.of(1, 2, 0))
-                        .add(2, BucketAssignment.of(2, 1, 0))
-                        .build();
+        TableAssignment assignment = TableAssignment.builder()
+                .add(0, BucketAssignment.of(0, 1, 2))
+                .add(1, BucketAssignment.of(1, 2, 0))
+                .add(2, BucketAssignment.of(2, 1, 0))
+                .build();
 
         long tableId = DATA1_TABLE_ID;
-        coordinatorContext.putTableInfo(
-                TableInfo.of(
-                        DATA1_TABLE_PATH,
-                        tableId,
-                        0,
-                        DATA1_TABLE_DESCRIPTOR,
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis()));
+        coordinatorContext.putTableInfo(TableInfo.of(
+                DATA1_TABLE_PATH,
+                tableId,
+                0,
+                DATA1_TABLE_DESCRIPTOR,
+                System.currentTimeMillis(),
+                System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
 
         // all replica should be online
@@ -171,14 +162,13 @@ class TableManagerTest {
         TableAssignment assignment = createAssignment();
         zookeeperClient.registerTableAssignment(tableId, assignment);
 
-        coordinatorContext.putTableInfo(
-                TableInfo.of(
-                        DATA1_TABLE_PATH_PK,
-                        tableId,
-                        0,
-                        DATA1_TABLE_DESCRIPTOR_PK,
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis()));
+        coordinatorContext.putTableInfo(TableInfo.of(
+                DATA1_TABLE_PATH_PK,
+                tableId,
+                0,
+                DATA1_TABLE_DESCRIPTOR_PK,
+                System.currentTimeMillis(),
+                System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH_PK, tableId, assignment);
 
         // now, delete the created table
@@ -207,14 +197,13 @@ class TableManagerTest {
         TableAssignment assignment = createAssignment();
         zookeeperClient.registerTableAssignment(tableId, assignment);
 
-        coordinatorContext.putTableInfo(
-                TableInfo.of(
-                        DATA1_TABLE_PATH,
-                        tableId,
-                        0,
-                        DATA1_TABLE_DESCRIPTOR,
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis()));
+        coordinatorContext.putTableInfo(TableInfo.of(
+                DATA1_TABLE_PATH,
+                tableId,
+                0,
+                DATA1_TABLE_DESCRIPTOR,
+                System.currentTimeMillis(),
+                System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
 
         // now, delete the created table/partition
@@ -254,14 +243,13 @@ class TableManagerTest {
         TableAssignment assignment = TableAssignment.builder().build();
         zookeeperClient.registerTableAssignment(tableId, assignment);
 
-        coordinatorContext.putTableInfo(
-                TableInfo.of(
-                        DATA1_TABLE_PATH,
-                        tableId,
-                        0,
-                        DATA1_TABLE_DESCRIPTOR,
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis()));
+        coordinatorContext.putTableInfo(TableInfo.of(
+                DATA1_TABLE_PATH,
+                tableId,
+                0,
+                DATA1_TABLE_DESCRIPTOR,
+                System.currentTimeMillis(),
+                System.currentTimeMillis()));
         tableManager.onCreateNewTable(DATA1_TABLE_PATH, tableId, assignment);
 
         PartitionAssignment partitionAssignment =
@@ -276,8 +264,7 @@ class TableManagerTest {
 
         // create partition
         long partitionId = 1L;
-        tableManager.onCreateNewPartition(
-                DATA1_TABLE_PATH, tableId, partitionId, partitionName, partitionAssignment);
+        tableManager.onCreateNewPartition(DATA1_TABLE_PATH, tableId, partitionId, partitionName, partitionAssignment);
 
         // all replicas should be online
         checkReplicaOnline(tableId, partitionId, partitionAssignment);
@@ -296,8 +283,7 @@ class TableManagerTest {
                 .build();
     }
 
-    private void checkReplicaOnline(
-            long tableId, @Nullable Long partitionId, TableAssignment tableAssignment)
+    private void checkReplicaOnline(long tableId, @Nullable Long partitionId, TableAssignment tableAssignment)
             throws Exception {
         for (Map.Entry<Integer, BucketAssignment> entry :
                 tableAssignment.getBucketAssignments().entrySet()) {
@@ -305,33 +291,26 @@ class TableManagerTest {
             List<Integer> replicas = entry.getValue().getReplicas();
             assertThat(coordinatorContext.getBucketState(tableBucket)).isEqualTo(OnlineBucket);
             // check the leader/epoch of each bucket
-            CoordinatorTestUtils.checkLeaderAndIsr(
-                    zookeeperClient, tableBucket, 0, replicas.get(0));
+            CoordinatorTestUtils.checkLeaderAndIsr(zookeeperClient, tableBucket, 0, replicas.get(0));
             for (int replica : replicas) {
-                TableBucketReplica tableBucketReplica =
-                        new TableBucketReplica(tableBucket, replica);
+                TableBucketReplica tableBucketReplica = new TableBucketReplica(tableBucket, replica);
                 assertThat(coordinatorContext.getReplicaState(tableBucketReplica))
                         .isEqualTo(OnlineReplica);
             }
         }
     }
 
-    private void checkReplicaDelete(
-            long tableId, @Nullable Long partitionId, TableAssignment assignment) {
+    private void checkReplicaDelete(long tableId, @Nullable Long partitionId, TableAssignment assignment) {
         // collect all the delete success event
-        Set<DeleteReplicaResponseReceivedEvent> deleteReplicaSuccessEvents =
-                collectDeleteReplicaSuccessEvents();
+        Set<DeleteReplicaResponseReceivedEvent> deleteReplicaSuccessEvents = collectDeleteReplicaSuccessEvents();
         Set<TableBucketReplica> deleteTableBucketReplicas = new HashSet<>();
         // get all the delete success replicas from the delete success event
-        for (DeleteReplicaResponseReceivedEvent deleteReplicaResponseReceivedEvent :
-                deleteReplicaSuccessEvents) {
+        for (DeleteReplicaResponseReceivedEvent deleteReplicaResponseReceivedEvent : deleteReplicaSuccessEvents) {
             List<DeleteReplicaResultForBucket> deleteReplicaResultForBuckets =
                     deleteReplicaResponseReceivedEvent.getDeleteReplicaResults();
-            for (DeleteReplicaResultForBucket deleteReplicaResultForBucket :
-                    deleteReplicaResultForBuckets) {
+            for (DeleteReplicaResultForBucket deleteReplicaResultForBucket : deleteReplicaResultForBuckets) {
                 if (deleteReplicaResultForBucket.succeeded()) {
-                    deleteTableBucketReplicas.add(
-                            deleteReplicaResultForBucket.getTableBucketReplica());
+                    deleteTableBucketReplicas.add(deleteReplicaResultForBucket.getTableBucketReplica());
                 }
             }
         }
@@ -361,12 +340,10 @@ class TableManagerTest {
     }
 
     private Set<DeleteReplicaResponseReceivedEvent> collectDeleteReplicaSuccessEvents() {
-        Set<DeleteReplicaResponseReceivedEvent> deleteReplicaResponseReceivedEvent =
-                new HashSet<>();
+        Set<DeleteReplicaResponseReceivedEvent> deleteReplicaResponseReceivedEvent = new HashSet<>();
         for (CoordinatorEvent coordinatorEvent : testingEventManager.getEvents()) {
             if (coordinatorEvent instanceof DeleteReplicaResponseReceivedEvent) {
-                deleteReplicaResponseReceivedEvent.add(
-                        (DeleteReplicaResponseReceivedEvent) coordinatorEvent);
+                deleteReplicaResponseReceivedEvent.add((DeleteReplicaResponseReceivedEvent) coordinatorEvent);
             }
         }
         return deleteReplicaResponseReceivedEvent;

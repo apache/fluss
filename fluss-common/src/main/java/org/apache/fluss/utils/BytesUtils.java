@@ -48,12 +48,7 @@ public final class BytesUtils {
     public static byte[] toArray(ByteBuffer buffer, int offset, int size) {
         byte[] dest = new byte[size];
         if (buffer.hasArray()) {
-            System.arraycopy(
-                    buffer.array(),
-                    buffer.position() + buffer.arrayOffset() + offset,
-                    dest,
-                    0,
-                    size);
+            System.arraycopy(buffer.array(), buffer.position() + buffer.arrayOffset() + offset, dest, 0, size);
         } else {
             int pos = buffer.position();
             buffer.position(pos + offset);
@@ -106,16 +101,8 @@ public final class BytesUtils {
 
         static {
             try {
-                EQUALS_METHOD =
-                        Class.forName(Arrays.class.getName())
-                                .getMethod(
-                                        "equals",
-                                        byte[].class,
-                                        int.class,
-                                        int.class,
-                                        byte[].class,
-                                        int.class,
-                                        int.class);
+                EQUALS_METHOD = Class.forName(Arrays.class.getName())
+                        .getMethod("equals", byte[].class, int.class, int.class, byte[].class, int.class, int.class);
             } catch (Exception e) {
                 throw new RuntimeException("Failed to load Arrays.equals method", e);
             }
@@ -129,9 +116,7 @@ public final class BytesUtils {
             try {
                 int fromIndex = 0; // inclusive
                 int toIndex = prefix.length; // exclusive
-                return (boolean)
-                        EQUALS_METHOD.invoke(
-                                null, prefix, fromIndex, toIndex, bytes, fromIndex, toIndex);
+                return (boolean) EQUALS_METHOD.invoke(null, prefix, fromIndex, toIndex, bytes, fromIndex, toIndex);
             } catch (Throwable e) {
                 // should never happen
                 throw new RuntimeException(e);

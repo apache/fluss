@@ -40,71 +40,38 @@ public final class WriteRecord {
 
     /** Create a write record for upsert operation and partial-upsert operation. */
     public static WriteRecord forUpsert(
-            PhysicalTablePath tablePath,
-            BinaryRow row,
-            byte[] key,
-            byte[] bucketKey,
-            @Nullable int[] targetColumns) {
+            PhysicalTablePath tablePath, BinaryRow row, byte[] key, byte[] bucketKey, @Nullable int[] targetColumns) {
         checkNotNull(row, "row must not be null");
         checkNotNull(key, "key must not be null");
         checkNotNull(bucketKey, "key must not be null");
-        int estimatedSizeInBytes =
-                DefaultKvRecord.sizeOf(key, row) + DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE;
-        return new WriteRecord(
-                tablePath,
-                key,
-                bucketKey,
-                row,
-                WriteFormat.KV,
-                targetColumns,
-                estimatedSizeInBytes);
+        int estimatedSizeInBytes = DefaultKvRecord.sizeOf(key, row) + DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE;
+        return new WriteRecord(tablePath, key, bucketKey, row, WriteFormat.KV, targetColumns, estimatedSizeInBytes);
     }
 
     /** Create a write record for delete operation and partial-delete update. */
     public static WriteRecord forDelete(
-            PhysicalTablePath tablePath,
-            byte[] key,
-            byte[] bucketKey,
-            @Nullable int[] targetColumns) {
+            PhysicalTablePath tablePath, byte[] key, byte[] bucketKey, @Nullable int[] targetColumns) {
         checkNotNull(key, "key must not be null");
         checkNotNull(bucketKey, "key must not be null");
-        int estimatedSizeInBytes =
-                DefaultKvRecord.sizeOf(key, null) + DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE;
-        return new WriteRecord(
-                tablePath,
-                key,
-                bucketKey,
-                null,
-                WriteFormat.KV,
-                targetColumns,
-                estimatedSizeInBytes);
+        int estimatedSizeInBytes = DefaultKvRecord.sizeOf(key, null) + DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE;
+        return new WriteRecord(tablePath, key, bucketKey, null, WriteFormat.KV, targetColumns, estimatedSizeInBytes);
     }
 
     /** Create a write record for append operation for indexed format. */
     public static WriteRecord forIndexedAppend(
             PhysicalTablePath tablePath, IndexedRow row, @Nullable byte[] bucketKey) {
         checkNotNull(row);
-        int estimatedSizeInBytes =
-                IndexedLogRecord.sizeOf(row) + DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
-        return new WriteRecord(
-                tablePath,
-                null,
-                bucketKey,
-                row,
-                WriteFormat.INDEXED_LOG,
-                null,
-                estimatedSizeInBytes);
+        int estimatedSizeInBytes = IndexedLogRecord.sizeOf(row) + DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+        return new WriteRecord(tablePath, null, bucketKey, row, WriteFormat.INDEXED_LOG, null, estimatedSizeInBytes);
     }
 
     /** Creates a write record for append operation for Arrow format. */
-    public static WriteRecord forArrowAppend(
-            PhysicalTablePath tablePath, InternalRow row, @Nullable byte[] bucketKey) {
+    public static WriteRecord forArrowAppend(PhysicalTablePath tablePath, InternalRow row, @Nullable byte[] bucketKey) {
         checkNotNull(row);
         // the write row maybe GenericRow, can't estimate the size.
         // it is not necessary to estimate size for Arrow format.
         int estimatedSizeInBytes = -1;
-        return new WriteRecord(
-                tablePath, null, bucketKey, row, WriteFormat.ARROW_LOG, null, estimatedSizeInBytes);
+        return new WriteRecord(tablePath, null, bucketKey, row, WriteFormat.ARROW_LOG, null, estimatedSizeInBytes);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -172,9 +139,7 @@ public final class WriteRecord {
     public int getEstimatedSizeInBytes() {
         if (estimatedSizeInBytes < 0) {
             throw new IllegalStateException(
-                    String.format(
-                            "The estimated size in bytes is not supported for %s write format.",
-                            writeFormat));
+                    String.format("The estimated size in bytes is not supported for %s write format.", writeFormat));
         }
         return estimatedSizeInBytes;
     }

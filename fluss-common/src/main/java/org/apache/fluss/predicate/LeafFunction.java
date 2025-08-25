@@ -54,17 +54,11 @@ public abstract class LeafFunction implements Serializable {
      * @return true if there is any row satisfies the condition, false otherwise
      */
     public abstract boolean test(
-            DataType type,
-            long rowCount,
-            Object min,
-            Object max,
-            Long nullCount,
-            List<Object> literals);
+            DataType type, long rowCount, Object min, Object max, Long nullCount, List<Object> literals);
 
     public abstract Optional<LeafFunction> negate();
 
-    public abstract <T> T visit(
-            FunctionVisitor<T> visitor, FieldRef fieldRef, List<Object> literals);
+    public abstract <T> T visit(FunctionVisitor<T> visitor, FieldRef fieldRef, List<Object> literals);
 
     @Override
     public int hashCode() {

@@ -63,41 +63,32 @@ public class AdjustIsrTest extends ReplicaTestBase {
         // 1. append one batch to leader.
         CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
         replicaManager.appendRecordsToLog(
-                20000,
-                1,
-                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
-                future::complete);
+                20000, 1, Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)), future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0, 10L));
 
         // mock follower 2 to fetch data from leader. fetch offset is 10 (which indicate the
         // follower catch up the leader, it will be added into isr list).
         replicaManager.fetchLogRecords(
-                new FetchParams(
-                        2, (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes()),
-                Collections.singletonMap(
-                        tb, new FetchReqInfo(tb.getTableId(), 10L, Integer.MAX_VALUE)),
+                new FetchParams(2, (int)
+                        conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes()),
+                Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 10L, Integer.MAX_VALUE)),
                 result -> {});
-        retry(
-                Duration.ofSeconds(20),
-                () -> {
-                    Replica replica1 = replicaManager.getReplicaOrException(tb);
-                    assertThat(replica1.getIsr()).containsExactlyInAnyOrder(1, 2);
-                });
+        retry(Duration.ofSeconds(20), () -> {
+            Replica replica1 = replicaManager.getReplicaOrException(tb);
+            assertThat(replica1.getIsr()).containsExactlyInAnyOrder(1, 2);
+        });
 
         // mock follower 3 to fetch data from leader. fetch offset is 10 (which indicate the
         // follower catch up the leader, it will be added into isr list).
         replicaManager.fetchLogRecords(
-                new FetchParams(
-                        3, (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes()),
-                Collections.singletonMap(
-                        tb, new FetchReqInfo(tb.getTableId(), 10L, Integer.MAX_VALUE)),
+                new FetchParams(3, (int)
+                        conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes()),
+                Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 10L, Integer.MAX_VALUE)),
                 result -> {});
-        retry(
-                Duration.ofSeconds(20),
-                () -> {
-                    Replica replica1 = replicaManager.getReplicaOrException(tb);
-                    assertThat(replica1.getIsr()).containsExactlyInAnyOrder(1, 2, 3);
-                });
+        retry(Duration.ofSeconds(20), () -> {
+            Replica replica1 = replicaManager.getReplicaOrException(tb);
+            assertThat(replica1.getIsr()).containsExactlyInAnyOrder(1, 2, 3);
+        });
     }
 
     @Test
@@ -112,9 +103,7 @@ public class AdjustIsrTest extends ReplicaTestBase {
         // retry until shrink follower 2 and 3 out of isr set. As the scheduler will shrink isr
         // Periodic, follower 2 and 3 don't fetch data from leader, they will be removed from isr
         // list by the periodic shrink isr scheduler.
-        retry(
-                Duration.ofSeconds(20),
-                () -> assertThat(replica.getIsr()).containsExactlyInAnyOrder(1));
+        retry(Duration.ofSeconds(20), () -> assertThat(replica.getIsr()).containsExactlyInAnyOrder(1));
     }
 
     @Test
@@ -127,19 +116,15 @@ public class AdjustIsrTest extends ReplicaTestBase {
         assertThat(replica.getIsr()).containsExactlyInAnyOrder(1, 2, 3);
 
         // To mock we prepare an isr shrink in Replica#maybeShrinkIsr();
-        IsrState.PendingShrinkIsrState pendingShrinkIsrState =
-                replica.prepareIsrShrink(
-                        new IsrState.CommittedIsrState(Arrays.asList(1, 2, 3)),
-                        Arrays.asList(1, 2),
-                        Collections.singletonList(3));
+        IsrState.PendingShrinkIsrState pendingShrinkIsrState = replica.prepareIsrShrink(
+                new IsrState.CommittedIsrState(Arrays.asList(1, 2, 3)),
+                Arrays.asList(1, 2),
+                Collections.singletonList(3));
 
         // Set leader epoch of this bucket in coordinatorServer gateway to 1 to mock leader epoch is
         // fenced.
         testCoordinatorGateway.setCurrentLeaderEpoch(tb, 1);
-        assertThatThrownBy(
-                        () ->
-                                replica.submitAdjustIsr(pendingShrinkIsrState)
-                                        .get(1, TimeUnit.MINUTES))
+        assertThatThrownBy(() -> replica.submitAdjustIsr(pendingShrinkIsrState).get(1, TimeUnit.MINUTES))
                 .rootCause()
                 .isInstanceOf(FencedLeaderEpochException.class)
                 .hasMessageContaining("request leader epoch is fenced.");

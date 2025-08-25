@@ -56,8 +56,7 @@ public class LocalFileSystem extends FileSystem {
             new ObtainedSecurityToken("file", new byte[0], null, Collections.emptyMap());
 
     /** The URI representing the local file system. */
-    private static final URI LOCAL_URI =
-            OperatingSystem.isWindows() ? URI.create("file:/") : URI.create("file:///");
+    private static final URI LOCAL_URI = OperatingSystem.isWindows() ? URI.create("file:/") : URI.create("file:///");
 
     /** The shared instance of the local file system. */
     private static final LocalFileSystem INSTANCE = new LocalFileSystem();
@@ -68,13 +67,12 @@ public class LocalFileSystem extends FileSystem {
         if (path.exists()) {
             return new LocalFileStatus(path, this);
         } else {
-            throw new FileNotFoundException(
-                    "File "
-                            + f
-                            + " does not exist or the user running "
-                            + "Fluss ('"
-                            + System.getProperty("user.name")
-                            + "') has insufficient permissions to access it.");
+            throw new FileNotFoundException("File "
+                    + f
+                    + " does not exist or the user running "
+                    + "Fluss ('"
+                    + System.getProperty("user.name")
+                    + "') has insufficient permissions to access it.");
         }
     }
 
@@ -134,8 +132,7 @@ public class LocalFileSystem extends FileSystem {
         } else if ((!recursive) && file.isDirectory()) {
             File[] containedFiles = file.listFiles();
             if (containedFiles == null) {
-                throw new IOException(
-                        "Directory " + file + " does not exist or an I/O error occurred");
+                throw new IOException("Directory " + file + " does not exist or an I/O error occurred");
             } else if (containedFiles.length != 0) {
                 throw new IOException("Directory " + file + " is not empty");
             }
@@ -196,14 +193,12 @@ public class LocalFileSystem extends FileSystem {
             throw new FileAlreadyExistsException(file.getAbsolutePath());
         } else {
             File parent = file.getParentFile();
-            return (parent == null || mkdirsInternal(parent))
-                    && (file.mkdir() || file.isDirectory());
+            return (parent == null || mkdirsInternal(parent)) && (file.mkdir() || file.isDirectory());
         }
     }
 
     @Override
-    public FSDataOutputStream create(final FsPath filePath, final WriteMode overwrite)
-            throws IOException {
+    public FSDataOutputStream create(final FsPath filePath, final WriteMode overwrite) throws IOException {
         checkNotNull(filePath, "filePath");
 
         if (exists(filePath) && overwrite == WriteMode.NO_OVERWRITE) {
@@ -234,10 +229,7 @@ public class LocalFileSystem extends FileSystem {
         try {
             Files.move(srcFile.toPath(), dstFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
             return true;
-        } catch (NoSuchFileException
-                | AccessDeniedException
-                | DirectoryNotEmptyException
-                | SecurityException ex) {
+        } catch (NoSuchFileException | AccessDeniedException | DirectoryNotEmptyException | SecurityException ex) {
             // catch the errors that are regular "move failed" exceptions and return false
             return false;
         }

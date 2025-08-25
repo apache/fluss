@@ -53,8 +53,7 @@ public final class CoordinatorEventManager implements EventManager {
     private final CoordinatorMetricGroup coordinatorMetricGroup;
 
     private final LinkedBlockingQueue<QueuedEvent> queue = new LinkedBlockingQueue<>();
-    private final CoordinatorEventThread thread =
-            new CoordinatorEventThread(COORDINATOR_EVENT_THREAD_NAME);
+    private final CoordinatorEventThread thread = new CoordinatorEventThread(COORDINATOR_EVENT_THREAD_NAME);
     private final Lock putLock = new ReentrantLock();
 
     // metrics
@@ -71,8 +70,7 @@ public final class CoordinatorEventManager implements EventManager {
     private static final int WINDOW_SIZE = 100;
     private static final long METRICS_UPDATE_INTERVAL_MS = 5000; // 5 seconds
 
-    public CoordinatorEventManager(
-            EventProcessor eventProcessor, CoordinatorMetricGroup coordinatorMetricGroup) {
+    public CoordinatorEventManager(EventProcessor eventProcessor, CoordinatorMetricGroup coordinatorMetricGroup) {
         this.eventProcessor = eventProcessor;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
         registerMetrics();
@@ -81,70 +79,47 @@ public final class CoordinatorEventManager implements EventManager {
     private void registerMetrics() {
         coordinatorMetricGroup.gauge(MetricNames.EVENT_QUEUE_SIZE, queue::size);
 
-        eventProcessingTime =
-                coordinatorMetricGroup.histogram(
-                        MetricNames.EVENT_PROCESSING_TIME_MS,
-                        new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+        eventProcessingTime = coordinatorMetricGroup.histogram(
+                MetricNames.EVENT_PROCESSING_TIME_MS, new DescriptiveStatisticsHistogram(WINDOW_SIZE));
 
-        eventQueueTime =
-                coordinatorMetricGroup.histogram(
-                        MetricNames.EVENT_QUEUE_TIME_MS,
-                        new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+        eventQueueTime = coordinatorMetricGroup.histogram(
+                MetricNames.EVENT_QUEUE_TIME_MS, new DescriptiveStatisticsHistogram(WINDOW_SIZE));
 
         // Register coordinator metrics
         coordinatorMetricGroup.gauge(MetricNames.ACTIVE_COORDINATOR_COUNT, () -> 1);
-        coordinatorMetricGroup.gauge(
-                MetricNames.ACTIVE_TABLET_SERVER_COUNT, () -> tabletServerCount);
+        coordinatorMetricGroup.gauge(MetricNames.ACTIVE_TABLET_SERVER_COUNT, () -> tabletServerCount);
         coordinatorMetricGroup.gauge(MetricNames.OFFLINE_BUCKET_COUNT, () -> offlineBucketCount);
         coordinatorMetricGroup.gauge(MetricNames.BUCKET_COUNT, () -> bucketCount);
         coordinatorMetricGroup.gauge(MetricNames.TABLE_COUNT, () -> tableCount);
-        coordinatorMetricGroup.gauge(
-                MetricNames.REPLICAS_TO_DELETE_COUNT, () -> replicasToDeleteCount);
+        coordinatorMetricGroup.gauge(MetricNames.REPLICAS_TO_DELETE_COUNT, () -> replicasToDeleteCount);
     }
 
     /** Not thread safety! this method can only be executed in the CoordinatorEventThread. */
     private void updateMetricsViaAccessContext() {
         // Create AccessContextEvent to safely access CoordinatorContext
-        AccessContextEvent<MetricsData> accessContextEvent =
-                new AccessContextEvent<>(
-                        context -> {
-                            int tabletServerCount = context.getLiveTabletServers().size();
-                            int tableCount = context.allTables().size();
-                            int bucketCount = context.bucketLeaderAndIsr().size();
-                            int offlineBucketCount = context.getOfflineBucketCount();
+        AccessContextEvent<MetricsData> accessContextEvent = new AccessContextEvent<>(context -> {
+            int tabletServerCount = context.getLiveTabletServers().size();
+            int tableCount = context.allTables().size();
+            int bucketCount = context.bucketLeaderAndIsr().size();
+            int offlineBucketCount = context.getOfflineBucketCount();
 
-                            int replicasToDeletes = 0;
-                            // for replica in partitions to be deleted
-                            for (TablePartition tablePartition :
-                                    context.getPartitionsToBeDeleted()) {
-                                for (TableBucketReplica replica :
-                                        context.getAllReplicasForPartition(
-                                                tablePartition.getTableId(),
-                                                tablePartition.getPartitionId())) {
-                                    replicasToDeletes =
-                                            isReplicaToDelete(replica, context)
-                                                    ? replicasToDeletes + 1
-                                                    : replicasToDeletes;
-                                }
-                            }
-                            // for replica in tables to be deleted
-                            for (long tableId : context.getTablesToBeDeleted()) {
-                                for (TableBucketReplica replica :
-                                        context.getAllReplicasForTable(tableId)) {
-                                    replicasToDeletes =
-                                            isReplicaToDelete(replica, context)
-                                                    ? replicasToDeletes + 1
-                                                    : replicasToDeletes;
-                                }
-                            }
+            int replicasToDeletes = 0;
+            // for replica in partitions to be deleted
+            for (TablePartition tablePartition : context.getPartitionsToBeDeleted()) {
+                for (TableBucketReplica replica : context.getAllReplicasForPartition(
+                        tablePartition.getTableId(), tablePartition.getPartitionId())) {
+                    replicasToDeletes = isReplicaToDelete(replica, context) ? replicasToDeletes + 1 : replicasToDeletes;
+                }
+            }
+            // for replica in tables to be deleted
+            for (long tableId : context.getTablesToBeDeleted()) {
+                for (TableBucketReplica replica : context.getAllReplicasForTable(tableId)) {
+                    replicasToDeletes = isReplicaToDelete(replica, context) ? replicasToDeletes + 1 : replicasToDeletes;
+                }
+            }
 
-                            return new MetricsData(
-                                    tabletServerCount,
-                                    tableCount,
-                                    bucketCount,
-                                    offlineBucketCount,
-                                    replicasToDeletes);
-                        });
+            return new MetricsData(tabletServerCount, tableCount, bucketCount, offlineBucketCount, replicasToDeletes);
+        });
 
         eventProcessor.process(accessContextEvent);
 
@@ -181,31 +156,23 @@ public final class CoordinatorEventManager implements EventManager {
     }
 
     public void put(CoordinatorEvent event) {
-        inLock(
-                putLock,
-                () -> {
-                    try {
-                        QueuedEvent queuedEvent =
-                                new QueuedEvent(event, System.currentTimeMillis());
-                        queue.put(queuedEvent);
+        inLock(putLock, () -> {
+            try {
+                QueuedEvent queuedEvent = new QueuedEvent(event, System.currentTimeMillis());
+                queue.put(queuedEvent);
 
-                        LOG.debug(
-                                "Put coordinator event {} of event type {}.",
-                                event,
-                                event.getClass());
-                    } catch (InterruptedException e) {
-                        LOG.error("Fail to put coordinator event {}.", event, e);
-                    }
-                });
+                LOG.debug("Put coordinator event {} of event type {}.", event, event.getClass());
+            } catch (InterruptedException e) {
+                LOG.error("Fail to put coordinator event {}.", event, e);
+            }
+        });
     }
 
     public void clearAndPut(CoordinatorEvent event) {
-        inLock(
-                putLock,
-                () -> {
-                    queue.clear();
-                    put(event);
-                });
+        inLock(putLock, () -> {
+            queue.clear();
+            put(event);
+        });
     }
 
     private class CoordinatorEventThread extends ShutdownableThread {
@@ -230,10 +197,7 @@ public final class CoordinatorEventManager implements EventManager {
 
             long eventStartTimeMs = System.currentTimeMillis();
 
-            LOG.debug(
-                    "Start processing event {} of event type {}.",
-                    coordinatorEvent,
-                    coordinatorEvent.getClass());
+            LOG.debug("Start processing event {} of event type {}.", coordinatorEvent, coordinatorEvent.getClass());
             try {
                 if (!(coordinatorEvent instanceof ShutdownEventThreadEvent)) {
                     eventQueueTime.update(System.currentTimeMillis() - queuedEvent.enqueueTimeMs);

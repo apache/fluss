@@ -28,20 +28,18 @@ import org.apache.commons.cli.Option;
  */
 public class CommandLineOptions {
 
-    public static final Option CONFIG_DIR_OPTION =
-            Option.builder("c")
-                    .longOpt("configDir")
-                    .required(true)
-                    .hasArg(true)
-                    .argName("configuration directory")
-                    .desc("Directory which contains the configuration file server.yaml.")
-                    .build();
+    public static final Option CONFIG_DIR_OPTION = Option.builder("c")
+            .longOpt("configDir")
+            .required(true)
+            .hasArg(true)
+            .argName("configuration directory")
+            .desc("Directory which contains the configuration file server.yaml.")
+            .build();
 
-    public static final Option DYNAMIC_PROPERTY_OPTION =
-            Option.builder("D")
-                    .argName("property=value")
-                    .numberOfArgs(2)
-                    .valueSeparator('=')
-                    .desc("use value for given property")
-                    .build();
+    public static final Option DYNAMIC_PROPERTY_OPTION = Option.builder("D")
+            .argName("property=value")
+            .numberOfArgs(2)
+            .valueSeparator('=')
+            .desc("use value for given property")
+            .build();
 }

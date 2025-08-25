@@ -36,10 +36,9 @@ public class CompactedKeyWriter extends CompactedRowWriter {
     public static FieldWriter createFieldWriter(DataType fieldType) {
         return (writer, pos, value) -> {
             if (value == null) {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "Null value is not allowed for compacted key encoder in position %d with type %s.",
-                                pos, fieldType));
+                throw new IllegalArgumentException(String.format(
+                        "Null value is not allowed for compacted key encoder in position %d with type %s.",
+                        pos, fieldType));
             } else {
                 CompactedRowWriter.createFieldWriter(fieldType).writeField(writer, pos, value);
             }

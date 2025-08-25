@@ -83,20 +83,16 @@ public class PojoToRowConverter<T> {
         SUPPORTED_TYPES.put(DataTypeRoot.BIGINT, orderedSet(Long.class, long.class));
         SUPPORTED_TYPES.put(DataTypeRoot.FLOAT, orderedSet(Float.class, float.class));
         SUPPORTED_TYPES.put(DataTypeRoot.DOUBLE, orderedSet(Double.class, double.class));
-        SUPPORTED_TYPES.put(
-                DataTypeRoot.CHAR, orderedSet(String.class, Character.class, char.class));
-        SUPPORTED_TYPES.put(
-                DataTypeRoot.STRING, orderedSet(String.class, Character.class, char.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.CHAR, orderedSet(String.class, Character.class, char.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.STRING, orderedSet(String.class, Character.class, char.class));
         SUPPORTED_TYPES.put(DataTypeRoot.BINARY, orderedSet(byte[].class));
         SUPPORTED_TYPES.put(DataTypeRoot.BYTES, orderedSet(byte[].class));
         SUPPORTED_TYPES.put(DataTypeRoot.DECIMAL, orderedSet(BigDecimal.class));
         SUPPORTED_TYPES.put(DataTypeRoot.DATE, orderedSet(LocalDate.class));
         SUPPORTED_TYPES.put(DataTypeRoot.TIME_WITHOUT_TIME_ZONE, orderedSet(LocalTime.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE, orderedSet(LocalDateTime.class));
         SUPPORTED_TYPES.put(
-                DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE, orderedSet(LocalDateTime.class));
-        SUPPORTED_TYPES.put(
-                DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE,
-                orderedSet(Instant.class, OffsetDateTime.class));
+                DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE, orderedSet(Instant.class, OffsetDateTime.class));
         // Add more supported types as needed
 
     }
@@ -145,30 +141,25 @@ public class PojoToRowConverter<T> {
 
                 // Check if field is a nested POJO
                 if (pojoFieldType instanceof PojoTypeInfo) {
-                    throw new UnsupportedOperationException(
-                            "Nested POJO fields are not supported yet. Field: "
-                                    + pojoField.getField().getName()
-                                    + " in class "
-                                    + pojoClass.getName());
+                    throw new UnsupportedOperationException("Nested POJO fields are not supported yet. Field: "
+                            + pojoField.getField().getName()
+                            + " in class "
+                            + pojoClass.getName());
                 }
 
                 // Check if the field type is supported
                 if (!SUPPORTED_TYPES.containsKey(fieldType.getTypeRoot())) {
-                    throw new UnsupportedOperationException(
-                            "Unsupported field type "
-                                    + fieldType.getTypeRoot()
-                                    + " for field "
-                                    + pojoField.getField().getName());
-                } else if (!SUPPORTED_TYPES
-                        .get(fieldType.getTypeRoot())
-                        .contains(pojoFieldType.getTypeClass())) {
-                    throw new UnsupportedOperationException(
-                            "Field Java type "
-                                    + pojoFieldType.getTypeClass()
-                                    + " for field "
-                                    + pojoField.getField().getName()
-                                    + " is not supported, the supported Java types are "
-                                    + SUPPORTED_TYPES.get(fieldType.getTypeRoot()));
+                    throw new UnsupportedOperationException("Unsupported field type "
+                            + fieldType.getTypeRoot()
+                            + " for field "
+                            + pojoField.getField().getName());
+                } else if (!SUPPORTED_TYPES.get(fieldType.getTypeRoot()).contains(pojoFieldType.getTypeClass())) {
+                    throw new UnsupportedOperationException("Field Java type "
+                            + pojoFieldType.getTypeClass()
+                            + " for field "
+                            + pojoField.getField().getName()
+                            + " is not supported, the supported Java types are "
+                            + SUPPORTED_TYPES.get(fieldType.getTypeRoot()));
                 }
 
                 // Create the appropriate converter for this field
@@ -222,13 +213,9 @@ public class PojoToRowConverter<T> {
                     if (value instanceof BigDecimal) {
                         DecimalType decimalType = (DecimalType) fieldType;
                         return Decimal.fromBigDecimal(
-                                (BigDecimal) value,
-                                decimalType.getPrecision(),
-                                decimalType.getScale());
+                                (BigDecimal) value, decimalType.getPrecision(), decimalType.getScale());
                     } else {
-                        LOG.warn(
-                                "Field {} is not a BigDecimal. Cannot convert to DecimalData.",
-                                field.getName());
+                        LOG.warn("Field {} is not a BigDecimal. Cannot convert to DecimalData.", field.getName());
                         return null;
                     }
                 };
@@ -241,9 +228,7 @@ public class PojoToRowConverter<T> {
                     if (value instanceof LocalDate) {
                         return (int) ((LocalDate) value).toEpochDay();
                     } else {
-                        LOG.warn(
-                                "Field {} is not a LocalDate. Cannot convert to int days.",
-                                field.getName());
+                        LOG.warn("Field {} is not a LocalDate. Cannot convert to int days.", field.getName());
                         return null;
                     }
                 };
@@ -257,9 +242,7 @@ public class PojoToRowConverter<T> {
                         LocalTime localTime = (LocalTime) value;
                         return (int) (localTime.toNanoOfDay() / 1_000_000);
                     } else {
-                        LOG.warn(
-                                "Field {} is not a LocalTime. Cannot convert to int millis.",
-                                field.getName());
+                        LOG.warn("Field {} is not a LocalTime. Cannot convert to int millis.", field.getName());
                         return null;
                     }
                 };
@@ -272,9 +255,7 @@ public class PojoToRowConverter<T> {
                     if (value instanceof LocalDateTime) {
                         return TimestampNtz.fromLocalDateTime((LocalDateTime) value);
                     } else {
-                        LOG.warn(
-                                "Field {} is not a LocalDateTime. Cannot convert to TimestampData.",
-                                field.getName());
+                        LOG.warn("Field {} is not a LocalDateTime. Cannot convert to TimestampData.", field.getName());
                         return null;
                     }
                 };

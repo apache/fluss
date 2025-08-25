@@ -57,7 +57,8 @@ class PaimonKeyEncoderTest {
         byte[] encodedKey = paimonKeyEncoder.encodeKey(indexedRow);
 
         // encode with Paimon implementation
-        byte[] paimonEncodedKey = genPaimonRowForAllTypes(allRowType.getFieldCount()).toBytes();
+        byte[] paimonEncodedKey =
+                genPaimonRowForAllTypes(allRowType.getFieldCount()).toBytes();
 
         // verify both the result should be same
         assertThat(encodedKey).isEqualTo(paimonEncodedKey);
@@ -80,8 +81,7 @@ class PaimonKeyEncoderTest {
         writer.writeChar(org.apache.fluss.row.BinaryString.fromString("1"), 2);
         writer.writeString(org.apache.fluss.row.BinaryString.fromString("hello"));
         writer.writeDecimal(org.apache.fluss.row.Decimal.fromUnscaledLong(9, 5, 2), 5);
-        writer.writeDecimal(
-                org.apache.fluss.row.Decimal.fromBigDecimal(new BigDecimal(10), 20, 0), 20);
+        writer.writeDecimal(org.apache.fluss.row.Decimal.fromBigDecimal(new BigDecimal(10), 20, 0), 20);
         writer.writeTimestampNtz(TimestampNtz.fromMillis(1698235273182L), 1);
         writer.writeTimestampNtz(TimestampNtz.fromMillis(1698235273182L), 5);
         writer.writeTimestampLtz(TimestampLtz.fromEpochMillis(1698235273182L, 45678), 1);
@@ -101,15 +101,9 @@ class PaimonKeyEncoderTest {
         binaryRowWriter.writeFloat(5, Float.parseFloat("13.2"));
         binaryRowWriter.writeDouble(6, Double.parseDouble("15.21"));
         binaryRowWriter.writeInt(
-                7,
-                (int)
-                        TypeUtils.castFromString(
-                                "2023-10-25", org.apache.fluss.types.DataTypes.DATE()));
+                7, (int) TypeUtils.castFromString("2023-10-25", org.apache.fluss.types.DataTypes.DATE()));
         binaryRowWriter.writeInt(
-                8,
-                (int)
-                        TypeUtils.castFromString(
-                                "09:30:00.0", org.apache.fluss.types.DataTypes.TIME()));
+                8, (int) TypeUtils.castFromString("09:30:00.0", org.apache.fluss.types.DataTypes.TIME()));
         binaryRowWriter.writeBinary(9, "1234567890".getBytes());
         binaryRowWriter.writeBinary(10, "20".getBytes());
         binaryRowWriter.writeString(11, BinaryString.fromString("1"));

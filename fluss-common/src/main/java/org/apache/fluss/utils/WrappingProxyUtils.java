@@ -60,11 +60,9 @@ public final class WrappingProxyUtils {
 
     private static void throwIfSafetyNetExceeded(final int numProxiesStripped) {
         if (numProxiesStripped >= SAFETY_NET_MAX_ITERATIONS) {
-            throw new IllegalArgumentException(
-                    format(
-                            "Already stripped %d proxies. "
-                                    + "Are there loops in the object graph?",
-                            SAFETY_NET_MAX_ITERATIONS));
+            throw new IllegalArgumentException(format(
+                    "Already stripped %d proxies. " + "Are there loops in the object graph?",
+                    SAFETY_NET_MAX_ITERATIONS));
         }
     }
 }

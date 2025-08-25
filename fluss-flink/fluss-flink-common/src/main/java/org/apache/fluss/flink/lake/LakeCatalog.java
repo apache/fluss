@@ -36,17 +36,13 @@ public class LakeCatalog {
     // todo make it pluggable
     private final FlinkCatalog paimonFlinkCatalog;
 
-    public LakeCatalog(
-            String catalogName, Map<String, String> catalogProperties, ClassLoader classLoader) {
+    public LakeCatalog(String catalogName, Map<String, String> catalogProperties, ClassLoader classLoader) {
         CatalogContext catalogContext =
-                CatalogContext.create(
-                        Options.fromMap(catalogProperties), null, new FlinkFileIOLoader());
-        paimonFlinkCatalog =
-                FlinkCatalogFactory.createCatalog(catalogName, catalogContext, classLoader);
+                CatalogContext.create(Options.fromMap(catalogProperties), null, new FlinkFileIOLoader());
+        paimonFlinkCatalog = FlinkCatalogFactory.createCatalog(catalogName, catalogContext, classLoader);
     }
 
-    public CatalogBaseTable getTable(ObjectPath objectPath)
-            throws TableNotExistException, CatalogException {
+    public CatalogBaseTable getTable(ObjectPath objectPath) throws TableNotExistException, CatalogException {
         return paimonFlinkCatalog.getTable(objectPath);
     }
 }

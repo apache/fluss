@@ -118,15 +118,13 @@ final class LogSegmentsTest extends LogTestBase {
         }
 
         // Test baseOffsets
-        assertThat(segments.baseOffsets())
-                .isEqualTo(Arrays.asList(offset1, offset2, offset3, offset4));
+        assertThat(segments.baseOffsets()).isEqualTo(Arrays.asList(offset1, offset2, offset3, offset4));
 
         // Test values
         assertThat(segments.values()).isEqualTo(segmentList);
 
         // Test values(to, from)
-        assertThatThrownBy(() -> segments.values(2, 1))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> segments.values(2, 1)).isInstanceOf(IllegalArgumentException.class);
         assertThat(segments.values(1, 1)).isEqualTo(Collections.emptyList());
         assertThat(segments.values(1, 2)).isEqualTo(Collections.singletonList(segment1));
         assertThat(segments.values(1, 3)).isEqualTo(Arrays.asList(segment1, segment2));
@@ -183,8 +181,7 @@ final class LogSegmentsTest extends LogTestBase {
                 .isEqualTo(Arrays.asList(segment1, segment2, segment3, segment4, segment5));
 
         // higherSegments(1) should return all segments in order except segment1
-        assertThat(segments.higherSegments(1L))
-                .isEqualTo(Arrays.asList(segment2, segment3, segment4, segment5));
+        assertThat(segments.higherSegments(1L)).isEqualTo(Arrays.asList(segment2, segment3, segment4, segment5));
 
         // higherSegments(8) should return only segment5
         assertThat(segments.higherSegments(8L)).isEqualTo(Collections.singletonList(segment5));

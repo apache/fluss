@@ -42,14 +42,10 @@ import java.util.stream.Collectors;
 
 /** Testing class for metadata updater. */
 public class TestingMetadataUpdater extends MetadataUpdater {
-    private static final ServerNode COORDINATOR =
-            new ServerNode(0, "localhost", 90, ServerType.COORDINATOR);
-    private static final ServerNode NODE1 =
-            new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER, "rack1");
-    private static final ServerNode NODE2 =
-            new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER, "rack2");
-    private static final ServerNode NODE3 =
-            new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER, "rack3");
+    private static final ServerNode COORDINATOR = new ServerNode(0, "localhost", 90, ServerType.COORDINATOR);
+    private static final ServerNode NODE1 = new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER, "rack1");
+    private static final ServerNode NODE2 = new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER, "rack2");
+    private static final ServerNode NODE3 = new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER, "rack3");
 
     private final TestCoordinatorGateway coordinatorGateway;
     private final Map<Integer, TestTabletServerGateway> tabletServerGatewayMap;
@@ -59,13 +55,8 @@ public class TestingMetadataUpdater extends MetadataUpdater {
     }
 
     private TestingMetadataUpdater(
-            ServerNode coordinatorServer,
-            List<ServerNode> tabletServers,
-            Map<TablePath, TableInfo> tableInfos) {
-        super(
-                RpcClient.create(
-                        new Configuration(), TestingClientMetricGroup.newInstance(), false),
-                Cluster.empty());
+            ServerNode coordinatorServer, List<ServerNode> tabletServers, Map<TablePath, TableInfo> tableInfos) {
+        super(RpcClient.create(new Configuration(), TestingClientMetricGroup.newInstance(), false), Cluster.empty());
         initializeCluster(coordinatorServer, tabletServers, tableInfos);
         coordinatorGateway = new TestCoordinatorGateway();
         tabletServerGatewayMap = new HashMap<>();
@@ -80,16 +71,13 @@ public class TestingMetadataUpdater extends MetadataUpdater {
 
     @Override
     public void checkAndUpdateTableMetadata(Set<TablePath> tablePaths) {
-        Set<TablePath> needUpdateTablePaths =
-                tablePaths.stream()
-                        .filter(tablePath -> !cluster.getTable(tablePath).isPresent())
-                        .collect(Collectors.toSet());
+        Set<TablePath> needUpdateTablePaths = tablePaths.stream()
+                .filter(tablePath -> !cluster.getTable(tablePath).isPresent())
+                .collect(Collectors.toSet());
         if (!needUpdateTablePaths.isEmpty()) {
-            throw new IllegalStateException(
-                    String.format(
-                            "tables %s not found in TestingMetadataUpdater, "
-                                    + "you need add it while construct updater",
-                            needUpdateTablePaths));
+            throw new IllegalStateException(String.format(
+                    "tables %s not found in TestingMetadataUpdater, " + "you need add it while construct updater",
+                    needUpdateTablePaths));
         }
     }
 
@@ -112,9 +100,7 @@ public class TestingMetadataUpdater extends MetadataUpdater {
     }
 
     private void initializeCluster(
-            ServerNode coordinatorServer,
-            List<ServerNode> tabletServers,
-            Map<TablePath, TableInfo> tableInfos) {
+            ServerNode coordinatorServer, List<ServerNode> tabletServers, Map<TablePath, TableInfo> tableInfos) {
 
         Map<Integer, ServerNode> tabletServerMap = new HashMap<>();
         tabletServers.forEach(tabletServer -> tabletServerMap.put(tabletServer.id(), tabletServer));
@@ -127,41 +113,39 @@ public class TestingMetadataUpdater extends MetadataUpdater {
         Map<PhysicalTablePath, List<BucketLocation>> tablePathToBucketLocations = new HashMap<>();
         Map<TablePath, Long> tableIdByPath = new HashMap<>();
         Map<TablePath, TableInfo> tableInfoByPath = new HashMap<>();
-        tableInfos.forEach(
-                (tablePath, tableInfo) -> {
-                    long tableId = tableInfo.getTableId();
-                    PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath);
-                    tablePathToBucketLocations.put(
-                            physicalTablePath,
-                            Arrays.asList(
-                                    new BucketLocation(
-                                            physicalTablePath,
-                                            tableId,
-                                            0,
-                                            tabletServers.get(0).id(),
-                                            replicas),
-                                    new BucketLocation(
-                                            physicalTablePath,
-                                            tableId,
-                                            1,
-                                            tabletServers.get(1).id(),
-                                            replicas),
-                                    new BucketLocation(
-                                            physicalTablePath,
-                                            tableId,
-                                            2,
-                                            tabletServers.get(2).id(),
-                                            replicas)));
-                    tableIdByPath.put(tablePath, tableId);
-                    tableInfoByPath.put(tablePath, tableInfo);
-                });
-        cluster =
-                new Cluster(
-                        tabletServerMap,
-                        coordinatorServer,
-                        tablePathToBucketLocations,
-                        tableIdByPath,
-                        Collections.emptyMap(),
-                        tableInfoByPath);
+        tableInfos.forEach((tablePath, tableInfo) -> {
+            long tableId = tableInfo.getTableId();
+            PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath);
+            tablePathToBucketLocations.put(
+                    physicalTablePath,
+                    Arrays.asList(
+                            new BucketLocation(
+                                    physicalTablePath,
+                                    tableId,
+                                    0,
+                                    tabletServers.get(0).id(),
+                                    replicas),
+                            new BucketLocation(
+                                    physicalTablePath,
+                                    tableId,
+                                    1,
+                                    tabletServers.get(1).id(),
+                                    replicas),
+                            new BucketLocation(
+                                    physicalTablePath,
+                                    tableId,
+                                    2,
+                                    tabletServers.get(2).id(),
+                                    replicas)));
+            tableIdByPath.put(tablePath, tableId);
+            tableInfoByPath.put(tablePath, tableInfo);
+        });
+        cluster = new Cluster(
+                tabletServerMap,
+                coordinatorServer,
+                tablePathToBucketLocations,
+                tableIdByPath,
+                Collections.emptyMap(),
+                tableInfoByPath);
     }
 }

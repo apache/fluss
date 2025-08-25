@@ -31,10 +31,10 @@ public class TableLookup implements Lookup {
     private final MetadataUpdater metadataUpdater;
     private final LookupClient lookupClient;
 
-    @Nullable private final List<String> lookupColumnNames;
+    @Nullable
+    private final List<String> lookupColumnNames;
 
-    public TableLookup(
-            TableInfo tableInfo, MetadataUpdater metadataUpdater, LookupClient lookupClient) {
+    public TableLookup(TableInfo tableInfo, MetadataUpdater metadataUpdater, LookupClient lookupClient) {
         this(tableInfo, metadataUpdater, lookupClient, null);
     }
 
@@ -59,8 +59,7 @@ public class TableLookup implements Lookup {
         if (lookupColumnNames == null) {
             return new PrimaryKeyLookuper(tableInfo, metadataUpdater, lookupClient);
         } else {
-            return new PrefixKeyLookuper(
-                    tableInfo, metadataUpdater, lookupClient, lookupColumnNames);
+            return new PrefixKeyLookuper(tableInfo, metadataUpdater, lookupClient, lookupColumnNames);
         }
     }
 }

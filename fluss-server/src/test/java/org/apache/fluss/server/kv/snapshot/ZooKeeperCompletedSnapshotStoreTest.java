@@ -58,8 +58,7 @@ class ZooKeeperCompletedSnapshotStoreTest {
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 zooKeeperExtensionWrapper.getCustomExtension().getConnectString());
-        zooKeeperClient =
-                ZooKeeperUtils.startZookeeperClient(configuration, NOPErrorHandler.INSTANCE);
+        zooKeeperClient = ZooKeeperUtils.startZookeeperClient(configuration, NOPErrorHandler.INSTANCE);
     }
 
     @AfterAll
@@ -108,22 +107,17 @@ class ZooKeeperCompletedSnapshotStoreTest {
         TableBucket tableBucket = new TableBucket(1, 2);
         try (ZooKeeperClient zooKeeperClient =
                 ZooKeeperUtils.startZookeeperClient(configuration, NOPErrorHandler.INSTANCE)) {
-            final CompletedSnapshotStore store =
-                    createZooKeeperSnapshotStore(zooKeeperClient, sharedKvFileRegistry);
+            final CompletedSnapshotStore store = createZooKeeperSnapshotStore(zooKeeperClient, sharedKvFileRegistry);
 
             CountDownLatch discardAttempted = new CountDownLatch(1);
             for (long i = 0; i < 2; ++i) {
                 FsPath snapshotPath = FsPath.fromLocalFile(tmpDir.toFile());
-                CompletedSnapshot snapshotToAdd =
-                        SnapshotsCleanerTest.createSnapshot(tableBucket, i, snapshotPath);
+                CompletedSnapshot snapshotToAdd = SnapshotsCleanerTest.createSnapshot(tableBucket, i, snapshotPath);
                 // shouldn't fail despite the exception
-                store.addSnapshotAndSubsumeOldestOne(
-                        snapshotToAdd,
-                        new SnapshotsCleaner(),
-                        () -> {
-                            discardAttempted.countDown();
-                            throw new RuntimeException();
-                        });
+                store.addSnapshotAndSubsumeOldestOne(snapshotToAdd, new SnapshotsCleaner(), () -> {
+                    discardAttempted.countDown();
+                    throw new RuntimeException();
+                });
             }
             discardAttempted.await();
         }
@@ -135,10 +129,6 @@ class ZooKeeperCompletedSnapshotStoreTest {
         ZooKeeperCompletedSnapshotHandleStore snapshotsInZooKeeper =
                 new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient);
         return new CompletedSnapshotStore(
-                1,
-                sharedKvFileRegistry,
-                Collections.emptyList(),
-                snapshotsInZooKeeper,
-                Executors.directExecutor());
+                1, sharedKvFileRegistry, Collections.emptyList(), snapshotsInZooKeeper, Executors.directExecutor());
     }
 }

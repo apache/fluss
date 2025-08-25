@@ -45,11 +45,13 @@ public class AddressBookTest {
     @Test
     public void testAddressBook() throws Exception {
         AddressBook ab = new AddressBook();
-        Person p1 = ab.addPerson().setName("name 1").setEmail("name1@example.com").setId(5);
+        Person p1 =
+                ab.addPerson().setName("name 1").setEmail("name1@example.com").setId(5);
         p1.addPhone().setNumber("xxx-zzz-1111").setType(Person.PhoneType.HOME);
         p1.addPhone().setNumber("xxx-zzz-2222").setType(Person.PhoneType.MOBILE);
 
-        Person p2 = ab.addPerson().setName("name 2").setEmail("name2@example.com").setId(6);
+        Person p2 =
+                ab.addPerson().setName("name 2").setEmail("name2@example.com").setId(6);
         p2.addPhone().setNumber("xxx-zzz-2222").setType(Person.PhoneType.HOME);
 
         assertThat(ab.getPersonsCount()).isEqualTo(2);
@@ -69,13 +71,11 @@ public class AddressBookTest {
         pbP1.setName("name 1");
         pbP1.setEmail("name1@example.com");
         pbP1.setId(5);
-        AddressBookProtos.Person.PhoneNumber.Builder pb1Pn1 =
-                AddressBookProtos.Person.PhoneNumber.newBuilder();
+        AddressBookProtos.Person.PhoneNumber.Builder pb1Pn1 = AddressBookProtos.Person.PhoneNumber.newBuilder();
         pb1Pn1.setNumber("xxx-zzz-1111");
         pb1Pn1.setType(AddressBookProtos.Person.PhoneType.HOME);
 
-        AddressBookProtos.Person.PhoneNumber.Builder pb1Pn2 =
-                AddressBookProtos.Person.PhoneNumber.newBuilder();
+        AddressBookProtos.Person.PhoneNumber.Builder pb1Pn2 = AddressBookProtos.Person.PhoneNumber.newBuilder();
         pb1Pn2.setNumber("xxx-zzz-2222");
         pb1Pn2.setType(AddressBookProtos.Person.PhoneType.MOBILE);
 
@@ -87,8 +87,7 @@ public class AddressBookTest {
         pbP2.setEmail("name2@example.com");
         pbP2.setId(6);
 
-        AddressBookProtos.Person.PhoneNumber.Builder pb2Pn1 =
-                AddressBookProtos.Person.PhoneNumber.newBuilder();
+        AddressBookProtos.Person.PhoneNumber.Builder pb2Pn1 = AddressBookProtos.Person.PhoneNumber.newBuilder();
         pb2Pn1.setNumber("xxx-zzz-2222");
         pb2Pn1.setType(AddressBookProtos.Person.PhoneType.HOME);
 

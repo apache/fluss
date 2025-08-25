@@ -114,8 +114,7 @@ public class JMXReporter implements MetricReporter {
              * modified and no longer conforms to the JMX domain rules or the table wasn't properly
              * generated.
              */
-            LOG.debug(
-                    "Implementation error. The domain or table does not conform to JMX rules.", e);
+            LOG.debug("Implementation error. The domain or table does not conform to JMX rules.", e);
             return;
         }
 
@@ -182,9 +181,7 @@ public class JMXReporter implements MetricReporter {
     static Hashtable<String, String> generateJmxTable(Map<String, String> variables) {
         Hashtable<String, String> ht = new Hashtable<>(variables.size());
         for (Map.Entry<String, String> variable : variables.entrySet()) {
-            ht.put(
-                    replaceInvalidChars(variable.getKey()),
-                    replaceInvalidChars(variable.getValue()));
+            ht.put(replaceInvalidChars(variable.getKey()), replaceInvalidChars(variable.getValue()));
         }
         return ht;
     }

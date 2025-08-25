@@ -69,19 +69,11 @@ public class RocksDBOperationUtils {
         RocksDB dbRef;
         try {
             if (isReadOnly) {
-                dbRef =
-                        RocksDB.openReadOnly(
-                                checkNotNull(dbOptions),
-                                checkNotNull(path),
-                                columnFamilyDescriptors,
-                                columnFamilyHandles);
+                dbRef = RocksDB.openReadOnly(
+                        checkNotNull(dbOptions), checkNotNull(path), columnFamilyDescriptors, columnFamilyHandles);
             } else {
-                dbRef =
-                        RocksDB.open(
-                                checkNotNull(dbOptions),
-                                checkNotNull(path),
-                                columnFamilyDescriptors,
-                                columnFamilyHandles);
+                dbRef = RocksDB.open(
+                        checkNotNull(dbOptions), checkNotNull(path), columnFamilyDescriptors, columnFamilyHandles);
             }
         } catch (RocksDBException e) {
             columnFamilyDescriptors.forEach((cfd) -> IOUtils.closeQuietly(cfd.getOptions()));
@@ -98,8 +90,7 @@ public class RocksDBOperationUtils {
         return dbRef;
     }
 
-    private static void throwExceptionIfPathLengthExceededOnWindows(String path, Exception cause)
-            throws IOException {
+    private static void throwExceptionIfPathLengthExceededOnWindows(String path, Exception cause) throws IOException {
         // max directory path length on Windows is 247.
         // the maximum path length is 260, subtracting one file name length (12 chars) and one NULL
         // terminator.

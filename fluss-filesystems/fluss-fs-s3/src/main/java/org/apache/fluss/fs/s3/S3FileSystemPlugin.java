@@ -80,13 +80,11 @@ public class S3FileSystemPlugin implements FileSystemPlugin {
             for (String prefix : FLUSS_CONFIG_PREFIXES) {
                 if (key.startsWith(prefix)) {
                     String newKey = HADOOP_CONFIG_PREFIX + key.substring(prefix.length());
-                    String newValue =
-                            flussConfig.getString(
-                                    ConfigBuilder.key(key).stringType().noDefaultValue(), null);
+                    String newValue = flussConfig.getString(
+                            ConfigBuilder.key(key).stringType().noDefaultValue(), null);
                     conf.set(newKey, newValue);
 
-                    LOG.debug(
-                            "Adding Fluss config entry for {} as {} to Hadoop config", key, newKey);
+                    LOG.debug("Adding Fluss config entry for {} as {} to Hadoop config", key, newKey);
                 }
             }
         }

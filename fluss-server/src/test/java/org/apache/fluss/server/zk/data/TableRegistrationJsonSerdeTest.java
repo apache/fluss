@@ -39,28 +39,22 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
     @Test
     void testInvalidTableRegistration() {
         // null bucket count
-        assertThatThrownBy(
-                        () ->
-                                new TableRegistration(
-                                        1234L,
-                                        "first-table",
-                                        Arrays.asList("a", "b"),
-                                        new TableDistribution(null, Arrays.asList("b", "c")),
-                                        Maps.newHashMap(),
-                                        Collections.singletonMap("custom-3", "\"300\""),
-                                        1735538268L,
-                                        1735538268L))
+        assertThatThrownBy(() -> new TableRegistration(
+                        1234L,
+                        "first-table",
+                        Arrays.asList("a", "b"),
+                        new TableDistribution(null, Arrays.asList("b", "c")),
+                        Maps.newHashMap(),
+                        Collections.singletonMap("custom-3", "\"300\""),
+                        1735538268L,
+                        1735538268L))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Bucket count is required for table registration.");
 
         // null distribution
-        assertThatThrownBy(
-                        () ->
-                                TableRegistration.newTable(
-                                        11,
-                                        TableDescriptor.builder()
-                                                .schema(TestData.DATA1_SCHEMA)
-                                                .build()))
+        assertThatThrownBy(() -> TableRegistration.newTable(
+                        11,
+                        TableDescriptor.builder().schema(TestData.DATA1_SCHEMA).build()))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Table distribution is required for table registration.");
     }
@@ -69,27 +63,25 @@ class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration
     protected TableRegistration[] createObjects() {
         TableRegistration[] tableRegistrations = new TableRegistration[2];
 
-        tableRegistrations[0] =
-                new TableRegistration(
-                        1234L,
-                        "first-table",
-                        Arrays.asList("a", "b"),
-                        new TableDistribution(16, Arrays.asList("b", "c")),
-                        Maps.newHashMap(),
-                        Collections.singletonMap("custom-3", "\"300\""),
-                        1735538268L,
-                        1735538268L);
+        tableRegistrations[0] = new TableRegistration(
+                1234L,
+                "first-table",
+                Arrays.asList("a", "b"),
+                new TableDistribution(16, Arrays.asList("b", "c")),
+                Maps.newHashMap(),
+                Collections.singletonMap("custom-3", "\"300\""),
+                1735538268L,
+                1735538268L);
 
-        tableRegistrations[1] =
-                new TableRegistration(
-                        1234L,
-                        "second-table",
-                        Collections.emptyList(),
-                        new TableDistribution(32, Collections.emptyList()),
-                        Collections.singletonMap("option-3", "300"),
-                        Maps.newHashMap(),
-                        -1,
-                        -1);
+        tableRegistrations[1] = new TableRegistration(
+                1234L,
+                "second-table",
+                Collections.emptyList(),
+                new TableDistribution(32, Collections.emptyList()),
+                Collections.singletonMap("option-3", "300"),
+                Maps.newHashMap(),
+                -1,
+                -1);
 
         return tableRegistrations;
     }

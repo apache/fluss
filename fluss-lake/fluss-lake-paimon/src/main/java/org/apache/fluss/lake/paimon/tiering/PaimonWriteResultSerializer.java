@@ -46,11 +46,7 @@ public class PaimonWriteResultSerializer implements SimpleVersionedSerializer<Pa
     public PaimonWriteResult deserialize(int version, byte[] serialized) throws IOException {
         if (version != CURRENT_VERSION) {
             throw new UnsupportedOperationException(
-                    "Expecting PaimonWriteResult version to be "
-                            + CURRENT_VERSION
-                            + ", but found "
-                            + version
-                            + ".");
+                    "Expecting PaimonWriteResult version to be " + CURRENT_VERSION + ", but found " + version + ".");
         }
         CommitMessage commitMessage = messageSer.deserialize(messageSer.getVersion(), serialized);
         return new PaimonWriteResult(commitMessage);

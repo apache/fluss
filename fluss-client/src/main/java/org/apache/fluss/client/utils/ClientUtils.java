@@ -42,16 +42,14 @@ public final class ClientUtils {
 
     private static final Logger LOG = LoggerFactory.getLogger(ClientUtils.class);
 
-    private static final Pattern HOST_PORT_PATTERN =
-            Pattern.compile(".*?\\[?([0-9a-zA-Z\\-%._:]*)\\]?:([0-9]+)");
+    private static final Pattern HOST_PORT_PATTERN = Pattern.compile(".*?\\[?([0-9a-zA-Z\\-%._:]*)\\]?:([0-9]+)");
 
     private ClientUtils() {}
 
     // todo: may add DnsLookup
     public static List<InetSocketAddress> parseAndValidateAddresses(List<String> urls) {
         if (urls == null) {
-            throw new IllegalConfigurationException(
-                    ConfigOptions.BOOTSTRAP_SERVERS.key() + " should be set.");
+            throw new IllegalConfigurationException(ConfigOptions.BOOTSTRAP_SERVERS.key() + " should be set.");
         }
         List<InetSocketAddress> addresses = new ArrayList<>();
         for (String url : urls) {
@@ -61,10 +59,7 @@ public final class ClientUtils {
                     Integer port = getPort(url);
                     if (host == null || port == null) {
                         throw new IllegalConfigurationException(
-                                "Invalid url in "
-                                        + ConfigOptions.BOOTSTRAP_SERVERS.key()
-                                        + ": "
-                                        + url);
+                                "Invalid url in " + ConfigOptions.BOOTSTRAP_SERVERS.key() + ": " + url);
                     }
                     InetSocketAddress address = new InetSocketAddress(host, port);
                     if (address.isUnresolved()) {
@@ -78,17 +73,13 @@ public final class ClientUtils {
                     }
                 } catch (IllegalArgumentException e) {
                     throw new IllegalConfigurationException(
-                            "Invalid port in "
-                                    + ConfigOptions.BOOTSTRAP_SERVERS.key()
-                                    + ": "
-                                    + url);
+                            "Invalid port in " + ConfigOptions.BOOTSTRAP_SERVERS.key() + ": " + url);
                 }
             }
         }
         if (addresses.isEmpty()) {
             throw new IllegalConfigurationException(
-                    "No resolvable bootstrap urls given in "
-                            + ConfigOptions.BOOTSTRAP_SERVERS.key());
+                    "No resolvable bootstrap urls given in " + ConfigOptions.BOOTSTRAP_SERVERS.key());
         }
         return addresses;
     }
@@ -121,10 +112,7 @@ public final class ClientUtils {
      * throw {@link PartitionNotExistException}.
      */
     public static Long getPartitionId(
-            InternalRow row,
-            PartitionGetter partitionGetter,
-            TablePath tablePath,
-            MetadataUpdater metadataUpdater)
+            InternalRow row, PartitionGetter partitionGetter, TablePath tablePath, MetadataUpdater metadataUpdater)
             throws PartitionNotExistException {
         checkNotNull(partitionGetter, "partitionGetter shouldn't be null.");
         String partitionName = partitionGetter.getPartition(row);

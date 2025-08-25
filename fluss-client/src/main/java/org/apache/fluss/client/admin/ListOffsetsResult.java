@@ -43,11 +43,7 @@ public class ListOffsetsResult {
     public CompletableFuture<Map<Integer, Long>> all() {
         return CompletableFuture.allOf(futures.values().toArray(new CompletableFuture[0]))
                 .thenApply(
-                        v ->
-                                futures.entrySet().stream()
-                                        .collect(
-                                                Collectors.toMap(
-                                                        Map.Entry::getKey,
-                                                        e -> e.getValue().join())));
+                        v -> futures.entrySet().stream().collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue()
+                                .join())));
     }
 }

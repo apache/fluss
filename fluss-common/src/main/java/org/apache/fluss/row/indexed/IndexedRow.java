@@ -82,8 +82,7 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
         this.fieldTypes = fieldTypes;
         this.arity = fieldTypes.length;
         this.nullBitsSizeInBytes = calculateBitSetWidthInBytes(arity);
-        this.headerSizeInBytes =
-                nullBitsSizeInBytes + calculateVariableColumnLengthListSize(fieldTypes);
+        this.headerSizeInBytes = nullBitsSizeInBytes + calculateVariableColumnLengthListSize(fieldTypes);
     }
 
     public static IndexedRow from(DataType[] fieldType, byte[] dataBytes) {
@@ -263,9 +262,7 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
                 return Decimal.isCompact(((DecimalType) dataType).getPrecision());
             default:
                 throw new IllegalArgumentException(
-                        String.format(
-                                "Currently, Data type '%s' is not supported in indexedRow",
-                                dataType));
+                        String.format("Currently, Data type '%s' is not supported in indexedRow", dataType));
         }
     }
 
@@ -474,8 +471,7 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
             return false;
         }
         IndexedRow that = (IndexedRow) o;
-        return sizeInBytes == that.sizeInBytes
-                && segment.equalTo(that.segment, offset, that.offset, sizeInBytes);
+        return sizeInBytes == that.sizeInBytes && segment.equalTo(that.segment, offset, that.offset, sizeInBytes);
     }
 
     @Override

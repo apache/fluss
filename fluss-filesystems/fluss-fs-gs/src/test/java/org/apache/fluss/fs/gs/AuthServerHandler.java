@@ -69,8 +69,7 @@ public class AuthServerHandler extends SimpleChannelInboundHandler<HttpObject> {
         }
     }
 
-    private void postRequest(ChannelHandlerContext ctx, URI url, HttpRequest req)
-            throws IOException {
+    private void postRequest(ChannelHandlerContext ctx, URI url, HttpRequest req) throws IOException {
         if (url.getPath().endsWith("/token")) {
             jsonResponse(ctx, req, "create-token.json");
         } else {
@@ -78,8 +77,7 @@ public class AuthServerHandler extends SimpleChannelInboundHandler<HttpObject> {
         }
     }
 
-    private void getRequest(ChannelHandlerContext ctx, URI url, HttpRequest req)
-            throws IOException {
+    private void getRequest(ChannelHandlerContext ctx, URI url, HttpRequest req) throws IOException {
         if (url.getPath().endsWith("/token")) {
             jsonResponse(ctx, req, "create-token.json");
         } else {
@@ -87,16 +85,12 @@ public class AuthServerHandler extends SimpleChannelInboundHandler<HttpObject> {
         }
     }
 
-    private void jsonResponse(ChannelHandlerContext ctx, HttpRequest req, String path)
-            throws IOException {
+    private void jsonResponse(ChannelHandlerContext ctx, HttpRequest req, String path) throws IOException {
         jsonResponse(ctx, req, path, OK);
     }
 
     private void jsonResponse(
-            ChannelHandlerContext ctx,
-            HttpRequest req,
-            String path,
-            HttpResponseStatus responseStatus)
+            ChannelHandlerContext ctx, HttpRequest req, String path, HttpResponseStatus responseStatus)
             throws IOException {
         response(ctx, req, readFromResources(path), responseStatus, APPLICATION_JSON);
     }
@@ -108,8 +102,7 @@ public class AuthServerHandler extends SimpleChannelInboundHandler<HttpObject> {
             HttpResponseStatus status,
             AsciiString contentType) {
         FullHttpResponse response =
-                new DefaultFullHttpResponse(
-                        req.protocolVersion(), status, Unpooled.wrappedBuffer(bytes));
+                new DefaultFullHttpResponse(req.protocolVersion(), status, Unpooled.wrappedBuffer(bytes));
         response.headers()
                 .set(CONTENT_TYPE, contentType)
                 .set("Location", "http://localhost:8080/resumbable-upload")
@@ -126,8 +119,7 @@ public class AuthServerHandler extends SimpleChannelInboundHandler<HttpObject> {
     }
 
     private byte[] readFromResources(String path) throws IOException {
-        InputStream inputStream =
-                AuthServerHandler.class.getClassLoader().getResourceAsStream(path);
+        InputStream inputStream = AuthServerHandler.class.getClassLoader().getResourceAsStream(path);
         ByteArrayOutputStream out = new ByteArrayOutputStream();
         IOUtils.copyBytes(inputStream, out, true);
         return out.toByteArray();

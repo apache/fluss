@@ -49,8 +49,7 @@ public class ListOffsetsParam {
     private final Integer offsetType;
     private @Nullable final Long startTimestamp;
 
-    public ListOffsetsParam(
-            int followerServerId, Integer offsetType, @Nullable Long startTimestamp) {
+    public ListOffsetsParam(int followerServerId, Integer offsetType, @Nullable Long startTimestamp) {
         this.followerServerId = followerServerId;
         this.offsetType = offsetType;
         this.startTimestamp = startTimestamp;

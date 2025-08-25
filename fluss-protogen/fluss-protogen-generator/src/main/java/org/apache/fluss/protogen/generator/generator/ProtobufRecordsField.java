@@ -52,49 +52,34 @@ public class ProtobufRecordsField extends ProtobufField<Field.Bytes> {
 
     @Override
     public void copy(PrintWriter w) {
-        w.format(
-                "%s(_other.%s());\n",
-                ProtoGenUtil.camelCase("set", ccName), ProtoGenUtil.camelCase("get", ccName));
+        w.format("%s(_other.%s());\n", ProtoGenUtil.camelCase("set", ccName), ProtoGenUtil.camelCase("get", ccName));
     }
 
     @Override
     public void setter(PrintWriter w, String enclosingType) {
         // set byte[]
-        w.format(
-                "public %s %s(byte[] %s) {\n",
-                enclosingType, ProtoGenUtil.camelCase("set", ccName), ccName);
+        w.format("public %s %s(byte[] %s) {\n", enclosingType, ProtoGenUtil.camelCase("set", ccName), ccName);
         w.format(
                 "    %sBytesView(new %s(%s));\n",
-                ProtoGenUtil.camelCase("set", ccName),
-                ByteBufBytesView.class.getSimpleName(),
-                ccName);
+                ProtoGenUtil.camelCase("set", ccName), ByteBufBytesView.class.getSimpleName(), ccName);
         w.format("    return this;\n");
         w.format("}\n");
 
         // set ByteBuf
-        w.format(
-                "public %s %s(ByteBuf %s) {\n",
-                enclosingType, ProtoGenUtil.camelCase("set", ccName), ccName);
+        w.format("public %s %s(ByteBuf %s) {\n", enclosingType, ProtoGenUtil.camelCase("set", ccName), ccName);
         w.format(
                 "    %sBytesView(new %s(%s));\n",
-                ProtoGenUtil.camelCase("set", ccName),
-                ByteBufBytesView.class.getSimpleName(),
-                ccName);
+                ProtoGenUtil.camelCase("set", ccName), ByteBufBytesView.class.getSimpleName(), ccName);
         w.format("    return this;\n");
         w.format("}\n");
 
         // set MemorySegment
         w.format(
                 "public %s %s(%s %s, int position, int size) {\n",
-                enclosingType,
-                ProtoGenUtil.camelCase("set", ccName),
-                MemorySegment.class.getName(),
-                ccName);
+                enclosingType, ProtoGenUtil.camelCase("set", ccName), MemorySegment.class.getName(), ccName);
         w.format(
                 "    %sBytesView(new %s(%s, position, size));\n",
-                ProtoGenUtil.camelCase("set", ccName),
-                MemorySegmentBytesView.class.getSimpleName(),
-                ccName);
+                ProtoGenUtil.camelCase("set", ccName), MemorySegmentBytesView.class.getSimpleName(), ccName);
         w.format("    return this;\n");
         w.format("}\n");
 
@@ -104,9 +89,7 @@ public class ProtobufRecordsField extends ProtobufField<Field.Bytes> {
                 enclosingType, ProtoGenUtil.camelCase("set", ccName), ccName);
         w.format(
                 "    %sBytesView(new %s(%s, position, size));\n",
-                ProtoGenUtil.camelCase("set", ccName),
-                FileRegionBytesView.class.getSimpleName(),
-                ccName);
+                ProtoGenUtil.camelCase("set", ccName), FileRegionBytesView.class.getSimpleName(), ccName);
         w.format("    return this;\n");
         w.format("}\n");
 
@@ -128,9 +111,7 @@ public class ProtobufRecordsField extends ProtobufField<Field.Bytes> {
         // get size
         w.format("public int %s() {\n", ProtoGenUtil.camelCase("get", ccName, "size"));
         w.format("    if (!%s()) {\n", ProtoGenUtil.camelCase("has", ccName));
-        w.format(
-                "        throw new IllegalStateException(\"Field '%s' is not set\");\n",
-                field.getName());
+        w.format("        throw new IllegalStateException(\"Field '%s' is not set\");\n", field.getName());
         w.format("    }\n");
         w.format("    return _%sLen;\n", ccName);
         w.format("}\n");
@@ -146,9 +127,7 @@ public class ProtobufRecordsField extends ProtobufField<Field.Bytes> {
         // get ByteBuf
         w.format("public ByteBuf %s() {\n", ProtoGenUtil.camelCase("get", ccName, "slice"));
         w.format("    if (!%s()) {\n", ProtoGenUtil.camelCase("has", ccName));
-        w.format(
-                "        throw new IllegalStateException(\"Field '%s' is not set\");\n",
-                field.getName());
+        w.format("        throw new IllegalStateException(\"Field '%s' is not set\");\n", field.getName());
         w.format("    }\n");
         w.format("    if (%s == null) {\n", ccName);
         w.format("        return _parsedBuffer.slice(_%sIdx, _%sLen);\n", ccName, ccName);

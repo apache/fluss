@@ -29,8 +29,7 @@ public class PaimonCommittableSerializer implements SimpleVersionedSerializer<Pa
 
     private static final int CURRENT_VERSION = 1;
 
-    private final ManifestCommittableSerializer manifestCommittableSerializer =
-            new ManifestCommittableSerializer();
+    private final ManifestCommittableSerializer manifestCommittableSerializer = new ManifestCommittableSerializer();
 
     @Override
     public int getVersion() {
@@ -47,15 +46,10 @@ public class PaimonCommittableSerializer implements SimpleVersionedSerializer<Pa
     public PaimonCommittable deserialize(int version, byte[] serialized) throws IOException {
         if (version != CURRENT_VERSION) {
             throw new UnsupportedOperationException(
-                    "Expecting PaimonCommittable version to be "
-                            + CURRENT_VERSION
-                            + ", but found "
-                            + version
-                            + ".");
+                    "Expecting PaimonCommittable version to be " + CURRENT_VERSION + ", but found " + version + ".");
         }
         ManifestCommittable manifestCommittable =
-                manifestCommittableSerializer.deserialize(
-                        manifestCommittableSerializer.getVersion(), serialized);
+                manifestCommittableSerializer.deserialize(manifestCommittableSerializer.getVersion(), serialized);
         return new PaimonCommittable(manifestCommittable);
     }
 }

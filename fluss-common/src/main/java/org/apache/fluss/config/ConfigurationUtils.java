@@ -86,10 +86,9 @@ public class ConfigurationUtils {
         if (rawValue instanceof List) {
             return (T) rawValue;
         } else {
-            return (T)
-                    StructuredOptionsSplitter.splitEscaped(rawValue.toString(), ',').stream()
-                            .map(s -> convertValue(s, atomicClass))
-                            .collect(Collectors.toList());
+            return (T) StructuredOptionsSplitter.splitEscaped(rawValue.toString(), ',').stream()
+                    .map(s -> convertValue(s, atomicClass))
+                    .collect(Collectors.toList());
         }
     }
 
@@ -98,17 +97,14 @@ public class ConfigurationUtils {
         if (o instanceof Map) {
             return (Map<String, String>) o;
         } else {
-            List<String> listOfRawProperties =
-                    StructuredOptionsSplitter.splitEscaped(o.toString(), ',');
+            List<String> listOfRawProperties = StructuredOptionsSplitter.splitEscaped(o.toString(), ',');
             return listOfRawProperties.stream()
                     .map(s -> StructuredOptionsSplitter.splitEscaped(s, ':'))
-                    .peek(
-                            pair -> {
-                                if (pair.size() != 2) {
-                                    throw new IllegalArgumentException(
-                                            "Map item is not a key-value pair (missing ':'?)");
-                                }
-                            })
+                    .peek(pair -> {
+                        if (pair.size() != 2) {
+                            throw new IllegalArgumentException("Map item is not a key-value pair (missing ':'?)");
+                        }
+                    })
                     .collect(Collectors.toMap(a -> a.get(0), a -> a.get(1)));
         }
     }
@@ -120,18 +116,13 @@ public class ConfigurationUtils {
         }
 
         return Arrays.stream(clazz.getEnumConstants())
-                .filter(
-                        e ->
-                                e.toString()
-                                        .toUpperCase(Locale.ROOT)
-                                        .equals(o.toString().toUpperCase(Locale.ROOT)))
+                .filter(e -> e.toString()
+                        .toUpperCase(Locale.ROOT)
+                        .equals(o.toString().toUpperCase(Locale.ROOT)))
                 .findAny()
-                .orElseThrow(
-                        () ->
-                                new IllegalArgumentException(
-                                        String.format(
-                                                "Could not parse value for enum %s. Expected one of: [%s]",
-                                                clazz, Arrays.toString(clazz.getEnumConstants()))));
+                .orElseThrow(() -> new IllegalArgumentException(String.format(
+                        "Could not parse value for enum %s. Expected one of: [%s]",
+                        clazz, Arrays.toString(clazz.getEnumConstants()))));
     }
 
     static Duration convertToDuration(Object o) {
@@ -164,16 +155,14 @@ public class ConfigurationUtils {
         } else if (o instanceof Map) {
             return ((Map<?, ?>) o)
                     .entrySet().stream()
-                            .map(
-                                    e -> {
-                                        String escapedKey =
-                                                escapeWithSingleQuote(e.getKey().toString(), ":");
-                                        String escapedValue =
-                                                escapeWithSingleQuote(e.getValue().toString(), ":");
+                            .map(e -> {
+                                String escapedKey =
+                                        escapeWithSingleQuote(e.getKey().toString(), ":");
+                                String escapedValue =
+                                        escapeWithSingleQuote(e.getValue().toString(), ":");
 
-                                        return escapeWithSingleQuote(
-                                                escapedKey + ":" + escapedValue, ",");
-                                    })
+                                return escapeWithSingleQuote(escapedKey + ":" + escapedValue, ",");
+                            })
                             .collect(Collectors.joining(","));
         }
 
@@ -189,9 +178,7 @@ public class ConfigurationUtils {
                 return (int) value;
             } else {
                 throw new IllegalArgumentException(
-                        String.format(
-                                "Configuration value %s overflows/underflows the integer type.",
-                                value));
+                        String.format("Configuration value %s overflows/underflows the integer type.", value));
             }
         }
 
@@ -219,10 +206,8 @@ public class ConfigurationUtils {
             case "FALSE":
                 return false;
             default:
-                throw new IllegalArgumentException(
-                        String.format(
-                                "Unrecognized option for boolean: %s. Expected either true or false(case insensitive)",
-                                o));
+                throw new IllegalArgumentException(String.format(
+                        "Unrecognized option for boolean: %s. Expected either true or false(case insensitive)", o));
         }
     }
 
@@ -237,9 +222,7 @@ public class ConfigurationUtils {
                 return (float) value;
             } else {
                 throw new IllegalArgumentException(
-                        String.format(
-                                "Configuration value %s overflows/underflows the float type.",
-                                value));
+                        String.format("Configuration value %s overflows/underflows the float type.", value));
             }
         }
 

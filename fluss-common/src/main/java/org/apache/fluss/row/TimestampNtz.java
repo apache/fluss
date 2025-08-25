@@ -149,8 +149,7 @@ public class TimestampNtz implements Comparable<TimestampNtz>, Serializable {
             return false;
         }
         TimestampNtz that = (TimestampNtz) obj;
-        return this.millisecond == that.millisecond
-                && this.nanoOfMillisecond == that.nanoOfMillisecond;
+        return this.millisecond == that.millisecond && this.nanoOfMillisecond == that.nanoOfMillisecond;
     }
 
     @Override

@@ -79,17 +79,14 @@ public class PlainSaslServer implements SaslServer {
         }
 
         NameCallback nameCallback = new NameCallback("username", username);
-        PlainAuthenticateCallback authenticateCallback =
-                new PlainAuthenticateCallback(password.toCharArray());
+        PlainAuthenticateCallback authenticateCallback = new PlainAuthenticateCallback(password.toCharArray());
         try {
             callbackHandler.handle(new Callback[] {nameCallback, authenticateCallback});
         } catch (Throwable e) {
-            throw new AuthenticationException(
-                    "Authentication failed: credentials for user could not be verified", e);
+            throw new AuthenticationException("Authentication failed: credentials for user could not be verified", e);
         }
         if (!authenticateCallback.authenticated()) {
-            throw new AuthenticationException(
-                    "Authentication failed: Invalid username or password");
+            throw new AuthenticationException("Authentication failed: Invalid username or password");
         }
         if (!authorizationIdFromClient.isEmpty() && !authorizationIdFromClient.equals(username)) {
             throw new AuthenticationException(
@@ -116,8 +113,7 @@ public class PlainSaslServer implements SaslServer {
         }
 
         if (tokens.size() != 3) {
-            throw new AuthenticationException(
-                    "Invalid SASL/PLAIN response: expected 3 tokens, got " + tokens.size());
+            throw new AuthenticationException("Invalid SASL/PLAIN response: expected 3 tokens, got " + tokens.size());
         }
 
         return tokens;
@@ -173,18 +169,12 @@ public class PlainSaslServer implements SaslServer {
 
         @Override
         public SaslServer createSaslServer(
-                String mechanism,
-                String protocol,
-                String serverName,
-                Map<String, ?> props,
-                CallbackHandler cbh)
+                String mechanism, String protocol, String serverName, Map<String, ?> props, CallbackHandler cbh)
                 throws SaslException {
 
             if (!PLAIN_MECHANISM.equals(mechanism)) {
                 throw new SaslException(
-                        String.format(
-                                "Mechanism '%s' is not supported. Only PLAIN is supported.",
-                                mechanism));
+                        String.format("Mechanism '%s' is not supported. Only PLAIN is supported.", mechanism));
             }
 
             return new PlainSaslServer(cbh);

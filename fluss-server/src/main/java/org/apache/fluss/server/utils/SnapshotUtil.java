@@ -39,8 +39,7 @@ public class SnapshotUtil {
      * @throws Exception exception that is a collection of all suppressed exceptions that were
      *     caught during iteration
      */
-    public static void bestEffortDiscardAllKvFiles(
-            Iterable<? extends KvFileHandle> handlesToDiscard) throws Exception {
+    public static void bestEffortDiscardAllKvFiles(Iterable<? extends KvFileHandle> handlesToDiscard) throws Exception {
         applyToAllWhileSuppressingExceptions(handlesToDiscard, KvFileHandle::discard);
     }
 
@@ -68,8 +67,7 @@ public class SnapshotUtil {
      *     the input elements.
      */
     public static <T> void applyToAllWhileSuppressingExceptions(
-            Iterable<T> inputs, ThrowingConsumer<T, ? extends Exception> throwingConsumer)
-            throws Exception {
+            Iterable<T> inputs, ThrowingConsumer<T, ? extends Exception> throwingConsumer) throws Exception {
 
         if (inputs != null && throwingConsumer != null) {
             Exception exception = null;

@@ -46,8 +46,7 @@ public class LanceArrowWriter extends ArrowReader {
     private final Semaphore writeToken;
     private final Semaphore loadToken;
 
-    public LanceArrowWriter(
-            BufferAllocator allocator, Schema schema, int batchSize, RowType rowType) {
+    public LanceArrowWriter(BufferAllocator allocator, Schema schema, int batchSize, RowType rowType) {
         super(allocator);
         checkNotNull(schema);
         checkArgument(batchSize > 0);

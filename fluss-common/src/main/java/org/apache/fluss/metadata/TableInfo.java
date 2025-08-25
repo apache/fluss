@@ -312,14 +312,10 @@ public final class TableInfo {
             long createdTime,
             long modifiedTime) {
         Schema schema = tableDescriptor.getSchema();
-        int numBuckets =
-                tableDescriptor
-                        .getTableDistribution()
-                        .flatMap(TableDescriptor.TableDistribution::getBucketCount)
-                        .orElseThrow(
-                                () ->
-                                        new IllegalArgumentException(
-                                                "Bucket count is required for creating table info."));
+        int numBuckets = tableDescriptor
+                .getTableDistribution()
+                .flatMap(TableDescriptor.TableDistribution::getBucketCount)
+                .orElseThrow(() -> new IllegalArgumentException("Bucket count is required for creating table info."));
         return new TableInfo(
                 tablePath,
                 tableId,
@@ -409,10 +405,7 @@ public final class TableInfo {
 
     // --------------------------------------------------------------------------------------------
 
-    private static List<String> generatePhysicalPrimaryKey(
-            List<String> primaryKeys, List<String> partitionKeys) {
-        return primaryKeys.stream()
-                .filter(pk -> !partitionKeys.contains(pk))
-                .collect(Collectors.toList());
+    private static List<String> generatePhysicalPrimaryKey(List<String> primaryKeys, List<String> partitionKeys) {
+        return primaryKeys.stream().filter(pk -> !partitionKeys.contains(pk)).collect(Collectors.toList());
     }
 }

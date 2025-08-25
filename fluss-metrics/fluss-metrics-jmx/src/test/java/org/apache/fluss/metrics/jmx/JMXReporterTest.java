@@ -58,11 +58,10 @@ class JMXReporterTest {
         variables.put("key1", "value1");
         variables.put("key2", "");
 
-        metricGroup =
-                TestMetricGroup.newBuilder()
-                        .setLogicalScopeFunction((characterFilter, character) -> "tabletServer")
-                        .setVariables(variables)
-                        .build();
+        metricGroup = TestMetricGroup.newBuilder()
+                .setLogicalScopeFunction((characterFilter, character) -> "tabletServer")
+                .setVariables(variables)
+                .build();
     }
 
     @AfterEach
@@ -124,14 +123,10 @@ class JMXReporterTest {
 
         MBeanServer mBeanServer = ManagementFactory.getPlatformMBeanServer();
 
-        ObjectName objectName1 =
-                new ObjectName(
-                        JMX_DOMAIN_PREFIX + "tabletServer.rep1",
-                        JMXReporter.generateJmxTable(metricGroup.getAllVariables()));
-        ObjectName objectName2 =
-                new ObjectName(
-                        JMX_DOMAIN_PREFIX + "tabletServer.rep2",
-                        JMXReporter.generateJmxTable(metricGroup.getAllVariables()));
+        ObjectName objectName1 = new ObjectName(
+                JMX_DOMAIN_PREFIX + "tabletServer.rep1", JMXReporter.generateJmxTable(metricGroup.getAllVariables()));
+        ObjectName objectName2 = new ObjectName(
+                JMX_DOMAIN_PREFIX + "tabletServer.rep2", JMXReporter.generateJmxTable(metricGroup.getAllVariables()));
 
         assertThat(mBeanServer.getAttribute(objectName1, "Value")).isEqualTo(1);
         assertThat(mBeanServer.getAttribute(objectName2, "Value")).isEqualTo(2);
@@ -152,22 +147,16 @@ class JMXReporterTest {
         rep1.notifyOfAddedMetric(g1, "rep1", metricGroup);
         rep2.notifyOfAddedMetric(g2, "rep2", metricGroup);
 
-        ObjectName objectName1 =
-                new ObjectName(
-                        JMX_DOMAIN_PREFIX + "tabletServer.rep1",
-                        JMXReporter.generateJmxTable(metricGroup.getAllVariables()));
-        ObjectName objectName2 =
-                new ObjectName(
-                        JMX_DOMAIN_PREFIX + "tabletServer.rep2",
-                        JMXReporter.generateJmxTable(metricGroup.getAllVariables()));
+        ObjectName objectName1 = new ObjectName(
+                JMX_DOMAIN_PREFIX + "tabletServer.rep1", JMXReporter.generateJmxTable(metricGroup.getAllVariables()));
+        ObjectName objectName2 = new ObjectName(
+                JMX_DOMAIN_PREFIX + "tabletServer.rep2", JMXReporter.generateJmxTable(metricGroup.getAllVariables()));
 
-        JMXServiceURL url1 =
-                new JMXServiceURL(
-                        "service:jmx:rmi://localhost:"
-                                + rep1.getPort().get()
-                                + "/jndi/rmi://localhost:"
-                                + rep1.getPort().get()
-                                + "/jmxrmi");
+        JMXServiceURL url1 = new JMXServiceURL("service:jmx:rmi://localhost:"
+                + rep1.getPort().get()
+                + "/jndi/rmi://localhost:"
+                + rep1.getPort().get()
+                + "/jmxrmi");
         JMXConnector jmxCon1 = JMXConnectorFactory.connect(url1);
         MBeanServerConnection mCon1 = jmxCon1.getMBeanServerConnection();
 
@@ -176,13 +165,11 @@ class JMXReporterTest {
 
         jmxCon1.close();
 
-        JMXServiceURL url2 =
-                new JMXServiceURL(
-                        "service:jmx:rmi://localhost:"
-                                + rep2.getPort().get()
-                                + "/jndi/rmi://localhost:"
-                                + rep2.getPort().get()
-                                + "/jmxrmi");
+        JMXServiceURL url2 = new JMXServiceURL("service:jmx:rmi://localhost:"
+                + rep2.getPort().get()
+                + "/jndi/rmi://localhost:"
+                + rep2.getPort().get()
+                + "/jmxrmi");
         JMXConnector jmxCon2 = JMXConnectorFactory.connect(url2);
         MBeanServerConnection mCon2 = jmxCon2.getMBeanServerConnection();
 
@@ -214,10 +201,9 @@ class JMXReporterTest {
 
         MBeanServer mBeanServer = ManagementFactory.getPlatformMBeanServer();
 
-        ObjectName objectName =
-                new ObjectName(
-                        JMX_DOMAIN_PREFIX + "tabletServer." + histogramName,
-                        JMXReporter.generateJmxTable(metricGroup.getAllVariables()));
+        ObjectName objectName = new ObjectName(
+                JMX_DOMAIN_PREFIX + "tabletServer." + histogramName,
+                JMXReporter.generateJmxTable(metricGroup.getAllVariables()));
 
         MBeanInfo info = mBeanServer.getMBeanInfo(objectName);
 
@@ -228,22 +214,15 @@ class JMXReporterTest {
         assertThat(mBeanServer.getAttribute(objectName, "Count")).isEqualTo(histogram.getCount());
         HistogramStatistics statistics = histogram.getStatistics();
         assertThat(mBeanServer.getAttribute(objectName, "Mean")).isEqualTo(statistics.getMean());
-        assertThat(mBeanServer.getAttribute(objectName, "StdDev"))
-                .isEqualTo(statistics.getStdDev());
+        assertThat(mBeanServer.getAttribute(objectName, "StdDev")).isEqualTo(statistics.getStdDev());
         assertThat(mBeanServer.getAttribute(objectName, "Max")).isEqualTo(statistics.getMax());
         assertThat(mBeanServer.getAttribute(objectName, "Min")).isEqualTo(statistics.getMin());
-        assertThat(mBeanServer.getAttribute(objectName, "Median"))
-                .isEqualTo(statistics.getQuantile(0.5));
-        assertThat(mBeanServer.getAttribute(objectName, "75thPercentile"))
-                .isEqualTo(statistics.getQuantile(0.75));
-        assertThat(mBeanServer.getAttribute(objectName, "95thPercentile"))
-                .isEqualTo(statistics.getQuantile(0.95));
-        assertThat(mBeanServer.getAttribute(objectName, "98thPercentile"))
-                .isEqualTo(statistics.getQuantile(0.98));
-        assertThat(mBeanServer.getAttribute(objectName, "99thPercentile"))
-                .isEqualTo(statistics.getQuantile(0.99));
-        assertThat(mBeanServer.getAttribute(objectName, "999thPercentile"))
-                .isEqualTo(statistics.getQuantile(0.999));
+        assertThat(mBeanServer.getAttribute(objectName, "Median")).isEqualTo(statistics.getQuantile(0.5));
+        assertThat(mBeanServer.getAttribute(objectName, "75thPercentile")).isEqualTo(statistics.getQuantile(0.75));
+        assertThat(mBeanServer.getAttribute(objectName, "95thPercentile")).isEqualTo(statistics.getQuantile(0.95));
+        assertThat(mBeanServer.getAttribute(objectName, "98thPercentile")).isEqualTo(statistics.getQuantile(0.98));
+        assertThat(mBeanServer.getAttribute(objectName, "99thPercentile")).isEqualTo(statistics.getQuantile(0.99));
+        assertThat(mBeanServer.getAttribute(objectName, "999thPercentile")).isEqualTo(statistics.getQuantile(0.999));
     }
 
     /** Tests that meters are properly reported via the JMXReporter. */
@@ -258,10 +237,9 @@ class JMXReporterTest {
 
         MBeanServer mBeanServer = ManagementFactory.getPlatformMBeanServer();
 
-        ObjectName objectName =
-                new ObjectName(
-                        JMX_DOMAIN_PREFIX + "tabletServer." + meterName,
-                        JMXReporter.generateJmxTable(metricGroup.getAllVariables()));
+        ObjectName objectName = new ObjectName(
+                JMX_DOMAIN_PREFIX + "tabletServer." + meterName,
+                JMXReporter.generateJmxTable(metricGroup.getAllVariables()));
 
         MBeanInfo info = mBeanServer.getMBeanInfo(objectName);
 

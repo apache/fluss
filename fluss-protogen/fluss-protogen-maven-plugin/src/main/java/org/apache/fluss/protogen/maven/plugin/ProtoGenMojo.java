@@ -61,19 +61,12 @@ public class ProtoGenMojo extends AbstractMojo {
     @Parameter(defaultValue = "generated-test-sources/protobuf/java", required = false)
     private String targetTestSourcesSubDir;
 
-    private void generate(List<File> protoFiles, File outputDirectory)
-            throws MojoExecutionException {
+    private void generate(List<File> protoFiles, File outputDirectory) throws MojoExecutionException {
         try {
             ProtoCodeGenerator.generate(protoFiles, outputDirectory, classPrefix, singleOuterClass);
         } catch (Exception e) {
-            getLog().error(
-                            "Failed to generate protogen code for "
-                                    + protoFiles
-                                    + ": "
-                                    + e.getMessage(),
-                            e);
-            throw new MojoExecutionException(
-                    "Failed to generate protogen code for " + protoFiles, e);
+            getLog().error("Failed to generate protogen code for " + protoFiles + ": " + e.getMessage(), e);
+            throw new MojoExecutionException("Failed to generate protogen code for " + protoFiles, e);
         }
     }
 
@@ -83,8 +76,7 @@ public class ProtoGenMojo extends AbstractMojo {
 
         if (sources == null || sources.isEmpty()) {
             File[] mainFilesArray =
-                    new File(baseDir, "src/main/proto")
-                            .listFiles((dir, name) -> name.endsWith(".proto"));
+                    new File(baseDir, "src/main/proto").listFiles((dir, name) -> name.endsWith(".proto"));
             if (mainFilesArray != null && mainFilesArray.length > 0) {
                 List<File> mainFiles = Arrays.asList(mainFilesArray);
                 File generatedSourcesDir = new File(targetDir, targetSourcesSubDir);
@@ -94,8 +86,7 @@ public class ProtoGenMojo extends AbstractMojo {
             }
 
             File[] testFilesArray =
-                    new File(baseDir, "src/test/proto")
-                            .listFiles((dir, name) -> name.endsWith(".proto"));
+                    new File(baseDir, "src/test/proto").listFiles((dir, name) -> name.endsWith(".proto"));
             if (testFilesArray != null && testFilesArray.length > 0) {
                 List<File> testFiles = Arrays.asList(testFilesArray);
                 File generatedTestSourcesDir = new File(targetDir, targetTestSourcesSubDir);

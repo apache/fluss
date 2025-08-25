@@ -27,8 +27,7 @@ import java.io.IOException;
 
 /** Json serializer and deserializer for {@link BucketSnapshot}. */
 @Internal
-public class BucketSnapshotJsonSerde
-        implements JsonSerializer<BucketSnapshot>, JsonDeserializer<BucketSnapshot> {
+public class BucketSnapshotJsonSerde implements JsonSerializer<BucketSnapshot>, JsonDeserializer<BucketSnapshot> {
 
     public static final BucketSnapshotJsonSerde INSTANCE = new BucketSnapshotJsonSerde();
 
@@ -48,8 +47,7 @@ public class BucketSnapshotJsonSerde
     }
 
     @Override
-    public void serialize(BucketSnapshot bucketSnapshot, JsonGenerator generator)
-            throws IOException {
+    public void serialize(BucketSnapshot bucketSnapshot, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
 
         // serialize data version.

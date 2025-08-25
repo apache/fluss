@@ -62,7 +62,8 @@ public final class FetchParams {
     // whether column projection is enabled
     private boolean projectionEnabled = false;
     // the lazily initialized projection util to read and project file logs
-    @Nullable private FileLogProjection fileLogProjection;
+    @Nullable
+    private FileLogProjection fileLogProjection;
 
     private final int minFetchBytes;
     private final long maxWaitMs;
@@ -77,12 +78,7 @@ public final class FetchParams {
     }
 
     @VisibleForTesting
-    public FetchParams(
-            int replicaId,
-            boolean fetchOnlyLeader,
-            int maxFetchBytes,
-            int minFetchBytes,
-            long maxWaitMs) {
+    public FetchParams(int replicaId, boolean fetchOnlyLeader, int maxFetchBytes, int minFetchBytes, long maxWaitMs) {
         this.replicaId = replicaId;
         this.fetchOnlyLeader = fetchOnlyLeader;
         this.maxFetchBytes = maxFetchBytes;
@@ -107,8 +103,7 @@ public final class FetchParams {
             if (fileLogProjection == null) {
                 fileLogProjection = new FileLogProjection();
             }
-            fileLogProjection.setCurrentProjection(
-                    tableId, schema, compressionInfo, projectedFields);
+            fileLogProjection.setCurrentProjection(tableId, schema, compressionInfo, projectedFields);
         } else {
             projectionEnabled = false;
         }

@@ -29,8 +29,7 @@ public class BucketOffsetJsonSerdeTest extends JsonSerdeTestBase<BucketOffset> {
     @Override
     protected BucketOffset[] createObjects() {
         return new BucketOffset[] {
-            new BucketOffset(10, 1, 1L, "country=eu-central/year=2023/month=12"),
-            new BucketOffset(20, 2, null, null)
+            new BucketOffset(10, 1, 1L, "country=eu-central/year=2023/month=12"), new BucketOffset(20, 2, null, null)
         };
     }
 

@@ -39,8 +39,7 @@ public class AppendOnlyTaskWriter extends RecordWriter {
             OutputFileFactory outputFileFactory,
             long targetFileSize) {
         super(
-                createTaskWriter(
-                        icebergTable, writerInitContext, format, outputFileFactory, targetFileSize),
+                createTaskWriter(icebergTable, writerInitContext, format, outputFileFactory, targetFileSize),
                 icebergTable.schema(),
                 writerInitContext.schema().getRowType(),
                 writerInitContext.tableBucket());

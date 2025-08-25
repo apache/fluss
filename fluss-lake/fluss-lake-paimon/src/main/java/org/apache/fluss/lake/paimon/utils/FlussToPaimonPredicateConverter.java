@@ -54,8 +54,7 @@ public class FlussToPaimonPredicateConverter implements PredicateVisitor<Predica
         this.paimonRowType = rowType;
     }
 
-    public static Optional<Predicate> convert(
-            RowType rowType, org.apache.fluss.predicate.Predicate flussPredicate) {
+    public static Optional<Predicate> convert(RowType rowType, org.apache.fluss.predicate.Predicate flussPredicate) {
         try {
             return Optional.of(flussPredicate.visit(new FlussToPaimonPredicateConverter(rowType)));
         } catch (UnsupportedOperationException e) {
@@ -103,56 +102,47 @@ public class FlussToPaimonPredicateConverter implements PredicateVisitor<Predica
 
         @Override
         public Predicate visitStartsWith(FieldRef fieldRef, Object literal) {
-            return builder.startsWith(
-                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
+            return builder.startsWith(fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitEndsWith(FieldRef fieldRef, Object literal) {
-            return builder.endsWith(
-                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
+            return builder.endsWith(fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitContains(FieldRef fieldRef, Object literal) {
-            return builder.contains(
-                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
+            return builder.contains(fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitLessThan(FieldRef fieldRef, Object literal) {
-            return builder.lessThan(
-                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
+            return builder.lessThan(fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitGreaterOrEqual(FieldRef fieldRef, Object literal) {
-            return builder.greaterOrEqual(
-                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
+            return builder.greaterOrEqual(fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitNotEqual(FieldRef fieldRef, Object literal) {
-            return builder.notEqual(
-                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
+            return builder.notEqual(fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitLessOrEqual(FieldRef fieldRef, Object literal) {
-            return builder.lessOrEqual(
-                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
+            return builder.lessOrEqual(fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitEqual(FieldRef fieldRef, Object literal) {
-            return builder.equal(
-                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
+            return builder.equal(fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override
         public Predicate visitGreaterThan(FieldRef fieldRef, Object literal) {
-            return builder.greaterThan(
-                    fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
+            return builder.greaterThan(fieldRef.index(), convertToPaimonLiteral(fieldRef.index(), literal));
         }
 
         @Override

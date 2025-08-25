@@ -63,11 +63,10 @@ class KvSnapshotITCase {
     private static final int BUCKET_NUM = 2;
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(initConfig())
+            .build();
 
     private ZooKeeperCompletedSnapshotHandleStore completedSnapshotHandleStore;
     private CoordinatorService coordinatorService;
@@ -76,10 +75,8 @@ class KvSnapshotITCase {
     @BeforeEach
     void beforeEach() {
         completedSnapshotHandleStore =
-                new ZooKeeperCompletedSnapshotHandleStore(
-                        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient());
-        this.coordinatorService =
-                FLUSS_CLUSTER_EXTENSION.getCoordinatorServer().getCoordinatorService();
+                new ZooKeeperCompletedSnapshotHandleStore(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient());
+        this.coordinatorService = FLUSS_CLUSTER_EXTENSION.getCoordinatorServer().getCoordinatorService();
         remoteDataDir = FLUSS_CLUSTER_EXTENSION.getRemoteDataDir();
     }
 
@@ -92,8 +89,7 @@ class KvSnapshotITCase {
         for (int i = 0; i < tableNum; i++) {
             TablePath tablePath = TablePath.of("test_db", "test_table_" + i);
             long tableId =
-                    RpcMessageTestUtils.createTable(
-                            FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
+                    RpcMessageTestUtils.createTable(FLUSS_CLUSTER_EXTENSION, tablePath, DATA1_TABLE_DESCRIPTOR_PK);
             tablePathMap.put(tableId, tablePath);
             for (int bucket = 0; bucket < BUCKET_NUM; bucket++) {
                 tableBuckets.add(new TableBucket(tableId, bucket));
@@ -111,60 +107,47 @@ class KvSnapshotITCase {
 
             // put one kv batch
             KvRecordBatch kvRecordBatch =
-                    genKvRecordBatch(
-                            Tuple2.of("k1", new Object[] {1, "k1"}),
-                            Tuple2.of("k2", new Object[] {2, "k2"}));
+                    genKvRecordBatch(Tuple2.of("k1", new Object[] {1, "k1"}), Tuple2.of("k2", new Object[] {2, "k2"}));
 
-            PutKvRequest putKvRequest =
-                    RpcMessageTestUtils.newPutKvRequest(tableId, bucket, 1, kvRecordBatch);
+            PutKvRequest putKvRequest = RpcMessageTestUtils.newPutKvRequest(tableId, bucket, 1, kvRecordBatch);
 
-            TabletServerGateway leaderGateway =
-                    FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
+            TabletServerGateway leaderGateway = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
             leaderGateway.putKv(putKvRequest).get();
 
             // wait for snapshot is available
             final long snapshot1Id = 0;
-            CompletedSnapshot completedSnapshot =
-                    waitValue(
-                                    () -> completedSnapshotHandleStore.get(tb, snapshot1Id),
-                                    Duration.ofMinutes(2),
-                                    "Fail to wait for the snapshot 0 for bucket " + tb)
-                            .retrieveCompleteSnapshot();
+            CompletedSnapshot completedSnapshot = waitValue(
+                            () -> completedSnapshotHandleStore.get(tb, snapshot1Id),
+                            Duration.ofMinutes(2),
+                            "Fail to wait for the snapshot 0 for bucket " + tb)
+                    .retrieveCompleteSnapshot();
 
             // check snapshot
-            List<Tuple2<byte[], byte[]>> expectedKeyValues =
-                    getKeyValuePairs(
-                            genKvRecords(
-                                    Tuple2.of("k1", new Object[] {1, "k1"}),
-                                    Tuple2.of("k2", new Object[] {2, "k2"})));
+            List<Tuple2<byte[], byte[]>> expectedKeyValues = getKeyValuePairs(
+                    genKvRecords(Tuple2.of("k1", new Object[] {1, "k1"}), Tuple2.of("k2", new Object[] {2, "k2"})));
             KvTestUtils.checkSnapshot(completedSnapshot, expectedKeyValues, 2);
             bucketKvSnapshotDirs.add(
                     new File(completedSnapshot.getSnapshotLocation().getParent().getPath()));
 
             // put kv batch again
-            kvRecordBatch =
-                    genKvRecordBatch(
-                            Tuple2.of("k1", new Object[] {1, "k11"}),
-                            Tuple2.of("k2", null),
-                            Tuple2.of("k3", new Object[] {3, "k3"}));
+            kvRecordBatch = genKvRecordBatch(
+                    Tuple2.of("k1", new Object[] {1, "k11"}),
+                    Tuple2.of("k2", null),
+                    Tuple2.of("k3", new Object[] {3, "k3"}));
             putKvRequest = RpcMessageTestUtils.newPutKvRequest(tableId, bucket, 1, kvRecordBatch);
             leaderGateway.putKv(putKvRequest).get();
 
             // wait for next snapshot is available
             final long snapshot2Id = 1;
-            completedSnapshot =
-                    waitValue(
-                                    () -> completedSnapshotHandleStore.get(tb, snapshot2Id),
-                                    Duration.ofMinutes(2),
-                                    "Fail to wait for the snapshot 0 for bucket " + tb)
-                            .retrieveCompleteSnapshot();
+            completedSnapshot = waitValue(
+                            () -> completedSnapshotHandleStore.get(tb, snapshot2Id),
+                            Duration.ofMinutes(2),
+                            "Fail to wait for the snapshot 0 for bucket " + tb)
+                    .retrieveCompleteSnapshot();
 
             // check snapshot
-            expectedKeyValues =
-                    getKeyValuePairs(
-                            genKvRecords(
-                                    Tuple2.of("k1", new Object[] {1, "k11"}),
-                                    Tuple2.of("k3", new Object[] {3, "k3"})));
+            expectedKeyValues = getKeyValuePairs(
+                    genKvRecords(Tuple2.of("k1", new Object[] {1, "k11"}), Tuple2.of("k3", new Object[] {3, "k3"})));
             KvTestUtils.checkSnapshot(completedSnapshot, expectedKeyValues, 6);
 
             // check min retain offset
@@ -172,18 +155,15 @@ class KvSnapshotITCase {
                 Replica replica = server.getReplicaManager().getReplicaOrException(tb);
                 // all replica min retain offset should equal to snapshot offset.
                 // use retry here because the follower min retain offset is updated asynchronously
-                retry(
-                        Duration.ofMinutes(1),
-                        () ->
-                                assertThat(replica.getLogTablet().getMinRetainOffset())
-                                        .as("Replica %s min retain offset", replica)
-                                        .isEqualTo(6));
+                retry(Duration.ofMinutes(1), () -> assertThat(
+                                replica.getLogTablet().getMinRetainOffset())
+                        .as("Replica %s min retain offset", replica)
+                        .isEqualTo(6));
             }
         }
         for (TablePath tablePath : tablePathMap.values()) {
             coordinatorService.dropTable(
-                    newDropTableRequest(
-                            tablePath.getDatabaseName(), tablePath.getTableName(), false));
+                    newDropTableRequest(tablePath.getDatabaseName(), tablePath.getTableName(), false));
         }
         checkDirsDeleted(bucketKvSnapshotDirs, tablePathMap);
     }
@@ -193,14 +173,10 @@ class KvSnapshotITCase {
             retry(Duration.ofMinutes(1), () -> assertThat(bucketDir.exists()).isFalse());
         }
         for (Map.Entry<Long, TablePath> tablePathEntry : tablePathMap.entrySet()) {
-            FsPath fsPath =
-                    FlussPaths.remoteTableDir(
-                            FsPath.fromLocalFile(new File(remoteDataDir)),
-                            tablePathEntry.getValue(),
-                            tablePathEntry.getKey());
-            retry(
-                    Duration.ofMinutes(1),
-                    () -> assertThat(new File(fsPath.getPath()).exists()).isFalse());
+            FsPath fsPath = FlussPaths.remoteTableDir(
+                    FsPath.fromLocalFile(new File(remoteDataDir)), tablePathEntry.getValue(), tablePathEntry.getKey());
+            retry(Duration.ofMinutes(1), () -> assertThat(new File(fsPath.getPath()).exists())
+                    .isFalse());
         }
     }
 

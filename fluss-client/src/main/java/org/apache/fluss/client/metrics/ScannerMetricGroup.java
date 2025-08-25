@@ -73,9 +73,7 @@ public class ScannerMetricGroup extends AbstractMetricGroup {
         meter(MetricNames.SCANNER_REMOTE_FETCH_ERROR_RATE, new MeterView(remoteFetchErrorCount));
 
         bytesPerRequest =
-                histogram(
-                        MetricNames.SCANNER_BYTES_PER_REQUEST,
-                        new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                histogram(MetricNames.SCANNER_BYTES_PER_REQUEST, new DescriptiveStatisticsHistogram(WINDOW_SIZE));
 
         gauge(MetricNames.SCANNER_TIME_MS_BETWEEN_POLL, () -> timeMsBetweenPoll);
         gauge(MetricNames.SCANNER_LAST_POLL_SECONDS_AGO, this::lastPollSecondsAgo);

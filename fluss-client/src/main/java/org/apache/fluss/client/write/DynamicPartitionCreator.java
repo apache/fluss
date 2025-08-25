@@ -93,8 +93,7 @@ public class DynamicPartitionCreator {
                 } else {
                     // if the partition is already in inflightPartitionsToCreate, we should skip
                     // creating it.
-                    LOG.debug(
-                            "Partition {} is already being created, skipping.", physicalTablePath);
+                    LOG.debug("Partition {} is already being created, skipping.", physicalTablePath);
                 }
             }
         }
@@ -111,8 +110,7 @@ public class DynamicPartitionCreator {
             if (t instanceof PartitionNotExistException) {
                 if (!dynamicPartitionEnabled) {
                     throw new PartitionNotExistException(
-                            String.format(
-                                    "Table partition '%s' does not exist.", physicalTablePath));
+                            String.format("Table partition '%s' does not exist.", physicalTablePath));
                 }
             } else {
                 throw new FlussRuntimeException(e.getMessage(), e);
@@ -131,18 +129,17 @@ public class DynamicPartitionCreator {
                 ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
 
         admin.createPartition(tablePath, resolvedPartitionSpec.toPartitionSpec(), true)
-                .whenComplete(
-                        (ignore, throwable) -> {
-                            if (throwable != null) {
-                                // If encounter TooManyPartitionsException or
-                                // TooManyBucketsException, we should set
-                                // cachedCreatePartitionException to make the next createPartition
-                                // call failed.
-                                onPartitionCreationFailed(physicalTablePath, throwable);
-                            } else {
-                                onPartitionCreationSuccess(physicalTablePath);
-                            }
-                        });
+                .whenComplete((ignore, throwable) -> {
+                    if (throwable != null) {
+                        // If encounter TooManyPartitionsException or
+                        // TooManyBucketsException, we should set
+                        // cachedCreatePartitionException to make the next createPartition
+                        // call failed.
+                        onPartitionCreationFailed(physicalTablePath, throwable);
+                    } else {
+                        onPartitionCreationSuccess(physicalTablePath);
+                    }
+                });
     }
 
     private void onPartitionCreationSuccess(PhysicalTablePath physicalTablePath) {
@@ -152,12 +149,9 @@ public class DynamicPartitionCreator {
         LOG.info("Successfully created partition {}", physicalTablePath);
     }
 
-    private void onPartitionCreationFailed(
-            PhysicalTablePath physicalTablePath, Throwable throwable) {
+    private void onPartitionCreationFailed(PhysicalTablePath physicalTablePath, Throwable throwable) {
         inflightPartitionsToCreate.remove(physicalTablePath);
-        fatalErrorHandler.accept(
-                new FlussRuntimeException(
-                        "Failed to dynamically create partition " + physicalTablePath,
-                        stripCompletionException(throwable)));
+        fatalErrorHandler.accept(new FlussRuntimeException(
+                "Failed to dynamically create partition " + physicalTablePath, stripCompletionException(throwable)));
     }
 }

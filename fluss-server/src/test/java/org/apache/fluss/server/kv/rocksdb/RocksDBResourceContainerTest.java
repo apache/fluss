@@ -120,8 +120,7 @@ class RocksDBResourceContainerTest {
             longInstanceBasePath.append("/append-for-long-path");
         }
         try (RocksDBResourceContainer container =
-                new RocksDBResourceContainer(
-                        new Configuration(), new File(longInstanceBasePath.toString()))) {
+                new RocksDBResourceContainer(new Configuration(), new File(longInstanceBasePath.toString()))) {
             // the db log dir should be empty since we disable the log for the instance path is
             // too long
             assertThat(container.getDbOptions().dbLogDir()).isEmpty();
@@ -157,8 +156,7 @@ class RocksDBResourceContainerTest {
                         ConfigOptions.KvCompressionType.LZ4,
                         ConfigOptions.KvCompressionType.ZSTD));
 
-        try (RocksDBResourceContainer optionsContainer =
-                new RocksDBResourceContainer(configuration, null, true)) {
+        try (RocksDBResourceContainer optionsContainer = new RocksDBResourceContainer(configuration, null, true)) {
 
             DBOptions dbOptions = optionsContainer.getDbOptions();
             assertThat(dbOptions.maxOpenFiles()).isEqualTo(-1);
@@ -177,14 +175,12 @@ class RocksDBResourceContainerTest {
             assertThat(columnOptions.minWriteBufferNumberToMerge()).isEqualTo(2);
             assertThat(columnOptions.writeBufferSize()).isEqualTo(64 * SizeUnit.MB);
             assertThat(columnOptions.compressionPerLevel())
-                    .isEqualTo(
-                            Arrays.asList(
-                                    CompressionType.NO_COMPRESSION,
-                                    CompressionType.LZ4_COMPRESSION,
-                                    CompressionType.ZSTD_COMPRESSION));
+                    .isEqualTo(Arrays.asList(
+                            CompressionType.NO_COMPRESSION,
+                            CompressionType.LZ4_COMPRESSION,
+                            CompressionType.ZSTD_COMPRESSION));
 
-            BlockBasedTableConfig tableConfig =
-                    (BlockBasedTableConfig) columnOptions.tableFormatConfig();
+            BlockBasedTableConfig tableConfig = (BlockBasedTableConfig) columnOptions.tableFormatConfig();
             assertThat(tableConfig.blockSize()).isEqualTo(4 * SizeUnit.KB);
             assertThat(tableConfig.metadataBlockSize()).isEqualTo(8 * SizeUnit.KB);
             assertThat(tableConfig.blockCacheSize()).isEqualTo(512 * SizeUnit.MB);

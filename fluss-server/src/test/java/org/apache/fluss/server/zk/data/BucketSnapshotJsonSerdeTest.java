@@ -29,8 +29,7 @@ class BucketSnapshotJsonSerdeTest extends JsonSerdeTestBase<BucketSnapshot> {
     @Override
     protected BucketSnapshot[] createObjects() {
         return new BucketSnapshot[] {
-            new BucketSnapshot(-1, -1, "oss://test/a1"),
-            new BucketSnapshot(1L, 1002L, "oss://test/a2"),
+            new BucketSnapshot(-1, -1, "oss://test/a1"), new BucketSnapshot(1L, 1002L, "oss://test/a2"),
         };
     }
 

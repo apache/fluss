@@ -36,25 +36,24 @@ public class DataTypeChecksTest {
         assertThat(getLength(new CharType(1))).isEqualTo(1);
         assertThat(getLength(new BinaryType(10))).isEqualTo(10);
 
-        List<DataType> noLengthTypes =
-                Arrays.asList(
-                        DataTypes.STRING(),
-                        DataTypes.BOOLEAN(),
-                        DataTypes.BYTES(),
-                        DataTypes.DECIMAL(2, 1),
-                        DataTypes.TINYINT(),
-                        DataTypes.SMALLINT(),
-                        DataTypes.INT(),
-                        DataTypes.BIGINT(),
-                        DataTypes.FLOAT(),
-                        DataTypes.DOUBLE(),
-                        DataTypes.DATE(),
-                        DataTypes.TIME(),
-                        DataTypes.TIMESTAMP(),
-                        DataTypes.TIMESTAMP_LTZ(),
-                        DataTypes.ARRAY(DataTypes.INT()),
-                        DataTypes.MAP(DataTypes.INT(), DataTypes.INT()),
-                        DataTypes.ROW(DataTypes.FIELD("a", DataTypes.INT())));
+        List<DataType> noLengthTypes = Arrays.asList(
+                DataTypes.STRING(),
+                DataTypes.BOOLEAN(),
+                DataTypes.BYTES(),
+                DataTypes.DECIMAL(2, 1),
+                DataTypes.TINYINT(),
+                DataTypes.SMALLINT(),
+                DataTypes.INT(),
+                DataTypes.BIGINT(),
+                DataTypes.FLOAT(),
+                DataTypes.DOUBLE(),
+                DataTypes.DATE(),
+                DataTypes.TIME(),
+                DataTypes.TIMESTAMP(),
+                DataTypes.TIMESTAMP_LTZ(),
+                DataTypes.ARRAY(DataTypes.INT()),
+                DataTypes.MAP(DataTypes.INT(), DataTypes.INT()),
+                DataTypes.ROW(DataTypes.FIELD("a", DataTypes.INT())));
 
         for (DataType noLengthType : noLengthTypes) {
             assertThatThrownBy(() -> getLength(noLengthType))
@@ -70,23 +69,22 @@ public class DataTypeChecksTest {
         assertThat(getPrecision(new TimestampType(5))).isEqualTo(5);
         assertThat(getPrecision(new LocalZonedTimestampType(9))).isEqualTo(9);
 
-        List<DataType> noPrecisionTypes =
-                Arrays.asList(
-                        DataTypes.CHAR(5),
-                        DataTypes.STRING(),
-                        DataTypes.BOOLEAN(),
-                        DataTypes.BINARY(5),
-                        DataTypes.BYTES(),
-                        DataTypes.TINYINT(),
-                        DataTypes.SMALLINT(),
-                        DataTypes.INT(),
-                        DataTypes.BIGINT(),
-                        DataTypes.FLOAT(),
-                        DataTypes.DOUBLE(),
-                        DataTypes.DATE(),
-                        DataTypes.ARRAY(DataTypes.INT()),
-                        DataTypes.MAP(DataTypes.INT(), DataTypes.INT()),
-                        DataTypes.ROW(DataTypes.FIELD("a", DataTypes.INT())));
+        List<DataType> noPrecisionTypes = Arrays.asList(
+                DataTypes.CHAR(5),
+                DataTypes.STRING(),
+                DataTypes.BOOLEAN(),
+                DataTypes.BINARY(5),
+                DataTypes.BYTES(),
+                DataTypes.TINYINT(),
+                DataTypes.SMALLINT(),
+                DataTypes.INT(),
+                DataTypes.BIGINT(),
+                DataTypes.FLOAT(),
+                DataTypes.DOUBLE(),
+                DataTypes.DATE(),
+                DataTypes.ARRAY(DataTypes.INT()),
+                DataTypes.MAP(DataTypes.INT(), DataTypes.INT()),
+                DataTypes.ROW(DataTypes.FIELD("a", DataTypes.INT())));
 
         for (DataType noPrecisionType : noPrecisionTypes) {
             assertThatThrownBy(() -> getPrecision(noPrecisionType))
@@ -103,20 +101,19 @@ public class DataTypeChecksTest {
         assertThat(getScale(new IntType())).isEqualTo(0);
         assertThat(getScale(new BigIntType())).isEqualTo(0);
 
-        List<DataType> noScaleTypes =
-                Arrays.asList(
-                        DataTypes.STRING(),
-                        DataTypes.BOOLEAN(),
-                        DataTypes.BYTES(),
-                        DataTypes.FLOAT(),
-                        DataTypes.DOUBLE(),
-                        DataTypes.DATE(),
-                        DataTypes.TIME(),
-                        DataTypes.TIMESTAMP(),
-                        DataTypes.TIMESTAMP_LTZ(),
-                        DataTypes.ARRAY(DataTypes.INT()),
-                        DataTypes.MAP(DataTypes.INT(), DataTypes.INT()),
-                        DataTypes.ROW(DataTypes.FIELD("a", DataTypes.INT())));
+        List<DataType> noScaleTypes = Arrays.asList(
+                DataTypes.STRING(),
+                DataTypes.BOOLEAN(),
+                DataTypes.BYTES(),
+                DataTypes.FLOAT(),
+                DataTypes.DOUBLE(),
+                DataTypes.DATE(),
+                DataTypes.TIME(),
+                DataTypes.TIMESTAMP(),
+                DataTypes.TIMESTAMP_LTZ(),
+                DataTypes.ARRAY(DataTypes.INT()),
+                DataTypes.MAP(DataTypes.INT(), DataTypes.INT()),
+                DataTypes.ROW(DataTypes.FIELD("a", DataTypes.INT())));
 
         for (DataType noScaleType : noScaleTypes) {
             assertThatThrownBy(() -> getScale(noScaleType))

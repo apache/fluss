@@ -51,8 +51,7 @@ public abstract class AbstractAutoCloseableRegistryTest<C extends Closeable, E e
         this.unclosedCounter = new AtomicInteger(0);
         this.streamOpenThreads = new ProducerThread[10];
         for (int i = 0; i < streamOpenThreads.length; ++i) {
-            streamOpenThreads[i] =
-                    createProducerThread(closeableRegistry, unclosedCounter, maxStreams);
+            streamOpenThreads[i] = createProducerThread(closeableRegistry, unclosedCounter, maxStreams);
         }
     }
 
@@ -97,14 +96,12 @@ public abstract class AbstractAutoCloseableRegistryTest<C extends Closeable, E e
         final BlockingTestCloseable blockingCloseable = new BlockingTestCloseable();
         registerCloseable(blockingCloseable);
         assertThat(closeableRegistry.getNumberOfRegisteredCloseables()).isEqualTo(1);
-        Thread closer =
-                new Thread(
-                        () -> {
-                            try {
-                                closeableRegistry.close();
-                            } catch (IOException ignore) {
-                            }
-                        });
+        Thread closer = new Thread(() -> {
+            try {
+                closeableRegistry.close();
+            } catch (IOException ignore) {
+            }
+        });
         closer.start();
         blockingCloseable.awaitClose(TEST_TIMEOUT_SECONDS, TimeUnit.SECONDS);
         final TestCloseable testCloseable = new TestCloseable();
@@ -120,17 +117,14 @@ public abstract class AbstractAutoCloseableRegistryTest<C extends Closeable, E e
     }
 
     /** A testing producer. */
-    protected abstract static class ProducerThread<C extends Closeable, E extends C, T>
-            extends Thread {
+    protected abstract static class ProducerThread<C extends Closeable, E extends C, T> extends Thread {
         protected final AbstractAutoCloseableRegistry<C, E, T, IOException> registry;
         protected final AtomicInteger refCount;
         protected final int maxStreams;
         protected int numStreams;
 
         public ProducerThread(
-                AbstractAutoCloseableRegistry<C, E, T, IOException> registry,
-                AtomicInteger refCount,
-                int maxStreams) {
+                AbstractAutoCloseableRegistry<C, E, T, IOException> registry, AtomicInteger refCount, int maxStreams) {
             this.registry = registry;
             this.refCount = refCount;
             this.maxStreams = maxStreams;
@@ -200,8 +194,7 @@ public abstract class AbstractAutoCloseableRegistryTest<C extends Closeable, E e
         }
 
         /** Causes the current thread to wait until {@link #close()} is called. */
-        public void awaitClose(final long timeout, final TimeUnit timeUnit)
-                throws InterruptedException {
+        public void awaitClose(final long timeout, final TimeUnit timeUnit) throws InterruptedException {
             assertThat(closeCalledLatch.await(timeout, timeUnit)).isTrue();
         }
     }

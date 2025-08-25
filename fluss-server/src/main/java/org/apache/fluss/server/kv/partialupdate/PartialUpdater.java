@@ -65,11 +65,9 @@ public class PartialUpdater {
         // check the target columns contains the primary key
         for (int pkIndex : schema.getPrimaryKeyIndexes()) {
             if (!partialUpdateCols.get(pkIndex)) {
-                throw new InvalidTargetColumnException(
-                        String.format(
-                                "The target write columns %s must contain the primary key columns %s.",
-                                schema.getColumnNames(targetColumns),
-                                schema.getColumnNames(schema.getPrimaryKeyIndexes())));
+                throw new InvalidTargetColumnException(String.format(
+                        "The target write columns %s must contain the primary key columns %s.",
+                        schema.getColumnNames(targetColumns), schema.getColumnNames(schema.getPrimaryKeyIndexes())));
             }
             pkColumnSet.set(pkIndex);
         }
@@ -79,10 +77,9 @@ public class PartialUpdater {
             // the columns not in primary key should be nullable
             if (!pkColumnSet.get(i)) {
                 if (!fieldDataTypes[i].isNullable()) {
-                    throw new InvalidTargetColumnException(
-                            String.format(
-                                    "Partial Update requires all columns except primary key to be nullable, but column %s is NOT NULL.",
-                                    schema.getRowType().getFieldNames().get(i)));
+                    throw new InvalidTargetColumnException(String.format(
+                            "Partial Update requires all columns except primary key to be nullable, but column %s is NOT NULL.",
+                            schema.getRowType().getFieldNames().get(i)));
                 }
             }
         }

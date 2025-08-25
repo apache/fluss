@@ -50,10 +50,8 @@ public final class BinaryType extends DataType {
     public BinaryType(boolean isNullable, int length) {
         super(isNullable, DataTypeRoot.BINARY);
         if (length < MIN_LENGTH) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Binary string length must be between %d and %d (both inclusive).",
-                            MIN_LENGTH, MAX_LENGTH));
+            throw new IllegalArgumentException(String.format(
+                    "Binary string length must be between %d and %d (both inclusive).", MIN_LENGTH, MAX_LENGTH));
         }
         this.length = length;
     }

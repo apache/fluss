@@ -63,11 +63,10 @@ public class FlinkLanceTieringTestBase {
     protected static final String DEFAULT_DB = "fluss";
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setClusterConf(initConfig())
-                    .setNumOfTabletServers(3)
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setClusterConf(initConfig())
+            .setNumOfTabletServers(3)
+            .build();
 
     protected StreamExecutionEnvironment execEnv;
 
@@ -83,10 +82,9 @@ public class FlinkLanceTieringTestBase {
                 .set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE);
         conf.setString("datalake.format", "lance");
         try {
-            warehousePath =
-                    Files.createTempDirectory("fluss-testing-datalake-tiered")
-                            .resolve("warehouse")
-                            .toString();
+            warehousePath = Files.createTempDirectory("fluss-testing-datalake-tiered")
+                    .resolve("warehouse")
+                    .toString();
         } catch (Exception e) {
             throw new FlussRuntimeException("Failed to create warehouse path");
         }
@@ -127,8 +125,7 @@ public class FlinkLanceTieringTestBase {
         return lanceConf;
     }
 
-    protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
-            throws Exception {
+    protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor) throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
         return admin.getTableInfo(tablePath).get().getTableId();
     }
@@ -146,41 +143,34 @@ public class FlinkLanceTieringTestBase {
     }
 
     protected void assertReplicaStatus(TableBucket tb, long expectedLogEndOffset) {
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    Replica replica = getLeaderReplica(tb);
-                    // datalake snapshot id should be updated
-                    assertThat(replica.getLogTablet().getLakeTableSnapshotId())
-                            .isGreaterThanOrEqualTo(0);
-                    assertThat(replica.getLakeLogEndOffset()).isEqualTo(expectedLogEndOffset);
-                });
+        retry(Duration.ofMinutes(1), () -> {
+            Replica replica = getLeaderReplica(tb);
+            // datalake snapshot id should be updated
+            assertThat(replica.getLogTablet().getLakeTableSnapshotId()).isGreaterThanOrEqualTo(0);
+            assertThat(replica.getLakeLogEndOffset()).isEqualTo(expectedLogEndOffset);
+        });
     }
 
-    protected long createLogTable(TablePath tablePath, int bucketNum, boolean isPartitioned)
-            throws Exception {
+    protected long createLogTable(TablePath tablePath, int bucketNum, boolean isPartitioned) throws Exception {
         Schema.Builder schemaBuilder =
                 Schema.newBuilder().column("a", DataTypes.INT()).column("b", DataTypes.STRING());
 
-        TableDescriptor.Builder tableBuilder =
-                TableDescriptor.builder()
-                        .distributedBy(bucketNum, "a")
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        TableDescriptor.Builder tableBuilder = TableDescriptor.builder()
+                .distributedBy(bucketNum, "a")
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
 
         if (isPartitioned) {
             schemaBuilder.column("c", DataTypes.STRING());
             tableBuilder.property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
             tableBuilder.partitionedBy("c");
-            tableBuilder.property(
-                    ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR);
+            tableBuilder.property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR);
         }
         tableBuilder.schema(schemaBuilder.build());
         return createTable(tablePath, tableBuilder.build());
     }
 
-    protected void writeRows(TablePath tablePath, List<InternalRow> rows, boolean append)
-            throws Exception {
+    protected void writeRows(TablePath tablePath, List<InternalRow> rows, boolean append) throws Exception {
         try (Table table = conn.getTable(tablePath)) {
             TableWriter tableWriter;
             if (append) {

@@ -66,35 +66,25 @@ public class TestJaasConfig extends Configuration {
 
     public static void createConfiguration(String clientMechanism, List<String> serverMechanisms) {
         TestJaasConfig config = new TestJaasConfig();
-        config.createOrUpdateEntry(
-                LOGIN_CONTEXT_CLIENT, loginModule(clientMechanism), defaultClientOptions());
+        config.createOrUpdateEntry(LOGIN_CONTEXT_CLIENT, loginModule(clientMechanism), defaultClientOptions());
         for (String mechanism : serverMechanisms) {
-            config.addEntry(
-                    LOGIN_CONTEXT_SERVER, loginModule(mechanism), defaultServerOptions(mechanism));
+            config.addEntry(LOGIN_CONTEXT_SERVER, loginModule(mechanism), defaultServerOptions(mechanism));
         }
         Configuration.setConfiguration(config);
     }
 
     public void createOrUpdateEntry(String name, String loginModule, Map<String, Object> options) {
         AppConfigurationEntry entry =
-                new AppConfigurationEntry(
-                        loginModule,
-                        AppConfigurationEntry.LoginModuleControlFlag.REQUIRED,
-                        options);
+                new AppConfigurationEntry(loginModule, AppConfigurationEntry.LoginModuleControlFlag.REQUIRED, options);
         entryMap.put(name, new AppConfigurationEntry[] {entry});
     }
 
     public void addEntry(String name, String loginModule, Map<String, String> options) {
         AppConfigurationEntry entry =
-                new AppConfigurationEntry(
-                        loginModule,
-                        AppConfigurationEntry.LoginModuleControlFlag.REQUIRED,
-                        options);
+                new AppConfigurationEntry(loginModule, AppConfigurationEntry.LoginModuleControlFlag.REQUIRED, options);
         AppConfigurationEntry[] existing = entryMap.get(name);
         AppConfigurationEntry[] newEntries =
-                existing == null
-                        ? new AppConfigurationEntry[1]
-                        : Arrays.copyOf(existing, existing.length + 1);
+                existing == null ? new AppConfigurationEntry[1] : Arrays.copyOf(existing, existing.length + 1);
         newEntries[newEntries.length - 1] = entry;
         entryMap.put(name, newEntries);
     }

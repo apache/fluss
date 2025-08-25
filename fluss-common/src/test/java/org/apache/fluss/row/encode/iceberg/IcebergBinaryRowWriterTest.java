@@ -162,7 +162,9 @@ class IcebergBinaryRowWriterTest {
         byte[] writerBytes = writer.toBytes();
         byte[] strBytes = value.getBytes(StandardCharsets.UTF_8);
 
-        int length = ByteBuffer.wrap(writerBytes, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+        int length = ByteBuffer.wrap(writerBytes, 0, 4)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .getInt();
         byte[] actualContent = Arrays.copyOfRange(writerBytes, 4, 4 + length);
 
         assertThat(length).isEqualTo(strBytes.length);
@@ -183,7 +185,9 @@ class IcebergBinaryRowWriterTest {
         writer.writeBytes(value);
         byte[] writerBytes = writer.toBytes();
 
-        int length = ByteBuffer.wrap(writerBytes, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+        int length = ByteBuffer.wrap(writerBytes, 0, 4)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .getInt();
         byte[] actualContent = Arrays.copyOfRange(writerBytes, 4, 4 + length);
 
         assertThat(length).isEqualTo(value.length);
@@ -206,7 +210,9 @@ class IcebergBinaryRowWriterTest {
         byte[] writerBytes = writer.toBytes();
         byte[] expectedBytes = bigDecimal.unscaledValue().toByteArray();
 
-        int length = ByteBuffer.wrap(writerBytes, 0, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
+        int length = ByteBuffer.wrap(writerBytes, 0, 4)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .getInt();
         byte[] actualContent = Arrays.copyOfRange(writerBytes, 4, 4 + length);
 
         assertThat(length).isEqualTo(expectedBytes.length);

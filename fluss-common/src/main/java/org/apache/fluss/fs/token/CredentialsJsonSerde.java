@@ -26,8 +26,7 @@ import org.apache.fluss.utils.json.JsonSerializer;
 import java.io.IOException;
 
 /** Json serializer and deserializer for {@link Credentials}. */
-public class CredentialsJsonSerde
-        implements JsonSerializer<Credentials>, JsonDeserializer<Credentials> {
+public class CredentialsJsonSerde implements JsonSerializer<Credentials>, JsonDeserializer<Credentials> {
 
     public static final CredentialsJsonSerde INSTANCE = new CredentialsJsonSerde();
 

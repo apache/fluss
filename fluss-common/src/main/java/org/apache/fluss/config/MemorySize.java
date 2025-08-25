@@ -53,13 +53,12 @@ public class MemorySize implements java.io.Serializable, Comparable<MemorySize> 
 
     public static final MemorySize MAX_VALUE = new MemorySize(Long.MAX_VALUE);
 
-    private static final List<MemoryUnit> ORDERED_UNITS =
-            Arrays.asList(
-                    MemoryUnit.BYTES,
-                    MemoryUnit.KILO_BYTES,
-                    MemoryUnit.MEGA_BYTES,
-                    MemoryUnit.GIGA_BYTES,
-                    MemoryUnit.TERA_BYTES);
+    private static final List<MemoryUnit> ORDERED_UNITS = Arrays.asList(
+            MemoryUnit.BYTES,
+            MemoryUnit.KILO_BYTES,
+            MemoryUnit.MEGA_BYTES,
+            MemoryUnit.GIGA_BYTES,
+            MemoryUnit.TERA_BYTES);
 
     // ------------------------------------------------------------------------
 
@@ -123,9 +122,7 @@ public class MemorySize implements java.io.Serializable, Comparable<MemorySize> 
     @Override
     public boolean equals(Object obj) {
         return obj == this
-                || (obj != null
-                        && obj.getClass() == this.getClass()
-                        && ((MemorySize) obj).bytes == this.bytes);
+                || (obj != null && obj.getClass() == this.getClass() && ((MemorySize) obj).bytes == this.bytes);
     }
 
     @Override
@@ -138,21 +135,19 @@ public class MemorySize implements java.io.Serializable, Comparable<MemorySize> 
     }
 
     private String formatToString() {
-        MemoryUnit highestIntegerUnit =
-                IntStream.range(0, ORDERED_UNITS.size())
-                        .sequential()
-                        .filter(idx -> bytes % ORDERED_UNITS.get(idx).getMultiplier() != 0)
-                        .boxed()
-                        .findFirst()
-                        .map(
-                                idx -> {
-                                    if (idx == 0) {
-                                        return ORDERED_UNITS.get(0);
-                                    } else {
-                                        return ORDERED_UNITS.get(idx - 1);
-                                    }
-                                })
-                        .orElse(MemoryUnit.BYTES);
+        MemoryUnit highestIntegerUnit = IntStream.range(0, ORDERED_UNITS.size())
+                .sequential()
+                .filter(idx -> bytes % ORDERED_UNITS.get(idx).getMultiplier() != 0)
+                .boxed()
+                .findFirst()
+                .map(idx -> {
+                    if (idx == 0) {
+                        return ORDERED_UNITS.get(0);
+                    } else {
+                        return ORDERED_UNITS.get(idx - 1);
+                    }
+                })
+                .orElse(MemoryUnit.BYTES);
 
         return String.format(
                 "%d %s",
@@ -168,25 +163,20 @@ public class MemorySize implements java.io.Serializable, Comparable<MemorySize> 
     }
 
     private String formatToHumanReadableString() {
-        MemoryUnit highestUnit =
-                IntStream.range(0, ORDERED_UNITS.size())
-                        .sequential()
-                        .filter(idx -> bytes > ORDERED_UNITS.get(idx).getMultiplier())
-                        .boxed()
-                        .max(Comparator.naturalOrder())
-                        .map(ORDERED_UNITS::get)
-                        .orElse(MemoryUnit.BYTES);
+        MemoryUnit highestUnit = IntStream.range(0, ORDERED_UNITS.size())
+                .sequential()
+                .filter(idx -> bytes > ORDERED_UNITS.get(idx).getMultiplier())
+                .boxed()
+                .max(Comparator.naturalOrder())
+                .map(ORDERED_UNITS::get)
+                .orElse(MemoryUnit.BYTES);
 
         if (highestUnit == MemoryUnit.BYTES) {
             return String.format("%d %s", bytes, MemoryUnit.BYTES.getUnits()[1]);
         } else {
             double approximate = 1.0 * bytes / highestUnit.getMultiplier();
             return String.format(
-                    Locale.ROOT,
-                    "%.3f%s (%d bytes)",
-                    approximate,
-                    highestUnit.getUnits()[1],
-                    bytes);
+                    Locale.ROOT, "%.3f%s (%d bytes)", approximate, highestUnit.getUnits()[1], bytes);
         }
     }
 
@@ -210,8 +200,7 @@ public class MemorySize implements java.io.Serializable, Comparable<MemorySize> 
     public MemorySize multiply(double multiplier) {
         checkArgument(multiplier >= 0, "multiplier must be >= 0");
 
-        BigDecimal product =
-                BigDecimal.valueOf(this.bytes).multiply(BigDecimal.valueOf(multiplier));
+        BigDecimal product = BigDecimal.valueOf(this.bytes).multiply(BigDecimal.valueOf(multiplier));
         if (product.compareTo(BigDecimal.valueOf(Long.MAX_VALUE)) > 0) {
             throw new ArithmeticException("long overflow");
         }
@@ -249,12 +238,11 @@ public class MemorySize implements java.io.Serializable, Comparable<MemorySize> 
     public static long parseBytes(String text) throws IllegalArgumentException {
         checkNotNull(text, "text");
         if (!MemoryUnit.hasUnit(text)) {
-            throw new IllegalArgumentException(
-                    "The memory value '"
-                            + text
-                            + "' does not specify a memory unit. "
-                            + "Memory size must be specified with units bytes (b), kibibytes (kb), "
-                            + "mebibytes (mb) or gibibytes (gb). E.g. 50b, 100kb, 3mb.");
+            throw new IllegalArgumentException("The memory value '"
+                    + text
+                    + "' does not specify a memory unit. "
+                    + "Memory size must be specified with units bytes (b), kibibytes (kb), "
+                    + "mebibytes (mb) or gibibytes (gb). E.g. 50b, 100kb, 3mb.");
         }
 
         final String trimmed = text.trim();
@@ -280,9 +268,7 @@ public class MemorySize implements java.io.Serializable, Comparable<MemorySize> 
             value = Long.parseLong(number); // this throws a NumberFormatException on overflow
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException(
-                    "The value '"
-                            + number
-                            + "' cannot be re represented as 64bit number (numeric overflow).");
+                    "The value '" + number + "' cannot be re represented as 64bit number (numeric overflow).");
         }
 
         final long multiplier = parseUnit(unit).map(MemoryUnit::getMultiplier).orElse(1L);
@@ -291,9 +277,7 @@ public class MemorySize implements java.io.Serializable, Comparable<MemorySize> 
         // check for overflow
         if (result / multiplier != value) {
             throw new IllegalArgumentException(
-                    "The value '"
-                            + text
-                            + "' cannot be re represented as 64bit number of bytes (numeric overflow).");
+                    "The value '" + text + "' cannot be re represented as 64bit number of bytes (numeric overflow).");
         }
 
         return result;
@@ -311,11 +295,10 @@ public class MemorySize implements java.io.Serializable, Comparable<MemorySize> 
         } else if (matchesAny(unit, MemoryUnit.TERA_BYTES)) {
             return Optional.of(MemoryUnit.TERA_BYTES);
         } else if (!unit.isEmpty()) {
-            throw new IllegalArgumentException(
-                    "Memory size unit '"
-                            + unit
-                            + "' does not match any of the recognized units: "
-                            + MemoryUnit.getAllUnits());
+            throw new IllegalArgumentException("Memory size unit '"
+                    + unit
+                    + "' does not match any of the recognized units: "
+                    + MemoryUnit.getAllUnits());
         }
 
         return Optional.empty();

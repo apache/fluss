@@ -33,7 +33,8 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
     public static final byte LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND = -2;
 
     // may be null when no snapshot data for the bucket
-    @Nullable private final List<LakeSplit> lakeSnapshotSplits;
+    @Nullable
+    private final List<LakeSplit> lakeSnapshotSplits;
 
     /** The records to skip when reading the splits. */
     private long recordOffset = 0;

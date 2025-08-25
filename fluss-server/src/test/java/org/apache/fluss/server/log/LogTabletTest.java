@@ -76,26 +76,21 @@ final class LogTabletTest extends LogTestBase {
     @BeforeEach
     public void setup() throws Exception {
         super.before();
-        logDir =
-                LogTestUtils.makeRandomLogTabletDir(
-                        tempDir,
-                        DATA1_TABLE_PATH.getDatabaseName(),
-                        DATA1_TABLE_ID,
-                        DATA1_TABLE_PATH.getTableName());
+        logDir = LogTestUtils.makeRandomLogTabletDir(
+                tempDir, DATA1_TABLE_PATH.getDatabaseName(), DATA1_TABLE_ID, DATA1_TABLE_PATH.getTableName());
         scheduler = new FlussScheduler(1);
         scheduler.startup();
-        logTablet =
-                LogTablet.create(
-                        PhysicalTablePath.of(DATA1_TABLE_PATH),
-                        logDir,
-                        conf,
-                        0,
-                        scheduler,
-                        LogFormat.ARROW,
-                        1,
-                        false,
-                        SystemClock.getInstance(),
-                        true);
+        logTablet = LogTablet.create(
+                PhysicalTablePath.of(DATA1_TABLE_PATH),
+                logDir,
+                conf,
+                0,
+                scheduler,
+                LogFormat.ARROW,
+                1,
+                false,
+                SystemClock.getInstance(),
+                true);
     }
 
     @AfterEach
@@ -105,12 +100,8 @@ final class LogTabletTest extends LogTestBase {
 
     @Test
     void testHighWatermarkMetadataUpdatedAfterSegmentRoll() throws Exception {
-        MemoryLogRecords mr =
-                genMemoryLogRecordsByObject(
-                        Arrays.asList(
-                                new Object[] {1, "a"},
-                                new Object[] {2, "b"},
-                                new Object[] {3, "c"}));
+        MemoryLogRecords mr = genMemoryLogRecordsByObject(
+                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"}));
         logTablet.appendAsLeader(mr);
         assertFetchSizeAndOffsets(0L, 0, Collections.emptyList(), baseRowType);
         logTablet.updateHighWatermark(logTablet.localLogEndOffset());
@@ -123,41 +114,27 @@ final class LogTabletTest extends LogTestBase {
 
     @Test
     void testAppendInfoFirstOffset() throws Exception {
-        MemoryLogRecords mr1 =
-                genMemoryLogRecordsByObject(
-                        Arrays.asList(
-                                new Object[] {1, "a"},
-                                new Object[] {2, "b"},
-                                new Object[] {3, "c"}));
+        MemoryLogRecords mr1 = genMemoryLogRecordsByObject(
+                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"}));
 
         LogAppendInfo firstAppendInfo = logTablet.appendAsLeader(mr1);
         assertThat(firstAppendInfo.firstOffset()).isEqualTo(0L);
 
-        MemoryLogRecords mr2 =
-                genMemoryLogRecordsByObject(
-                        Arrays.asList(
-                                new Object[] {4, "d"},
-                                new Object[] {5, "e"},
-                                new Object[] {6, "f"}));
+        MemoryLogRecords mr2 = genMemoryLogRecordsByObject(
+                Arrays.asList(new Object[] {4, "d"}, new Object[] {5, "e"}, new Object[] {6, "f"}));
         LogAppendInfo secondAppendInfo = logTablet.appendAsLeader(mr2);
         assertThat(secondAppendInfo.firstOffset()).isEqualTo(3L);
 
         logTablet.roll(Optional.empty());
-        MemoryLogRecords mr3 =
-                genMemoryLogRecordsByObject(
-                        Arrays.asList(new Object[] {1, "g"}, new Object[] {2, "h"}));
+        MemoryLogRecords mr3 = genMemoryLogRecordsByObject(Arrays.asList(new Object[] {1, "g"}, new Object[] {2, "h"}));
         LogAppendInfo afterRollAppendInfo = logTablet.appendAsLeader(mr3);
         assertThat(afterRollAppendInfo.firstOffset()).isEqualTo(6L);
     }
 
     @Test
     void testHighWatermarkMaintenance() throws Exception {
-        MemoryLogRecords mr1 =
-                genMemoryLogRecordsByObject(
-                        Arrays.asList(
-                                new Object[] {1, "a"},
-                                new Object[] {2, "b"},
-                                new Object[] {3, "c"}));
+        MemoryLogRecords mr1 = genMemoryLogRecordsByObject(
+                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"}));
         assertHighWatermark(0L);
         // HighWatermark not changed by append.
         logTablet.appendAsLeader(mr1);
@@ -172,20 +149,12 @@ final class LogTabletTest extends LogTestBase {
 
     @Test
     void testFetchUpToLogEndOffset() throws Exception {
-        MemoryLogRecords mr1 =
-                genMemoryLogRecordsByObject(
-                        Arrays.asList(
-                                new Object[] {1, "a"},
-                                new Object[] {2, "b"},
-                                new Object[] {3, "c"}));
+        MemoryLogRecords mr1 = genMemoryLogRecordsByObject(
+                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"}));
         logTablet.appendAsLeader(mr1);
 
-        MemoryLogRecords mr2 =
-                genMemoryLogRecordsByObject(
-                        Arrays.asList(
-                                new Object[] {4, "d"},
-                                new Object[] {5, "e"},
-                                new Object[] {6, "f"}));
+        MemoryLogRecords mr2 = genMemoryLogRecordsByObject(
+                Arrays.asList(new Object[] {4, "d"}, new Object[] {5, "e"}, new Object[] {6, "f"}));
         logTablet.appendAsLeader(mr2);
 
         for (long i = logTablet.localLogEndOffset(); i < logTablet.localLogEndOffset(); i = i + 1) {
@@ -195,16 +164,10 @@ final class LogTabletTest extends LogTestBase {
 
     @Test
     void testFetchUpToHighWatermark() throws Exception {
-        MemoryLogRecords mr1 =
-                genMemoryLogRecordsByObject(
-                        Arrays.asList(
-                                new Object[] {1, "a"},
-                                new Object[] {2, "b"},
-                                new Object[] {3, "c"}));
+        MemoryLogRecords mr1 = genMemoryLogRecordsByObject(
+                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"}));
         logTablet.appendAsLeader(mr1);
-        MemoryLogRecords mr2 =
-                genMemoryLogRecordsByObject(
-                        Arrays.asList(new Object[] {4, "a"}, new Object[] {5, "b"}));
+        MemoryLogRecords mr2 = genMemoryLogRecordsByObject(Arrays.asList(new Object[] {4, "a"}, new Object[] {5, "b"}));
         logTablet.appendAsLeader(mr2);
         assertHighWatermarkBoundedFetches();
         logTablet.updateHighWatermark(3L);
@@ -248,11 +211,10 @@ final class LogTabletTest extends LogTestBase {
         MemoryLogRecords nextRecords = genMemoryLogRecordsWithWriterId(DATA1, writerId, 2, 0);
         assertThatThrownBy(() -> logTablet.appendAsLeader(nextRecords))
                 .isInstanceOf(OutOfOrderSequenceException.class)
-                .hasMessageContaining(
-                        String.format(
-                                "Out of order batch sequence for writer 1 at offset 19 in table-bucket "
-                                        + "TableBucket{tableId=150001, bucket=%s} : 2 (incoming batch seq.), 0 (current batch seq.)",
-                                logTablet.getTableBucket().getBucket()));
+                .hasMessageContaining(String.format(
+                        "Out of order batch sequence for writer 1 at offset 19 in table-bucket "
+                                + "TableBucket{tableId=150001, bucket=%s} : 2 (incoming batch seq.), 0 (current batch seq.)",
+                        logTablet.getTableBucket().getBucket()));
     }
 
     @Test
@@ -276,14 +238,11 @@ final class LogTabletTest extends LogTestBase {
 
     @Test
     void testWriterStateTruncateTo() throws Exception {
-        logTablet.appendAsLeader(
-                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"})));
-        logTablet.appendAsLeader(
-                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {2, "b"})));
+        logTablet.appendAsLeader(genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"})));
+        logTablet.appendAsLeader(genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {2, "b"})));
         takeWriterSnapshot(logTablet);
 
-        logTablet.appendAsLeader(
-                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {3, "c"})));
+        logTablet.appendAsLeader(genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {3, "c"})));
         takeWriterSnapshot(logTablet);
 
         logTablet.truncateTo(2L);
@@ -305,11 +264,9 @@ final class LogTabletTest extends LogTestBase {
         long writerId = 1L;
 
         logTablet.appendAsLeader(
-                genMemoryLogRecordsWithWriterId(
-                        Collections.singletonList(new Object[] {1, "a"}), writerId, 0, 0L));
+                genMemoryLogRecordsWithWriterId(Collections.singletonList(new Object[] {1, "a"}), writerId, 0, 0L));
         logTablet.appendAsLeader(
-                genMemoryLogRecordsWithWriterId(
-                        Collections.singletonList(new Object[] {1, "b"}), writerId, 1, 0L));
+                genMemoryLogRecordsWithWriterId(Collections.singletonList(new Object[] {1, "b"}), writerId, 1, 0L));
 
         LogTestUtils.deleteWriterSnapshotFiles(logDir);
 
@@ -322,17 +279,14 @@ final class LogTabletTest extends LogTestBase {
 
     @Test
     void testWriterStateTruncateFullyAndStartAt() throws Exception {
-        MemoryLogRecords records =
-                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"}));
+        MemoryLogRecords records = genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {1, "a"}));
         conf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, new MemorySize(records.sizeInBytes()));
         LogTablet log = createLogTablet(conf);
         log.appendAsLeader(records);
         takeWriterSnapshot(log);
 
-        log.appendAsLeader(
-                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {2, "b"})));
-        log.appendAsLeader(
-                genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {3, "c"})));
+        log.appendAsLeader(genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {2, "b"})));
+        log.appendAsLeader(genMemoryLogRecordsByObject(Collections.singletonList(new Object[] {3, "c"})));
         takeWriterSnapshot(log);
 
         assertThat(log.logSegments().size()).isEqualTo(3);
@@ -349,8 +303,7 @@ final class LogTabletTest extends LogTestBase {
     void testWriterIdExpirationOnSegmentDeletion() throws Exception {
         long writerId1 = 1L;
         MemoryLogRecords records =
-                genMemoryLogRecordsWithWriterId(
-                        Collections.singletonList(new Object[] {1, "a"}), writerId1, 0, 0L);
+                genMemoryLogRecordsWithWriterId(Collections.singletonList(new Object[] {1, "a"}), writerId1, 0, 0L);
         conf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, new MemorySize(records.sizeInBytes()));
         LogTablet log = createLogTablet(conf);
         log.appendAsLeader(records);
@@ -358,16 +311,13 @@ final class LogTabletTest extends LogTestBase {
 
         long writerId2 = 2L;
         log.appendAsLeader(
-                genMemoryLogRecordsWithWriterId(
-                        Collections.singletonList(new Object[] {2, "b"}), writerId2, 0, 0L));
+                genMemoryLogRecordsWithWriterId(Collections.singletonList(new Object[] {2, "b"}), writerId2, 0, 0L));
         log.appendAsLeader(
-                genMemoryLogRecordsWithWriterId(
-                        Collections.singletonList(new Object[] {2, "b"}), writerId2, 1, 0L));
+                genMemoryLogRecordsWithWriterId(Collections.singletonList(new Object[] {2, "b"}), writerId2, 1, 0L));
         takeWriterSnapshot(log);
 
         assertThat(log.logSegments().size()).isEqualTo(3);
-        assertThat(log.activeWriters().keySet())
-                .isEqualTo(new HashSet<>(Arrays.asList(writerId1, writerId2)));
+        assertThat(log.activeWriters().keySet()).isEqualTo(new HashSet<>(Arrays.asList(writerId1, writerId2)));
 
         log.updateHighWatermark(log.localLogEndOffset());
 
@@ -378,19 +328,15 @@ final class LogTabletTest extends LogTestBase {
     void testWriterSnapshotAfterSegmentRollOnAppend() throws Exception {
         long writerId = 1L;
         MemoryLogRecords records =
-                genMemoryLogRecordsWithWriterId(
-                        Collections.singletonList(new Object[] {1, "a"}), writerId, 0, 0L);
-        conf.set(
-                ConfigOptions.LOG_SEGMENT_FILE_SIZE,
-                new MemorySize(records.sizeInBytes() * 2L - 1));
+                genMemoryLogRecordsWithWriterId(Collections.singletonList(new Object[] {1, "a"}), writerId, 0, 0L);
+        conf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, new MemorySize(records.sizeInBytes() * 2L - 1));
         LogTablet log = createLogTablet(conf);
 
         log.appendAsLeader(records);
 
         // The next append should overflow the segment and cause it to roll.
         log.appendAsLeader(
-                genMemoryLogRecordsWithWriterId(
-                        Collections.singletonList(new Object[] {1, "a"}), writerId, 1, 0L));
+                genMemoryLogRecordsWithWriterId(Collections.singletonList(new Object[] {1, "a"}), writerId, 1, 0L));
 
         assertThat(log.logSegments().size()).isEqualTo(2);
         assertThat(log.activeLogSegment().getBaseOffset()).isEqualTo(1L);
@@ -416,12 +362,10 @@ final class LogTabletTest extends LogTestBase {
         long writerId1 = 23L;
         LogTablet log = createLogTablet(conf);
         log.appendAsLeader(
-                genMemoryLogRecordsWithWriterId(
-                        Collections.singletonList(new Object[] {1, "a"}), writerId1, 0, 0L));
+                genMemoryLogRecordsWithWriterId(Collections.singletonList(new Object[] {1, "a"}), writerId1, 0, 0L));
         assertThat(log.activeWriters().keySet()).isEqualTo(Collections.singleton(writerId1));
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(log.activeWriters().keySet()).isEqualTo(Collections.emptySet()));
+        retry(Duration.ofMinutes(1), () -> assertThat(log.activeWriters().keySet())
+                .isEqualTo(Collections.emptySet()));
     }
 
     @Test
@@ -430,8 +374,7 @@ final class LogTabletTest extends LogTestBase {
         // Pad the beginning of the log.
         for (int i = 0; i <= 5; i++) {
             logTablet.appendAsLeader(
-                    genMemoryLogRecordsWithWriterId(
-                            Collections.singletonList(new Object[] {1, "a"}), writerId, i, 0L));
+                    genMemoryLogRecordsWithWriterId(Collections.singletonList(new Object[] {1, "a"}), writerId, i, 0L));
         }
 
         // Append an entry with multiple log records.
@@ -443,22 +386,16 @@ final class LogTabletTest extends LogTestBase {
         // Append a Duplicate of the tail, when the entry at the tail has multiple records.
         LogAppendInfo dupMultiEntryAppendInfo =
                 logTablet.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, writerId, 6, 0L));
-        assertThat(dupMultiEntryAppendInfo.firstOffset())
-                .isEqualTo(multiEntryAppendInfo.firstOffset());
-        assertThat(dupMultiEntryAppendInfo.lastOffset())
-                .isEqualTo(multiEntryAppendInfo.lastOffset());
+        assertThat(dupMultiEntryAppendInfo.firstOffset()).isEqualTo(multiEntryAppendInfo.firstOffset());
+        assertThat(dupMultiEntryAppendInfo.lastOffset()).isEqualTo(multiEntryAppendInfo.lastOffset());
 
         // Append a partial duplicate of the tail. This is not allowed.
-        assertThatThrownBy(
-                        () ->
-                                logTablet.appendAsLeader(
-                                        genMemoryLogRecordsWithWriterId(DATA1, writerId, 8, 0L)))
+        assertThatThrownBy(() -> logTablet.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, writerId, 8, 0L)))
                 .isInstanceOf(OutOfOrderSequenceException.class)
-                .hasMessageContaining(
-                        String.format(
-                                "Out of order batch sequence for writer 1 at offset 25 in table-bucket "
-                                        + "TableBucket{tableId=150001, bucket=%s} : 8 (incoming batch seq.), 6 (current batch seq.)",
-                                logTablet.getTableBucket().getBucket()));
+                .hasMessageContaining(String.format(
+                        "Out of order batch sequence for writer 1 at offset 25 in table-bucket "
+                                + "TableBucket{tableId=150001, bucket=%s} : 8 (incoming batch seq.), 6 (current batch seq.)",
+                        logTablet.getTableBucket().getBucket()));
 
         // Append a duplicate of the batch which is 4th from the tail. This should succeed without
         // error since we retain the batch metadata of the last 5 batches.
@@ -466,25 +403,17 @@ final class LogTabletTest extends LogTestBase {
 
         // Duplicates at older entries are reported as OutOfOrderSequence errors. batch 1 is removed
         // from writerState.
-        assertThatThrownBy(
-                        () ->
-                                logTablet.appendAsLeader(
-                                        genMemoryLogRecordsWithWriterId(DATA1, writerId, 1, 0L)))
+        assertThatThrownBy(() -> logTablet.appendAsLeader(genMemoryLogRecordsWithWriterId(DATA1, writerId, 1, 0L)))
                 .isInstanceOf(OutOfOrderSequenceException.class)
-                .hasMessageContaining(
-                        String.format(
-                                "Out of order batch sequence for writer 1 at offset 25 in table-bucket "
-                                        + "TableBucket{tableId=150001, bucket=%s} : 1 (incoming batch seq.), 6 (current batch seq.)",
-                                logTablet.getTableBucket().getBucket()));
+                .hasMessageContaining(String.format(
+                        "Out of order batch sequence for writer 1 at offset 25 in table-bucket "
+                                + "TableBucket{tableId=150001, bucket=%s} : 1 (incoming batch seq.), 6 (current batch seq.)",
+                        logTablet.getTableBucket().getBucket()));
     }
 
     private LogTablet createLogTablet(Configuration config) throws Exception {
-        File logDir =
-                LogTestUtils.makeRandomLogTabletDir(
-                        tempDir,
-                        DATA1_TABLE_PATH.getDatabaseName(),
-                        DATA1_TABLE_ID,
-                        DATA1_TABLE_PATH.getTableName());
+        File logDir = LogTestUtils.makeRandomLogTabletDir(
+                tempDir, DATA1_TABLE_PATH.getDatabaseName(), DATA1_TABLE_ID, DATA1_TABLE_PATH.getTableName());
         Scheduler scheduler = new FlussScheduler(1);
         scheduler.startup();
         return LogTablet.create(
@@ -501,10 +430,8 @@ final class LogTabletTest extends LogTestBase {
     }
 
     private void assertFetchSizeAndOffsets(
-            long fetchOffset, int expectedSize, List<Long> expectedOffsets, RowType rowType)
-            throws Exception {
-        FetchDataInfo fetchInfo =
-                readLog(logTablet, fetchOffset, 2048, FetchIsolation.HIGH_WATERMARK, false);
+            long fetchOffset, int expectedSize, List<Long> expectedOffsets, RowType rowType) throws Exception {
+        FetchDataInfo fetchInfo = readLog(logTablet, fetchOffset, 2048, FetchIsolation.HIGH_WATERMARK, false);
         assertThat(fetchInfo.getRecords().sizeInBytes()).isEqualTo(expectedSize);
         List<Long> actualOffsets = new ArrayList<>();
         Iterable<LogRecordBatch> batchIterable = fetchInfo.getRecords().batches();
@@ -530,9 +457,7 @@ final class LogTabletTest extends LogTestBase {
         for (long offset = 0; offset < logTablet.getHighWatermark(); offset++) {
             assertNonEmptyFetch(offset, FetchIsolation.HIGH_WATERMARK);
         }
-        for (long offset = logTablet.getHighWatermark();
-                offset <= logTablet.localLogEndOffset();
-                offset++) {
+        for (long offset = logTablet.getHighWatermark(); offset <= logTablet.localLogEndOffset(); offset++) {
             assertEmptyFetch(offset, FetchIsolation.HIGH_WATERMARK);
         }
     }
@@ -572,11 +497,7 @@ final class LogTabletTest extends LogTestBase {
     }
 
     private FetchDataInfo readLog(
-            LogTablet logTablet,
-            long offset,
-            int maxLength,
-            FetchIsolation isolation,
-            boolean minOneMessage)
+            LogTablet logTablet, long offset, int maxLength, FetchIsolation isolation, boolean minOneMessage)
             throws Exception {
         return logTablet.read(offset, maxLength, isolation, minOneMessage, null);
     }
@@ -585,17 +506,14 @@ final class LogTabletTest extends LogTestBase {
         assertThat(offsetMetadata.messageOffsetOnly()).isFalse();
 
         long segmentBaseOffset = offsetMetadata.getSegmentBaseOffset();
-        List<LogSegment> logSegments =
-                logTablet.logSegments(segmentBaseOffset, segmentBaseOffset + 1);
+        List<LogSegment> logSegments = logTablet.logSegments(segmentBaseOffset, segmentBaseOffset + 1);
         assertThat(logSegments.isEmpty()).isFalse();
         LogSegment segment = logSegments.get(0);
         assertThat(segment.getBaseOffset()).isEqualTo(segmentBaseOffset);
         assertThat(offsetMetadata.getRelativePositionInSegment() <= segment.getSizeInBytes())
                 .isTrue();
 
-        FetchDataInfo readInfo =
-                segment.read(
-                        offsetMetadata.getMessageOffset(), 2048, segment.getSizeInBytes(), false);
+        FetchDataInfo readInfo = segment.read(offsetMetadata.getMessageOffset(), 2048, segment.getSizeInBytes(), false);
 
         if (offsetMetadata.getRelativePositionInSegment() < segment.getSizeInBytes()) {
             assertThat(readInfo.getFetchOffsetMetadata()).isEqualTo(offsetMetadata);

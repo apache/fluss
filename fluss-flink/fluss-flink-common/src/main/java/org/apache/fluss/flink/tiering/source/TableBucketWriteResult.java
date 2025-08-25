@@ -40,10 +40,12 @@ public class TableBucketWriteResult<WriteResult> implements Serializable {
     private final TableBucket tableBucket;
 
     // null when the bucket is not for a partition
-    @Nullable private final String partitionName;
+    @Nullable
+    private final String partitionName;
 
     // will be null when no any data write, such as for tiering a empty log split
-    @Nullable private final WriteResult writeResult;
+    @Nullable
+    private final WriteResult writeResult;
 
     // the end offset of tiering, should be the last tiered record's offset + 1
     private final long logEndOffset;

@@ -28,8 +28,7 @@ class FlussAssertionsTest {
 
     @Test
     void testEventuallySucceedsWithCompletedFuture() {
-        final CompletableFuture<String> completedFuture =
-                CompletableFuture.completedFuture("Fluss");
+        final CompletableFuture<String> completedFuture = CompletableFuture.completedFuture("Fluss");
         assertThatFuture(completedFuture).eventuallySucceeds().isEqualTo("Fluss");
     }
 }

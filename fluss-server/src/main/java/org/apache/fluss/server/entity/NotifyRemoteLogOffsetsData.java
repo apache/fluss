@@ -28,10 +28,7 @@ public class NotifyRemoteLogOffsetsData {
     private final int coordinatorEpoch;
 
     public NotifyRemoteLogOffsetsData(
-            TableBucket tableBucket,
-            long remoteLogStartOffset,
-            long remoteLogEndOffset,
-            int coordinatorEpoch) {
+            TableBucket tableBucket, long remoteLogStartOffset, long remoteLogEndOffset, int coordinatorEpoch) {
         this.tableBucket = tableBucket;
         this.remoteLogStartOffset = remoteLogStartOffset;
         this.remoteLogEndOffset = remoteLogEndOffset;

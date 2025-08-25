@@ -63,15 +63,10 @@ public class KvRecordTestUtils {
             return ofRecords(records, NO_WRITER_ID, NO_BATCH_SEQUENCE);
         }
 
-        public KvRecordBatch ofRecords(
-                List<KvRecord> records, long writeClientId, int batchSequenceId)
+        public KvRecordBatch ofRecords(List<KvRecord> records, long writeClientId, int batchSequenceId)
                 throws IOException {
-            KvRecordBatchBuilder builder =
-                    KvRecordBatchBuilder.builder(
-                            schemaId,
-                            Integer.MAX_VALUE,
-                            new UnmanagedPagedOutputView(100),
-                            KvFormat.COMPACTED);
+            KvRecordBatchBuilder builder = KvRecordBatchBuilder.builder(
+                    schemaId, Integer.MAX_VALUE, new UnmanagedPagedOutputView(100), KvFormat.COMPACTED);
             for (KvRecord kvRecord : records) {
                 builder.append(BytesUtils.toArray(kvRecord.getKey()), kvRecord.getRow());
             }

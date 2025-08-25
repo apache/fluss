@@ -61,7 +61,10 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
 
     // the indexes of primary key in emitted row by paimon and fluss
     private int[] keyIndexesInRow;
-    @Nullable private int[] adjustProjectedFields;
+
+    @Nullable
+    private int[] adjustProjectedFields;
+
     private final int[] newProjectedFields;
 
     // the sorted logs in memory, mapping from key -> value
@@ -84,10 +87,9 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
         this.newProjectedFields = getNeedProjectFields(table, projectedFields);
 
         this.logScanner = table.newScan().project(newProjectedFields).createLogScanner();
-        this.lakeSource.withProject(
-                Arrays.stream(newProjectedFields)
-                        .mapToObj(field -> new int[] {field})
-                        .toArray(int[][]::new));
+        this.lakeSource.withProject(Arrays.stream(newProjectedFields)
+                .mapToObj(field -> new int[] {field})
+                .toArray(int[][]::new));
 
         TableBucket tableBucket = lakeSnapshotAndFlussLogSplit.getTableBucket();
         if (tableBucket.getPartitionId() != null) {
@@ -96,18 +98,13 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
                     tableBucket.getBucket(),
                     lakeSnapshotAndFlussLogSplit.getStartingOffset());
         } else {
-            this.logScanner.subscribe(
-                    tableBucket.getBucket(), lakeSnapshotAndFlussLogSplit.getStartingOffset());
+            this.logScanner.subscribe(tableBucket.getBucket(), lakeSnapshotAndFlussLogSplit.getStartingOffset());
         }
 
-        this.stoppingOffset =
-                lakeSnapshotAndFlussLogSplit
-                        .getStoppingOffset()
-                        .orElseThrow(
-                                () ->
-                                        new RuntimeException(
-                                                "StoppingOffset is null for split: "
-                                                        + lakeSnapshotAndFlussLogSplit));
+        this.stoppingOffset = lakeSnapshotAndFlussLogSplit
+                .getStoppingOffset()
+                .orElseThrow(() ->
+                        new RuntimeException("StoppingOffset is null for split: " + lakeSnapshotAndFlussLogSplit));
 
         this.logScanFinished = lakeSnapshotAndFlussLogSplit.getStartingOffset() >= stoppingOffset;
     }
@@ -134,7 +131,8 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
                     keyIndexesInRow[i] = newProjectedFields.size() - 1;
                 }
             }
-            int[] newProjection = newProjectedFields.stream().mapToInt(Integer::intValue).toArray();
+            int[] newProjection =
+                    newProjectedFields.stream().mapToInt(Integer::intValue).toArray();
             // the underlying scan will use the new projection to scan data,
             // but will still need to map from the new projection to the origin projected fields
             int[] adjustProjectedFields = new int[projectedFields.length];
@@ -178,16 +176,15 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
                 }
             }
             if (currentSortMergeReader == null) {
-                currentSortMergeReader =
-                        new SortMergeReader(
-                                adjustProjectedFields,
-                                keyIndexesInRow,
-                                lakeRecordIterators,
-                                rowComparator,
-                                CloseableIterator.wrap(
-                                        logRows == null
-                                                ? Collections.emptyIterator()
-                                                : logRows.values().iterator()));
+                currentSortMergeReader = new SortMergeReader(
+                        adjustProjectedFields,
+                        keyIndexesInRow,
+                        lakeRecordIterators,
+                        rowComparator,
+                        CloseableIterator.wrap(
+                                logRows == null
+                                        ? Collections.emptyIterator()
+                                        : logRows.values().iterator()));
             }
             return currentSortMergeReader.readBatch();
         } else {
@@ -202,8 +199,7 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
                         if (reader instanceof SortedRecordReader) {
                             rowComparator = ((SortedRecordReader) reader).order();
                         } else {
-                            throw new UnsupportedOperationException(
-                                    "lake records must instance of sorted view.");
+                            throw new UnsupportedOperationException("lake records must instance of sorted view.");
                         }
                         lakeRecordIterators.add(reader.read());
                     }
@@ -218,11 +214,9 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
     private void pollLogRecords(Duration timeout) {
         ScanRecords scanRecords = logScanner.poll(timeout);
         for (ScanRecord scanRecord : scanRecords) {
-            boolean isDelete =
-                    scanRecord.getChangeType() == ChangeType.DELETE
-                            || scanRecord.getChangeType() == ChangeType.UPDATE_BEFORE;
-            KeyValueRow keyValueRow =
-                    new KeyValueRow(keyIndexesInRow, scanRecord.getRow(), isDelete);
+            boolean isDelete = scanRecord.getChangeType() == ChangeType.DELETE
+                    || scanRecord.getChangeType() == ChangeType.UPDATE_BEFORE;
+            KeyValueRow keyValueRow = new KeyValueRow(keyIndexesInRow, scanRecord.getRow(), isDelete);
             InternalRow keyRow = keyValueRow.keyRow();
             // upsert the key value row
             logRows.put(keyRow, keyValueRow);

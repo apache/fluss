@@ -46,15 +46,13 @@ public class InstantiationUtils {
 
         protected final ClassLoader classLoader;
 
-        public ClassLoaderObjectInputStream(InputStream in, ClassLoader classLoader)
-                throws IOException {
+        public ClassLoaderObjectInputStream(InputStream in, ClassLoader classLoader) throws IOException {
             super(in);
             this.classLoader = classLoader;
         }
 
         @Override
-        protected Class<?> resolveClass(ObjectStreamClass desc)
-                throws IOException, ClassNotFoundException {
+        protected Class<?> resolveClass(ObjectStreamClass desc) throws IOException, ClassNotFoundException {
             if (classLoader != null) {
                 String name = desc.getName();
                 try {
@@ -76,8 +74,7 @@ public class InstantiationUtils {
         }
 
         @Override
-        protected Class<?> resolveProxyClass(String[] interfaces)
-                throws IOException, ClassNotFoundException {
+        protected Class<?> resolveProxyClass(String[] interfaces) throws IOException, ClassNotFoundException {
             if (classLoader != null) {
                 ClassLoader nonPublicLoader = null;
                 boolean hasNonPublicInterface = false;
@@ -89,8 +86,7 @@ public class InstantiationUtils {
                     if ((cl.getModifiers() & Modifier.PUBLIC) == 0) {
                         if (hasNonPublicInterface) {
                             if (nonPublicLoader != cl.getClassLoader()) {
-                                throw new IllegalAccessError(
-                                        "conflicting non-public interface class loaders");
+                                throw new IllegalAccessError("conflicting non-public interface class loaders");
                             }
                         } else {
                             nonPublicLoader = cl.getClassLoader();
@@ -100,8 +96,7 @@ public class InstantiationUtils {
                     classObjs[i] = cl;
                 }
                 try {
-                    return Proxy.getProxyClass(
-                            hasNonPublicInterface ? nonPublicLoader : classLoader, classObjs);
+                    return Proxy.getProxyClass(hasNonPublicInterface ? nonPublicLoader : classLoader, classObjs);
                 } catch (IllegalArgumentException e) {
                     throw new ClassNotFoundException(null, e);
                 }
@@ -112,8 +107,7 @@ public class InstantiationUtils {
 
         // ------------------------------------------------
 
-        private static final HashMap<String, Class<?>> primitiveClasses =
-                CollectionUtils.newHashMapWithExpectedSize(9);
+        private static final HashMap<String, Class<?>> primitiveClasses = CollectionUtils.newHashMapWithExpectedSize(9);
 
         static {
             primitiveClasses.put("boolean", boolean.class);
@@ -139,21 +133,17 @@ public class InstantiationUtils {
 
     public static void serializeObject(OutputStream out, Object o) throws IOException {
         ObjectOutputStream oos =
-                out instanceof ObjectOutputStream
-                        ? (ObjectOutputStream) out
-                        : new ObjectOutputStream(out);
+                out instanceof ObjectOutputStream ? (ObjectOutputStream) out : new ObjectOutputStream(out);
         oos.writeObject(o);
     }
 
     @SuppressWarnings("unchecked")
-    public static <T> T deserializeObject(byte[] bytes, ClassLoader cl)
-            throws IOException, ClassNotFoundException {
+    public static <T> T deserializeObject(byte[] bytes, ClassLoader cl) throws IOException, ClassNotFoundException {
         return deserializeObject(new ByteArrayInputStream(bytes), cl);
     }
 
     @SuppressWarnings("unchecked")
-    public static <T> T deserializeObject(InputStream in, ClassLoader cl)
-            throws IOException, ClassNotFoundException {
+    public static <T> T deserializeObject(InputStream in, ClassLoader cl) throws IOException, ClassNotFoundException {
 
         final ClassLoader old = Thread.currentThread().getContextClassLoader();
         // not using resource try to avoid AutoClosable's close() on the given stream
@@ -176,8 +166,7 @@ public class InstantiationUtils {
      * @throws ClassNotFoundException Thrown if any of the classes referenced by the object cannot
      *     be resolved during deserialization.
      */
-    public static <T extends Serializable> T clone(T obj)
-            throws IOException, ClassNotFoundException {
+    public static <T extends Serializable> T clone(T obj) throws IOException, ClassNotFoundException {
         if (obj == null) {
             return null;
         } else {
@@ -259,8 +248,7 @@ public class InstantiationUtils {
         final String errorMessage = checkForInstantiationError(clazz);
 
         if (errorMessage != null) {
-            throw new RuntimeException(
-                    "The class '" + clazz.getName() + "' is not instantiable: " + errorMessage);
+            throw new RuntimeException("The class '" + clazz.getName() + "' is not instantiable: " + errorMessage);
         }
     }
 
@@ -299,9 +287,7 @@ public class InstantiationUtils {
      */
     public static boolean isProperClass(Class<?> clazz) {
         int mods = clazz.getModifiers();
-        return !(Modifier.isAbstract(mods)
-                || Modifier.isInterface(mods)
-                || Modifier.isNative(mods));
+        return !(Modifier.isAbstract(mods) || Modifier.isInterface(mods) || Modifier.isNative(mods));
     }
 
     /**
@@ -325,8 +311,7 @@ public class InstantiationUtils {
     public static boolean hasPublicNullaryConstructor(Class<?> clazz) {
         Constructor<?>[] constructors = clazz.getConstructors();
         for (Constructor<?> constructor : constructors) {
-            if (constructor.getParameterCount() == 0
-                    && Modifier.isPublic(constructor.getModifiers())) {
+            if (constructor.getParameterCount() == 0 && Modifier.isPublic(constructor.getModifiers())) {
                 return true;
             }
         }

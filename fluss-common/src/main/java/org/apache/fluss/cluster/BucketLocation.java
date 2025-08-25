@@ -31,23 +31,19 @@ import java.util.Objects;
 public final class BucketLocation {
     private final PhysicalTablePath physicalTablePath;
     private final TableBucket tableBucket;
-    @Nullable private Integer leader;
+
+    @Nullable
+    private Integer leader;
+
     private final int[] replicas;
 
     public BucketLocation(
-            PhysicalTablePath physicalTablePath,
-            long tableId,
-            int bucketId,
-            @Nullable Integer leader,
-            int[] replicas) {
+            PhysicalTablePath physicalTablePath, long tableId, int bucketId, @Nullable Integer leader, int[] replicas) {
         this(physicalTablePath, new TableBucket(tableId, bucketId), leader, replicas);
     }
 
     public BucketLocation(
-            PhysicalTablePath physicalTablePath,
-            TableBucket tableBucket,
-            @Nullable Integer leader,
-            int[] replicas) {
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket, @Nullable Integer leader, int[] replicas) {
         this.physicalTablePath = physicalTablePath;
         this.tableBucket = tableBucket;
         this.leader = leader;
@@ -103,10 +99,7 @@ public final class BucketLocation {
     public String toString() {
         return String.format(
                 "Bucket(physicalTablePath = %s, %s, leader = %s, replicas = %s)",
-                physicalTablePath,
-                tableBucket,
-                leader == null ? "none" : leader,
-                formatNodeIds(replicas));
+                physicalTablePath, tableBucket, leader == null ? "none" : leader, formatNodeIds(replicas));
     }
 
     /** Format the node ids from each item in the array for display. */

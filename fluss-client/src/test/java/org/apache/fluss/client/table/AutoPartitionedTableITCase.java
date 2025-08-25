@@ -75,8 +75,7 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
     @Test
     void testPartitionedPrimaryKeyTable() throws Exception {
         Schema schema = createPartitionedTable(DATA1_TABLE_PATH_PK, true);
-        Map<String, Long> partitionIdByNames =
-                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(DATA1_TABLE_PATH_PK);
+        Map<String, Long> partitionIdByNames = FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(DATA1_TABLE_PATH_PK);
         Table table = conn.getTable(DATA1_TABLE_PATH_PK);
         UpsertWriter upsertWriter = table.newUpsert().createWriter();
         int recordsPerPartition = 5;
@@ -112,30 +111,25 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
     void testPartitionedTablePrefixLookup(boolean isDataLakeEnabled) throws Exception {
         // This case partition key 'b' in both pk and bucket key (prefix key).
         TablePath tablePath = TablePath.of("test_db_1", "test_partitioned_table_prefix_lookup");
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .column("c", DataTypes.BIGINT())
-                        .column("d", DataTypes.STRING())
-                        .primaryKey("a", "b", "c")
-                        .build();
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .distributedBy(3, "a", "c")
-                        .partitionedBy("b")
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                        .property(
-                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
-                                AutoPartitionTimeUnit.YEAR)
-                        // test data lake bucket assigner for prefix lookup
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, isDataLakeEnabled)
-                        .build();
+        Schema schema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.STRING())
+                .column("c", DataTypes.BIGINT())
+                .column("d", DataTypes.STRING())
+                .primaryKey("a", "b", "c")
+                .build();
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(schema)
+                .distributedBy(3, "a", "c")
+                .partitionedBy("b")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR)
+                // test data lake bucket assigner for prefix lookup
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, isDataLakeEnabled)
+                .build();
         RowType rowType = schema.getRowType();
         createTable(tablePath, descriptor, false);
-        Map<String, Long> partitionIdByNames =
-                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
+        Map<String, Long> partitionIdByNames = FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
 
         Table table = conn.getTable(tablePath);
         for (String partition : partitionIdByNames.keySet()) {
@@ -146,25 +140,20 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
         for (int i = 0; i < 3; i++) {
             // test prefix lookups with partition field (b) in different
             // position of the lookup columns
-            List<String> lookupColumns =
-                    i == 0
-                            ? Arrays.asList("b", "a", "c")
-                            : i == 1 ? Arrays.asList("a", "b", "c") : Arrays.asList("a", "c", "b");
+            List<String> lookupColumns = i == 0
+                    ? Arrays.asList("b", "a", "c")
+                    : i == 1 ? Arrays.asList("a", "b", "c") : Arrays.asList("a", "c", "b");
             Lookuper prefixLookuper = table.newLookup().lookupBy(lookupColumns).createLookuper();
             for (String partition : partitionIdByNames.keySet()) {
-                Object[] lookupRow =
-                        i == 0
-                                ? new Object[] {partition, 1, 1L}
-                                : i == 1
-                                        ? new Object[] {1, partition, 1L}
-                                        : new Object[] {1, 1L, partition};
+                Object[] lookupRow = i == 0
+                        ? new Object[] {partition, 1, 1L}
+                        : i == 1 ? new Object[] {1, partition, 1L} : new Object[] {1, 1L, partition};
                 CompletableFuture<LookupResult> result = prefixLookuper.lookup(row(lookupRow));
                 LookupResult prefixLookupResult = result.get();
                 assertThat(prefixLookupResult).isNotNull();
                 List<InternalRow> rowList = prefixLookupResult.getRowList();
                 assertThat(rowList.size()).isEqualTo(1);
-                assertRowValueEquals(
-                        rowType, rowList.get(0), new Object[] {1, partition, 1L, "value1"});
+                assertRowValueEquals(rowType, rowList.get(0), new Object[] {1, partition, 1L, "value1"});
             }
         }
     }
@@ -173,24 +162,20 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
     void testInvalidPrefixLookupForPartitionedTable() throws Exception {
         // This case partition key 'c' only in pk but not in prefix key.
         TablePath tablePath = TablePath.of("test_db_1", "test_partitioned_table_prefix_lookup2");
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.BIGINT())
-                        .column("c", DataTypes.STRING())
-                        .column("d", DataTypes.STRING())
-                        .primaryKey("a", "b", "c")
-                        .build();
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .distributedBy(3, "a", "b")
-                        .partitionedBy("c")
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                        .property(
-                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
-                                AutoPartitionTimeUnit.YEAR)
-                        .build();
+        Schema schema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.BIGINT())
+                .column("c", DataTypes.STRING())
+                .column("d", DataTypes.STRING())
+                .primaryKey("a", "b", "c")
+                .build();
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(schema)
+                .distributedBy(3, "a", "b")
+                .partitionedBy("c")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR)
+                .build();
         createTable(tablePath, descriptor, false);
 
         Table table = conn.getTable(tablePath);
@@ -206,8 +191,7 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
     @Test
     void testPartitionedLogTable() throws Exception {
         Schema schema = createPartitionedTable(DATA1_TABLE_PATH, false);
-        Map<String, Long> partitionIdByNames =
-                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(DATA1_TABLE_PATH);
+        Map<String, Long> partitionIdByNames = FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(DATA1_TABLE_PATH);
         Table table = conn.getTable(DATA1_TABLE_PATH);
         AppendWriter appendWriter = table.newAppend().createWriter();
         int recordsPerPartition = 5;
@@ -232,12 +216,10 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
         // write rows
         TablePath tablePath = TablePath.of("test_db_1", "unsubscribe_partition_bucket_table");
         Schema schema = createPartitionedTable(tablePath, false);
-        Map<String, Long> partitionIdByNames =
-                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
+        Map<String, Long> partitionIdByNames = FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
         Table table = conn.getTable(tablePath);
 
-        Map<Long, List<InternalRow>> expectPartitionAppendRows =
-                writeRows(table, partitionIdByNames);
+        Map<Long, List<InternalRow>> expectPartitionAppendRows = writeRows(table, partitionIdByNames);
 
         // then, let's verify the logs
         try (LogScanner logScanner = table.newScan().createLogScanner()) {
@@ -249,7 +231,8 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
             verifyRows(schema.getRowType(), actualRows, expectPartitionAppendRows);
 
             // now, unsubscribe some partitions
-            long removedPartitionId = expectPartitionAppendRows.keySet().iterator().next();
+            long removedPartitionId =
+                    expectPartitionAppendRows.keySet().iterator().next();
             logScanner.unsubscribe(removedPartitionId, 0);
 
             // now, write some records again
@@ -266,8 +249,7 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
         return rows.values().stream().map(List::size).reduce(0, Integer::sum);
     }
 
-    private Map<Long, List<InternalRow>> writeRows(
-            Table table, Map<String, Long> partitionIdByNames) {
+    private Map<Long, List<InternalRow>> writeRows(Table table, Map<String, Long> partitionIdByNames) {
         AppendWriter appendWriter = table.newAppend().createWriter();
         int recordsPerPartition = 5;
         Map<Long, List<InternalRow>> expectPartitionAppendRows = new HashMap<>();
@@ -284,8 +266,7 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
         return expectPartitionAppendRows;
     }
 
-    private Map<Long, List<InternalRow>> pollRecords(
-            LogScanner logScanner, int expectRecordsCount) {
+    private Map<Long, List<InternalRow>> pollRecords(LogScanner logScanner, int expectRecordsCount) {
         int scanRecordCount = 0;
         Map<Long, List<InternalRow>> actualRows = new HashMap<>();
         while (scanRecordCount < expectRecordsCount) {
@@ -311,7 +292,8 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
         Lookuper lookuper = table.newLookup().createLookuper();
 
         // lookup a not exist partition will return null.
-        assertThat(lookuper.lookup(row(1, partitionName)).get().getSingletonRow()).isEqualTo(null);
+        assertThat(lookuper.lookup(row(1, partitionName)).get().getSingletonRow())
+                .isEqualTo(null);
 
         // test write to not exist partition
         UpsertWriter upsertWriter = table.newUpsert().createWriter();
@@ -337,24 +319,18 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testAddPartitionForAutoPartitionedTable() throws Exception {
-        TablePath tablePath =
-                TablePath.of("test_db_1", "test_auto_partition_table_add_partition_1");
+        TablePath tablePath = TablePath.of("test_db_1", "test_auto_partition_table_add_partition_1");
         Schema schema = createPartitionedTable(tablePath, false);
         int currentYear = LocalDateTime.now().getYear();
 
         // create one partition.
-        admin.createPartition(
-                        tablePath, newPartitionSpec("c", String.valueOf(currentYear + 10)), false)
+        admin.createPartition(tablePath, newPartitionSpec("c", String.valueOf(currentYear + 10)), false)
                 .get();
-        Map<String, Long> partitionIdByNames =
-                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 3);
+        Map<String, Long> partitionIdByNames = FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath, 3);
 
         List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
         List<String> expectedPartitions = new ArrayList<>(partitionIdByNames.keySet());
-        assertThat(
-                        partitionInfos.stream()
-                                .map(PartitionInfo::getPartitionName)
-                                .collect(Collectors.toList()))
+        assertThat(partitionInfos.stream().map(PartitionInfo::getPartitionName).collect(Collectors.toList()))
                 .containsExactlyInAnyOrderElementsOf(expectedPartitions);
 
         Table table = conn.getTable(tablePath);
@@ -376,16 +352,14 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
         verifyPartitionLogs(table, schema.getRowType(), expectPartitionAppendRows);
     }
 
-    private Schema createPartitionedTable(TablePath tablePath, boolean isPrimaryTable)
-            throws Exception {
-        Schema.Builder schemaBuilder =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .withComment("a is first column")
-                        .column("b", DataTypes.STRING())
-                        .withComment("b is second column")
-                        .column("c", DataTypes.STRING())
-                        .withComment("c is third column");
+    private Schema createPartitionedTable(TablePath tablePath, boolean isPrimaryTable) throws Exception {
+        Schema.Builder schemaBuilder = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .withComment("a is first column")
+                .column("b", DataTypes.STRING())
+                .withComment("b is second column")
+                .column("c", DataTypes.STRING())
+                .withComment("c is third column");
 
         if (isPrimaryTable) {
             schemaBuilder.primaryKey("a", "c");
@@ -393,15 +367,12 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
 
         Schema schema = schemaBuilder.build();
 
-        TableDescriptor partitionTableDescriptor =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .partitionedBy("c")
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                        .property(
-                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
-                                AutoPartitionTimeUnit.YEAR)
-                        .build();
+        TableDescriptor partitionTableDescriptor = TableDescriptor.builder()
+                .schema(schema)
+                .partitionedBy("c")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR)
+                .build();
         createTable(tablePath, partitionTableDescriptor, false);
         return schema;
     }

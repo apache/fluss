@@ -48,13 +48,10 @@ import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TI
  * @param <WriteResult> the type of write lake result.
  */
 public class TieringSource<WriteResult>
-        implements Source<
-                TableBucketWriteResult<WriteResult>, TieringSplit, TieringSourceEnumeratorState> {
+        implements Source<TableBucketWriteResult<WriteResult>, TieringSplit, TieringSourceEnumeratorState> {
 
-    public static final String TIERING_SOURCE_TRANSFORMATION_UID =
-            "$$fluss_tiering_source_operator$$";
-    public static final OperatorID TIERING_SOURCE_OPERATOR_UID =
-            new OperatorID(generateOperatorHash());
+    public static final String TIERING_SOURCE_TRANSFORMATION_UID = "$$fluss_tiering_source_operator$$";
+    public static final OperatorID TIERING_SOURCE_OPERATOR_UID = new OperatorID(generateOperatorHash());
 
     private final Configuration flussConf;
     private final LakeTieringFactory<WriteResult, ?> lakeTieringFactory;
@@ -77,8 +74,7 @@ public class TieringSource<WriteResult>
     @Override
     public SplitEnumerator<TieringSplit, TieringSourceEnumeratorState> createEnumerator(
             SplitEnumeratorContext<TieringSplit> splitEnumeratorContext) throws Exception {
-        return new TieringSourceEnumerator(
-                flussConf, splitEnumeratorContext, pollTieringTableIntervalMs);
+        return new TieringSourceEnumerator(flussConf, splitEnumeratorContext, pollTieringTableIntervalMs);
     }
 
     @Override
@@ -87,8 +83,7 @@ public class TieringSource<WriteResult>
             TieringSourceEnumeratorState tieringSourceEnumeratorState)
             throws Exception {
         // stateless operator
-        return new TieringSourceEnumerator(
-                flussConf, splitEnumeratorContext, pollTieringTableIntervalMs);
+        return new TieringSourceEnumerator(flussConf, splitEnumeratorContext, pollTieringTableIntervalMs);
     }
 
     @Override
@@ -97,8 +92,7 @@ public class TieringSource<WriteResult>
     }
 
     @Override
-    public SimpleVersionedSerializer<TieringSourceEnumeratorState>
-            getEnumeratorCheckpointSerializer() {
+    public SimpleVersionedSerializer<TieringSourceEnumeratorState> getEnumeratorCheckpointSerializer() {
         return TieringSourceEnumeratorStateSerializer.INSTANCE;
     }
 
@@ -124,8 +118,7 @@ public class TieringSource<WriteResult>
         private long pollTieringTableIntervalMs =
                 POLL_TIERING_TABLE_INTERVAL.defaultValue().toMillis();
 
-        public Builder(
-                Configuration flussConf, LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
+        public Builder(Configuration flussConf, LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
             this.flussConf = flussConf;
             this.lakeTieringFactory = lakeTieringFactory;
         }

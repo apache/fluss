@@ -50,8 +50,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 @Internal
 @ThreadSafe
-public abstract class AbstractAutoCloseableRegistry<
-                R extends AutoCloseable, C extends R, T, E extends Exception>
+public abstract class AbstractAutoCloseableRegistry<R extends AutoCloseable, C extends R, T, E extends Exception>
         implements AutoCloseable {
 
     /** Lock that guards state of this registry. * */
@@ -93,8 +92,7 @@ public abstract class AbstractAutoCloseableRegistry<
         }
 
         IOUtils.closeQuietly(closeable);
-        throw new IOException(
-                "Cannot register Closeable, registry is already closed. Closing argument.");
+        throw new IOException("Cannot register Closeable, registry is already closed. Closing argument.");
     }
 
     /**

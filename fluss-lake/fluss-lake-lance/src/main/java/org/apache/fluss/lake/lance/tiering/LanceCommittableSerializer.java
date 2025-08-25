@@ -50,11 +50,7 @@ public class LanceCommittableSerializer implements SimpleVersionedSerializer<Lan
     public LanceCommittable deserialize(int version, byte[] serialized) throws IOException {
         if (version != CURRENT_VERSION) {
             throw new UnsupportedOperationException(
-                    "Expecting LanceCommittable version to be "
-                            + CURRENT_VERSION
-                            + ", but found "
-                            + version
-                            + ".");
+                    "Expecting LanceCommittable version to be " + CURRENT_VERSION + ", but found " + version + ".");
         }
         try (ByteArrayInputStream bais = new ByteArrayInputStream(serialized);
                 ObjectInputStream ois = new ObjectInputStream(bais)) {

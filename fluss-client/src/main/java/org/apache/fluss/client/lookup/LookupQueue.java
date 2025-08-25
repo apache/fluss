@@ -43,17 +43,16 @@ class LookupQueue {
     private final long batchTimeoutNanos;
 
     LookupQueue(Configuration conf) {
-        this.lookupQueue =
-                new ArrayBlockingQueue<>(conf.get(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE));
+        this.lookupQueue = new ArrayBlockingQueue<>(conf.get(ConfigOptions.CLIENT_LOOKUP_QUEUE_SIZE));
         this.maxBatchSize = conf.get(ConfigOptions.CLIENT_LOOKUP_MAX_BATCH_SIZE);
-        this.batchTimeoutNanos = conf.get(ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT).toNanos();
+        this.batchTimeoutNanos =
+                conf.get(ConfigOptions.CLIENT_LOOKUP_BATCH_TIMEOUT).toNanos();
         this.closed = false;
     }
 
     void appendLookup(AbstractLookupQuery<?> lookup) {
         if (closed) {
-            throw new IllegalStateException(
-                    "Can not append lookup operation since the LookupQueue is closed.");
+            throw new IllegalStateException("Can not append lookup operation since the LookupQueue is closed.");
         }
 
         try {

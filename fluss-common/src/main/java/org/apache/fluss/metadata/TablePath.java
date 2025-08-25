@@ -100,8 +100,7 @@ public class TablePath implements Serializable {
             return false;
         }
         TablePath that = (TablePath) o;
-        return Objects.equals(databaseName, that.databaseName)
-                && Objects.equals(tableName, that.tableName);
+        return Objects.equals(databaseName, that.databaseName) && Objects.equals(tableName, that.tableName);
     }
 
     @Override
@@ -128,16 +127,14 @@ public class TablePath implements Serializable {
     public static void validateDatabaseName(String databaseName) throws InvalidDatabaseException {
         String dbError = detectInvalidName(databaseName);
         if (dbError != null) {
-            throw new InvalidDatabaseException(
-                    "Database name " + databaseName + " is invalid: " + dbError);
+            throw new InvalidDatabaseException("Database name " + databaseName + " is invalid: " + dbError);
         }
     }
 
     public static void validateTableName(String tableName) throws InvalidTableException {
         String tableError = detectInvalidName(tableName);
         if (tableError != null) {
-            throw new InvalidTableException(
-                    "Table name " + tableName + " is invalid: " + tableError);
+            throw new InvalidTableException("Table name " + tableName + " is invalid: " + tableError);
         }
     }
 
@@ -155,10 +152,7 @@ public class TablePath implements Serializable {
             return "'..' is not allowed";
         }
         if (identifier.length() > MAX_NAME_LENGTH) {
-            return "the length of '"
-                    + identifier
-                    + "' is longer than the max allowed length "
-                    + MAX_NAME_LENGTH;
+            return "the length of '" + identifier + "' is longer than the max allowed length " + MAX_NAME_LENGTH;
         }
         if (containsInvalidPattern(identifier)) {
             return "'"
@@ -176,11 +170,7 @@ public class TablePath implements Serializable {
 
             // We don't use Character.isLetterOrDigit(c) because it's slower
             boolean validChar =
-                    (c >= 'a' && c <= 'z')
-                            || (c >= '0' && c <= '9')
-                            || (c >= 'A' && c <= 'Z')
-                            || c == '_'
-                            || c == '-';
+                    (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || (c >= 'A' && c <= 'Z') || c == '_' || c == '-';
 
             if (!validChar) {
                 return true;

@@ -31,8 +31,7 @@ public class ExceptionUtilsTest {
     @Test
     void testStringifyNullException() {
         assertThat(ExceptionUtils.STRINGIFIED_NULL_EXCEPTION).isNotNull();
-        assertThat(ExceptionUtils.STRINGIFIED_NULL_EXCEPTION)
-                .isEqualTo(ExceptionUtils.stringifyException(null));
+        assertThat(ExceptionUtils.STRINGIFIED_NULL_EXCEPTION).isEqualTo(ExceptionUtils.stringifyException(null));
     }
 
     @Test
@@ -68,19 +67,16 @@ public class ExceptionUtilsTest {
         assertThatThrownBy(() -> ExceptionUtils.rethrow(error)).isInstanceOf(InternalError.class);
         // runtime exception should be rethrown
         Throwable runtimeException = new RuntimeException();
-        assertThatThrownBy(() -> ExceptionUtils.rethrow(runtimeException))
-                .isInstanceOf(RuntimeException.class);
+        assertThatThrownBy(() -> ExceptionUtils.rethrow(runtimeException)).isInstanceOf(RuntimeException.class);
         // other exception should be rethrow with wrapping to runtime exception
         Throwable classNotFoundException = new ClassNotFoundException();
-        assertThatThrownBy(() -> ExceptionUtils.rethrow(classNotFoundException))
-                .isInstanceOf(RuntimeException.class);
+        assertThatThrownBy(() -> ExceptionUtils.rethrow(classNotFoundException)).isInstanceOf(RuntimeException.class);
     }
 
     @Test
     public void testReThrowException() {
         Exception exception = new Exception("exception to be rethrown");
-        assertThatThrownBy(() -> ExceptionUtils.tryRethrowException(exception))
-                .isEqualTo(exception);
+        assertThatThrownBy(() -> ExceptionUtils.tryRethrowException(exception)).isEqualTo(exception);
 
         String parentMsg = "wrapping exception msg";
         Error error = new Error("error");
@@ -98,11 +94,9 @@ public class ExceptionUtilsTest {
 
     @Test
     public void testFindThrowableByType() {
-        assertThat(
-                        ExceptionUtils.findThrowable(
-                                        new RuntimeException(new IllegalStateException()),
-                                        IllegalStateException.class)
-                                .isPresent())
+        assertThat(ExceptionUtils.findThrowable(
+                                new RuntimeException(new IllegalStateException()), IllegalStateException.class)
+                        .isPresent())
                 .isTrue();
     }
 
@@ -124,30 +118,24 @@ public class ExceptionUtilsTest {
     @Test
     public void testExceptionStripping() {
         final Exception expectedException = new Exception("test exception");
-        Throwable strippedException =
-                ExceptionUtils.stripException(
-                        new RuntimeException(new RuntimeException(expectedException)),
-                        RuntimeException.class);
+        Throwable strippedException = ExceptionUtils.stripException(
+                new RuntimeException(new RuntimeException(expectedException)), RuntimeException.class);
 
         assertThat(strippedException).isEqualTo(expectedException);
 
         // test strip ExecutionException
-        strippedException =
-                ExceptionUtils.stripExecutionException(new ExecutionException(expectedException));
+        strippedException = ExceptionUtils.stripExecutionException(new ExecutionException(expectedException));
         assertThat(strippedException).isEqualTo(expectedException);
 
         // test strip CompletionException
-        strippedException =
-                ExceptionUtils.stripCompletionException(new CompletionException(expectedException));
+        strippedException = ExceptionUtils.stripCompletionException(new CompletionException(expectedException));
         assertThat(strippedException).isEqualTo(expectedException);
     }
 
     @Test
     public void testInvalidExceptionStripping() {
-        final Exception expectedException =
-                new Exception(new RuntimeException(new Exception("inner exception")));
-        final Throwable strippedException =
-                ExceptionUtils.stripException(expectedException, RuntimeException.class);
+        final Exception expectedException = new Exception(new RuntimeException(new Exception("inner exception")));
+        final Throwable strippedException = ExceptionUtils.stripException(expectedException, RuntimeException.class);
 
         assertThat(strippedException).isEqualTo(expectedException);
     }
@@ -167,18 +155,15 @@ public class ExceptionUtilsTest {
 
     @Test
     public void testUpdateDetailMessageOfRelevantThrowableAsCause() {
-        Throwable oomCause =
-                new IllegalArgumentException("another message deep down in the cause tree");
+        Throwable oomCause = new IllegalArgumentException("another message deep down in the cause tree");
 
         Throwable oom = new OutOfMemoryError("old message").initCause(oomCause);
-        oom.setStackTrace(
-                new StackTraceElement[] {new StackTraceElement("class", "method", "file", 1)});
+        oom.setStackTrace(new StackTraceElement[] {new StackTraceElement("class", "method", "file", 1)});
         oom.addSuppressed(new NullPointerException());
 
         Throwable rootThrowable = new IllegalStateException("another message", oom);
         ExceptionUtils.updateDetailMessage(
-                rootThrowable,
-                t -> t.getClass().equals(OutOfMemoryError.class) ? "new message" : null);
+                rootThrowable, t -> t.getClass().equals(OutOfMemoryError.class) ? "new message" : null);
 
         assertThat(rootThrowable.getCause()).isSameAs(oom);
         assertThat(rootThrowable.getCause().getMessage()).isEqualTo("new message");
@@ -191,8 +176,7 @@ public class ExceptionUtilsTest {
     @Test
     public void testUpdateDetailMessageWithoutRelevantThrowable() {
         Throwable originalThrowable =
-                new IllegalStateException(
-                        "root message", new IllegalArgumentException("cause message"));
+                new IllegalStateException("root message", new IllegalArgumentException("cause message"));
         ExceptionUtils.updateDetailMessage(originalThrowable, t -> null);
 
         assertThat(originalThrowable.getMessage()).isEqualTo("root message");

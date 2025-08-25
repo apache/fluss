@@ -42,8 +42,7 @@ public class TestFileSystem extends LocalFileSystem {
     private static final AtomicInteger streamOpenCounter = new AtomicInteger(0);
 
     // current number of created, unclosed (output) stream
-    private static final Map<FsPath, Integer> currentUnclosedOutputStream =
-            MapUtils.newConcurrentHashMap();
+    private static final Map<FsPath, Integer> currentUnclosedOutputStream = MapUtils.newConcurrentHashMap();
 
     private final Configuration configuration;
 
@@ -74,8 +73,7 @@ public class TestFileSystem extends LocalFileSystem {
     }
 
     @Override
-    public FSDataOutputStream create(final FsPath filePath, final WriteMode overwrite)
-            throws IOException {
+    public FSDataOutputStream create(final FsPath filePath, final WriteMode overwrite) throws IOException {
         currentUnclosedOutputStream.compute(filePath, (k, v) -> v == null ? 1 : v + 1);
         LocalDataOutputStream stream = (LocalDataOutputStream) super.create(filePath, overwrite);
         return new TestOutputStream(stream, filePath);
@@ -136,8 +134,7 @@ public class TestFileSystem extends LocalFileSystem {
 
         @Override
         public void close() throws IOException {
-            currentUnclosedOutputStream.compute(
-                    path, (k, v) -> checkNotNull(v) == 1 ? null : v - 1);
+            currentUnclosedOutputStream.compute(path, (k, v) -> checkNotNull(v) == 1 ? null : v - 1);
             stream.close();
         }
     }

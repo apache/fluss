@@ -58,15 +58,13 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
 
-    public PaimonLakeCommitter(PaimonCatalogProvider paimonCatalogProvider, TablePath tablePath)
-            throws IOException {
+    public PaimonLakeCommitter(PaimonCatalogProvider paimonCatalogProvider, TablePath tablePath) throws IOException {
         this.paimonCatalog = paimonCatalogProvider.get();
         this.fileStoreTable = getTable(tablePath);
     }
 
     @Override
-    public PaimonCommittable toCommittable(List<PaimonWriteResult> paimonWriteResults)
-            throws IOException {
+    public PaimonCommittable toCommittable(List<PaimonWriteResult> paimonWriteResults) throws IOException {
         ManifestCommittable committable = new ManifestCommittable(COMMIT_IDENTIFIER);
         for (PaimonWriteResult paimonWriteResult : paimonWriteResults) {
             committable.addFileCommittable(paimonWriteResult.commitMessage());
@@ -75,16 +73,12 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     }
 
     @Override
-    public long commit(PaimonCommittable committable, Map<String, String> snapshotProperties)
-            throws IOException {
+    public long commit(PaimonCommittable committable, Map<String, String> snapshotProperties) throws IOException {
         ManifestCommittable manifestCommittable = committable.manifestCommittable();
         snapshotProperties.forEach(manifestCommittable::addProperty);
 
         try {
-            fileStoreCommit =
-                    fileStoreTable
-                            .store()
-                            .newCommit(FLUSS_LAKE_TIERING_COMMIT_USER, fileStoreTable);
+            fileStoreCommit = fileStoreTable.store().newCommit(FLUSS_LAKE_TIERING_COMMIT_USER, fileStoreTable);
             fileStoreCommit.commit(manifestCommittable, false);
             Long commitSnapshotId = currentCommitSnapshotId.get();
             currentCommitSnapshotId.remove();
@@ -101,17 +95,14 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
 
     @Override
     public void abort(PaimonCommittable committable) throws IOException {
-        fileStoreCommit =
-                fileStoreTable.store().newCommit(FLUSS_LAKE_TIERING_COMMIT_USER, fileStoreTable);
+        fileStoreCommit = fileStoreTable.store().newCommit(FLUSS_LAKE_TIERING_COMMIT_USER, fileStoreTable);
         fileStoreCommit.abort(committable.manifestCommittable().fileCommittables());
     }
 
     @Nullable
     @Override
-    public CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss)
-            throws IOException {
-        Snapshot latestLakeSnapshotOfLake =
-                getCommittedLatestSnapshotOfLake(FLUSS_LAKE_TIERING_COMMIT_USER);
+    public CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss) throws IOException {
+        Snapshot latestLakeSnapshotOfLake = getCommittedLatestSnapshotOfLake(FLUSS_LAKE_TIERING_COMMIT_USER);
         if (latestLakeSnapshotOfLake == null) {
             return null;
         }
@@ -119,13 +110,11 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
         // we get the latest snapshot committed by fluss,
         // but the latest snapshot is not greater than latestLakeSnapshotIdOfFluss, no any missing
         // snapshot, return directly
-        if (latestLakeSnapshotIdOfFluss != null
-                && latestLakeSnapshotOfLake.id() <= latestLakeSnapshotIdOfFluss) {
+        if (latestLakeSnapshotIdOfFluss != null && latestLakeSnapshotOfLake.id() <= latestLakeSnapshotIdOfFluss) {
             return null;
         }
 
-        CommittedLakeSnapshot committedLakeSnapshot =
-                new CommittedLakeSnapshot(latestLakeSnapshotOfLake.id());
+        CommittedLakeSnapshot committedLakeSnapshot = new CommittedLakeSnapshot(latestLakeSnapshotOfLake.id());
 
         if (latestLakeSnapshotOfLake.properties() == null) {
             throw new IOException("Failed to load committed lake snapshot properties from Paimon.");
@@ -138,15 +127,13 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
         // it can resume tiering with new tiering service
         Map<String, String> lakeSnapshotProperties = latestLakeSnapshotOfLake.properties();
         if (lakeSnapshotProperties == null) {
-            throw new IllegalArgumentException(
-                    "Cannot resume tiering from an old version(v0.7) of tiering service. "
-                            + "The snapshot was committed to the lake storage but failed to commit to Fluss. "
-                            + "To resolve this:\n"
-                            + "1. Run the old tiering service(v0.7) again to complete the Fluss commit\n"
-                            + "2. Then you can resume tiering with the newer version of tiering service");
+            throw new IllegalArgumentException("Cannot resume tiering from an old version(v0.7) of tiering service. "
+                    + "The snapshot was committed to the lake storage but failed to commit to Fluss. "
+                    + "To resolve this:\n"
+                    + "1. Run the old tiering service(v0.7) again to complete the Fluss commit\n"
+                    + "2. Then you can resume tiering with the newer version of tiering service");
         } else {
-            String flussOffsetProperties =
-                    lakeSnapshotProperties.get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
+            String flussOffsetProperties = lakeSnapshotProperties.get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
             for (JsonNode node : OBJECT_MAPPER.readTree(flussOffsetProperties)) {
                 BucketOffset bucketOffset = BucketOffsetJsonSerde.INSTANCE.deserialize(node);
                 if (bucketOffset.getPartitionId() != null) {
@@ -156,8 +143,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
                             bucketOffset.getBucket(),
                             bucketOffset.getLogOffset());
                 } else {
-                    committedLakeSnapshot.addBucket(
-                            bucketOffset.getBucket(), bucketOffset.getLogOffset());
+                    committedLakeSnapshot.addBucket(bucketOffset.getBucket(), bucketOffset.getLogOffset());
                 }
             }
         }
@@ -168,10 +154,9 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     private Snapshot getCommittedLatestSnapshotOfLake(String commitUser) throws IOException {
         // get the latest snapshot committed by fluss or latest committed id
         SnapshotManager snapshotManager = fileStoreTable.snapshotManager();
-        Long userCommittedSnapshotIdOrLatestCommitId =
-                fileStoreTable
-                        .snapshotManager()
-                        .pickOrLatest((snapshot -> snapshot.commitUser().equals(commitUser)));
+        Long userCommittedSnapshotIdOrLatestCommitId = fileStoreTable
+                .snapshotManager()
+                .pickOrLatest((snapshot -> snapshot.commitUser().equals(commitUser)));
         // no any snapshot, return null directly
         if (userCommittedSnapshotIdOrLatestCommitId == null) {
             return null;
@@ -203,15 +188,11 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
 
     private FileStoreTable getTable(TablePath tablePath) throws IOException {
         try {
-            FileStoreTable table =
-                    (FileStoreTable)
-                            paimonCatalog
-                                    .getTable(toPaimon(tablePath))
-                                    .copy(
-                                            Collections.singletonMap(
-                                                    CoreOptions.COMMIT_CALLBACKS.key(),
-                                                    PaimonLakeCommitter.PaimonCommitCallback.class
-                                                            .getName()));
+            FileStoreTable table = (FileStoreTable) paimonCatalog
+                    .getTable(toPaimon(tablePath))
+                    .copy(Collections.singletonMap(
+                            CoreOptions.COMMIT_CALLBACKS.key(),
+                            PaimonLakeCommitter.PaimonCommitCallback.class.getName()));
 
             return table;
         } catch (Exception e) {
@@ -223,8 +204,7 @@ public class PaimonLakeCommitter implements LakeCommitter<PaimonWriteResult, Pai
     public static class PaimonCommitCallback implements CommitCallback {
 
         @Override
-        public void call(
-                List<ManifestEntry> list, List<IndexManifestEntry> indexFiles, Snapshot snapshot) {
+        public void call(List<ManifestEntry> list, List<IndexManifestEntry> indexFiles, Snapshot snapshot) {
             currentCommitSnapshotId.set(snapshot.id());
         }
 

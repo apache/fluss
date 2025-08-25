@@ -54,15 +54,13 @@ public class ReporterSetup {
             return Collections.emptyList();
         }
         Set<String> configuredReporters = new HashSet<>(reporters);
-        final Map<String, MetricReporterPlugin> discoveredReporterPlugins =
-                loadAvailableReporterPlugins(pluginManager);
+        final Map<String, MetricReporterPlugin> discoveredReporterPlugins = loadAvailableReporterPlugins(pluginManager);
         return setUpReporters(configuredReporters, discoveredReporterPlugins, configuration);
     }
 
     private static Map<String, MetricReporterPlugin> loadAvailableReporterPlugins(
             @Nullable PluginManager pluginManager) {
-        final Map<String, MetricReporterPlugin> reporterPlugins =
-                CollectionUtils.newHashMapWithExpectedSize(2);
+        final Map<String, MetricReporterPlugin> reporterPlugins = CollectionUtils.newHashMapWithExpectedSize(2);
         final Iterator<MetricReporterPlugin> pluginIterator = getAllReporterPlugins(pluginManager);
         // do not use streams or for-each loops here because they do not allow catching individual
         // ServiceConfigurationErrors
@@ -79,12 +77,11 @@ public class ReporterSetup {
                             "Found {} with name {} at {}.",
                             MetricReporterPlugin.class.getSimpleName(),
                             reporterName,
-                            new File(
-                                            plugin.getClass()
-                                                    .getProtectionDomain()
-                                                    .getCodeSource()
-                                                    .getLocation()
-                                                    .toURI())
+                            new File(plugin.getClass()
+                                            .getProtectionDomain()
+                                            .getCodeSource()
+                                            .getLocation()
+                                            .toURI())
                                     .getCanonicalPath());
                 } else {
                     LOG.warn(
@@ -100,14 +97,11 @@ public class ReporterSetup {
         return Collections.unmodifiableMap(reporterPlugins);
     }
 
-    private static Iterator<MetricReporterPlugin> getAllReporterPlugins(
-            @Nullable PluginManager pluginManager) {
+    private static Iterator<MetricReporterPlugin> getAllReporterPlugins(@Nullable PluginManager pluginManager) {
         final Iterator<MetricReporterPlugin> pluginIteratorSPI =
                 ServiceLoader.load(MetricReporterPlugin.class).iterator();
         final Iterator<MetricReporterPlugin> iteratorPlugins =
-                pluginManager != null
-                        ? pluginManager.load(MetricReporterPlugin.class)
-                        : Collections.emptyIterator();
+                pluginManager != null ? pluginManager.load(MetricReporterPlugin.class) : Collections.emptyIterator();
 
         return Iterators.concat(iteratorPlugins, pluginIteratorSPI);
     }
@@ -126,8 +120,7 @@ public class ReporterSetup {
                 continue;
             }
             try {
-                MetricReporterPlugin metricReporterPlugin =
-                        discoveredReporterPlugins.get(reporterName);
+                MetricReporterPlugin metricReporterPlugin = discoveredReporterPlugins.get(reporterName);
                 MetricReporter reporter = metricReporterPlugin.createMetricReporter(reporterConfig);
                 Configuration metricConfig = new Configuration(reporterConfig);
                 reporter.open(metricConfig);

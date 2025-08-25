@@ -45,12 +45,10 @@ public class ServerConfigurationParserFactory implements ParserResultFactory<Ser
 
     @Override
     public ServerConfiguration createResult(@Nonnull CommandLine commandLine) {
-        final String configDir =
-                commandLine.getOptionValue(CommandLineOptions.CONFIG_DIR_OPTION.getOpt());
+        final String configDir = commandLine.getOptionValue(CommandLineOptions.CONFIG_DIR_OPTION.getOpt());
 
         final Properties dynamicProperties =
-                commandLine.getOptionProperties(
-                        CommandLineOptions.DYNAMIC_PROPERTY_OPTION.getOpt());
+                commandLine.getOptionProperties(CommandLineOptions.DYNAMIC_PROPERTY_OPTION.getOpt());
 
         return new ServerConfiguration(configDir, dynamicProperties, commandLine.getArgs());
     }

@@ -32,8 +32,7 @@ public class ExecutorUtilsTest {
     void testGracefulShutdown() {
         ExecutorService executorService1 = Executors.newFixedThreadPool(1);
         ExecutorService executorService2 = Executors.newFixedThreadPool(2);
-        ExecutorUtils.gracefulShutdown(
-                1000, TimeUnit.MILLISECONDS, executorService1, executorService2);
+        ExecutorUtils.gracefulShutdown(1000, TimeUnit.MILLISECONDS, executorService1, executorService2);
         assertThat(executorService1.isShutdown()).isTrue();
         assertThat(executorService2.isShutdown()).isTrue();
     }
@@ -42,10 +41,8 @@ public class ExecutorUtilsTest {
     void testNoBlockingShutdown() throws Exception {
         ExecutorService executorService1 = Executors.newFixedThreadPool(1);
         ExecutorService executorService2 = Executors.newFixedThreadPool(2);
-        ExecutorUtils.gracefulShutdown(
-                1000, TimeUnit.MILLISECONDS, executorService1, executorService2);
-        ExecutorUtils.nonBlockingShutdown(
-                        1000, TimeUnit.MILLISECONDS, executorService1, executorService2)
+        ExecutorUtils.gracefulShutdown(1000, TimeUnit.MILLISECONDS, executorService1, executorService2);
+        ExecutorUtils.nonBlockingShutdown(1000, TimeUnit.MILLISECONDS, executorService1, executorService2)
                 .get();
         assertThat(executorService1.isShutdown()).isTrue();
         assertThat(executorService2.isShutdown()).isTrue();

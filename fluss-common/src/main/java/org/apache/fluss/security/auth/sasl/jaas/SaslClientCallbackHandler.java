@@ -62,28 +62,29 @@ public class SaslClientCallbackHandler implements AuthenticateCallbackHandler {
         for (Callback callback : callbacks) {
             if (callback instanceof NameCallback) {
                 NameCallback nc = (NameCallback) callback;
-                if (subject != null && !subject.getPublicCredentials(String.class).isEmpty()) {
-                    nc.setName(subject.getPublicCredentials(String.class).iterator().next());
+                if (subject != null
+                        && !subject.getPublicCredentials(String.class).isEmpty()) {
+                    nc.setName(subject.getPublicCredentials(String.class)
+                            .iterator()
+                            .next());
                 } else {
                     nc.setName(nc.getDefaultName());
                 }
             } else if (callback instanceof PasswordCallback) {
-                if (subject != null && !subject.getPrivateCredentials(String.class).isEmpty()) {
-                    char[] password =
-                            subject.getPrivateCredentials(String.class)
-                                    .iterator()
-                                    .next()
-                                    .toCharArray();
+                if (subject != null
+                        && !subject.getPrivateCredentials(String.class).isEmpty()) {
+                    char[] password = subject.getPrivateCredentials(String.class)
+                            .iterator()
+                            .next()
+                            .toCharArray();
                     ((PasswordCallback) callback).setPassword(password);
                 } else {
-                    String errorMessage =
-                            "Could not login: the client is being asked for a password, but the Fluss"
-                                    + " client code does not currently support obtaining a password from the user.";
+                    String errorMessage = "Could not login: the client is being asked for a password, but the Fluss"
+                            + " client code does not currently support obtaining a password from the user.";
                     throw new UnsupportedCallbackException(callback, errorMessage);
                 }
             } else {
-                throw new UnsupportedCallbackException(
-                        callback, "Unrecognized SASL ClientCallback");
+                throw new UnsupportedCallbackException(callback, "Unrecognized SASL ClientCallback");
             }
         }
     }

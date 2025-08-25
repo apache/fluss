@@ -63,22 +63,15 @@ class MetadataUpdaterTest {
         // repeat 20K times to reproduce StackOverflowError if there is
         // any N levels UnmodifiableCollection
         for (int i = 0; i < 20000; i++) {
-            cluster =
-                    MetadataUtils.sendMetadataRequestAndRebuildCluster(
-                            FLUSS_CLUSTER_EXTENSION.newCoordinatorClient(),
-                            true,
-                            cluster,
-                            null,
-                            null,
-                            null);
+            cluster = MetadataUtils.sendMetadataRequestAndRebuildCluster(
+                    FLUSS_CLUSTER_EXTENSION.newCoordinatorClient(), true, cluster, null, null, null);
         }
     }
 
     @Test
     void testUpdateWithEmptyMetadataResponse() throws Exception {
         RpcClient rpcClient = FLUSS_CLUSTER_EXTENSION.getRpcClient();
-        MetadataUpdater metadataUpdater =
-                new MetadataUpdater(FLUSS_CLUSTER_EXTENSION.getClientConfig(), rpcClient);
+        MetadataUpdater metadataUpdater = new MetadataUpdater(FLUSS_CLUSTER_EXTENSION.getClientConfig(), rpcClient);
 
         // update metadata
         metadataUpdater.updateMetadata(null, null, null);
@@ -100,16 +93,15 @@ class MetadataUpdaterTest {
 
         // we mock a new cluster with only server 1 so that it'll only send request
         // to server 1, which will return empty resonate
-        Cluster newCluster =
-                new Cluster(
-                        Collections.singletonMap(
-                                newServerId,
-                                FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().get(newServerId)),
-                        null,
-                        Collections.emptyMap(),
-                        Collections.emptyMap(),
-                        Collections.emptyMap(),
-                        Collections.emptyMap());
+        Cluster newCluster = new Cluster(
+                Collections.singletonMap(
+                        newServerId,
+                        FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().get(newServerId)),
+                null,
+                Collections.emptyMap(),
+                Collections.emptyMap(),
+                Collections.emptyMap(),
+                Collections.emptyMap());
 
         metadataUpdater = new MetadataUpdater(rpcClient, newCluster);
         // shouldn't update metadata to empty since the empty metadata will be ignored

@@ -132,15 +132,13 @@ public class ConfigOption<T> {
      * @return A new config options, with the given fallback keys.
      */
     public ConfigOption<T> withFallbackKeys(String... fallbackKeys) {
-        final Stream<FallbackKey> newFallbackKeys =
-                Arrays.stream(fallbackKeys).map(FallbackKey::createFallbackKey);
+        final Stream<FallbackKey> newFallbackKeys = Arrays.stream(fallbackKeys).map(FallbackKey::createFallbackKey);
         final Stream<FallbackKey> currentAlternativeKeys = Arrays.stream(this.fallbackKeys);
 
         // put fallback keys first so that they are prioritized
         final FallbackKey[] mergedAlternativeKeys =
                 Stream.concat(newFallbackKeys, currentAlternativeKeys).toArray(FallbackKey[]::new);
-        return new ConfigOption<>(
-                key, clazz, description, defaultValue, isList, mergedAlternativeKeys);
+        return new ConfigOption<>(key, clazz, description, defaultValue, isList, mergedAlternativeKeys);
     }
 
     /**
@@ -162,10 +160,8 @@ public class ConfigOption<T> {
 
         // put deprecated keys last so that they are de-prioritized
         final FallbackKey[] mergedAlternativeKeys =
-                Stream.concat(currentAlternativeKeys, newDeprecatedKeys)
-                        .toArray(FallbackKey[]::new);
-        return new ConfigOption<>(
-                key, clazz, description, defaultValue, isList, mergedAlternativeKeys);
+                Stream.concat(currentAlternativeKeys, newDeprecatedKeys).toArray(FallbackKey[]::new);
+        return new ConfigOption<>(key, clazz, description, defaultValue, isList, mergedAlternativeKeys);
     }
 
     /**
@@ -247,8 +243,7 @@ public class ConfigOption<T> {
                     && Arrays.equals(this.fallbackKeys, that.fallbackKeys)
                     && (this.defaultValue == null
                             ? that.defaultValue == null
-                            : (that.defaultValue != null
-                                    && this.defaultValue.equals(that.defaultValue)));
+                            : (that.defaultValue != null && this.defaultValue.equals(that.defaultValue)));
         } else {
             return false;
         }
@@ -264,7 +259,6 @@ public class ConfigOption<T> {
     @Override
     public String toString() {
         return String.format(
-                "Key: '%s' , default: %s (fallback keys: %s)",
-                key, defaultValue, Arrays.toString(fallbackKeys));
+                "Key: '%s' , default: %s (fallback keys: %s)", key, defaultValue, Arrays.toString(fallbackKeys));
     }
 }

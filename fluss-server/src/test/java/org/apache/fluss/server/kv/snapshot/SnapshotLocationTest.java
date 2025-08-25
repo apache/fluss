@@ -34,8 +34,11 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Unit tests for the {@link org.apache.fluss.server.kv.snapshot.SnapshotLocation}. */
 class SnapshotLocationTest {
 
-    @TempDir private Path exclusiveSnapshotDir;
-    @TempDir private Path sharedSnapshotDir;
+    @TempDir
+    private Path exclusiveSnapshotDir;
+
+    @TempDir
+    private Path sharedSnapshotDir;
 
     // ------------------------------------------------------------------------
     //  tests
@@ -49,25 +52,17 @@ class SnapshotLocationTest {
                 createSnapshotLocation(LocalFileSystem.getSharedInstance(), writeBufferSize);
 
         // test write not-shared
-        verifyWriteFlushesIfAboveThreshold(
-                snapshotLocation, writeBufferSize, SnapshotFileScope.EXCLUSIVE);
+        verifyWriteFlushesIfAboveThreshold(snapshotLocation, writeBufferSize, SnapshotFileScope.EXCLUSIVE);
         // test write shared
-        verifyWriteFlushesIfAboveThreshold(
-                snapshotLocation, writeBufferSize, SnapshotFileScope.SHARED);
+        verifyWriteFlushesIfAboveThreshold(snapshotLocation, writeBufferSize, SnapshotFileScope.SHARED);
     }
 
     private void verifyWriteFlushesIfAboveThreshold(
-            SnapshotLocation snapshotLocation,
-            int fileSizeThreshold,
-            SnapshotFileScope snapshotFileScope)
+            SnapshotLocation snapshotLocation, int fileSizeThreshold, SnapshotFileScope snapshotFileScope)
             throws IOException {
-        try (FsSnapshotOutputStream stream =
-                snapshotLocation.createSnapshotOutputStream(snapshotFileScope)) {
+        try (FsSnapshotOutputStream stream = snapshotLocation.createSnapshotOutputStream(snapshotFileScope)) {
             stream.write(new byte[fileSizeThreshold]);
-            Path pathToCheck =
-                    snapshotFileScope == SnapshotFileScope.SHARED
-                            ? sharedSnapshotDir
-                            : exclusiveSnapshotDir;
+            Path pathToCheck = snapshotFileScope == SnapshotFileScope.SHARED ? sharedSnapshotDir : exclusiveSnapshotDir;
             File[] files = new File(pathToCheck.toUri()).listFiles();
             assertThat(files).hasSize(1);
             File file = files[0];
@@ -88,15 +83,12 @@ class SnapshotLocationTest {
         flushAndVerify(10, 11, false);
     }
 
-    private void flushAndVerify(int minFileSize, int bytesToFlush, boolean expectEmpty)
-            throws IOException {
-        try (FsSnapshotOutputStream stream =
-                createSnapshotLocation(LocalFileSystem.getSharedInstance(), minFileSize)
-                        .createSnapshotOutputStream(SnapshotFileScope.EXCLUSIVE)) {
+    private void flushAndVerify(int minFileSize, int bytesToFlush, boolean expectEmpty) throws IOException {
+        try (FsSnapshotOutputStream stream = createSnapshotLocation(LocalFileSystem.getSharedInstance(), minFileSize)
+                .createSnapshotOutputStream(SnapshotFileScope.EXCLUSIVE)) {
             stream.write(new byte[bytesToFlush]);
             stream.flush();
-            assertThat(new File(exclusiveSnapshotDir.toUri()).listFiles())
-                    .hasSize(expectEmpty ? 0 : 1);
+            assertThat(new File(exclusiveSnapshotDir.toUri()).listFiles()).hasSize(expectEmpty ? 0 : 1);
         }
     }
 
@@ -106,9 +98,6 @@ class SnapshotLocationTest {
 
     private SnapshotLocation createSnapshotLocation(FileSystem fs, int bufferSize) {
         return new SnapshotLocation(
-                fs,
-                new FsPath(exclusiveSnapshotDir.toUri()),
-                new FsPath(sharedSnapshotDir.toUri()),
-                bufferSize);
+                fs, new FsPath(exclusiveSnapshotDir.toUri()), new FsPath(sharedSnapshotDir.toUri()), bufferSize);
     }
 }

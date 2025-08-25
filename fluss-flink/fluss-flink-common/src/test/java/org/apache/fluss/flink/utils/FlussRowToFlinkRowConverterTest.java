@@ -45,8 +45,7 @@ class FlussRowToFlinkRowConverterTest {
     @Test
     void testConverter() throws Exception {
         RowType rowType = createAllRowType();
-        FlussRowToFlinkRowConverter flussRowToFlinkRowConverter =
-                new FlussRowToFlinkRowConverter(rowType);
+        FlussRowToFlinkRowConverter flussRowToFlinkRowConverter = new FlussRowToFlinkRowConverter(rowType);
 
         IndexedRow row = new IndexedRow(rowType.getChildren().toArray(new DataType[0]));
         try (IndexedRowWriter writer = genRecordForAllTypes(createAllTypes())) {
@@ -63,15 +62,12 @@ class FlussRowToFlinkRowConverterTest {
             assertThat(flinkRow.getByte(1)).isEqualTo((byte) 2);
             assertThat(flinkRow.getShort(2)).isEqualTo((short) 10);
             assertThat(flinkRow.getInt(3)).isEqualTo(100);
-            assertThat(flinkRow.getLong(4))
-                    .isEqualTo(new BigInteger("12345678901234567890").longValue());
+            assertThat(flinkRow.getLong(4)).isEqualTo(new BigInteger("12345678901234567890").longValue());
             assertThat(flinkRow.getFloat(5)).isEqualTo(13.2f);
             assertThat(flinkRow.getDouble(6)).isEqualTo(15.21);
 
-            assertThat(DateTimeUtils.toLocalDate(flinkRow.getInt(7)))
-                    .isEqualTo(LocalDate.of(2023, 10, 25));
-            assertThat(DateTimeUtils.toLocalTime(flinkRow.getInt(8)))
-                    .isEqualTo(LocalTime.of(9, 30, 0, 0));
+            assertThat(DateTimeUtils.toLocalDate(flinkRow.getInt(7))).isEqualTo(LocalDate.of(2023, 10, 25));
+            assertThat(DateTimeUtils.toLocalTime(flinkRow.getInt(8))).isEqualTo(LocalTime.of(9, 30, 0, 0));
 
             assertThat(flinkRow.getBinary(9)).isEqualTo("1234567890".getBytes());
             assertThat(flinkRow.getBinary(10)).isEqualTo("20".getBytes());
@@ -79,17 +75,13 @@ class FlussRowToFlinkRowConverterTest {
             assertThat(flinkRow.getString(11).toString()).isEqualTo("1");
             assertThat(flinkRow.getString(12).toString()).isEqualTo("hello");
 
-            assertThat(flinkRow.getDecimal(13, 5, 2).toBigDecimal())
-                    .isEqualTo(BigDecimal.valueOf(9, 2));
+            assertThat(flinkRow.getDecimal(13, 5, 2).toBigDecimal()).isEqualTo(BigDecimal.valueOf(9, 2));
             assertThat(flinkRow.getDecimal(14, 20, 0).toBigDecimal()).isEqualTo(new BigDecimal(10));
 
-            assertThat(flinkRow.getTimestamp(15, 1).toString())
-                    .isEqualTo("2023-10-25T12:01:13.182");
-            assertThat(flinkRow.getTimestamp(16, 5).toString())
-                    .isEqualTo("2023-10-25T12:01:13.182");
+            assertThat(flinkRow.getTimestamp(15, 1).toString()).isEqualTo("2023-10-25T12:01:13.182");
+            assertThat(flinkRow.getTimestamp(16, 5).toString()).isEqualTo("2023-10-25T12:01:13.182");
 
-            assertThat(flinkRow.getTimestamp(17, 1).toString())
-                    .isEqualTo("2023-10-25T12:01:13.182");
+            assertThat(flinkRow.getTimestamp(17, 1).toString()).isEqualTo("2023-10-25T12:01:13.182");
             assertThat(flinkRow.isNullAt(18)).isTrue();
         }
     }

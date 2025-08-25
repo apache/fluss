@@ -69,8 +69,7 @@ public abstract class WriteBatch {
      * @param callback the callback to send back to writer
      * @return true if append success, false if the batch is full.
      */
-    public abstract boolean tryAppend(WriteRecord writeRecord, WriteCallback callback)
-            throws Exception;
+    public abstract boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception;
 
     /**
      * Gets the memory segment bytes view of the batch. This includes the latest updated {@link
@@ -128,15 +127,10 @@ public abstract class WriteBatch {
     /** Abort the batch and complete the future and callbacks. */
     public void abort(Exception exception) {
         if (!finalState.compareAndSet(null, FinalState.ABORTED)) {
-            throw new IllegalStateException(
-                    "Batch has already been completed in final stata " + finalState.get());
+            throw new IllegalStateException("Batch has already been completed in final stata " + finalState.get());
         }
 
-        LOG.trace(
-                "Abort batch for table path {} with bucket_id {}",
-                physicalTablePath,
-                bucketId,
-                exception);
+        LOG.trace("Abort batch for table path {} with bucket_id {}", physicalTablePath, bucketId, exception);
         completeFutureAndFireCallbacks(exception);
     }
 
@@ -184,17 +178,14 @@ public abstract class WriteBatch {
 
     private void completeFutureAndFireCallbacks(@Nullable Exception exception) {
         // execute callbacks.
-        callbacks.forEach(
-                callback -> {
-                    try {
-                        callback.onCompletion(exception);
-                    } catch (Exception e) {
-                        LOG.error(
-                                "Error executing user-provided callback on message for table path '{}'",
-                                physicalTablePath,
-                                e);
-                    }
-                });
+        callbacks.forEach(callback -> {
+            try {
+                callback.onCompletion(exception);
+            } catch (Exception e) {
+                LOG.error(
+                        "Error executing user-provided callback on message for table path '{}'", physicalTablePath, e);
+            }
+        });
         requestFuture.done();
     }
 
@@ -226,8 +217,7 @@ public abstract class WriteBatch {
      * and second time around batch.done() may try to set SUCCEEDED final state.
      */
     private boolean done(@Nullable Exception batchException) {
-        final FinalState tryFinalState =
-                (batchException == null) ? FinalState.SUCCEEDED : FinalState.FAILED;
+        final FinalState tryFinalState = (batchException == null) ? FinalState.SUCCEEDED : FinalState.FAILED;
         if (tryFinalState == FinalState.SUCCEEDED) {
             LOG.trace("Successfully produced messages to {}.", physicalTablePath);
         } else {
@@ -249,18 +239,12 @@ public abstract class WriteBatch {
                         finalState.get());
             } else {
                 // FAILED --> FAILED transitions are ignored.
-                LOG.debug(
-                        "Ignore state transition {} -> {} for batch.",
-                        this.finalState.get(),
-                        tryFinalState);
+                LOG.debug("Ignore state transition {} -> {} for batch.", this.finalState.get(), tryFinalState);
             }
         } else {
             // A SUCCESSFUL batch must not attempt another state change.
             throw new IllegalStateException(
-                    "A "
-                            + this.finalState.get()
-                            + " batch must not attempt another state change to "
-                            + tryFinalState);
+                    "A " + this.finalState.get() + " batch must not attempt another state change to " + tryFinalState);
         }
         return false;
     }

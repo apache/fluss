@@ -100,26 +100,14 @@ public class PushdownUtils {
                     ResolvedExpression right = expr.getResolvedChildren().get(1);
 
                     FieldEqual fieldEqual = null;
-                    if (left instanceof FieldReferenceExpression
-                            && right instanceof ValueLiteralExpression) {
+                    if (left instanceof FieldReferenceExpression && right instanceof ValueLiteralExpression) {
                         FieldReferenceExpression leftFieldRef = (FieldReferenceExpression) left;
                         ValueLiteralExpression rightValue = (ValueLiteralExpression) right;
-                        fieldEqual =
-                                extractFieldEqual(
-                                        leftFieldRef,
-                                        rightValue,
-                                        fieldIndexToType,
-                                        valueConversion);
-                    } else if (left instanceof ValueLiteralExpression
-                            && right instanceof FieldReferenceExpression) {
+                        fieldEqual = extractFieldEqual(leftFieldRef, rightValue, fieldIndexToType, valueConversion);
+                    } else if (left instanceof ValueLiteralExpression && right instanceof FieldReferenceExpression) {
                         ValueLiteralExpression leftValue = (ValueLiteralExpression) left;
                         FieldReferenceExpression rightFieldRef = (FieldReferenceExpression) right;
-                        fieldEqual =
-                                extractFieldEqual(
-                                        rightFieldRef,
-                                        leftValue,
-                                        fieldIndexToType,
-                                        valueConversion);
+                        fieldEqual = extractFieldEqual(rightFieldRef, leftValue, fieldIndexToType, valueConversion);
                     }
 
                     if (fieldEqual != null) {
@@ -175,18 +163,18 @@ public class PushdownUtils {
         switch (type.getTypeRoot()) {
             case CHAR:
             case VARCHAR:
-                value = BinaryString.fromString(valueExp.getValueAs(String.class).get());
+                value = BinaryString.fromString(
+                        valueExp.getValueAs(String.class).get());
                 break;
             case BOOLEAN:
                 value = valueExp.getValueAs(Boolean.class).get();
                 break;
             case DECIMAL:
                 DecimalType decimalType = (DecimalType) type;
-                value =
-                        Decimal.fromBigDecimal(
-                                valueExp.getValueAs(BigDecimal.class).get(),
-                                decimalType.getPrecision(),
-                                decimalType.getScale());
+                value = Decimal.fromBigDecimal(
+                        valueExp.getValueAs(BigDecimal.class).get(),
+                        decimalType.getPrecision(),
+                        decimalType.getScale());
                 break;
             case INTEGER:
                 value = valueExp.getValueAs(Integer.class).get();
@@ -198,12 +186,12 @@ public class PushdownUtils {
                 value = valueExp.getValueAs(Double.class).get();
                 break;
             case TIMESTAMP_WITHOUT_TIME_ZONE:
-                value =
-                        TimestampNtz.fromLocalDateTime(
-                                valueExp.getValueAs(LocalDateTime.class).get());
+                value = TimestampNtz.fromLocalDateTime(
+                        valueExp.getValueAs(LocalDateTime.class).get());
                 break;
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                value = TimestampLtz.fromInstant(valueExp.getValueAs(Instant.class).get());
+                value = TimestampLtz.fromInstant(
+                        valueExp.getValueAs(Instant.class).get());
                 break;
             default:
                 value = null;
@@ -219,18 +207,18 @@ public class PushdownUtils {
         switch (type.getTypeRoot()) {
             case CHAR:
             case VARCHAR:
-                value = BinaryStringData.fromString(valueExp.getValueAs(String.class).get());
+                value = BinaryStringData.fromString(
+                        valueExp.getValueAs(String.class).get());
                 break;
             case BOOLEAN:
                 value = valueExp.getValueAs(Boolean.class).get();
                 break;
             case DECIMAL:
                 DecimalType decimalType = (DecimalType) type;
-                value =
-                        DecimalData.fromBigDecimal(
-                                valueExp.getValueAs(BigDecimal.class).get(),
-                                decimalType.getPrecision(),
-                                decimalType.getScale());
+                value = DecimalData.fromBigDecimal(
+                        valueExp.getValueAs(BigDecimal.class).get(),
+                        decimalType.getPrecision(),
+                        decimalType.getScale());
                 break;
             case INTEGER:
                 value = valueExp.getValueAs(Integer.class).get();
@@ -242,12 +230,12 @@ public class PushdownUtils {
                 value = valueExp.getValueAs(Double.class).get();
                 break;
             case TIMESTAMP_WITHOUT_TIME_ZONE:
-                value =
-                        TimestampData.fromLocalDateTime(
-                                valueExp.getValueAs(LocalDateTime.class).get());
+                value = TimestampData.fromLocalDateTime(
+                        valueExp.getValueAs(LocalDateTime.class).get());
                 break;
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                value = TimestampData.fromInstant(valueExp.getValueAs(Instant.class).get());
+                value = TimestampData.fromInstant(
+                        valueExp.getValueAs(Instant.class).get());
                 break;
             default:
                 value = null;
@@ -264,16 +252,9 @@ public class PushdownUtils {
             int[] primaryKeyIndexes,
             int lookupMaxRetryTimes,
             @Nullable int[] projectedFields) {
-        LookupNormalizer lookupNormalizer =
-                createPrimaryKeyLookupNormalizer(primaryKeyIndexes, sourceOutputType);
-        LookupFunction lookupFunction =
-                new FlinkLookupFunction(
-                        flussConfig,
-                        tablePath,
-                        sourceOutputType,
-                        lookupMaxRetryTimes,
-                        lookupNormalizer,
-                        projectedFields);
+        LookupNormalizer lookupNormalizer = createPrimaryKeyLookupNormalizer(primaryKeyIndexes, sourceOutputType);
+        LookupFunction lookupFunction = new FlinkLookupFunction(
+                flussConfig, tablePath, sourceOutputType, lookupMaxRetryTimes, lookupNormalizer, projectedFields);
         try {
             // it's fine to pass null here, as we don't use it in it
             lookupFunction.open(null);
@@ -283,8 +264,7 @@ public class PushdownUtils {
         }
     }
 
-    public static void deleteSingleRow(
-            GenericRow deleteRow, TablePath tablePath, Configuration flussConfig) {
+    public static void deleteSingleRow(GenericRow deleteRow, TablePath tablePath, Configuration flussConfig) {
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
                 Table table = connection.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
@@ -302,8 +282,7 @@ public class PushdownUtils {
             long limitRowNum) {
         if (limitRowNum > MAX_LIMIT_PUSHDOWN) {
             throw new UnsupportedOperationException(
-                    String.format(
-                            "LIMIT statement doesn't support greater than %s", MAX_LIMIT_PUSHDOWN));
+                    String.format("LIMIT statement doesn't support greater than %s", MAX_LIMIT_PUSHDOWN));
         }
         int limit = (int) limitRowNum;
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
@@ -313,45 +292,30 @@ public class PushdownUtils {
             int bucketCount = tableInfo.getNumBuckets();
             List<TableBucket> tableBuckets;
             if (tableInfo.isPartitioned()) {
-                List<PartitionInfo> partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
-                tableBuckets =
-                        partitionInfos.stream()
-                                .flatMap(
-                                        partitionInfo ->
-                                                IntStream.range(0, bucketCount)
-                                                        .mapToObj(
-                                                                bucketId ->
-                                                                        new TableBucket(
-                                                                                tableInfo
-                                                                                        .getTableId(),
-                                                                                partitionInfo
-                                                                                        .getPartitionId(),
-                                                                                bucketId)))
-                                .collect(Collectors.toList());
+                List<PartitionInfo> partitionInfos =
+                        flussAdmin.listPartitionInfos(tablePath).get();
+                tableBuckets = partitionInfos.stream()
+                        .flatMap(partitionInfo -> IntStream.range(0, bucketCount)
+                                .mapToObj(bucketId -> new TableBucket(
+                                        tableInfo.getTableId(), partitionInfo.getPartitionId(), bucketId)))
+                        .collect(Collectors.toList());
             } else {
-                tableBuckets =
-                        IntStream.range(0, bucketCount)
-                                .mapToObj(
-                                        bucketId ->
-                                                new TableBucket(tableInfo.getTableId(), bucketId))
-                                .collect(Collectors.toList());
+                tableBuckets = IntStream.range(0, bucketCount)
+                        .mapToObj(bucketId -> new TableBucket(tableInfo.getTableId(), bucketId))
+                        .collect(Collectors.toList());
             }
 
             Scan scan = table.newScan().limit(limit).project(projectedFields);
             List<BatchScanner> scanners =
-                    tableBuckets.stream()
-                            .map(scan::createBatchScanner)
-                            .collect(Collectors.toList());
+                    tableBuckets.stream().map(scan::createBatchScanner).collect(Collectors.toList());
             List<InternalRow> scannedRows = BatchScanUtils.collectLimitedRows(scanners, limit);
 
             // convert fluss row into flink row
             List<RowData> flinkRows = new ArrayList<>();
-            FlussRowToFlinkRowConverter flussRowToFlinkRowConverter =
-                    new FlussRowToFlinkRowConverter(
-                            projectedFields != null
-                                    ? FlinkConversions.toFlussRowType(sourceOutputType)
-                                            .project(projectedFields)
-                                    : FlinkConversions.toFlussRowType(sourceOutputType));
+            FlussRowToFlinkRowConverter flussRowToFlinkRowConverter = new FlussRowToFlinkRowConverter(
+                    projectedFields != null
+                            ? FlinkConversions.toFlussRowType(sourceOutputType).project(projectedFields)
+                            : FlinkConversions.toFlussRowType(sourceOutputType));
             int count = 0;
             for (InternalRow row : scannedRows) {
                 flinkRows.add(flussRowToFlinkRowConverter.toFlinkRowData(row));
@@ -383,7 +347,8 @@ public class PushdownUtils {
             List<CompletableFuture<Long>> countFutureList =
                     offsetLengthes(flussAdmin, tablePath, partitionInfos, buckets);
             // wait for all the response
-            CompletableFuture.allOf(countFutureList.toArray(new CompletableFuture[0])).join();
+            CompletableFuture.allOf(countFutureList.toArray(new CompletableFuture[0]))
+                    .join();
             long count = 0;
             for (CompletableFuture<Long> countFuture : countFutureList) {
                 count += countFuture.get();
@@ -395,10 +360,7 @@ public class PushdownUtils {
     }
 
     private static List<CompletableFuture<Long>> offsetLengthes(
-            Admin flussAdmin,
-            TablePath tablePath,
-            List<PartitionInfo> partitionInfos,
-            Collection<Integer> buckets) {
+            Admin flussAdmin, TablePath tablePath, List<PartitionInfo> partitionInfos, Collection<Integer> buckets) {
         List<CompletableFuture<Long>> list = new ArrayList<>();
         for (@Nullable PartitionInfo info : partitionInfos) {
             String partitionName = info != null ? info.getPartitionName() : null;
@@ -406,20 +368,15 @@ public class PushdownUtils {
                     listOffsets(flussAdmin, tablePath, buckets, new EarliestSpec(), partitionName);
             ListOffsetsResult latestOffsets =
                     listOffsets(flussAdmin, tablePath, buckets, new LatestSpec(), partitionName);
-            CompletableFuture<Long> apply =
-                    earliestOffsets
-                            .all()
-                            .thenCombine(
-                                    latestOffsets.all(),
-                                    (earliestOffsetsMap, latestOffsetsMap) -> {
-                                        long count = 0;
-                                        for (int bucket : earliestOffsetsMap.keySet()) {
-                                            count +=
-                                                    latestOffsetsMap.get(bucket)
-                                                            - earliestOffsetsMap.get(bucket);
-                                        }
-                                        return count;
-                                    });
+            CompletableFuture<Long> apply = earliestOffsets
+                    .all()
+                    .thenCombine(latestOffsets.all(), (earliestOffsetsMap, latestOffsetsMap) -> {
+                        long count = 0;
+                        for (int bucket : earliestOffsetsMap.keySet()) {
+                            count += latestOffsetsMap.get(bucket) - earliestOffsetsMap.get(bucket);
+                        }
+                        return count;
+                    });
             list.add(apply);
         }
         return list;

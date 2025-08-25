@@ -57,10 +57,7 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
             TabletServerMetricGroup serverMetricGroup) {
         super(
                 registry,
-                makeScope(
-                        serverMetricGroup,
-                        physicalTablePath.getDatabaseName(),
-                        physicalTablePath.getTableName()),
+                makeScope(serverMetricGroup, physicalTablePath.getDatabaseName(), physicalTablePath.getTableName()),
                 serverMetricGroup);
         this.physicalTablePath = physicalTablePath;
 
@@ -226,8 +223,7 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
     //  bucket groups
     // ------------------------------------------------------------------------
     public BucketMetricGroup addBucketMetricGroup(int bucketId) {
-        return buckets.computeIfAbsent(
-                bucketId, (bucket) -> new BucketMetricGroup(registry, bucketId, this));
+        return buckets.computeIfAbsent(bucketId, (bucket) -> new BucketMetricGroup(registry, bucketId, this));
     }
 
     public void removeBucketMetricGroup(int bucketId) {
@@ -248,8 +244,7 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
         protected final Counter bytesIn;
         protected final Counter bytesOut;
 
-        private TabletMetricGroup(
-                PhysicalTableMetricGroup physicalTableMetricGroup, TabletType tabletType) {
+        private TabletMetricGroup(PhysicalTableMetricGroup physicalTableMetricGroup, TabletType tabletType) {
             super(
                     physicalTableMetricGroup.registry,
                     makeScope(physicalTableMetricGroup, tabletType.name),
@@ -293,26 +288,19 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
         private final Counter remoteLogDeleteRequests;
         private final Counter remoteLogDeleteErrors;
 
-        private LogMetricGroup(
-                PhysicalTableMetricGroup physicalTableMetricGroup, TabletType groupType) {
+        private LogMetricGroup(PhysicalTableMetricGroup physicalTableMetricGroup, TabletType groupType) {
             super(physicalTableMetricGroup, groupType);
             // for fetch log requests
             totalFetchLogRequests = new ThreadSafeSimpleCounter();
             meter(MetricNames.TOTAL_FETCH_LOG_REQUESTS_RATE, new MeterView(totalFetchLogRequests));
             failedFetchLogRequests = new ThreadSafeSimpleCounter();
-            meter(
-                    MetricNames.FAILED_FETCH_LOG_REQUESTS_RATE,
-                    new MeterView(failedFetchLogRequests));
+            meter(MetricNames.FAILED_FETCH_LOG_REQUESTS_RATE, new MeterView(failedFetchLogRequests));
             if (groupType == TabletType.LOG) {
                 // for produce log request
                 totalProduceLogRequests = new ThreadSafeSimpleCounter();
-                meter(
-                        MetricNames.TOTAL_PRODUCE_FETCH_LOG_REQUESTS_RATE,
-                        new MeterView(totalProduceLogRequests));
+                meter(MetricNames.TOTAL_PRODUCE_FETCH_LOG_REQUESTS_RATE, new MeterView(totalProduceLogRequests));
                 failedProduceLogRequests = new ThreadSafeSimpleCounter();
-                meter(
-                        MetricNames.FAILED_PRODUCE_FETCH_LOG_REQUESTS_RATE,
-                        new MeterView(failedProduceLogRequests));
+                meter(MetricNames.FAILED_PRODUCE_FETCH_LOG_REQUESTS_RATE, new MeterView(failedProduceLogRequests));
             } else {
                 totalProduceLogRequests = NoOpCounter.INSTANCE;
                 failedProduceLogRequests = NoOpCounter.INSTANCE;
@@ -326,9 +314,7 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
             remoteLogCopyErrors = new ThreadSafeSimpleCounter();
             meter(MetricNames.REMOTE_LOG_COPY_ERROR_RATE, new MeterView(remoteLogCopyErrors));
             remoteLogDeleteRequests = new ThreadSafeSimpleCounter();
-            meter(
-                    MetricNames.REMOTE_LOG_DELETE_REQUESTS_RATE,
-                    new MeterView(remoteLogDeleteRequests));
+            meter(MetricNames.REMOTE_LOG_DELETE_REQUESTS_RATE, new MeterView(remoteLogDeleteRequests));
             remoteLogDeleteErrors = new ThreadSafeSimpleCounter();
             meter(MetricNames.REMOTE_LOG_DELETE_ERROR_RATE, new MeterView(remoteLogDeleteErrors));
         }
@@ -365,23 +351,15 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
             meter(MetricNames.FAILED_PUT_KV_REQUESTS_RATE, new MeterView(failedPutKvRequests));
             // for limit scan request
             totalLimitScanRequests = new ThreadSafeSimpleCounter();
-            meter(
-                    MetricNames.TOTAL_LIMIT_SCAN_REQUESTS_RATE,
-                    new MeterView(totalLimitScanRequests));
+            meter(MetricNames.TOTAL_LIMIT_SCAN_REQUESTS_RATE, new MeterView(totalLimitScanRequests));
             failedLimitScanRequests = new ThreadSafeSimpleCounter();
-            meter(
-                    MetricNames.FAILED_LIMIT_SCAN_REQUESTS_RATE,
-                    new MeterView(failedLimitScanRequests));
+            meter(MetricNames.FAILED_LIMIT_SCAN_REQUESTS_RATE, new MeterView(failedLimitScanRequests));
 
             // for prefix lookup request
             totalPrefixLookupRequests = new ThreadSafeSimpleCounter();
-            meter(
-                    MetricNames.TOTAL_PREFIX_LOOKUP_REQUESTS_RATE,
-                    new MeterView(totalPrefixLookupRequests));
+            meter(MetricNames.TOTAL_PREFIX_LOOKUP_REQUESTS_RATE, new MeterView(totalPrefixLookupRequests));
             failedPrefixLookupRequests = new ThreadSafeSimpleCounter();
-            meter(
-                    MetricNames.FAILED_PREFIX_LOOKUP_REQUESTS_RATE,
-                    new MeterView(failedPrefixLookupRequests));
+            meter(MetricNames.FAILED_PREFIX_LOOKUP_REQUESTS_RATE, new MeterView(failedPrefixLookupRequests));
         }
 
         @Override

@@ -56,8 +56,7 @@ public class PaimonKeyEncoder implements KeyEncoder {
         paimonBinaryRowWriter.writeChangeType(ChangeType.INSERT);
         // iterate all the fields of the row, and encode each field
         for (int i = 0; i < fieldGetters.length; i++) {
-            fieldEncoders[i].writeField(
-                    paimonBinaryRowWriter, i, fieldGetters[i].getFieldOrNull(row));
+            fieldEncoders[i].writeField(paimonBinaryRowWriter, i, fieldGetters[i].getFieldOrNull(row));
         }
         return paimonBinaryRowWriter.toBytes();
     }

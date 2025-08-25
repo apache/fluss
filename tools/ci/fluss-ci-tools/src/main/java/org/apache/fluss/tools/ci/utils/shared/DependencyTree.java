@@ -62,7 +62,10 @@ public class DependencyTree {
 
     private static final class Node {
         private final Dependency dependency;
-        @Nullable private final Node parent;
+
+        @Nullable
+        private final Node parent;
+
         private final List<Node> children = new ArrayList<>();
 
         private Node(Dependency dependency, @Nullable Node parent) {

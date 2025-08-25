@@ -87,13 +87,11 @@ public class LogFetchBuffer implements AutoCloseable {
     }
 
     void pend(PendingFetch pendingFetch) {
-        inLock(
-                lock,
-                () -> {
-                    pendingFetches
-                            .computeIfAbsent(pendingFetch.tableBucket(), k -> new LinkedList<>())
-                            .add(pendingFetch);
-                });
+        inLock(lock, () -> {
+            pendingFetches
+                    .computeIfAbsent(pendingFetch.tableBucket(), k -> new LinkedList<>())
+                    .add(pendingFetch);
+        });
     }
 
     /**
@@ -101,45 +99,40 @@ public class LogFetchBuffer implements AutoCloseable {
      * buffer.
      */
     void tryComplete(TableBucket tableBucket) {
-        inLock(
-                lock,
-                () -> {
-                    boolean hasCompleted = false;
-                    LinkedList<PendingFetch> pendings = this.pendingFetches.get(tableBucket);
-                    while (pendings != null && !pendings.isEmpty()) {
-                        PendingFetch pendingFetch = pendings.peek();
-                        if (pendingFetch.isCompleted()) {
-                            CompletedFetch completedFetch = pendingFetch.toCompletedFetch();
-                            completedFetches.add(completedFetch);
-                            pendings.poll();
-                            hasCompleted = true;
-                        } else {
-                            break;
-                        }
-                    }
-                    if (hasCompleted) {
-                        notEmptyCondition.signalAll();
-                        // clear the bucket entry if there is no pending fetches for the bucket.
-                        if (pendings.isEmpty()) {
-                            this.pendingFetches.remove(tableBucket);
-                        }
-                    }
-                });
+        inLock(lock, () -> {
+            boolean hasCompleted = false;
+            LinkedList<PendingFetch> pendings = this.pendingFetches.get(tableBucket);
+            while (pendings != null && !pendings.isEmpty()) {
+                PendingFetch pendingFetch = pendings.peek();
+                if (pendingFetch.isCompleted()) {
+                    CompletedFetch completedFetch = pendingFetch.toCompletedFetch();
+                    completedFetches.add(completedFetch);
+                    pendings.poll();
+                    hasCompleted = true;
+                } else {
+                    break;
+                }
+            }
+            if (hasCompleted) {
+                notEmptyCondition.signalAll();
+                // clear the bucket entry if there is no pending fetches for the bucket.
+                if (pendings.isEmpty()) {
+                    this.pendingFetches.remove(tableBucket);
+                }
+            }
+        });
     }
 
     void add(CompletedFetch completedFetch) {
-        inLock(
-                lock,
-                () -> {
-                    LinkedList<PendingFetch> pendings =
-                            pendingFetches.get(completedFetch.tableBucket);
-                    if (pendings == null || pendings.isEmpty()) {
-                        completedFetches.add(completedFetch);
-                        notEmptyCondition.signalAll();
-                    } else {
-                        pendings.add(new CompletedPendingFetch(completedFetch));
-                    }
-                });
+        inLock(lock, () -> {
+            LinkedList<PendingFetch> pendings = pendingFetches.get(completedFetch.tableBucket);
+            if (pendings == null || pendings.isEmpty()) {
+                completedFetches.add(completedFetch);
+                notEmptyCondition.signalAll();
+            } else {
+                pendings.add(new CompletedPendingFetch(completedFetch));
+            }
+        });
     }
 
     void addAll(Collection<CompletedFetch> completedFetches) {
@@ -180,28 +173,26 @@ public class LogFetchBuffer implements AutoCloseable {
      * @return false if the waiting time detectably elapsed before return from the method, else true
      */
     boolean awaitNotEmpty(long deadlineNanos) throws InterruptedException {
-        return inLock(
-                lock,
-                () -> {
-                    while (isEmpty()) {
-                        if (wokenup.compareAndSet(true, false)) {
-                            throw new WakeupException("The await is wakeup.");
-                        }
-                        long remainingNanos = deadlineNanos - System.nanoTime();
-                        if (remainingNanos <= 0) {
-                            // false for timeout
-                            return false;
-                        }
+        return inLock(lock, () -> {
+            while (isEmpty()) {
+                if (wokenup.compareAndSet(true, false)) {
+                    throw new WakeupException("The await is wakeup.");
+                }
+                long remainingNanos = deadlineNanos - System.nanoTime();
+                if (remainingNanos <= 0) {
+                    // false for timeout
+                    return false;
+                }
 
-                        if (notEmptyCondition.await(remainingNanos, TimeUnit.NANOSECONDS)) {
-                            // true for signal
-                            return true;
-                        }
-                    }
-
-                    // true for wakeup or we have data to return
+                if (notEmptyCondition.await(remainingNanos, TimeUnit.NANOSECONDS)) {
+                    // true for signal
                     return true;
-                });
+                }
+            }
+
+            // true for wakeup or we have data to return
+            return true;
+        });
     }
 
     public void wakeup() {
@@ -217,18 +208,16 @@ public class LogFetchBuffer implements AutoCloseable {
      * @param buckets {@link Set} of {@link TableBucket}s for which any buffered data should be kept
      */
     void retainAll(Set<TableBucket> buckets) {
-        inLock(
-                lock,
-                () -> {
-                    completedFetches.removeIf(cf -> maybeDrain(buckets, cf));
+        inLock(lock, () -> {
+            completedFetches.removeIf(cf -> maybeDrain(buckets, cf));
 
-                    if (maybeDrain(buckets, nextInLineFetch)) {
-                        nextInLineFetch = null;
-                    }
+            if (maybeDrain(buckets, nextInLineFetch)) {
+                nextInLineFetch = null;
+            }
 
-                    // remove entries that not matches the buckets from pendingFetches
-                    pendingFetches.entrySet().removeIf(entry -> !buckets.contains(entry.getKey()));
-                });
+            // remove entries that not matches the buckets from pendingFetches
+            pendingFetches.entrySet().removeIf(entry -> !buckets.contains(entry.getKey()));
+        });
     }
 
     /**
@@ -255,17 +244,15 @@ public class LogFetchBuffer implements AutoCloseable {
      */
     @Nullable
     Set<TableBucket> bufferedBuckets() {
-        return inLock(
-                lock,
-                () -> {
-                    final Set<TableBucket> buckets = new HashSet<>();
-                    if (nextInLineFetch != null && !nextInLineFetch.isConsumed()) {
-                        buckets.add(nextInLineFetch.tableBucket);
-                    }
-                    completedFetches.forEach(cf -> buckets.add(cf.tableBucket));
-                    buckets.addAll(pendingFetches.keySet());
-                    return buckets;
-                });
+        return inLock(lock, () -> {
+            final Set<TableBucket> buckets = new HashSet<>();
+            if (nextInLineFetch != null && !nextInLineFetch.isConsumed()) {
+                buckets.add(nextInLineFetch.tableBucket);
+            }
+            completedFetches.forEach(cf -> buckets.add(cf.tableBucket));
+            buckets.addAll(pendingFetches.keySet());
+            return buckets;
+        });
     }
 
     /** Return the set of {@link TableBucket buckets} for which we have pending fetches. */

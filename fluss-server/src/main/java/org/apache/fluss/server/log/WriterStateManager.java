@@ -90,8 +90,7 @@ public class WriterStateManager {
     private long lastMapOffset = 0L;
     private long lastSnapOffset = 0L;
 
-    public WriterStateManager(TableBucket tableBucket, File logTabletDir, int writerExpirationMs)
-            throws IOException {
+    public WriterStateManager(TableBucket tableBucket, File logTabletDir, int writerExpirationMs) throws IOException {
         this.tableBucket = tableBucket;
         this.writerExpirationMs = writerExpirationMs;
         this.logTabletDir = logTabletDir;
@@ -126,11 +125,10 @@ public class WriterStateManager {
     }
 
     public void removeExpiredWriters(long currentTimeMs) {
-        List<Long> keys =
-                writers.entrySet().stream()
-                        .filter(entry -> isWriterExpired(currentTimeMs, entry.getValue()))
-                        .map(Map.Entry::getKey)
-                        .collect(Collectors.toList());
+        List<Long> keys = writers.entrySet().stream()
+                .filter(entry -> isWriterExpired(currentTimeMs, entry.getValue()))
+                .map(Map.Entry::getKey)
+                .collect(Collectors.toList());
         removeWriterIds(keys);
     }
 
@@ -143,8 +141,7 @@ public class WriterStateManager {
      * UnknownWriterIdException} errors. Note that the log end offset is assumed to be less than or
      * equal to the high watermark.
      */
-    public void truncateAndReload(long logStartOffset, long logEndOffset, long currentTimeMs)
-            throws IOException {
+    public void truncateAndReload(long logStartOffset, long logEndOffset, long currentTimeMs) throws IOException {
         // remove all out of range snapshots.
         for (SnapshotFile snapshot : snapshots.values()) {
             if (snapshot.offset > logEndOffset || snapshot.offset <= logStartOffset) {
@@ -190,8 +187,7 @@ public class WriterStateManager {
     public void takeSnapshot() throws IOException {
         // If not a new offset, then it is not worth taking another snapshot
         if (lastMapOffset > lastSnapOffset) {
-            SnapshotFile snapshotFile =
-                    new SnapshotFile(writerSnapshotFile(logTabletDir, lastMapOffset));
+            SnapshotFile snapshotFile = new SnapshotFile(writerSnapshotFile(logTabletDir, lastMapOffset));
             long start = System.currentTimeMillis();
             writeSnapshot(snapshotFile.file(), writers);
             LOG.info(
@@ -224,8 +220,7 @@ public class WriterStateManager {
     }
 
     public WriterAppendInfo prepareUpdate(long writerId) {
-        WriterStateEntry currentEntry =
-                lastEntry(writerId).orElse(WriterStateEntry.empty(writerId));
+        WriterStateEntry currentEntry = lastEntry(writerId).orElse(WriterStateEntry.empty(writerId));
         return new WriterAppendInfo(writerId, tableBucket, currentEntry);
     }
 
@@ -234,11 +229,7 @@ public class WriterStateManager {
         long writerId = appendInfo.writerId();
         if (writerId == LogRecordBatch.NO_WRITER_ID) {
             throw new IllegalArgumentException(
-                    "Invalid writer id "
-                            + writerId
-                            + " passed to update "
-                            + "for bucket "
-                            + tableBucket);
+                    "Invalid writer id " + writerId + " passed to update " + "for bucket " + tableBucket);
         }
 
         LOG.trace("Updated writer id {} state to {}", writerId, appendInfo);
@@ -262,10 +253,9 @@ public class WriterStateManager {
      * shutdown.
      */
     public void removeStraySnapshots(Collection<Long> segmentBaseOffsets) throws IOException {
-        OptionalLong maxSegmentBaseOffset =
-                segmentBaseOffsets.isEmpty()
-                        ? OptionalLong.empty()
-                        : OptionalLong.of(segmentBaseOffsets.stream().max(Long::compare).get());
+        OptionalLong maxSegmentBaseOffset = segmentBaseOffsets.isEmpty()
+                ? OptionalLong.empty()
+                : OptionalLong.of(segmentBaseOffsets.stream().max(Long::compare).get());
 
         HashSet<Long> baseOffsets = new HashSet<>(segmentBaseOffsets);
         Optional<SnapshotFile> latestStraySnapshot = Optional.empty();
@@ -311,21 +301,14 @@ public class WriterStateManager {
                 SnapshotFile snapshot = latestSnapshotFileOptional.get();
                 try {
                     LOG.info("Loading writer state from snapshot file '{}'", snapshot);
-                    Stream<WriterStateEntry> loadedWriters =
-                            readSnapshot(snapshot.file()).stream()
-                                    .filter(
-                                            writerStateEntry ->
-                                                    !isWriterExpired(
-                                                            currentTime, writerStateEntry));
+                    Stream<WriterStateEntry> loadedWriters = readSnapshot(snapshot.file()).stream()
+                            .filter(writerStateEntry -> !isWriterExpired(currentTime, writerStateEntry));
                     loadedWriters.forEach(this::loadWriterEntry);
                     lastSnapOffset = snapshot.offset;
                     lastMapOffset = lastSnapOffset;
                     return;
                 } catch (CorruptSnapshotException e) {
-                    LOG.warn(
-                            "Failed to load writer snapshot from '{}': {}",
-                            snapshot.file(),
-                            e.getMessage());
+                    LOG.warn("Failed to load writer snapshot from '{}': {}", snapshot.file(), e.getMessage());
                     removeAndDeleteSnapshot(snapshot.offset);
                 }
             } else {
@@ -405,8 +388,7 @@ public class WriterStateManager {
     }
 
     private static boolean isSnapshotFile(Path path) {
-        return Files.isRegularFile(path)
-                && path.getFileName().toString().endsWith(WRITER_SNAPSHOT_FILE_SUFFIX);
+        return Files.isRegularFile(path) && path.getFileName().toString().endsWith(WRITER_SNAPSHOT_FILE_SUFFIX);
     }
 
     @VisibleForTesting
@@ -429,36 +411,29 @@ public class WriterStateManager {
             WriterSnapshotMap writerSnapshotMap = WriterSnapshotMap.fromJsonBytes(json);
 
             List<WriterStateEntry> writerIdEntries = new ArrayList<>();
-            writerSnapshotMap.snapshotEntries.forEach(
-                    snapshotEntry ->
-                            writerIdEntries.add(
-                                    new WriterStateEntry(
-                                            snapshotEntry.writerId,
-                                            snapshotEntry.lastBatchTimestamp,
-                                            new WriterStateEntry.BatchMetadata(
-                                                    snapshotEntry.writerId,
-                                                    snapshotEntry.lastBatchSequence,
-                                                    snapshotEntry.lastBatchBaseOffset,
-                                                    snapshotEntry.lastBatchOffsetDelta,
-                                                    snapshotEntry.lastBatchTimestamp))));
+            writerSnapshotMap.snapshotEntries.forEach(snapshotEntry -> writerIdEntries.add(new WriterStateEntry(
+                    snapshotEntry.writerId,
+                    snapshotEntry.lastBatchTimestamp,
+                    new WriterStateEntry.BatchMetadata(
+                            snapshotEntry.writerId,
+                            snapshotEntry.lastBatchSequence,
+                            snapshotEntry.lastBatchBaseOffset,
+                            snapshotEntry.lastBatchOffsetDelta,
+                            snapshotEntry.lastBatchTimestamp))));
             return writerIdEntries;
         } catch (IOException | UncheckedIOException e) {
             throw new CorruptSnapshotException("Failed to read snapshot file " + file, e);
         }
     }
 
-    private static void writeSnapshot(File file, Map<Long, WriterStateEntry> entries)
-            throws IOException {
+    private static void writeSnapshot(File file, Map<Long, WriterStateEntry> entries) throws IOException {
         List<WriterSnapshotEntry> snapshotEntries = new ArrayList<>();
-        entries.forEach(
-                (writerId, writerStateEntry) ->
-                        snapshotEntries.add(
-                                new WriterSnapshotEntry(
-                                        writerId,
-                                        writerStateEntry.lastBatchSequence(),
-                                        writerStateEntry.lastDataOffset(),
-                                        writerStateEntry.lastOffsetDelta(),
-                                        writerStateEntry.lastBatchTimestamp())));
+        entries.forEach((writerId, writerStateEntry) -> snapshotEntries.add(new WriterSnapshotEntry(
+                writerId,
+                writerStateEntry.lastBatchSequence(),
+                writerStateEntry.lastDataOffset(),
+                writerStateEntry.lastOffsetDelta(),
+                writerStateEntry.lastBatchTimestamp())));
         byte[] jsonBytes = new WriterSnapshotMap(snapshotEntries).toJsonBytes();
 
         ByteBuffer buffer = ByteBuffer.allocate(jsonBytes.length);
@@ -466,8 +441,7 @@ public class WriterStateManager {
         buffer.flip();
 
         try (FileChannel fileChannel =
-                FileChannel.open(
-                        file.toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
+                FileChannel.open(file.toPath(), StandardOpenOption.CREATE, StandardOpenOption.WRITE)) {
             fileChannel.write(buffer);
             fileChannel.force(true);
         }
@@ -488,8 +462,7 @@ public class WriterStateManager {
         private static final int WRITER_ID_SNAPSHOT_VERSION = 1;
 
         @Override
-        public void serialize(WriterSnapshotMap writerSnapshotMap, JsonGenerator generator)
-                throws IOException {
+        public void serialize(WriterSnapshotMap writerSnapshotMap, JsonGenerator generator) throws IOException {
             generator.writeStartObject();
 
             // serialize data version.
@@ -502,8 +475,7 @@ public class WriterStateManager {
                 generator.writeNumberField(WRITER_ID_FILED, entry.writerId);
                 generator.writeNumberField(LAST_BATCH_SEQUENCE_FILED, entry.lastBatchSequence);
                 generator.writeNumberField(LAST_BATCH_BASE_OFFSET_FILED, entry.lastBatchBaseOffset);
-                generator.writeNumberField(
-                        LAST_BATCH_OFFSET_DELTA_FILED, entry.lastBatchOffsetDelta);
+                generator.writeNumberField(LAST_BATCH_OFFSET_DELTA_FILED, entry.lastBatchOffsetDelta);
                 generator.writeNumberField(LAST_BATCH_TIMESTAMP_FILED, entry.lastBatchTimestamp);
                 generator.writeEndObject();
             }
@@ -519,17 +491,16 @@ public class WriterStateManager {
             while (entriesJson.hasNext()) {
                 JsonNode entryJson = entriesJson.next();
                 long writerId = entryJson.get(WRITER_ID_FILED).asLong();
-                int batchSequenceNumber = entryJson.get(LAST_BATCH_SEQUENCE_FILED).asInt();
-                long lastBatchBaseOffset = entryJson.get(LAST_BATCH_BASE_OFFSET_FILED).asLong();
-                int lastBatchOffsetDelta = entryJson.get(LAST_BATCH_OFFSET_DELTA_FILED).asInt();
-                long lastBatchTimestamp = entryJson.get(LAST_BATCH_TIMESTAMP_FILED).asLong();
-                snapshotEntries.add(
-                        new WriterSnapshotEntry(
-                                writerId,
-                                batchSequenceNumber,
-                                lastBatchBaseOffset,
-                                lastBatchOffsetDelta,
-                                lastBatchTimestamp));
+                int batchSequenceNumber =
+                        entryJson.get(LAST_BATCH_SEQUENCE_FILED).asInt();
+                long lastBatchBaseOffset =
+                        entryJson.get(LAST_BATCH_BASE_OFFSET_FILED).asLong();
+                int lastBatchOffsetDelta =
+                        entryJson.get(LAST_BATCH_OFFSET_DELTA_FILED).asInt();
+                long lastBatchTimestamp =
+                        entryJson.get(LAST_BATCH_TIMESTAMP_FILED).asLong();
+                snapshotEntries.add(new WriterSnapshotEntry(
+                        writerId, batchSequenceNumber, lastBatchBaseOffset, lastBatchOffsetDelta, lastBatchTimestamp));
             }
 
             return new WriterSnapshotMap(snapshotEntries);
@@ -576,11 +547,7 @@ public class WriterStateManager {
         @Override
         public int hashCode() {
             return Objects.hash(
-                    writerId,
-                    lastBatchSequence,
-                    lastBatchBaseOffset,
-                    lastBatchOffsetDelta,
-                    lastBatchTimestamp);
+                    writerId, lastBatchSequence, lastBatchBaseOffset, lastBatchOffsetDelta, lastBatchTimestamp);
         }
 
         @Override

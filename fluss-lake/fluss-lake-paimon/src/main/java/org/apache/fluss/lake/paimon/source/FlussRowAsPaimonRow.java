@@ -137,8 +137,7 @@ public class FlussRowAsPaimonRow implements InternalRow {
                 } else {
                     TimestampLtz timestampLtz = internalRow.getTimestampLtz(pos, precision);
                     return Timestamp.fromEpochMillis(
-                            timestampLtz.getEpochMillisecond(),
-                            timestampLtz.getNanoOfMillisecond());
+                            timestampLtz.getEpochMillisecond(), timestampLtz.getNanoOfMillisecond());
                 }
             default:
                 throw new UnsupportedOperationException(
@@ -153,25 +152,21 @@ public class FlussRowAsPaimonRow implements InternalRow {
 
     @Override
     public Variant getVariant(int i) {
-        throw new UnsupportedOperationException(
-                "getVariant is not support for Fluss record currently.");
+        throw new UnsupportedOperationException("getVariant is not support for Fluss record currently.");
     }
 
     @Override
     public InternalArray getArray(int pos) {
-        throw new UnsupportedOperationException(
-                "getArray is not support for Fluss record currently.");
+        throw new UnsupportedOperationException("getArray is not support for Fluss record currently.");
     }
 
     @Override
     public InternalMap getMap(int pos) {
-        throw new UnsupportedOperationException(
-                "getMap is not support for Fluss record currently.");
+        throw new UnsupportedOperationException("getMap is not support for Fluss record currently.");
     }
 
     @Override
     public InternalRow getRow(int pos, int pos1) {
-        throw new UnsupportedOperationException(
-                "getRow is not support for Fluss record currently.");
+        throw new UnsupportedOperationException("getRow is not support for Fluss record currently.");
     }
 }

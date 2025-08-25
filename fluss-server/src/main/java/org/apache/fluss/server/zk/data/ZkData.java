@@ -59,8 +59,7 @@ public final class ZkData {
         }
 
         public static byte[] encode(DatabaseRegistration databaseRegistration) {
-            return JsonSerdeUtils.writeValueAsBytes(
-                    databaseRegistration, DatabaseRegistrationJsonSerde.INSTANCE);
+            return JsonSerdeUtils.writeValueAsBytes(databaseRegistration, DatabaseRegistrationJsonSerde.INSTANCE);
         }
 
         public static DatabaseRegistration decode(byte[] json) {
@@ -114,8 +113,7 @@ public final class ZkData {
         }
 
         public static byte[] encode(TableRegistration tableRegistration) {
-            return JsonSerdeUtils.writeValueAsBytes(
-                    tableRegistration, TableRegistrationJsonSerde.INSTANCE);
+            return JsonSerdeUtils.writeValueAsBytes(tableRegistration, TableRegistrationJsonSerde.INSTANCE);
         }
 
         public static TableRegistration decode(byte[] json) {
@@ -260,8 +258,7 @@ public final class ZkData {
         }
 
         public static byte[] encode(CoordinatorAddress coordinatorAddress) {
-            return JsonSerdeUtils.writeValueAsBytes(
-                    coordinatorAddress, CoordinatorAddressJsonSerde.INSTANCE);
+            return JsonSerdeUtils.writeValueAsBytes(coordinatorAddress, CoordinatorAddressJsonSerde.INSTANCE);
         }
 
         public static CoordinatorAddress decode(byte[] json) {
@@ -306,8 +303,7 @@ public final class ZkData {
         }
 
         public static byte[] encode(TabletServerRegistration tsRegistration) {
-            return JsonSerdeUtils.writeValueAsBytes(
-                    tsRegistration, TabletServerRegistrationJsonSerde.INSTANCE);
+            return JsonSerdeUtils.writeValueAsBytes(tsRegistration, TabletServerRegistrationJsonSerde.INSTANCE);
         }
 
         public static TabletServerRegistration decode(byte[] json) {
@@ -350,8 +346,7 @@ public final class ZkData {
         }
 
         public static byte[] encode(TableAssignment tableAssignment) {
-            return JsonSerdeUtils.writeValueAsBytes(
-                    tableAssignment, TableAssignmentJsonSerde.INSTANCE);
+            return JsonSerdeUtils.writeValueAsBytes(tableAssignment, TableAssignmentJsonSerde.INSTANCE);
         }
 
         public static TableAssignment decode(byte[] json) {
@@ -372,8 +367,7 @@ public final class ZkData {
         }
 
         public static byte[] encode(PartitionAssignment tableAssignment) {
-            return JsonSerdeUtils.writeValueAsBytes(
-                    tableAssignment, PartitionAssignmentJsonSerde.INSTANCE);
+            return JsonSerdeUtils.writeValueAsBytes(tableAssignment, PartitionAssignmentJsonSerde.INSTANCE);
         }
 
         public static PartitionAssignment decode(byte[] json) {
@@ -487,8 +481,7 @@ public final class ZkData {
         }
 
         public static byte[] encode(BucketSnapshot bucketSnapshot) {
-            return JsonSerdeUtils.writeValueAsBytes(
-                    bucketSnapshot, BucketSnapshotJsonSerde.INSTANCE);
+            return JsonSerdeUtils.writeValueAsBytes(bucketSnapshot, BucketSnapshotJsonSerde.INSTANCE);
         }
 
         public static BucketSnapshot decode(byte[] json) {
@@ -525,8 +518,7 @@ public final class ZkData {
         }
 
         public static byte[] encode(RemoteLogManifestHandle remoteLogManifestHandle) {
-            return JsonSerdeUtils.writeValueAsBytes(
-                    remoteLogManifestHandle, RemoteLogManifestHandleJsonSerde.INSTANCE);
+            return JsonSerdeUtils.writeValueAsBytes(remoteLogManifestHandle, RemoteLogManifestHandleJsonSerde.INSTANCE);
         }
 
         public static RemoteLogManifestHandle decode(byte[] json) {
@@ -545,8 +537,7 @@ public final class ZkData {
         }
 
         public static byte[] encode(LakeTableSnapshot lakeTableSnapshot) {
-            return JsonSerdeUtils.writeValueAsBytes(
-                    lakeTableSnapshot, LakeTableSnapshotJsonSerde.INSTANCE);
+            return JsonSerdeUtils.writeValueAsBytes(lakeTableSnapshot, LakeTableSnapshotJsonSerde.INSTANCE);
         }
 
         public static LakeTableSnapshot decode(byte[] json) {
@@ -633,8 +624,7 @@ public final class ZkData {
         }
 
         public static byte[] encode(Resource resource) {
-            return (resource.getType() + RESOURCE_SEPARATOR + resource.getName())
-                    .getBytes(StandardCharsets.UTF_8);
+            return (resource.getType() + RESOURCE_SEPARATOR + resource.getName()).getBytes(StandardCharsets.UTF_8);
         }
 
         public static Resource decode(byte[] json) {
@@ -644,8 +634,7 @@ public final class ZkData {
                 return Resource.of(split[0], split[1]);
             } else {
                 throw new IllegalArgumentException(
-                        "expected a string in format ResourceType:ResourceName but got "
-                                + resourceStr);
+                        "expected a string in format ResourceType:ResourceName but got " + resourceStr);
             }
         }
     }

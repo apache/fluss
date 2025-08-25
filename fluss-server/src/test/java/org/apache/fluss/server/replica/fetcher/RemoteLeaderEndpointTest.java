@@ -54,11 +54,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Test for {@link RemoteLeaderEndpoint}. */
 public class RemoteLeaderEndpointTest {
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(initConfig())
+            .build();
 
     private ZooKeeperClient zkClient;
 
@@ -70,8 +69,10 @@ public class RemoteLeaderEndpointTest {
     @Test
     void testFetchLogReturnedOffHeapMemoryData() throws Exception {
         // set bucket count to 1 to easy for debug.
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1, "a").build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(DATA1_SCHEMA)
+                .distributedBy(1, "a")
+                .build();
         FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
 
         long tableId = createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
@@ -79,25 +80,22 @@ public class RemoteLeaderEndpointTest {
         TableBucket tb = new TableBucket(tableId, bucketId);
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
-        TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        TabletServerGateway leaderGateWay = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
 
         // send one batch
         assertProduceLogResponse(
                 leaderGateWay
-                        .produceLog(
-                                RpcMessageTestUtils.newProduceLogRequest(
-                                        tableId,
-                                        tb.getBucket(),
-                                        -1,
-                                        genMemoryLogRecordsByObject(DATA1)))
+                        .produceLog(RpcMessageTestUtils.newProduceLogRequest(
+                                tableId, tb.getBucket(), -1, genMemoryLogRecordsByObject(DATA1)))
                         .get(),
                 bucketId,
                 0L);
 
         // check leader log data.
         assertFetchLogResponse(
-                leaderGateWay.fetchLog(newFetchLogRequest(-1, tableId, bucketId, 0L)).get(),
+                leaderGateWay
+                        .fetchLog(newFetchLogRequest(-1, tableId, bucketId, 0L))
+                        .get(),
                 tableId,
                 bucketId,
                 10L,
@@ -105,37 +103,31 @@ public class RemoteLeaderEndpointTest {
 
         // mock follower to fetch data.
         LeaderAndIsr leaderAndIsr = zkClient.getLeaderAndIsr(tb).get();
-        Integer follower = leaderAndIsr.isr().stream().filter(id -> id != leader).findFirst().get();
+        Integer follower = leaderAndIsr.isr().stream()
+                .filter(id -> id != leader)
+                .findFirst()
+                .get();
 
-        RemoteLeaderEndpoint remoteLeaderEndpoint =
-                FLUSS_CLUSTER_EXTENSION
-                        .getTabletServerById(follower)
-                        .getReplicaManager()
-                        .getReplicaFetcherManager()
-                        .buildRemoteLogEndpoint(leader);
-        FetchData fetchData =
-                remoteLeaderEndpoint
-                        .fetchLog(
-                                remoteLeaderEndpoint
-                                        .buildFetchLogContext(
-                                                Collections.singletonMap(
-                                                        tb,
-                                                        new BucketFetchStatus(
-                                                                tableId,
-                                                                DATA1_TABLE_PATH,
-                                                                0L,
-                                                                null)))
-                                        .get())
-                        .get();
+        RemoteLeaderEndpoint remoteLeaderEndpoint = FLUSS_CLUSTER_EXTENSION
+                .getTabletServerById(follower)
+                .getReplicaManager()
+                .getReplicaFetcherManager()
+                .buildRemoteLogEndpoint(leader);
+        FetchData fetchData = remoteLeaderEndpoint
+                .fetchLog(remoteLeaderEndpoint
+                        .buildFetchLogContext(Collections.singletonMap(
+                                tb, new BucketFetchStatus(tableId, DATA1_TABLE_PATH, 0L, null)))
+                        .get())
+                .get();
 
         FetchLogResponse response = fetchData.getFetchLogResponse();
         assertThat(response.isLazilyParsed()).isTrue();
         assertThat(response.getParsedByteBuf().isDirect()).isTrue();
 
-        Map<TableBucket, FetchLogResultForBucket> fetchLogResultMap =
-                fetchData.getFetchLogResultMap();
+        Map<TableBucket, FetchLogResultForBucket> fetchLogResultMap = fetchData.getFetchLogResultMap();
         assertThat(fetchLogResultMap.size()).isEqualTo(1);
-        MemoryLogRecords logRecords = (MemoryLogRecords) fetchLogResultMap.get(tb).recordsOrEmpty();
+        MemoryLogRecords logRecords =
+                (MemoryLogRecords) fetchLogResultMap.get(tb).recordsOrEmpty();
         MemorySegment memorySegment = logRecords.getMemorySegment();
         assertThat(memorySegment.getHeapMemory()).isNull();
         assertThat(memorySegment.getOffHeapBuffer()).isNotNull();

@@ -23,8 +23,7 @@ import org.apache.fluss.config.Configuration;
  * A {@link AuthenticationPlugin} that is conflicting with the {@link
  * TestConflictingAuthenticationPlugin2}.
  */
-public class TestConflictingAuthenticationPlugin1
-        implements ClientAuthenticationPlugin, ServerAuthenticationPlugin {
+public class TestConflictingAuthenticationPlugin1 implements ClientAuthenticationPlugin, ServerAuthenticationPlugin {
 
     public String authProtocol() {
         return "conflicting";

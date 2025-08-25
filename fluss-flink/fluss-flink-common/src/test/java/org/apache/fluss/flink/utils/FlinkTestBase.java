@@ -67,82 +67,65 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class FlinkTestBase extends AbstractTestBase {
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setClusterConf(
-                            new Configuration()
-                                    // set snapshot interval to 1s for testing purposes
-                                    .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
-                                    // not to clean snapshots for test purpose
-                                    .set(
-                                            ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS,
-                                            Integer.MAX_VALUE))
-                    .setNumOfTabletServers(3)
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setClusterConf(new Configuration()
+                    // set snapshot interval to 1s for testing purposes
+                    .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
+                    // not to clean snapshots for test purpose
+                    .set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE))
+            .setNumOfTabletServers(3)
+            .build();
 
     protected static final int DEFAULT_BUCKET_NUM = 3;
 
-    protected static final Schema DEFAULT_PK_TABLE_SCHEMA =
-            Schema.newBuilder()
-                    .primaryKey("id")
+    protected static final Schema DEFAULT_PK_TABLE_SCHEMA = Schema.newBuilder()
+            .primaryKey("id")
+            .column("id", DataTypes.INT())
+            .column("name", DataTypes.STRING())
+            .build();
+
+    protected static final Schema DEFAULT_LOG_TABLE_SCHEMA = Schema.newBuilder()
+            .column("id", DataTypes.INT())
+            .column("name", DataTypes.STRING())
+            .build();
+
+    protected static final TableDescriptor DEFAULT_PK_TABLE_DESCRIPTOR = TableDescriptor.builder()
+            .schema(DEFAULT_PK_TABLE_SCHEMA)
+            .distributedBy(DEFAULT_BUCKET_NUM, "id")
+            .build();
+
+    protected static final TableDescriptor DEFAULT_LOG_TABLE_DESCRIPTOR = TableDescriptor.builder()
+            .schema(DEFAULT_LOG_TABLE_SCHEMA)
+            .distributedBy(DEFAULT_BUCKET_NUM, "id")
+            .build();
+
+    protected static final TableDescriptor DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR = TableDescriptor.builder()
+            .schema(Schema.newBuilder()
                     .column("id", DataTypes.INT())
                     .column("name", DataTypes.STRING())
-                    .build();
+                    .build())
+            .distributedBy(DEFAULT_BUCKET_NUM)
+            .partitionedBy("name")
+            .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+            .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR)
+            .build();
 
-    protected static final Schema DEFAULT_LOG_TABLE_SCHEMA =
-            Schema.newBuilder()
+    protected static final TableDescriptor DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR = TableDescriptor.builder()
+            .schema(Schema.newBuilder()
                     .column("id", DataTypes.INT())
                     .column("name", DataTypes.STRING())
-                    .build();
-
-    protected static final TableDescriptor DEFAULT_PK_TABLE_DESCRIPTOR =
-            TableDescriptor.builder()
-                    .schema(DEFAULT_PK_TABLE_SCHEMA)
-                    .distributedBy(DEFAULT_BUCKET_NUM, "id")
-                    .build();
-
-    protected static final TableDescriptor DEFAULT_LOG_TABLE_DESCRIPTOR =
-            TableDescriptor.builder()
-                    .schema(DEFAULT_LOG_TABLE_SCHEMA)
-                    .distributedBy(DEFAULT_BUCKET_NUM, "id")
-                    .build();
-
-    protected static final TableDescriptor DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR =
-            TableDescriptor.builder()
-                    .schema(
-                            Schema.newBuilder()
-                                    .column("id", DataTypes.INT())
-                                    .column("name", DataTypes.STRING())
-                                    .build())
-                    .distributedBy(DEFAULT_BUCKET_NUM)
-                    .partitionedBy("name")
-                    .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                    .property(
-                            ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
-                            AutoPartitionTimeUnit.YEAR)
-                    .build();
-
-    protected static final TableDescriptor DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR =
-            TableDescriptor.builder()
-                    .schema(
-                            Schema.newBuilder()
-                                    .column("id", DataTypes.INT())
-                                    .column("name", DataTypes.STRING())
-                                    .column("date", DataTypes.STRING())
-                                    .primaryKey("id", "date")
-                                    .build())
-                    .distributedBy(DEFAULT_BUCKET_NUM)
-                    .partitionedBy("date")
-                    .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                    .property(
-                            ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
-                            AutoPartitionTimeUnit.YEAR)
-                    .build();
+                    .column("date", DataTypes.STRING())
+                    .primaryKey("id", "date")
+                    .build())
+            .distributedBy(DEFAULT_BUCKET_NUM)
+            .partitionedBy("date")
+            .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+            .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR)
+            .build();
 
     protected static final String DEFAULT_DB = "test-flink-db";
 
-    protected static final TablePath DEFAULT_TABLE_PATH =
-            TablePath.of(DEFAULT_DB, "test-flink-table");
+    protected static final TablePath DEFAULT_TABLE_PATH = TablePath.of(DEFAULT_DB, "test-flink-table");
 
     protected static Connection conn;
     protected static Admin admin;
@@ -176,15 +159,13 @@ public class FlinkTestBase extends AbstractTestBase {
         }
     }
 
-    protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
-            throws Exception {
+    protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor) throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
         return admin.getTableInfo(tablePath).get().getTableId();
     }
 
     public static List<String> assertAndCollectRecords(
-            org.apache.flink.util.CloseableIterator<Row> iterator, int expectedNum)
-            throws Exception {
+            org.apache.flink.util.CloseableIterator<Row> iterator, int expectedNum) throws Exception {
         List<String> actual = new ArrayList<>(expectedNum);
         for (int i = 0; i < expectedNum; i++) {
             actual.add(iterator.next().toString());
@@ -205,12 +186,9 @@ public class FlinkTestBase extends AbstractTestBase {
      * Wait until the default number of partitions is created. Return the map from partition id to
      * partition name. .
      */
-    public static Map<Long, String> waitUntilPartitions(
-            ZooKeeperClient zooKeeperClient, TablePath tablePath) {
+    public static Map<Long, String> waitUntilPartitions(ZooKeeperClient zooKeeperClient, TablePath tablePath) {
         return waitUntilPartitions(
-                zooKeeperClient,
-                tablePath,
-                ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.defaultValue());
+                zooKeeperClient, tablePath, ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.defaultValue());
     }
 
     /**
@@ -221,49 +199,42 @@ public class FlinkTestBase extends AbstractTestBase {
             ZooKeeperClient zooKeeperClient, TablePath tablePath, int expectPartitions) {
         return waitValue(
                 () -> {
-                    Map<Long, String> gotPartitions =
-                            zooKeeperClient.getPartitionIdAndNames(tablePath);
-                    return expectPartitions == gotPartitions.size()
-                            ? Optional.of(gotPartitions)
-                            : Optional.empty();
+                    Map<Long, String> gotPartitions = zooKeeperClient.getPartitionIdAndNames(tablePath);
+                    return expectPartitions == gotPartitions.size() ? Optional.of(gotPartitions) : Optional.empty();
                 },
                 Duration.ofMinutes(1),
                 String.format("expect %d table partition has not been created", expectPartitions));
     }
 
     public static Map<Long, String> createPartitions(
-            ZooKeeperClient zkClient, TablePath tablePath, List<String> partitionsToCreate)
-            throws Exception {
+            ZooKeeperClient zkClient, TablePath tablePath, List<String> partitionsToCreate) throws Exception {
         MetadataManager metadataManager = new MetadataManager(zkClient, new Configuration());
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         Map<Long, String> newPartitionIds = new HashMap<>();
         for (String partition : partitionsToCreate) {
             long partitionId = zkClient.getPartitionIdAndIncrement();
             newPartitionIds.put(partitionId, partition);
-            TableAssignment assignment =
-                    generateAssignment(
-                            tableInfo.getNumBuckets(),
-                            tableInfo.getTableConfig().getReplicationFactor(),
-                            new TabletServerInfo[] {
-                                new TabletServerInfo(0, "rack0"),
-                                new TabletServerInfo(1, "rack1"),
-                                new TabletServerInfo(2, "rack2")
-                            });
+            TableAssignment assignment = generateAssignment(
+                    tableInfo.getNumBuckets(),
+                    tableInfo.getTableConfig().getReplicationFactor(),
+                    new TabletServerInfo[] {
+                        new TabletServerInfo(0, "rack0"),
+                        new TabletServerInfo(1, "rack1"),
+                        new TabletServerInfo(2, "rack2")
+                    });
 
             // register partition assignments and metadata
             zkClient.registerPartitionAssignmentAndMetadata(
                     partitionId,
                     partition,
-                    new PartitionAssignment(
-                            tableInfo.getTableId(), assignment.getBucketAssignments()),
+                    new PartitionAssignment(tableInfo.getTableId(), assignment.getBucketAssignments()),
                     tablePath,
                     tableInfo.getTableId());
         }
         return newPartitionIds;
     }
 
-    public static void dropPartitions(
-            ZooKeeperClient zkClient, TablePath tablePath, Set<String> droppedPartitions)
+    public static void dropPartitions(ZooKeeperClient zkClient, TablePath tablePath, Set<String> droppedPartitions)
             throws Exception {
         for (String partition : droppedPartitions) {
             zkClient.deletePartition(tablePath, partition);
@@ -271,8 +242,7 @@ public class FlinkTestBase extends AbstractTestBase {
     }
 
     public static List<String> writeRowsToPartition(
-            Connection connection, TablePath tablePath, Collection<String> partitions)
-            throws Exception {
+            Connection connection, TablePath tablePath, Collection<String> partitions) throws Exception {
         List<InternalRow> rows = new ArrayList<>();
         List<String> expectedRowValues = new ArrayList<>();
         for (String partition : partitions) {
@@ -286,8 +256,7 @@ public class FlinkTestBase extends AbstractTestBase {
         return expectedRowValues;
     }
 
-    public static void writeRows(
-            Connection connection, TablePath tablePath, List<InternalRow> rows, boolean append)
+    public static void writeRows(Connection connection, TablePath tablePath, List<InternalRow> rows, boolean append)
             throws Exception {
         try (Table table = connection.getTable(tablePath)) {
             TableWriter tableWriter;

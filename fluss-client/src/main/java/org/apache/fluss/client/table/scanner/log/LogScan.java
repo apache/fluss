@@ -30,7 +30,8 @@ import javax.annotation.Nullable;
 public class LogScan {
 
     /** The projected fields to do projection. No projection if is null. */
-    @Nullable private final int[] projectedFields;
+    @Nullable
+    private final int[] projectedFields;
 
     public LogScan() {
         this(null);

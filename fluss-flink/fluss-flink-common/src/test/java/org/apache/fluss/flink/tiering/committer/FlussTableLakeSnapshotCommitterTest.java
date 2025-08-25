@@ -61,14 +61,9 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testCommit(boolean isPartitioned) throws Exception {
-        TablePath tablePath =
-                TablePath.of("fluss", "test_commit" + (isPartitioned ? "_partitioned" : ""));
+        TablePath tablePath = TablePath.of("fluss", "test_commit" + (isPartitioned ? "_partitioned" : ""));
         long tableId =
-                createTable(
-                        tablePath,
-                        isPartitioned
-                                ? DATA1_PARTITIONED_TABLE_DESCRIPTOR
-                                : DATA1_TABLE_DESCRIPTOR);
+                createTable(tablePath, isPartitioned ? DATA1_PARTITIONED_TABLE_DESCRIPTOR : DATA1_TABLE_DESCRIPTOR);
 
         List<String> partitions;
         Map<String, Long> partitionNameAndIds = new HashMap<>();
@@ -94,13 +89,11 @@ class FlussTableLakeSnapshotCommitterTest extends FlinkTestBase {
                     long partitionId = partitionNameAndIds.get(partitionName);
                     committedLakeSnapshot.addPartitionBucket(
                             partitionId,
-                            ResolvedPartitionSpec.fromPartitionName(
-                                            Collections.singletonList("a"), partitionName)
+                            ResolvedPartitionSpec.fromPartitionName(Collections.singletonList("a"), partitionName)
                                     .getPartitionQualifiedName(),
                             bucket,
                             bucketOffset);
-                    expectedOffsets.put(
-                            new TableBucket(tableId, partitionId, bucket), bucketOffset);
+                    expectedOffsets.put(new TableBucket(tableId, partitionId, bucket), bucketOffset);
                     expectedPartitionNameById.put(partitionId, partitionName);
                 }
             }

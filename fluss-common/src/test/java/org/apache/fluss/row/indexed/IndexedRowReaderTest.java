@@ -82,17 +82,14 @@ public class IndexedRowReaderTest {
         assertThat(reader.readLong()).isEqualTo(new BigInteger("12345678901234567890").longValue());
         assertThat(reader.readFloat()).isEqualTo(Float.parseFloat("13.2"));
         assertThat(reader.readDouble()).isEqualTo(Double.parseDouble("15.21"));
-        assertThat(DateTimeUtils.toLocalDate(reader.readInt()))
-                .isEqualTo(LocalDate.of(2023, 10, 25));
-        assertThat(DateTimeUtils.toLocalTime(reader.readInt()))
-                .isEqualTo(LocalTime.of(9, 30, 0, 0));
+        assertThat(DateTimeUtils.toLocalDate(reader.readInt())).isEqualTo(LocalDate.of(2023, 10, 25));
+        assertThat(DateTimeUtils.toLocalTime(reader.readInt())).isEqualTo(LocalTime.of(9, 30, 0, 0));
         assertThat(reader.readBinary(20)).isEqualTo("1234567890".getBytes());
         assertThat(reader.readBytes()).isEqualTo("20".getBytes());
         assertThat(reader.readChar(2)).isEqualTo(BinaryString.fromString("1"));
         assertThat(reader.readString()).isEqualTo(BinaryString.fromString("hello"));
         assertThat(reader.readDecimal(5, 2)).isEqualTo(Decimal.fromUnscaledLong(9, 5, 2));
-        assertThat(reader.readDecimal(20, 0))
-                .isEqualTo(Decimal.fromBigDecimal(new BigDecimal(10), 20, 0));
+        assertThat(reader.readDecimal(20, 0)).isEqualTo(Decimal.fromBigDecimal(new BigDecimal(10), 20, 0));
         assertThat(reader.readTimestampNtz(1).toString()).isEqualTo("2023-10-25T12:01:13.182");
         assertThat(reader.readTimestampNtz(5).toString()).isEqualTo("2023-10-25T12:01:13.182");
         assertThat(reader.readTimestampLtz(1).toString()).isEqualTo("2023-10-25T12:01:13.182Z");

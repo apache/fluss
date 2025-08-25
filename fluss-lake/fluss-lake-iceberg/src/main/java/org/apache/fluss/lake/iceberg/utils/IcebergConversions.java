@@ -37,8 +37,7 @@ public class IcebergConversions {
         return TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName());
     }
 
-    public static PartitionKey toPartition(
-            Table table, @Nullable String partitionName, int bucket) {
+    public static PartitionKey toPartition(Table table, @Nullable String partitionName, int bucket) {
         PartitionSpec partitionSpec = table.spec();
         Schema schema = table.schema();
         PartitionKey partitionKey = new PartitionKey(partitionSpec, schema);

@@ -74,20 +74,16 @@ public class DirectoryBasedPluginFinder implements PluginFinder {
     public Collection<PluginDescriptor> findPlugins() throws IOException {
 
         if (!Files.isDirectory(pluginsRootDir)) {
-            throw new IOException(
-                    "Plugins root directory [" + pluginsRootDir + "] does not exist!");
+            throw new IOException("Plugins root directory [" + pluginsRootDir + "] does not exist!");
         }
         try (Stream<Path> stream = Files.list(pluginsRootDir)) {
             return stream.filter(Files::isDirectory)
-                    .map(
-                            FunctionUtils.uncheckedFunction(
-                                    this::createPluginDescriptorForSubDirectory))
+                    .map(FunctionUtils.uncheckedFunction(this::createPluginDescriptorForSubDirectory))
                     .collect(Collectors.toList());
         }
     }
 
-    private PluginDescriptor createPluginDescriptorForSubDirectory(Path subDirectory)
-            throws IOException {
+    private PluginDescriptor createPluginDescriptorForSubDirectory(Path subDirectory) throws IOException {
         URL[] urls = createJarURLsFromDirectory(subDirectory);
         Arrays.sort(urls, Comparator.comparing(URL::toString));
         // TODO: This class could be extended to parse exclude-pattern from a optional text files in
@@ -97,17 +93,15 @@ public class DirectoryBasedPluginFinder implements PluginFinder {
 
     private URL[] createJarURLsFromDirectory(Path subDirectory) throws IOException {
         try (Stream<Path> stream = Files.list(subDirectory)) {
-            URL[] urls =
-                    stream.filter((Path p) -> Files.isRegularFile(p) && jarFileMatcher.matches(p))
-                            .map(FunctionUtils.uncheckedFunction((Path p) -> p.toUri().toURL()))
-                            .toArray(URL[]::new);
+            URL[] urls = stream.filter((Path p) -> Files.isRegularFile(p) && jarFileMatcher.matches(p))
+                    .map(FunctionUtils.uncheckedFunction((Path p) -> p.toUri().toURL()))
+                    .toArray(URL[]::new);
 
             if (urls.length < 1) {
-                throw new IOException(
-                        "Cannot find any jar files for plugin in directory ["
-                                + subDirectory
-                                + "]."
-                                + " Please provide the jar files for the plugin or delete the directory.");
+                throw new IOException("Cannot find any jar files for plugin in directory ["
+                        + subDirectory
+                        + "]."
+                        + " Please provide the jar files for the plugin or delete the directory.");
             }
 
             return urls;

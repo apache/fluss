@@ -161,8 +161,7 @@ public final class LazyIndex<T extends AbstractIndex> implements Closeable {
 
     private volatile IndexWrapper indexWrapper;
 
-    private LazyIndex(
-            IndexWrapper indexWrapper, long baseOffset, int maxIndexSize, IndexType indexType) {
+    private LazyIndex(IndexWrapper indexWrapper, long baseOffset, int maxIndexSize, IndexType indexType) {
         this.indexWrapper = indexWrapper;
         this.baseOffset = baseOffset;
         this.maxIndexSize = maxIndexSize;
@@ -187,21 +186,18 @@ public final class LazyIndex<T extends AbstractIndex> implements Closeable {
         if (wrapper instanceof IndexValue<?>) {
             return ((IndexValue<T>) wrapper).index;
         } else {
-            return inLock(
-                    lock,
-                    () -> {
-                        if (indexWrapper instanceof IndexValue<?>) {
-                            return ((IndexValue<T>) indexWrapper).index;
-                        } else if (indexWrapper instanceof IndexFile) {
-                            IndexFile indexFile = (IndexFile) indexWrapper;
-                            IndexValue<T> indexValue = new IndexValue<>(loadIndex(indexFile.file));
-                            indexWrapper = indexValue;
-                            return indexValue.index;
-                        } else {
-                            throw new IllegalStateException(
-                                    "Unexpected type for indexWrapper " + indexWrapper.getClass());
-                        }
-                    });
+            return inLock(lock, () -> {
+                if (indexWrapper instanceof IndexValue<?>) {
+                    return ((IndexValue<T>) indexWrapper).index;
+                } else if (indexWrapper instanceof IndexFile) {
+                    IndexFile indexFile = (IndexFile) indexWrapper;
+                    IndexValue<T> indexValue = new IndexValue<>(loadIndex(indexFile.file));
+                    indexWrapper = indexValue;
+                    return indexValue.index;
+                } else {
+                    throw new IllegalStateException("Unexpected type for indexWrapper " + indexWrapper.getClass());
+                }
+            });
         }
     }
 

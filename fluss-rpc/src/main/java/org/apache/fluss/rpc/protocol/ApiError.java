@@ -50,10 +50,9 @@ public class ApiError {
             // but we may need to avoid this to not leak sensitive information in the future.
             String errorStack = ExceptionUtils.stringifyException(throwableToBeEncoded);
             // tailor the error stack to reduce the network cost.
-            message =
-                    errorStack.length() > MAX_ERROR_MESSAGE_LENGTH
-                            ? errorStack.substring(0, MAX_ERROR_MESSAGE_LENGTH)
-                            : errorStack;
+            message = errorStack.length() > MAX_ERROR_MESSAGE_LENGTH
+                    ? errorStack.substring(0, MAX_ERROR_MESSAGE_LENGTH)
+                    : errorStack;
         } else {
             message = throwableToBeEncoded.getMessage();
         }

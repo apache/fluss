@@ -41,20 +41,15 @@ public class AuthorizerLoader {
 
     /** Load authorizer. */
     public static @Nullable Authorizer createAuthorizer(
-            Configuration configuration,
-            ZooKeeperClient zooKeeperClient,
-            @Nullable PluginManager pluginManager) {
+            Configuration configuration, ZooKeeperClient zooKeeperClient, @Nullable PluginManager pluginManager) {
         if (!configuration.get(AUTHORIZER_ENABLED)) {
             return null;
         }
         String authorizerType = configuration.get(AUTHORIZER_TYPE);
         Collection<Supplier<Iterator<AuthorizationPlugin>>> pluginSuppliers = new ArrayList<>(2);
         pluginSuppliers.add(
-                () ->
-                        ServiceLoader.load(
-                                        AuthorizationPlugin.class,
-                                        AuthorizationPlugin.class.getClassLoader())
-                                .iterator());
+                () -> ServiceLoader.load(AuthorizationPlugin.class, AuthorizationPlugin.class.getClassLoader())
+                        .iterator());
 
         if (pluginManager != null) {
             pluginSuppliers.add(() -> pluginManager.load(AuthorizationPlugin.class));
@@ -72,22 +67,19 @@ public class AuthorizerLoader {
         }
 
         if (matchingPlugins.size() != 1) {
-            throw new ValidationException(
-                    String.format(
-                            "Could not find same authorizer plugin for protocol '%s' in the classpath.\n\n"
-                                    + "Available factory protocols are:\n\n"
-                                    + "%s",
-                            authorizerType,
-                            matchingPlugins.stream()
-                                    .map(f -> f.getClass().getName())
-                                    .distinct()
-                                    .sorted()
-                                    .collect(Collectors.joining("\n"))));
+            throw new ValidationException(String.format(
+                    "Could not find same authorizer plugin for protocol '%s' in the classpath.\n\n"
+                            + "Available factory protocols are:\n\n"
+                            + "%s",
+                    authorizerType,
+                    matchingPlugins.stream()
+                            .map(f -> f.getClass().getName())
+                            .distinct()
+                            .sorted()
+                            .collect(Collectors.joining("\n"))));
         }
 
-        return matchingPlugins
-                .get(0)
-                .createAuthorizer(new DefaultContext(configuration, zooKeeperClient));
+        return matchingPlugins.get(0).createAuthorizer(new DefaultContext(configuration, zooKeeperClient));
     }
 
     /** Default implementation of {@link AuthorizationPlugin.Context}. */
@@ -95,8 +87,7 @@ public class AuthorizerLoader {
         private final Configuration configuration;
         private final ZooKeeperClient zooKeeperClient;
 
-        public DefaultContext(
-                Configuration configuration, @Nullable ZooKeeperClient zooKeeperClient) {
+        public DefaultContext(Configuration configuration, @Nullable ZooKeeperClient zooKeeperClient) {
             this.configuration = configuration;
             this.zooKeeperClient = zooKeeperClient;
         }

@@ -76,9 +76,7 @@ public class ScanRecord implements LogRecord {
             return false;
         }
         ScanRecord that = (ScanRecord) o;
-        return offset == that.offset
-                && changeType == that.changeType
-                && Objects.equals(row, that.row);
+        return offset == that.offset && changeType == that.changeType && Objects.equals(row, that.row);
     }
 
     @Override

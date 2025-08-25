@@ -33,7 +33,8 @@ import java.util.Optional;
 public class AclDeleteResult {
 
     /** The error encountered while attempting to match ACL filters for deletion, if any. */
-    @Nullable private final ApiError error;
+    @Nullable
+    private final ApiError error;
 
     /** The collection of delete results for each matching ACL binding. */
     private final Collection<AclBindingDeleteResult> aclBindingDeleteResults;
@@ -42,8 +43,7 @@ public class AclDeleteResult {
         this(deleteResults, null);
     }
 
-    public AclDeleteResult(
-            Collection<AclBindingDeleteResult> deleteResults, @Nullable ApiError error) {
+    public AclDeleteResult(Collection<AclBindingDeleteResult> deleteResults, @Nullable ApiError error) {
         this.aclBindingDeleteResults = deleteResults;
         this.error = error;
     }
@@ -66,7 +66,8 @@ public class AclDeleteResult {
         private final AclBinding aclBinding;
 
         /** The exception encountered while attempting to delete the ACL binding, if any. */
-        @Nullable private final ApiError error;
+        @Nullable
+        private final ApiError error;
 
         public AclBindingDeleteResult(AclBinding aclBinding, ApiError apiError) {
             this.aclBinding = aclBinding;

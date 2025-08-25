@@ -65,9 +65,7 @@ class CompletedSnapshotStoreManagerTest {
     @BeforeAll
     static void beforeAll() {
         zookeeperClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+                ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getZooKeeperClient(NOPErrorHandler.INSTANCE);
         completedSnapshotHandleStore = new ZooKeeperCompletedSnapshotHandleStore(zookeeperClient);
         ioExecutor = Executors.newFixedThreadPool(1);
     }
@@ -97,34 +95,29 @@ class CompletedSnapshotStoreManagerTest {
         for (TableBucket tableBucket : tableBuckets) {
             // add some snapshots
             for (int snapshot = 0; snapshot < snapshotNum; snapshot++) {
-                CompletedSnapshot completedSnapshot =
-                        KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, snapshot);
+                CompletedSnapshot completedSnapshot = KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, snapshot);
                 addCompletedSnapshot(completedSnapshotStoreManager, completedSnapshot);
 
                 // check gotten completed snapshot
-                assertThat(getCompletedSnapshot(tableBucket, snapshot))
-                        .isEqualTo(completedSnapshot);
+                assertThat(getCompletedSnapshot(tableBucket, snapshot)).isEqualTo(completedSnapshot);
                 tableBucketLatestCompletedSnapshots.put(tableBucket, completedSnapshot);
             }
             // check has retain number of snapshots
-            assertThat(
-                            completedSnapshotStoreManager
-                                    .getOrCreateCompletedSnapshotStore(tableBucket)
-                                    .getAllSnapshots())
+            assertThat(completedSnapshotStoreManager
+                            .getOrCreateCompletedSnapshotStore(tableBucket)
+                            .getAllSnapshots())
                     .hasSize(maxNumberOfSnapshotsToRetain);
         }
 
         // we create another table bucket snapshot manager
-        completedSnapshotStoreManager =
-                createCompletedSnapshotStoreManager(maxNumberOfSnapshotsToRetain);
+        completedSnapshotStoreManager = createCompletedSnapshotStoreManager(maxNumberOfSnapshotsToRetain);
 
         for (TableBucket tableBucket : tableBucketLatestCompletedSnapshots.keySet()) {
             // get latest snapshot
             CompletedSnapshot completedSnapshot =
                     getLatestCompletedSnapshot(completedSnapshotStoreManager, tableBucket);
             // check snapshot
-            assertThat(completedSnapshot)
-                    .isEqualTo(tableBucketLatestCompletedSnapshots.get(tableBucket));
+            assertThat(completedSnapshot).isEqualTo(tableBucketLatestCompletedSnapshots.get(tableBucket));
 
             // add a new snapshot
             long snapshotId = completedSnapshot.getSnapshotID() + 1;
@@ -134,48 +127,45 @@ class CompletedSnapshotStoreManagerTest {
             assertThat(getCompletedSnapshot(tableBucket, snapshotId)).isEqualTo(completedSnapshot);
 
             // check has retain number of snapshots
-            assertThat(
-                            completedSnapshotStoreManager
-                                    .getOrCreateCompletedSnapshotStore(tableBucket)
-                                    .getAllSnapshots())
+            assertThat(completedSnapshotStoreManager
+                            .getOrCreateCompletedSnapshotStore(tableBucket)
+                            .getAllSnapshots())
                     .hasSize(maxNumberOfSnapshotsToRetain);
         }
 
         // for other unknown buckets, snapshots should be empty
         TableBucket nonExistBucket = new TableBucket(10, 100);
-        assertThat(
-                        completedSnapshotStoreManager
-                                .getOrCreateCompletedSnapshotStore(nonExistBucket)
-                                .getAllSnapshots())
+        assertThat(completedSnapshotStoreManager
+                        .getOrCreateCompletedSnapshotStore(nonExistBucket)
+                        .getAllSnapshots())
                 .hasSize(0);
     }
 
     @Test
     void testRemoveCompletedSnapshotStoreFromManager() throws Exception {
-        CompletedSnapshotStoreManager completedSnapshotStoreManager =
-                createCompletedSnapshotStoreManager(10);
+        CompletedSnapshotStoreManager completedSnapshotStoreManager = createCompletedSnapshotStoreManager(10);
         Set<TableBucket> tableBuckets = createTableBuckets(1, 2);
         int snapshotNum = 3;
         for (TableBucket tableBucket : tableBuckets) {
             // add some snapshots
             for (int snapshot = 0; snapshot < snapshotNum; snapshot++) {
-                CompletedSnapshot completedSnapshot =
-                        KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, snapshot);
+                CompletedSnapshot completedSnapshot = KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, snapshot);
                 addCompletedSnapshot(completedSnapshotStoreManager, completedSnapshot);
             }
         }
         // before remove CompletedSnapshotStore
-        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores().size())
+        assertThat(completedSnapshotStoreManager
+                        .getBucketCompletedSnapshotStores()
+                        .size())
                 .isEqualTo(2);
         // after remove CompletedSnapshotStore
         completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(tableBuckets);
-        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
+        assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores())
+                .isEmpty();
     }
 
-    private CompletedSnapshotStoreManager createCompletedSnapshotStoreManager(
-            int maxNumberOfSnapshotsToRetain) {
-        return new CompletedSnapshotStoreManager(
-                maxNumberOfSnapshotsToRetain, ioExecutor, zookeeperClient);
+    private CompletedSnapshotStoreManager createCompletedSnapshotStoreManager(int maxNumberOfSnapshotsToRetain) {
+        return new CompletedSnapshotStoreManager(maxNumberOfSnapshotsToRetain, ioExecutor, zookeeperClient);
     }
 
     private CompletedSnapshot getLatestCompletedSnapshot(
@@ -186,8 +176,7 @@ class CompletedSnapshotStoreManagerTest {
     }
 
     private void addCompletedSnapshot(
-            CompletedSnapshotStoreManager completedSnapshotStoreManager,
-            CompletedSnapshot completedSnapshot)
+            CompletedSnapshotStoreManager completedSnapshotStoreManager, CompletedSnapshot completedSnapshot)
             throws Exception {
         TableBucket tableBucket = completedSnapshot.getTableBucket();
         CompletedSnapshotStore completedSnapshotStore =
@@ -195,19 +184,16 @@ class CompletedSnapshotStoreManagerTest {
         completedSnapshotStore.add(completedSnapshot);
     }
 
-    private CompletedSnapshot getCompletedSnapshot(TableBucket tableBucket, long snapshotId)
-            throws Exception {
+    private CompletedSnapshot getCompletedSnapshot(TableBucket tableBucket, long snapshotId) throws Exception {
         return completedSnapshotHandleStore
                 .get(tableBucket, snapshotId)
-                .map(
-                        t -> {
-                            try {
-                                return t.retrieveCompleteSnapshot();
-                            } catch (IOException e) {
-                                throw new RuntimeException(
-                                        "Fail to retrieve completed snapshot.", e);
-                            }
-                        })
+                .map(t -> {
+                    try {
+                        return t.retrieveCompleteSnapshot();
+                    } catch (IOException e) {
+                        throw new RuntimeException("Fail to retrieve completed snapshot.", e);
+                    }
+                })
                 .orElse(null);
     }
 

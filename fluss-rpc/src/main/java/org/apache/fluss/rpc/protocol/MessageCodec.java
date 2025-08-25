@@ -59,8 +59,7 @@ public final class MessageCodec {
 
     private MessageCodec() {}
 
-    public static Send encodeSuccessResponse(
-            ByteBufAllocator allocator, int requestId, ApiMessage response) {
+    public static Send encodeSuccessResponse(ByteBufAllocator allocator, int requestId, ApiMessage response) {
         int responseSize = response.totalSize();
         int frameLength = RESPONSE_HEADER_LENGTH + responseSize;
         // 4 bytes for the request id which is not in response body,
@@ -77,8 +76,7 @@ public final class MessageCodec {
         return output.buildSend();
     }
 
-    public static ByteBuf encodeErrorResponse(
-            ByteBufAllocator allocator, int requestId, ApiError error) {
+    public static ByteBuf encodeErrorResponse(ByteBufAllocator allocator, int requestId, ApiError error) {
         ErrorResponse response = error.toErrorResponse();
         int responseSize = response.totalSize();
         int frameLength = RESPONSE_HEADER_LENGTH + responseSize;
@@ -108,11 +106,7 @@ public final class MessageCodec {
     }
 
     public static ByteBuf encodeRequest(
-            ByteBufAllocator allocator,
-            short apiKey,
-            short apiVersion,
-            int requestId,
-            ApiMessage request) {
+            ByteBufAllocator allocator, short apiKey, short apiVersion, int requestId, ApiMessage request) {
         int requestSize = request.totalSize();
         int frameLength = REQUEST_HEADER_LENGTH + requestSize;
         int bufferSize = frameLength + 4;

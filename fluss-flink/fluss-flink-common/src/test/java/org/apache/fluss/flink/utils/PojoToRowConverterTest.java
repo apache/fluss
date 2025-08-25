@@ -54,15 +54,13 @@ public class PojoToRowConverterTest {
 
     @Test
     public void testBasicConversion() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Arrays.asList(
-                                new DataField("orderId", new BigIntType(false), "Order ID"),
-                                new DataField("itemId", new BigIntType(false), "Item ID"),
-                                new DataField("amount", new IntType(false), "Order amount"),
-                                new DataField(
-                                        "address", new StringType(true), "Shipping address")));
+        RowType rowType = new RowType(
+                true,
+                Arrays.asList(
+                        new DataField("orderId", new BigIntType(false), "Order ID"),
+                        new DataField("itemId", new BigIntType(false), "Item ID"),
+                        new DataField("amount", new IntType(false), "Order amount"),
+                        new DataField("address", new StringType(true), "Shipping address")));
 
         PojoToRowConverter<Order> converter = new PojoToRowConverter<>(Order.class, rowType);
 
@@ -79,15 +77,13 @@ public class PojoToRowConverterTest {
 
     @Test
     public void testNullHandling() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Arrays.asList(
-                                new DataField("orderId", new BigIntType(false), "Order ID"),
-                                new DataField("itemId", new BigIntType(false), "Item ID"),
-                                new DataField("amount", new IntType(false), "Order amount"),
-                                new DataField(
-                                        "address", new StringType(true), "Shipping address")));
+        RowType rowType = new RowType(
+                true,
+                Arrays.asList(
+                        new DataField("orderId", new BigIntType(false), "Order ID"),
+                        new DataField("itemId", new BigIntType(false), "Item ID"),
+                        new DataField("amount", new IntType(false), "Order amount"),
+                        new DataField("address", new StringType(true), "Shipping address")));
 
         PojoToRowConverter<Order> converter = new PojoToRowConverter<>(Order.class, rowType);
 
@@ -105,18 +101,14 @@ public class PojoToRowConverterTest {
 
     @Test
     public void testMissingFields() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Arrays.asList(
-                                new DataField("orderId", new BigIntType(false), "Order ID"),
-                                new DataField("itemId", new BigIntType(false), "Item ID"),
-                                new DataField("amount", new IntType(false), "Order amount"),
-                                new DataField("address", new StringType(true), "Shipping address"),
-                                new DataField(
-                                        "nonExistentField",
-                                        new StringType(true),
-                                        "Non-existent field")));
+        RowType rowType = new RowType(
+                true,
+                Arrays.asList(
+                        new DataField("orderId", new BigIntType(false), "Order ID"),
+                        new DataField("itemId", new BigIntType(false), "Item ID"),
+                        new DataField("amount", new IntType(false), "Order amount"),
+                        new DataField("address", new StringType(true), "Shipping address"),
+                        new DataField("nonExistentField", new StringType(true), "Non-existent field")));
 
         PojoToRowConverter<Order> converter = new PojoToRowConverter<>(Order.class, rowType);
 
@@ -134,14 +126,13 @@ public class PojoToRowConverterTest {
 
     @Test
     public void testFieldOrderIndependence() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Arrays.asList(
-                                new DataField("address", new StringType(true), "Shipping address"),
-                                new DataField("amount", new IntType(false), "Order amount"),
-                                new DataField("orderId", new BigIntType(false), "Order ID"),
-                                new DataField("itemId", new BigIntType(false), "Item ID")));
+        RowType rowType = new RowType(
+                true,
+                Arrays.asList(
+                        new DataField("address", new StringType(true), "Shipping address"),
+                        new DataField("amount", new IntType(false), "Order amount"),
+                        new DataField("orderId", new BigIntType(false), "Order ID"),
+                        new DataField("itemId", new BigIntType(false), "Item ID")));
 
         PojoToRowConverter<Order> converter = new PojoToRowConverter<>(Order.class, rowType);
 
@@ -208,15 +199,11 @@ public class PojoToRowConverterTest {
             }
         }
 
-        RowType rowType =
-                new RowType(
-                        true,
-                        Arrays.asList(
-                                new DataField("name", new StringType(false), "Name"),
-                                new DataField(
-                                        "nestedPojo",
-                                        new RowType(true, Collections.emptyList()),
-                                        "Nested POJO")));
+        RowType rowType = new RowType(
+                true,
+                Arrays.asList(
+                        new DataField("name", new StringType(false), "Name"),
+                        new DataField("nestedPojo", new RowType(true, Collections.emptyList()), "Nested POJO")));
 
         // Accept either exception type since Flink's POJO analysis happens first
         assertThatThrownBy(() -> new PojoToRowConverter<>(NestedContainer.class, rowType))
@@ -225,12 +212,11 @@ public class PojoToRowConverterTest {
 
     @Test
     public void testUnsupportedJavaClass() {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Arrays.asList(
-                                new DataField("id", new IntType(false), "Id"),
-                                new DataField("price", new DecimalType(38, 18), "Price")));
+        RowType rowType = new RowType(
+                true,
+                Arrays.asList(
+                        new DataField("id", new IntType(false), "Id"),
+                        new DataField("price", new DecimalType(38, 18), "Price")));
 
         assertThatThrownBy(() -> new PojoToRowConverter<>(ProductWithPrice.class, rowType))
                 .isInstanceOf(UnsupportedOperationException.class)
@@ -390,59 +376,47 @@ public class PojoToRowConverterTest {
 
     @Test
     void testConvertAllDataTypes() throws Exception {
-        RowType rowType =
-                new RowType(
-                        true,
-                        Arrays.asList(
-                                // Basic Order fields
-                                new DataField("orderId", new BigIntType(false), "Order ID"),
-                                new DataField("itemId", new BigIntType(false), "Item ID"),
-                                new DataField("amount", new IntType(false), "Order amount"),
-                                new DataField("address", new StringType(true), "Shipping address"),
-                                // Additional data types
-                                new DataField(
-                                        "booleanValue", new BooleanType(false), "Boolean value"),
-                                new DataField(
-                                        "tinyintValue", new TinyIntType(false), "TinyInt value"),
-                                new DataField(
-                                        "smallintValue", new SmallIntType(false), "SmallInt value"),
-                                new DataField("floatValue", new FloatType(false), "Float value"),
-                                new DataField("doubleValue", new DoubleType(false), "Double value"),
-                                new DataField(
-                                        "decimalValue",
-                                        new DecimalType(false, 10, 2),
-                                        "Decimal value"),
-                                new DataField("dateValue", new DateType(false), "Date value"),
-                                new DataField("timeValue", new TimeType(false, 3), "Time value"),
-                                new DataField(
-                                        "timestampValue",
-                                        new TimestampType(false, 6),
-                                        "Timestamp value"),
-                                new DataField("bytesValue", new BinaryType(5), "Binary value"),
-                                new DataField("charValue", new CharType(false, 1), "Char value")));
+        RowType rowType = new RowType(
+                true,
+                Arrays.asList(
+                        // Basic Order fields
+                        new DataField("orderId", new BigIntType(false), "Order ID"),
+                        new DataField("itemId", new BigIntType(false), "Item ID"),
+                        new DataField("amount", new IntType(false), "Order amount"),
+                        new DataField("address", new StringType(true), "Shipping address"),
+                        // Additional data types
+                        new DataField("booleanValue", new BooleanType(false), "Boolean value"),
+                        new DataField("tinyintValue", new TinyIntType(false), "TinyInt value"),
+                        new DataField("smallintValue", new SmallIntType(false), "SmallInt value"),
+                        new DataField("floatValue", new FloatType(false), "Float value"),
+                        new DataField("doubleValue", new DoubleType(false), "Double value"),
+                        new DataField("decimalValue", new DecimalType(false, 10, 2), "Decimal value"),
+                        new DataField("dateValue", new DateType(false), "Date value"),
+                        new DataField("timeValue", new TimeType(false, 3), "Time value"),
+                        new DataField("timestampValue", new TimestampType(false, 6), "Timestamp value"),
+                        new DataField("bytesValue", new BinaryType(5), "Binary value"),
+                        new DataField("charValue", new CharType(false, 1), "Char value")));
 
         // Create a ComplexTypeOrder with all fields
-        ComplexTypeOrder order =
-                new ComplexTypeOrder(
-                        1001L,
-                        5001L,
-                        10,
-                        "123 Mumbai",
-                        true, // boolean
-                        (byte) 127, // tinyint
-                        (short) 32767, // smallint
-                        3.14f, // float
-                        2.71828, // double
-                        new BigDecimal("123.45"), // decimal
-                        LocalDate.of(2023, 7, 15), // date
-                        LocalTime.of(14, 30, 45, 123000000), // time
-                        LocalDateTime.of(2023, 7, 15, 14, 30, 45, 123456000), // timestamp
-                        new byte[] {1, 2, 3, 4, 5}, // binary
-                        'A' // char
-                        );
+        ComplexTypeOrder order = new ComplexTypeOrder(
+                1001L,
+                5001L,
+                10,
+                "123 Mumbai",
+                true, // boolean
+                (byte) 127, // tinyint
+                (short) 32767, // smallint
+                3.14f, // float
+                2.71828, // double
+                new BigDecimal("123.45"), // decimal
+                LocalDate.of(2023, 7, 15), // date
+                LocalTime.of(14, 30, 45, 123000000), // time
+                LocalDateTime.of(2023, 7, 15, 14, 30, 45, 123456000), // timestamp
+                new byte[] {1, 2, 3, 4, 5}, // binary
+                'A' // char
+                );
 
-        PojoToRowConverter<ComplexTypeOrder> converter =
-                new PojoToRowConverter<>(ComplexTypeOrder.class, rowType);
+        PojoToRowConverter<ComplexTypeOrder> converter = new PojoToRowConverter<>(ComplexTypeOrder.class, rowType);
         GenericRow result = converter.convert(order);
 
         assertThat(result.getFieldCount()).isEqualTo(15);
@@ -468,8 +442,7 @@ public class PojoToRowConverterTest {
         assertThat(result.getInt(11)).isEqualTo(expectedMillisOfDay);
 
         LocalDateTime expectedTimestamp = LocalDateTime.of(2023, 7, 15, 14, 30, 45, 123456000);
-        long expectedEpochMillis =
-                expectedTimestamp.toEpochSecond(java.time.ZoneOffset.UTC) * 1000L + 123L;
+        long expectedEpochMillis = expectedTimestamp.toEpochSecond(java.time.ZoneOffset.UTC) * 1000L + 123L;
         assertThat(result.getTimestampNtz(12, 6).getMillisecond()).isEqualTo(expectedEpochMillis);
 
         assertThat(result.getBytes(13)).isEqualTo(new byte[] {1, 2, 3, 4, 5});

@@ -28,10 +28,8 @@ public class TieringSourceOptions {
 
     public static final String DATA_LAKE_CONFIG_PREFIX = "datalake.";
 
-    public static final ConfigOption<Duration> POLL_TIERING_TABLE_INTERVAL =
-            key("tiering.poll.table.interval")
-                    .durationType()
-                    .defaultValue(Duration.ofSeconds(30))
-                    .withDescription(
-                            "The fixed interval to request tiering table from Fluss cluster, by default 30 seconds.");
+    public static final ConfigOption<Duration> POLL_TIERING_TABLE_INTERVAL = key("tiering.poll.table.interval")
+            .durationType()
+            .defaultValue(Duration.ofSeconds(30))
+            .withDescription("The fixed interval to request tiering table from Fluss cluster, by default 30 seconds.");
 }

@@ -45,19 +45,18 @@ public class SafetyNetCloseableRegistryTest
 
     @Override
     protected void registerCloseable(final Closeable closeable) throws IOException {
-        final WrappingProxyCloseable<Closeable> wrappingProxyCloseable =
-                new WrappingProxyCloseable<Closeable>() {
+        final WrappingProxyCloseable<Closeable> wrappingProxyCloseable = new WrappingProxyCloseable<Closeable>() {
 
-                    @Override
-                    public void close() throws IOException {
-                        closeable.close();
-                    }
+            @Override
+            public void close() throws IOException {
+                closeable.close();
+            }
 
-                    @Override
-                    public Closeable getWrappedDelegate() {
-                        return closeable;
-                    }
-                };
+            @Override
+            public Closeable getWrappedDelegate() {
+                return closeable;
+            }
+        };
         closeableRegistry.registerCloseable(wrappingProxyCloseable);
     }
 
@@ -94,8 +93,7 @@ public class SafetyNetCloseableRegistryTest
         return new AbstractAutoCloseableRegistryTest.ProducerThread<
                 Closeable,
                 WrappingProxyCloseable<? extends Closeable>,
-                SafetyNetCloseableRegistry.PhantomDelegatingCloseableRef>(
-                registry, unclosedCounter, maxStreams) {
+                SafetyNetCloseableRegistry.PhantomDelegatingCloseableRef>(registry, unclosedCounter, maxStreams) {
 
             int count = 0;
 
@@ -106,11 +104,8 @@ public class SafetyNetCloseableRegistryTest
 
                 // this method automatically registers the stream with the given registry.
                 @SuppressWarnings("unused")
-                ClosingFSDataInputStream pis =
-                        ClosingFSDataInputStream.wrapSafe(
-                                testStream,
-                                (SafetyNetCloseableRegistry) registry,
-                                debug); // reference dies here
+                ClosingFSDataInputStream pis = ClosingFSDataInputStream.wrapSafe(
+                        testStream, (SafetyNetCloseableRegistry) registry, debug); // reference dies here
                 ++count;
             }
         };
@@ -123,93 +118,70 @@ public class SafetyNetCloseableRegistryTest
 
     @Test
     public void testCorrectScopesForSafetyNet(@TempDir Path tempDir) throws Exception {
-        CheckedThread t1 =
-                new CheckedThread() {
+        CheckedThread t1 = new CheckedThread() {
 
-                    @Override
-                    public void go() throws Exception {
-                        try {
-                            FileSystem fs1 = FileSystem.get(LocalFileSystem.getLocalFsURI());
-                            // ensure no safety net in place
-                            assertThat(fs1).isNotInstanceOf(SafetyNetWrapperFileSystem.class);
-                            FileSystemSafetyNet.initializeSafetyNetForThread();
-                            fs1 = FileSystem.get(LocalFileSystem.getLocalFsURI());
-                            // ensure safety net is in place now
-                            assertThat(fs1).isInstanceOf(SafetyNetWrapperFileSystem.class);
+            @Override
+            public void go() throws Exception {
+                try {
+                    FileSystem fs1 = FileSystem.get(LocalFileSystem.getLocalFsURI());
+                    // ensure no safety net in place
+                    assertThat(fs1).isNotInstanceOf(SafetyNetWrapperFileSystem.class);
+                    FileSystemSafetyNet.initializeSafetyNetForThread();
+                    fs1 = FileSystem.get(LocalFileSystem.getLocalFsURI());
+                    // ensure safety net is in place now
+                    assertThat(fs1).isInstanceOf(SafetyNetWrapperFileSystem.class);
 
-                            FsPath tmp = new FsPath(tempDir.toString(), "test_file");
+                    FsPath tmp = new FsPath(tempDir.toString(), "test_file");
 
-                            try (FSDataOutputStream stream =
-                                    fs1.create(tmp, FileSystem.WriteMode.NO_OVERWRITE)) {
-                                CheckedThread t2 =
-                                        new CheckedThread() {
-                                            @Override
-                                            public void go() {
-                                                try {
-                                                    FileSystem fs2 =
-                                                            FileSystem.get(
-                                                                    LocalFileSystem
-                                                                            .getLocalFsURI());
-                                                    // ensure the safety net does not leak here
-                                                    assertThat(fs2)
-                                                            .isNotInstanceOf(
-                                                                    SafetyNetWrapperFileSystem
-                                                                            .class);
-                                                    FileSystemSafetyNet
-                                                            .initializeSafetyNetForThread();
-                                                    fs2 =
-                                                            FileSystem.get(
-                                                                    LocalFileSystem
-                                                                            .getLocalFsURI());
-                                                    // ensure we can bring another safety net in
-                                                    // place
-                                                    assertThat(fs2)
-                                                            .isInstanceOf(
-                                                                    SafetyNetWrapperFileSystem
-                                                                            .class);
-                                                    FileSystemSafetyNet
-                                                            .closeSafetyNetAndGuardedResourcesForThread();
-                                                    fs2 =
-                                                            FileSystem.get(
-                                                                    LocalFileSystem
-                                                                            .getLocalFsURI());
-                                                    // and that we can remove it again
-                                                    assertThat(fs2)
-                                                            .isNotInstanceOf(
-                                                                    SafetyNetWrapperFileSystem
-                                                                            .class);
-                                                } catch (Exception e) {
-                                                    fail(ExceptionUtils.stringifyException(e));
-                                                }
-                                            }
-                                        };
-
-                                t2.start();
-                                t2.sync();
-
-                                // ensure stream is still open and was never closed by any
-                                // interferences
-                                stream.write(42);
-                                FileSystemSafetyNet.closeSafetyNetAndGuardedResourcesForThread();
-
-                                // ensure leaking stream was closed
+                    try (FSDataOutputStream stream = fs1.create(tmp, FileSystem.WriteMode.NO_OVERWRITE)) {
+                        CheckedThread t2 = new CheckedThread() {
+                            @Override
+                            public void go() {
                                 try {
-                                    stream.write(43);
-                                    fail("stream should be closed.");
-                                } catch (IOException ignore) {
-
+                                    FileSystem fs2 = FileSystem.get(LocalFileSystem.getLocalFsURI());
+                                    // ensure the safety net does not leak here
+                                    assertThat(fs2).isNotInstanceOf(SafetyNetWrapperFileSystem.class);
+                                    FileSystemSafetyNet.initializeSafetyNetForThread();
+                                    fs2 = FileSystem.get(LocalFileSystem.getLocalFsURI());
+                                    // ensure we can bring another safety net in
+                                    // place
+                                    assertThat(fs2).isInstanceOf(SafetyNetWrapperFileSystem.class);
+                                    FileSystemSafetyNet.closeSafetyNetAndGuardedResourcesForThread();
+                                    fs2 = FileSystem.get(LocalFileSystem.getLocalFsURI());
+                                    // and that we can remove it again
+                                    assertThat(fs2).isNotInstanceOf(SafetyNetWrapperFileSystem.class);
+                                } catch (Exception e) {
+                                    fail(ExceptionUtils.stringifyException(e));
                                 }
-                                fs1 = FileSystem.get(LocalFileSystem.getLocalFsURI());
-                                // ensure safety net was removed
-                                assertThat(fs1).isNotInstanceOf(SafetyNetWrapperFileSystem.class);
-                            } finally {
-                                fs1.delete(tmp, false);
                             }
-                        } catch (Exception e) {
-                            fail(ExceptionUtils.stringifyException(e));
+                        };
+
+                        t2.start();
+                        t2.sync();
+
+                        // ensure stream is still open and was never closed by any
+                        // interferences
+                        stream.write(42);
+                        FileSystemSafetyNet.closeSafetyNetAndGuardedResourcesForThread();
+
+                        // ensure leaking stream was closed
+                        try {
+                            stream.write(43);
+                            fail("stream should be closed.");
+                        } catch (IOException ignore) {
+
                         }
+                        fs1 = FileSystem.get(LocalFileSystem.getLocalFsURI());
+                        // ensure safety net was removed
+                        assertThat(fs1).isNotInstanceOf(SafetyNetWrapperFileSystem.class);
+                    } finally {
+                        fs1.delete(tmp, false);
                     }
-                };
+                } catch (Exception e) {
+                    fail(ExceptionUtils.stringifyException(e));
+                }
+            }
+        };
 
         t1.start();
         t1.sync();
@@ -266,8 +238,7 @@ public class SafetyNetCloseableRegistryTest
         closeableRegistry.close();
     }
 
-    private static class JoinOnInterruptReaperThread
-            extends SafetyNetCloseableRegistry.CloseableReaperThread {
+    private static class JoinOnInterruptReaperThread extends SafetyNetCloseableRegistry.CloseableReaperThread {
         @Override
         public void interrupt() {
             super.interrupt();
@@ -279,8 +250,7 @@ public class SafetyNetCloseableRegistryTest
         }
     }
 
-    private static class OutOfMemoryReaperThread
-            extends SafetyNetCloseableRegistry.CloseableReaperThread {
+    private static class OutOfMemoryReaperThread extends SafetyNetCloseableRegistry.CloseableReaperThread {
 
         @Override
         public synchronized void start() {

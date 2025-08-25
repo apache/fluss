@@ -33,31 +33,30 @@ import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 /** Json serializer and deserializer for {@link TabletServerRegistration}. */
 @Internal
 public class TabletServerRegistrationJsonSerde
-        implements JsonSerializer<TabletServerRegistration>,
-                JsonDeserializer<TabletServerRegistration> {
+        implements JsonSerializer<TabletServerRegistration>, JsonDeserializer<TabletServerRegistration> {
 
-    public static final TabletServerRegistrationJsonSerde INSTANCE =
-            new TabletServerRegistrationJsonSerde();
+    public static final TabletServerRegistrationJsonSerde INSTANCE = new TabletServerRegistrationJsonSerde();
 
     private static final String VERSION_KEY = "version";
     private static final int VERSION = 3;
 
-    @Deprecated private static final String HOST = "host";
-    @Deprecated private static final String PORT = "port";
+    @Deprecated
+    private static final String HOST = "host";
+
+    @Deprecated
+    private static final String PORT = "port";
+
     private static final String REGISTER_TIMESTAMP = "register_timestamp";
     private static final String LISTENERS = "listeners";
     private static final String RACK = "rack";
 
     @Override
-    public void serialize(
-            TabletServerRegistration tabletServerRegistration, JsonGenerator generator)
+    public void serialize(TabletServerRegistration tabletServerRegistration, JsonGenerator generator)
             throws IOException {
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, VERSION);
-        generator.writeStringField(
-                LISTENERS, Endpoint.toListenersString(tabletServerRegistration.getEndpoints()));
-        generator.writeNumberField(
-                REGISTER_TIMESTAMP, tabletServerRegistration.getRegisterTimestamp());
+        generator.writeStringField(LISTENERS, Endpoint.toListenersString(tabletServerRegistration.getEndpoints()));
+        generator.writeNumberField(REGISTER_TIMESTAMP, tabletServerRegistration.getRegisterTimestamp());
         if (tabletServerRegistration.getRack() != null) {
             generator.writeStringField(RACK, tabletServerRegistration.getRack());
         }

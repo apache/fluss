@@ -58,10 +58,8 @@ public class MetricNames {
     public static final String DELAYED_WRITE_COUNT = "delayedWriteCount";
     public static final String DELAYED_WRITE_EXPIRES_RATE = "delayedWriteExpiresPerSecond";
     public static final String DELAYED_FETCH_COUNT = "delayedFetchCount";
-    public static final String DELAYED_FETCH_FROM_FOLLOWER_EXPIRES_RATE =
-            "delayedFetchFromFollowerExpiresPerSecond";
-    public static final String DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE =
-            "delayedFetchFromClientExpiresPerSecond";
+    public static final String DELAYED_FETCH_FROM_FOLLOWER_EXPIRES_RATE = "delayedFetchFromFollowerExpiresPerSecond";
+    public static final String DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE = "delayedFetchFromClientExpiresPerSecond";
 
     // --------------------------------------------------------------------------------------------
     // metrics for table
@@ -72,10 +70,8 @@ public class MetricNames {
 
     public static final String TOTAL_FETCH_LOG_REQUESTS_RATE = "totalFetchLogRequestsPerSecond";
     public static final String FAILED_FETCH_LOG_REQUESTS_RATE = "failedFetchLogRequestsPerSecond";
-    public static final String TOTAL_PRODUCE_FETCH_LOG_REQUESTS_RATE =
-            "totalProduceLogRequestsPerSecond";
-    public static final String FAILED_PRODUCE_FETCH_LOG_REQUESTS_RATE =
-            "failedProduceLogRequestsPerSecond";
+    public static final String TOTAL_PRODUCE_FETCH_LOG_REQUESTS_RATE = "totalProduceLogRequestsPerSecond";
+    public static final String FAILED_PRODUCE_FETCH_LOG_REQUESTS_RATE = "failedProduceLogRequestsPerSecond";
 
     public static final String REMOTE_LOG_COPY_BYTES_RATE = "remoteLogCopyBytesPerSecond";
     public static final String REMOTE_LOG_COPY_REQUESTS_RATE = "remoteLogCopyRequestsPerSecond";
@@ -89,10 +85,8 @@ public class MetricNames {
     public static final String FAILED_PUT_KV_REQUESTS_RATE = "failedPutKvRequestsPerSecond";
     public static final String TOTAL_LIMIT_SCAN_REQUESTS_RATE = "totalLimitScanRequestsPerSecond";
     public static final String FAILED_LIMIT_SCAN_REQUESTS_RATE = "failedLimitScanRequestsPerSecond";
-    public static final String TOTAL_PREFIX_LOOKUP_REQUESTS_RATE =
-            "totalPrefixLookupRequestsPerSecond";
-    public static final String FAILED_PREFIX_LOOKUP_REQUESTS_RATE =
-            "failedPrefixLookupRequestsPerSecond";
+    public static final String TOTAL_PREFIX_LOOKUP_REQUESTS_RATE = "totalPrefixLookupRequestsPerSecond";
+    public static final String FAILED_PREFIX_LOOKUP_REQUESTS_RATE = "failedPrefixLookupRequestsPerSecond";
 
     // --------------------------------------------------------------------------------------------
     // metrics for table bucket
@@ -118,11 +112,9 @@ public class MetricNames {
     public static final String KV_LATEST_SNAPSHOT_SIZE = "latestSnapshotSize";
     public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_DUPLICATED_RATE =
             "preWriteBufferTruncateAsDuplicatedPerSecond";
-    public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE =
-            "preWriteBufferTruncateAsErrorPerSecond";
+    public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE = "preWriteBufferTruncateAsErrorPerSecond";
     public static final String KV_PRE_WRITE_BUFFER_FLUSH_RATE = "preWriteBufferFlushPerSecond";
-    public static final String KV_PRE_WRITE_BUFFER_FLUSH_LATENCY_MS =
-            "preWriteBufferFlushLatencyMs";
+    public static final String KV_PRE_WRITE_BUFFER_FLUSH_LATENCY_MS = "preWriteBufferFlushLatencyMs";
 
     // --------------------------------------------------------------------------------------------
     // metrics for rpc client
@@ -165,6 +157,5 @@ public class MetricNames {
     public static final String NETTY_USED_DIRECT_MEMORY = "usedDirectMemory";
     public static final String NETTY_NUM_DIRECT_ARENAS = "numDirectArenas";
     public static final String NETTY_NUM_ALLOCATIONS_PER_SECONDS = "numAllocationsPerSecond";
-    public static final String NETTY_NUM_HUGE_ALLOCATIONS_PER_SECONDS =
-            "numHugeAllocationsPerSecond";
+    public static final String NETTY_NUM_HUGE_ALLOCATIONS_PER_SECONDS = "numHugeAllocationsPerSecond";
 }

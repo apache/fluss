@@ -72,8 +72,7 @@ public class AuthenticationTest {
         clientConfig.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
         clientConfig.setString("client.security.sasl.username", "root");
         clientConfig.setString("client.security.sasl.password", "password");
-        try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
+        try (NettyClient nettyClient = new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             verifyGetTableNamesList(nettyClient, usernamePasswordServerNode);
         }
     }
@@ -84,15 +83,13 @@ public class AuthenticationTest {
         clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
 
         // test normal mutual auth
-        try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
+        try (NettyClient nettyClient = new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             verifyGetTableNamesList(nettyClient, mutualAuthServerNode);
         }
 
         // test invalid challenge from server
         clientConfig.setString("client.security.mutual.error-type", "SERVER_ERROR_CHALLENGE");
-        try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
+        try (NettyClient nettyClient = new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, mutualAuthServerNode))
                     .hasRootCauseExactlyInstanceOf(AuthenticationException.class)
                     .rootCause()
@@ -101,8 +98,7 @@ public class AuthenticationTest {
 
         // test invalid token from client
         clientConfig.setString("client.security.mutual.error-type", "CLIENT_ERROR_SECOND_TOKEN");
-        try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
+        try (NettyClient nettyClient = new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, mutualAuthServerNode))
                     .rootCause()
                     .hasMessageContaining("Invalid token value");
@@ -114,13 +110,11 @@ public class AuthenticationTest {
         Configuration clientConfig = new Configuration();
         clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
         clientConfig.setString("client.security.mutual.error-type", "SERVER_NO_CHALLENGE");
-        try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
+        try (NettyClient nettyClient = new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
 
             assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, mutualAuthServerNode))
                     .hasRootCauseExactlyInstanceOf(IllegalStateException.class)
-                    .hasMessageContaining(
-                            "client authenticator is not completed while server generate no challenge");
+                    .hasMessageContaining("client authenticator is not completed while server generate no challenge");
         }
     }
 
@@ -129,8 +123,7 @@ public class AuthenticationTest {
         Configuration clientConfig = new Configuration();
         clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
         clientConfig.setString("client.security.mutual.error-type", "RETRIABLE_EXCEPTION");
-        try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
+        try (NettyClient nettyClient = new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             verifyGetTableNamesList(nettyClient, mutualAuthServerNode);
         }
     }
@@ -138,10 +131,8 @@ public class AuthenticationTest {
     @Test
     void testClientLackAuthenticateProtocol() throws Exception {
         Configuration clientConfig = new Configuration();
-        try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
-            assertThatThrownBy(
-                            () -> verifyGetTableNamesList(nettyClient, usernamePasswordServerNode))
+        try (NettyClient nettyClient = new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
+            assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, usernamePasswordServerNode))
                     .cause()
                     .isExactlyInstanceOf(AuthenticationException.class)
                     .hasMessageContaining(
@@ -153,14 +144,11 @@ public class AuthenticationTest {
     void testAuthenticateProtocolNotMatch() throws Exception {
         Configuration clientConfig = new Configuration();
         clientConfig.set(ConfigOptions.CLIENT_SECURITY_PROTOCOL, "mutual");
-        try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
-            assertThatThrownBy(
-                            () -> verifyGetTableNamesList(nettyClient, usernamePasswordServerNode))
+        try (NettyClient nettyClient = new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
+            assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, usernamePasswordServerNode))
                     .cause()
                     .isExactlyInstanceOf(AuthenticationException.class)
-                    .hasMessageContaining(
-                            "SASL server enables [PLAIN] while protocol of client is 'mutual'");
+                    .hasMessageContaining("SASL server enables [PLAIN] while protocol of client is 'mutual'");
         }
     }
 
@@ -171,10 +159,8 @@ public class AuthenticationTest {
         clientConfig.set(ConfigOptions.CLIENT_SASL_MECHANISM, "plain");
         clientConfig.setString("client.security.sasl.username", "root");
         clientConfig.setString("client.security.sasl.password", "password2");
-        try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
-            assertThatThrownBy(
-                            () -> verifyGetTableNamesList(nettyClient, usernamePasswordServerNode))
+        try (NettyClient nettyClient = new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
+            assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient, usernamePasswordServerNode))
                     .cause()
                     .isExactlyInstanceOf(AuthenticationException.class)
                     .hasMessageContaining("Invalid username or password");
@@ -189,17 +175,13 @@ public class AuthenticationTest {
         clientConfig.setString("client.security.sasl.username", "root");
         clientConfig.setString("client.security.sasl.password", "password");
 
-        try (NettyClient nettyClient =
-                new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
+        try (NettyClient nettyClient = new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
             verifyGetTableNamesList(nettyClient, usernamePasswordServerNode);
             // client2 with wrong password after client1 successes to authenticate.
             clientConfig.setString("client.security.sasl.password", "password2");
             try (NettyClient nettyClient2 =
                     new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
-                assertThatThrownBy(
-                                () ->
-                                        verifyGetTableNamesList(
-                                                nettyClient2, usernamePasswordServerNode))
+                assertThatThrownBy(() -> verifyGetTableNamesList(nettyClient2, usernamePasswordServerNode))
                         .cause()
                         .isExactlyInstanceOf(AuthenticationException.class)
                         .hasMessageContaining("Invalid username or password");
@@ -207,21 +189,18 @@ public class AuthenticationTest {
         }
     }
 
-    private void verifyGetTableNamesList(NettyClient nettyClient, ServerNode serverNode)
-            throws Exception {
+    private void verifyGetTableNamesList(NettyClient nettyClient, ServerNode serverNode) throws Exception {
         ListTablesRequest request = new ListTablesRequest().setDatabaseName("test-database");
-        ListTablesResponse listTablesResponse =
-                (ListTablesResponse)
-                        nettyClient.sendRequest(serverNode, ApiKeys.LIST_TABLES, request).get();
+        ListTablesResponse listTablesResponse = (ListTablesResponse) nettyClient
+                .sendRequest(serverNode, ApiKeys.LIST_TABLES, request)
+                .get();
 
-        assertThat(listTablesResponse.getTableNamesList())
-                .isEqualTo(Collections.singletonList("test-table"));
+        assertThat(listTablesResponse.getTableNamesList()).isEqualTo(Collections.singletonList("test-table"));
     }
 
     private void buildNettyServer() throws Exception {
         Configuration configuration = new Configuration();
-        configuration.setString(
-                ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT1:mutual,CLIENT2:sasl");
+        configuration.setString(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP.key(), "CLIENT1:mutual,CLIENT2:sasl");
         configuration.setString("security.sasl.enabled.mechanisms", "plain");
         configuration.setString(
                 "security.sasl.plain.jaas.config",
@@ -236,24 +215,20 @@ public class AuthenticationTest {
         TestingAuthenticateGatewayService service = new TestingAuthenticateGatewayService();
         try (NetUtils.Port availablePort1 = getAvailablePort();
                 NetUtils.Port availablePort2 = getAvailablePort()) {
-            this.nettyServer =
-                    new NettyServer(
-                            configuration,
-                            Arrays.asList(
-                                    new Endpoint("localhost", availablePort1.getPort(), "CLIENT1"),
-                                    new Endpoint("localhost", availablePort2.getPort(), "CLIENT2")),
-                            service,
-                            metricGroup,
-                            RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
+            this.nettyServer = new NettyServer(
+                    configuration,
+                    Arrays.asList(
+                            new Endpoint("localhost", availablePort1.getPort(), "CLIENT1"),
+                            new Endpoint("localhost", availablePort2.getPort(), "CLIENT2")),
+                    service,
+                    metricGroup,
+                    RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
             nettyServer.start();
 
             // use client listener to connect to server
-            mutualAuthServerNode =
-                    new ServerNode(
-                            1, "localhost", availablePort1.getPort(), ServerType.COORDINATOR);
+            mutualAuthServerNode = new ServerNode(1, "localhost", availablePort1.getPort(), ServerType.COORDINATOR);
             usernamePasswordServerNode =
-                    new ServerNode(
-                            2, "localhost", availablePort2.getPort(), ServerType.COORDINATOR);
+                    new ServerNode(2, "localhost", availablePort2.getPort(), ServerType.COORDINATOR);
         }
     }
 

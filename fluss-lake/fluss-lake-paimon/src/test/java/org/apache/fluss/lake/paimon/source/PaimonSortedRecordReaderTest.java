@@ -77,11 +77,9 @@ class PaimonSortedRecordReaderTest extends PaimonSourceTestBase {
             RecordReader recordReader = lakeSource.createRecordReader(() -> paimonSplit);
             assertThat(recordReader).isInstanceOf(PaimonSortedRecordReader.class);
             CloseableIterator<LogRecord> iterator = recordReader.read();
-            assertThat(
-                            isSorted(
-                                    TransformingCloseableIterator.transform(
-                                            iterator, LogRecord::getRow),
-                                    ((SortedRecordReader) recordReader).order()))
+            assertThat(isSorted(
+                            TransformingCloseableIterator.transform(iterator, LogRecord::getRow),
+                            ((SortedRecordReader) recordReader).order()))
                     .isTrue();
             iterator.close();
         }
@@ -103,32 +101,29 @@ class PaimonSortedRecordReaderTest extends PaimonSourceTestBase {
         return true;
     }
 
-    private void preparePkTable(
-            TablePath tablePath, boolean isPartitioned, int bucketNum, List<InternalRow> rows)
+    private void preparePkTable(TablePath tablePath, boolean isPartitioned, int bucketNum, List<InternalRow> rows)
             throws Exception {
         createFullTypePkTable(tablePath, isPartitioned, bucketNum);
         rows.addAll(writeFullTypeRows(tablePath, 10, isPartitioned ? "test" : null));
     }
 
-    private void createFullTypePkTable(TablePath tablePath, boolean isPartitioned, int bucketNum)
-            throws Exception {
-        Schema.Builder schemaBuilder =
-                Schema.newBuilder()
-                        .column("f_int", DataTypes.INT())
-                        .column("f_boolean", DataTypes.BOOLEAN())
-                        .column("f_byte", DataTypes.TINYINT())
-                        .column("f_short", DataTypes.SMALLINT())
-                        .column("f_long", DataTypes.BIGINT())
-                        .column("f_float", DataTypes.FLOAT())
-                        .column("f_double", DataTypes.DOUBLE())
-                        .column("f_string", DataTypes.STRING())
-                        .column("f_decimal1", DataTypes.DECIMAL(5, 2))
-                        .column("f_decimal2", DataTypes.DECIMAL(20, 0))
-                        .column("f_timestamp_ltz1", DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE(3))
-                        .column("f_timestamp_ltz2", DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE(6))
-                        .column("f_timestamp_ntz1", DataTypes.TIMESTAMP(3))
-                        .column("f_timestamp_ntz2", DataTypes.TIMESTAMP(6))
-                        .column("f_binary", DataTypes.BINARY(4));
+    private void createFullTypePkTable(TablePath tablePath, boolean isPartitioned, int bucketNum) throws Exception {
+        Schema.Builder schemaBuilder = Schema.newBuilder()
+                .column("f_int", DataTypes.INT())
+                .column("f_boolean", DataTypes.BOOLEAN())
+                .column("f_byte", DataTypes.TINYINT())
+                .column("f_short", DataTypes.SMALLINT())
+                .column("f_long", DataTypes.BIGINT())
+                .column("f_float", DataTypes.FLOAT())
+                .column("f_double", DataTypes.DOUBLE())
+                .column("f_string", DataTypes.STRING())
+                .column("f_decimal1", DataTypes.DECIMAL(5, 2))
+                .column("f_decimal2", DataTypes.DECIMAL(20, 0))
+                .column("f_timestamp_ltz1", DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE(3))
+                .column("f_timestamp_ltz2", DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE(6))
+                .column("f_timestamp_ntz1", DataTypes.TIMESTAMP(3))
+                .column("f_timestamp_ntz2", DataTypes.TIMESTAMP(6))
+                .column("f_binary", DataTypes.BINARY(4));
 
         if (isPartitioned) {
             schemaBuilder.column("p", DataTypes.STRING());
@@ -148,58 +143,56 @@ class PaimonSortedRecordReaderTest extends PaimonSourceTestBase {
         createTable(tablePath, schemaBuilder.build());
     }
 
-    private List<InternalRow> writeFullTypeRows(
-            TablePath tablePath, int rowCount, @Nullable String partition) throws Exception {
+    private List<InternalRow> writeFullTypeRows(TablePath tablePath, int rowCount, @Nullable String partition)
+            throws Exception {
         List<org.apache.paimon.data.InternalRow> rows = new ArrayList<>();
         List<InternalRow> flussRows = new ArrayList<>();
         Table table = getTable(tablePath);
 
         for (int i = 0; i < rowCount; i++) {
             if (partition == null) {
-                org.apache.fluss.row.GenericRow row =
-                        row(
-                                i + 30,
-                                true,
-                                (byte) 100,
-                                (short) 200,
-                                400L,
-                                500.1f,
-                                600.0d,
-                                org.apache.fluss.row.BinaryString.fromString("another_string_" + i),
-                                Decimal.fromUnscaledLong(900, 5, 2),
-                                Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
-                                TimestampLtz.fromEpochMillis(1698235273400L),
-                                TimestampLtz.fromEpochMillis(1698235273400L, 7000),
-                                TimestampNtz.fromMillis(1698235273501L),
-                                TimestampNtz.fromMillis(1698235273501L, 8000),
-                                new byte[] {5, 6, 7, 8},
-                                0,
-                                (long) i,
-                                TimestampNtz.fromMillis(System.currentTimeMillis()));
+                org.apache.fluss.row.GenericRow row = row(
+                        i + 30,
+                        true,
+                        (byte) 100,
+                        (short) 200,
+                        400L,
+                        500.1f,
+                        600.0d,
+                        org.apache.fluss.row.BinaryString.fromString("another_string_" + i),
+                        Decimal.fromUnscaledLong(900, 5, 2),
+                        Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                        TimestampLtz.fromEpochMillis(1698235273400L),
+                        TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                        TimestampNtz.fromMillis(1698235273501L),
+                        TimestampNtz.fromMillis(1698235273501L, 8000),
+                        new byte[] {5, 6, 7, 8},
+                        0,
+                        (long) i,
+                        TimestampNtz.fromMillis(System.currentTimeMillis()));
                 rows.add(new FlussRowAsPaimonRow(row, table.rowType()));
                 flussRows.add(row);
             } else {
-                org.apache.fluss.row.GenericRow row =
-                        row(
-                                i + 30,
-                                true,
-                                (byte) 100,
-                                (short) 200,
-                                400L,
-                                500.1f,
-                                600.0d,
-                                org.apache.fluss.row.BinaryString.fromString("another_string_" + i),
-                                Decimal.fromUnscaledLong(900, 5, 2),
-                                Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
-                                TimestampLtz.fromEpochMillis(1698235273400L),
-                                TimestampLtz.fromEpochMillis(1698235273400L, 7000),
-                                TimestampNtz.fromMillis(1698235273501L),
-                                TimestampNtz.fromMillis(1698235273501L, 8000),
-                                new byte[] {5, 6, 7, 8},
-                                org.apache.fluss.row.BinaryString.fromString(partition),
-                                0,
-                                (long) i,
-                                TimestampNtz.fromMillis(System.currentTimeMillis()));
+                org.apache.fluss.row.GenericRow row = row(
+                        i + 30,
+                        true,
+                        (byte) 100,
+                        (short) 200,
+                        400L,
+                        500.1f,
+                        600.0d,
+                        org.apache.fluss.row.BinaryString.fromString("another_string_" + i),
+                        Decimal.fromUnscaledLong(900, 5, 2),
+                        Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                        TimestampLtz.fromEpochMillis(1698235273400L),
+                        TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                        TimestampNtz.fromMillis(1698235273501L),
+                        TimestampNtz.fromMillis(1698235273501L, 8000),
+                        new byte[] {5, 6, 7, 8},
+                        org.apache.fluss.row.BinaryString.fromString(partition),
+                        0,
+                        (long) i,
+                        TimestampNtz.fromMillis(System.currentTimeMillis()));
                 rows.add(new FlussRowAsPaimonRow(row, table.rowType()));
                 flussRows.add(row);
             }

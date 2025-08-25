@@ -30,8 +30,7 @@ import org.apache.flink.connector.base.source.reader.synchronization.FutureCompl
  * Adapter for {@link SingleThreadMultiplexSourceReaderBase}.TODO: remove it until not supported in
  * flink 1.18.
  */
-public abstract class SingleThreadMultiplexSourceReaderBaseAdapter<
-                E, T, SplitT extends SourceSplit, SplitStateT>
+public abstract class SingleThreadMultiplexSourceReaderBaseAdapter<E, T, SplitT extends SourceSplit, SplitStateT>
         extends SingleThreadMultiplexSourceReaderBase<E, T, SplitT, SplitStateT> {
     public SingleThreadMultiplexSourceReaderBaseAdapter(
             FutureCompletingBlockingQueue<RecordsWithSplitIds<E>> elementsQueue,

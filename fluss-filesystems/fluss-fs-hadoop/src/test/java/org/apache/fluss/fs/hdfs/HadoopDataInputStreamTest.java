@@ -43,11 +43,8 @@ class HadoopDataInputStreamTest {
 
     @Test
     void testSeekSkip() throws IOException {
-        verifyInputStream =
-                spy(
-                        new FSDataInputStream(
-                                new SeekableByteArrayInputStream(
-                                        new byte[2 * HadoopDataInputStream.MIN_SKIP_BYTES])));
+        verifyInputStream = spy(new FSDataInputStream(
+                new SeekableByteArrayInputStream(new byte[2 * HadoopDataInputStream.MIN_SKIP_BYTES])));
         testInputStream = new HadoopDataInputStream(verifyInputStream);
         // skip
         long skipped = testInputStream.skip(5);

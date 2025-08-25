@@ -112,9 +112,7 @@ public class ArrowReadableChannelBenchmark {
             try (ByteArrayOutputStream out = new ByteArrayOutputStream()) {
                 ArrowRecordBatch arrowRecordBatch = vectorUnloader.getRecordBatch();
                 MessageSerializer.serialize(
-                        new WriteChannel(Channels.newChannel(out)),
-                        arrowRecordBatch,
-                        new IpcOption());
+                        new WriteChannel(Channels.newChannel(out)), arrowRecordBatch, new IpcOption());
                 byte[] byteArray = out.toByteArray();
                 ByteBuffer buf = ByteBuffer.allocateDirect(byteArray.length);
                 buf.put(byteArray);
@@ -140,8 +138,7 @@ public class ArrowReadableChannelBenchmark {
             buffer.rewind();
             ByteBufferReadableChannel channel = new ByteBufferReadableChannel(buffer);
             try (ArrowRecordBatch batch =
-                    MessageSerializer.deserializeRecordBatch(
-                            new ReadChannel(channel), rootAllocator)) {
+                    MessageSerializer.deserializeRecordBatch(new ReadChannel(channel), rootAllocator)) {
                 vectorLoader.load(batch);
                 checkState(root.getRowCount() == ROW_COUNT);
             }
@@ -155,8 +152,7 @@ public class ArrowReadableChannelBenchmark {
             ByteBufferInputStream inputStream = new ByteBufferInputStream(buffer);
             ReadableByteChannel channel = Channels.newChannel(inputStream);
             try (ArrowRecordBatch batch =
-                    MessageSerializer.deserializeRecordBatch(
-                            new ReadChannel(channel), rootAllocator)) {
+                    MessageSerializer.deserializeRecordBatch(new ReadChannel(channel), rootAllocator)) {
                 vectorLoader.load(batch);
                 checkState(root.getRowCount() == ROW_COUNT);
             }
@@ -164,14 +160,10 @@ public class ArrowReadableChannelBenchmark {
     }
 
     public static void main(String[] args) throws RunnerException {
-        Options opt =
-                new OptionsBuilder()
-                        .verbosity(VerboseMode.NORMAL)
-                        .include(
-                                ".*"
-                                        + ArrowReadableChannelBenchmark.class.getCanonicalName()
-                                        + ".*")
-                        .build();
+        Options opt = new OptionsBuilder()
+                .verbosity(VerboseMode.NORMAL)
+                .include(".*" + ArrowReadableChannelBenchmark.class.getCanonicalName() + ".*")
+                .build();
 
         new Runner(opt).run();
     }

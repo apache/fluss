@@ -81,11 +81,10 @@ class FlussLakeTableITCase {
     private static final int PARTITION_PRE_CREATE = 2;
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(initConfig())
+            .build();
 
     protected Connection conn;
     protected Admin admin;
@@ -158,22 +157,20 @@ class FlussLakeTableITCase {
     @MethodSource("testPrimaryKeyTableArgs")
     void testPrimaryKeyTable(boolean isPartitioned, boolean isDefaultBucketKey) throws Exception {
         TablePath tablePath = TablePath.of("fluss", "test_primary_key_lake_table");
-        Schema pkTableSchema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .column("c", DataTypes.STRING())
-                        .column("d", DataTypes.STRING())
-                        .primaryKey("a", "c", "d")
-                        .build();
+        Schema pkTableSchema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.STRING())
+                .column("c", DataTypes.STRING())
+                .column("d", DataTypes.STRING())
+                .primaryKey("a", "c", "d")
+                .build();
 
         TableDescriptor.Builder pkTableBuilder = TableDescriptor.builder().schema(pkTableSchema);
         if (isPartitioned) {
             pkTableBuilder.partitionedBy("d");
             pkTableBuilder
                     .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                    .property(
-                            ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY)
+                    .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY)
                     .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, 2);
         }
 
@@ -185,8 +182,7 @@ class FlussLakeTableITCase {
         createTable(tablePath, pkTable, false);
 
         // verify write will use the lake's bucket assigner
-        Map<TableBucket, List<InternalRow>> writtenRows =
-                writeRowsAndVerifyBucket(tablePath, pkTable);
+        Map<TableBucket, List<InternalRow>> writtenRows = writeRowsAndVerifyBucket(tablePath, pkTable);
 
         // verify lookup will use the lake's bucket assigner
         Set<InternalRow> allRows =
@@ -197,14 +193,12 @@ class FlussLakeTableITCase {
         if (isDefaultBucketKey) {
             lookUpColumns = Arrays.asList("a", "c", "d");
         } else {
-            lookUpColumns =
-                    isPartitioned ? Arrays.asList("a", "d") : Collections.singletonList("a");
+            lookUpColumns = isPartitioned ? Arrays.asList("a", "d") : Collections.singletonList("a");
         }
         List<InternalRow.FieldGetter> lookUpFieldGetter = new ArrayList<>(lookUpColumns.size());
         for (int columnIndex : pkTableSchema.getColumnIndexes(lookUpColumns)) {
             lookUpFieldGetter.add(
-                    InternalRow.createFieldGetter(
-                            pkTableSchema.getRowType().getTypeAt(columnIndex), columnIndex));
+                    InternalRow.createFieldGetter(pkTableSchema.getRowType().getTypeAt(columnIndex), columnIndex));
         }
         // lookup
         try (Table table = conn.getTable(tablePath)) {
@@ -225,25 +219,20 @@ class FlussLakeTableITCase {
     @ValueSource(booleans = {true, false})
     void testLogTable(boolean isPartitioned) throws Exception {
         TablePath tablePath = TablePath.of("fluss", "test_log_lake_table");
-        Schema logTableSchema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .column("c", DataTypes.STRING())
-                        .column("d", DataTypes.STRING())
-                        .build();
+        Schema logTableSchema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.STRING())
+                .column("c", DataTypes.STRING())
+                .column("d", DataTypes.STRING())
+                .build();
         TableDescriptor.Builder logTableBuilder =
-                TableDescriptor.builder()
-                        .schema(logTableSchema)
-                        .distributedBy(DEFAULT_BUCKET_COUNT, "b");
+                TableDescriptor.builder().schema(logTableSchema).distributedBy(DEFAULT_BUCKET_COUNT, "b");
         if (isPartitioned) {
             logTableBuilder.partitionedBy("d");
             logTableBuilder
                     .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                    .property(
-                            ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY)
-                    .property(
-                            ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, PARTITION_PRE_CREATE);
+                    .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.DAY)
+                    .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, PARTITION_PRE_CREATE);
         }
         TableDescriptor logTable = logTableBuilder.build();
         createTable(tablePath, logTable, false);
@@ -251,8 +240,7 @@ class FlussLakeTableITCase {
         writeRowsAndVerifyBucket(tablePath, logTable);
     }
 
-    private void createTable(
-            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists)
+    private void createTable(TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists)
             throws Exception {
         admin.createTable(tablePath, tableDescriptor, ignoreIfExists).get();
     }
@@ -261,39 +249,35 @@ class FlussLakeTableITCase {
             TablePath tablePath, TableDescriptor tableDescriptor) throws Exception {
         TableInfo tableInfo = admin.getTableInfo(tablePath).get();
         long tableId = tableInfo.getTableId();
-        DataLakeFormat dataLakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
+        DataLakeFormat dataLakeFormat =
+                tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
         int rowNums = 30;
         boolean isPartitioned = tableDescriptor.isPartitioned();
         RowType rowType = tableDescriptor.getSchema().getRowType();
-        KeyEncoder keyEncoder =
-                KeyEncoder.of(rowType, tableDescriptor.getBucketKeys(), dataLakeFormat);
+        KeyEncoder keyEncoder = KeyEncoder.of(rowType, tableDescriptor.getBucketKeys(), dataLakeFormat);
         HashBucketAssigner bucketAssigner =
                 new HashBucketAssigner(DEFAULT_BUCKET_COUNT, BucketingFunction.of(dataLakeFormat));
         Map<String, Long> partitionIdByNames = null;
         if (isPartitioned) {
-            partitionIdByNames =
-                    FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsCreated(
-                            tablePath, PARTITION_PRE_CREATE);
+            partitionIdByNames = FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsCreated(tablePath, PARTITION_PRE_CREATE);
         }
         int totalRows = partitionIdByNames != null ? rowNums * partitionIdByNames.size() : rowNums;
 
         // write rows
         Map<TableBucket, List<InternalRow>> expectedRows = new HashMap<>();
         try (Table table = conn.getTable(tablePath)) {
-            TableWriter tableWriter =
-                    tableDescriptor.hasPrimaryKey()
-                            ? table.newUpsert().createWriter()
-                            : table.newAppend().createWriter();
+            TableWriter tableWriter = tableDescriptor.hasPrimaryKey()
+                    ? table.newUpsert().createWriter()
+                    : table.newAppend().createWriter();
             if (partitionIdByNames != null) {
                 for (String partition : partitionIdByNames.keySet()) {
                     for (int i = 0; i < rowNums; i++) {
                         InternalRow row = row(i, "b" + i, "c" + i, partition);
                         writeRow(tableWriter, row);
-                        TableBucket assignedBucket =
-                                new TableBucket(
-                                        tableId,
-                                        partitionIdByNames.get(partition),
-                                        bucketAssigner.assignBucket(keyEncoder.encodeKey(row)));
+                        TableBucket assignedBucket = new TableBucket(
+                                tableId,
+                                partitionIdByNames.get(partition),
+                                bucketAssigner.assignBucket(keyEncoder.encodeKey(row)));
                         expectedRows
                                 .computeIfAbsent(assignedBucket, (k) -> new ArrayList<>())
                                 .add(row);
@@ -304,10 +288,10 @@ class FlussLakeTableITCase {
                     InternalRow row = row(i, "b" + i, "c" + i, "d" + i);
                     writeRow(tableWriter, row);
                     TableBucket assignedBucket =
-                            new TableBucket(
-                                    tableId,
-                                    bucketAssigner.assignBucket(keyEncoder.encodeKey(row)));
-                    expectedRows.computeIfAbsent(assignedBucket, (k) -> new ArrayList<>()).add(row);
+                            new TableBucket(tableId, bucketAssigner.assignBucket(keyEncoder.encodeKey(row)));
+                    expectedRows
+                            .computeIfAbsent(assignedBucket, (k) -> new ArrayList<>())
+                            .add(row);
                 }
             }
             tableWriter.flush();
@@ -332,10 +316,9 @@ class FlussLakeTableITCase {
                 for (TableBucket tableBucket : scanRecords.buckets()) {
                     actualRows
                             .computeIfAbsent(tableBucket, (k) -> new ArrayList<>())
-                            .addAll(
-                                    scanRecords.records(tableBucket).stream()
-                                            .map(ScanRecord::getRow)
-                                            .collect(Collectors.toList()));
+                            .addAll(scanRecords.records(tableBucket).stream()
+                                    .map(ScanRecord::getRow)
+                                    .collect(Collectors.toList()));
                 }
                 scanCount += scanRecords.count();
             }

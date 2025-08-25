@@ -42,25 +42,21 @@ public class KafkaRequestHandlerTest {
     public void testKafkaApiVersionsNotSupported() {
         KafkaRequestHandler handler = createKafkaRequestHandler();
         short latestVersion = ApiKeys.API_VERSIONS.latestVersion();
-        ApiVersionsRequest apiVersionsRequest =
-                new ApiVersionsRequest.Builder().build(latestVersion);
+        ApiVersionsRequest apiVersionsRequest = new ApiVersionsRequest.Builder().build(latestVersion);
         ChannelHandlerContext ctx = new TestingChannelHandlerContext();
-        KafkaRequest request =
-                new KafkaRequest(
-                        ApiKeys.API_VERSIONS,
-                        (short) (latestVersion + 1), // unsupported version
-                        new RequestHeader(ApiKeys.API_VERSIONS, latestVersion, "client-id", 0),
-                        apiVersionsRequest,
-                        ByteBufAllocator.DEFAULT.buffer(),
-                        ctx,
-                        new CompletableFuture<>());
+        KafkaRequest request = new KafkaRequest(
+                ApiKeys.API_VERSIONS,
+                (short) (latestVersion + 1), // unsupported version
+                new RequestHeader(ApiKeys.API_VERSIONS, latestVersion, "client-id", 0),
+                apiVersionsRequest,
+                ByteBufAllocator.DEFAULT.buffer(),
+                ctx,
+                new CompletableFuture<>());
         handler.handleApiVersionsRequest(request);
 
         ByteBuf responseBuffer = request.responseBuffer();
         ApiVersionsResponse response =
-                (ApiVersionsResponse)
-                        AbstractResponse.parseResponse(
-                                responseBuffer.nioBuffer(), request.header());
+                (ApiVersionsResponse) AbstractResponse.parseResponse(responseBuffer.nioBuffer(), request.header());
         Map<Errors, Integer> errorCounts = response.errorCounts();
         assertThat(1).isEqualTo(errorCounts.size());
         assertThat(1).isEqualTo(errorCounts.get(Errors.UNSUPPORTED_VERSION));
@@ -70,46 +66,35 @@ public class KafkaRequestHandlerTest {
     public void testKafkaApiVersionsRequest() {
         KafkaRequestHandler handler = createKafkaRequestHandler();
         short latestVersion = ApiKeys.API_VERSIONS.latestVersion();
-        ApiVersionsRequest apiVersionsRequest =
-                new ApiVersionsRequest.Builder().build(latestVersion);
+        ApiVersionsRequest apiVersionsRequest = new ApiVersionsRequest.Builder().build(latestVersion);
         ChannelHandlerContext ctx = new TestingChannelHandlerContext();
-        KafkaRequest request =
-                new KafkaRequest(
-                        ApiKeys.API_VERSIONS,
-                        latestVersion,
-                        new RequestHeader(ApiKeys.API_VERSIONS, latestVersion, "client-id", 0),
-                        apiVersionsRequest,
-                        ByteBufAllocator.DEFAULT.buffer(),
-                        ctx,
-                        new CompletableFuture<>());
+        KafkaRequest request = new KafkaRequest(
+                ApiKeys.API_VERSIONS,
+                latestVersion,
+                new RequestHeader(ApiKeys.API_VERSIONS, latestVersion, "client-id", 0),
+                apiVersionsRequest,
+                ByteBufAllocator.DEFAULT.buffer(),
+                ctx,
+                new CompletableFuture<>());
         handler.handleApiVersionsRequest(request);
 
         ByteBuf responseBuffer = request.responseBuffer();
         ApiVersionsResponse response =
-                (ApiVersionsResponse)
-                        AbstractResponse.parseResponse(
-                                responseBuffer.nioBuffer(), request.header());
+                (ApiVersionsResponse) AbstractResponse.parseResponse(responseBuffer.nioBuffer(), request.header());
         Map<Errors, Integer> errorCounts = response.errorCounts();
         assertThat(1).isEqualTo(errorCounts.size());
         assertThat(1).isEqualTo(errorCounts.get(Errors.NONE));
-        response.data()
-                .apiKeys()
-                .forEach(
-                        apiVersion -> {
-                            if (ApiKeys.METADATA.id == apiVersion.apiKey()) {
-                                assertThat((short) 11)
-                                        .isGreaterThanOrEqualTo(apiVersion.maxVersion());
-                            } else if (ApiKeys.FETCH.id == apiVersion.apiKey()) {
-                                assertThat((short) 12)
-                                        .isGreaterThanOrEqualTo(apiVersion.maxVersion());
-                            } else {
-                                ApiKeys apiKeys = ApiKeys.forId(apiVersion.apiKey());
-                                assertThat(apiVersion.minVersion())
-                                        .isEqualTo(apiKeys.oldestVersion());
-                                assertThat(apiVersion.maxVersion())
-                                        .isEqualTo(apiKeys.latestVersion());
-                            }
-                        });
+        response.data().apiKeys().forEach(apiVersion -> {
+            if (ApiKeys.METADATA.id == apiVersion.apiKey()) {
+                assertThat((short) 11).isGreaterThanOrEqualTo(apiVersion.maxVersion());
+            } else if (ApiKeys.FETCH.id == apiVersion.apiKey()) {
+                assertThat((short) 12).isGreaterThanOrEqualTo(apiVersion.maxVersion());
+            } else {
+                ApiKeys apiKeys = ApiKeys.forId(apiVersion.apiKey());
+                assertThat(apiVersion.minVersion()).isEqualTo(apiKeys.oldestVersion());
+                assertThat(apiVersion.maxVersion()).isEqualTo(apiKeys.latestVersion());
+            }
+        });
     }
 
     private static KafkaRequestHandler createKafkaRequestHandler() {

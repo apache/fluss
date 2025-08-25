@@ -76,13 +76,12 @@ public class ServerMetricUtilsTest {
         assertThat(hasMetaspaceMemoryPool())
                 .withFailMessage("Requires JVM with Metaspace memory pool")
                 .isTrue();
-        final InterceptingMetricGroup metaspaceMetrics =
-                new InterceptingMetricGroup() {
-                    @Override
-                    public MetricGroup addGroup(String name) {
-                        return this;
-                    }
-                };
+        final InterceptingMetricGroup metaspaceMetrics = new InterceptingMetricGroup() {
+            @Override
+            public MetricGroup addGroup(String name) {
+                return this;
+            }
+        };
 
         instantiateMetaspaceMemoryMetrics(metaspaceMetrics);
 
@@ -94,14 +93,12 @@ public class ServerMetricUtilsTest {
     @Test
     public void testGcMetricCompleteness() {
         Map<String, InterceptingMetricGroup> addedGroups = new HashMap<>();
-        InterceptingMetricGroup gcGroup =
-                new InterceptingMetricGroup() {
-                    @Override
-                    public MetricGroup addGroup(String name) {
-                        return addedGroups.computeIfAbsent(
-                                name, k -> new InterceptingMetricGroup());
-                    }
-                };
+        InterceptingMetricGroup gcGroup = new InterceptingMetricGroup() {
+            @Override
+            public MetricGroup addGroup(String name) {
+                return addedGroups.computeIfAbsent(name, k -> new InterceptingMetricGroup());
+            }
+        };
 
         List<GarbageCollectorMXBean> garbageCollectors = new ArrayList<>();
         garbageCollectors.add(new TestGcBean("gc1", 100, 500));
@@ -118,8 +115,7 @@ public class ServerMetricUtilsTest {
         validateCollectorMetric(addedGroups.get("all"), 150L, 750L);
     }
 
-    private static void validateCollectorMetric(
-            InterceptingMetricGroup group, long count, long time) {
+    private static void validateCollectorMetric(InterceptingMetricGroup group, long count, long time) {
         assertThat(((Gauge) group.get("count")).getValue()).isEqualTo(count);
         assertThat(((Gauge) group.get("time")).getValue()).isEqualTo(time);
         MeterView perSecond = ((MeterView) group.get("timeMsPerSecond"));
@@ -128,8 +124,7 @@ public class ServerMetricUtilsTest {
     }
 
     private static boolean hasMetaspaceMemoryPool() {
-        return ManagementFactory.getMemoryPoolMXBeans().stream()
-                .anyMatch(bean -> "Metaspace".equals(bean.getName()));
+        return ManagementFactory.getMemoryPoolMXBeans().stream().anyMatch(bean -> "Metaspace".equals(bean.getName()));
     }
 
     @Test
@@ -167,13 +162,12 @@ public class ServerMetricUtilsTest {
                 .withFailMessage("Requires JVM with Metaspace memory pool")
                 .isTrue();
 
-        final InterceptingMetricGroup metaspaceMetrics =
-                new InterceptingMetricGroup() {
-                    @Override
-                    public MetricGroup addGroup(String name) {
-                        return this;
-                    }
-                };
+        final InterceptingMetricGroup metaspaceMetrics = new InterceptingMetricGroup() {
+            @Override
+            public MetricGroup addGroup(String name) {
+                return this;
+            }
+        };
 
         instantiateMetaspaceMemoryMetrics(metaspaceMetrics);
 
@@ -209,13 +203,12 @@ public class ServerMetricUtilsTest {
      */
     private static Class<?> redefineDummyClass() throws ClassNotFoundException {
         Class<?> clazz = Dummy.class;
-        ComponentClassLoader classLoader =
-                new ComponentClassLoader(
-                        ClassLoaderUtils.getClasspathURLs(),
-                        clazz.getClassLoader(),
-                        new String[] {"java."},
-                        new String[] {"org.apache."},
-                        Collections.emptyMap());
+        ComponentClassLoader classLoader = new ComponentClassLoader(
+                ClassLoaderUtils.getClasspathURLs(),
+                clazz.getClassLoader(),
+                new String[] {"java."},
+                new String[] {"org.apache."},
+                Collections.emptyMap());
 
         Class<?> newClass = classLoader.loadClass(clazz.getName());
 
@@ -226,8 +219,7 @@ public class ServerMetricUtilsTest {
 
     /** Caller may choose to run multiple times for possible interference with other tests. */
     private void runUntilMetricChanged(
-            String name, int maxRuns, CheckedSupplier<Object> objectCreator, Gauge<Long> metric)
-            throws Exception {
+            String name, int maxRuns, CheckedSupplier<Object> objectCreator, Gauge<Long> metric) throws Exception {
         maxRuns = Math.max(1, maxRuns);
         long initialValue = metric.getValue();
         for (int i = 0; i < maxRuns; i++) {
@@ -239,9 +231,7 @@ public class ServerMetricUtilsTest {
             referencedObjects.add(object);
             Thread.sleep(50);
         }
-        String msg =
-                String.format(
-                        "%s usage metric never changed its value after %d runs.", name, maxRuns);
+        String msg = String.format("%s usage metric never changed its value after %d runs.", name, maxRuns);
         fail(msg);
     }
 

@@ -91,10 +91,8 @@ class CompactedRowWriterTest {
         CompactedRowWriter writer = new CompactedRowWriter(allDataTypes.length);
         CompactedRowReader reader = new CompactedRowReader(allDataTypes.length);
         InternalRow.FieldGetter[] getters = new InternalRow.FieldGetter[allDataTypes.length];
-        CompactedRowWriter.FieldWriter[] writers =
-                new CompactedRowWriter.FieldWriter[allDataTypes.length];
-        CompactedRowReader.FieldReader[] readers =
-                new CompactedRowReader.FieldReader[allDataTypes.length];
+        CompactedRowWriter.FieldWriter[] writers = new CompactedRowWriter.FieldWriter[allDataTypes.length];
+        CompactedRowReader.FieldReader[] readers = new CompactedRowReader.FieldReader[allDataTypes.length];
         for (int i = 0; i < allDataTypes.length; i++) {
             getters[i] = InternalRow.createFieldGetter(allDataTypes[i], i);
             writers[i] = CompactedRowWriter.createFieldWriter(allDataTypes[i]);
@@ -162,8 +160,7 @@ class CompactedRowWriterTest {
             }
 
             CompactedRowReader compactedRowReader = new CompactedRowReader(numFields);
-            compactedRowReader.pointTo(
-                    compactedRowWriter.segment(), 0, compactedRowWriter.position());
+            compactedRowReader.pointTo(compactedRowWriter.segment(), 0, compactedRowWriter.position());
             for (int j = 0; j < numFields; j++) {
                 assertThat(compactedRowReader.readInt()).isEqualTo(i * j);
             }

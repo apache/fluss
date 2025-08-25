@@ -27,8 +27,7 @@ public class FetchLogContext {
     private final Map<Long, TablePath> tableIdToTablePath;
     private final FetchLogRequest fetchLogRequest;
 
-    public FetchLogContext(
-            Map<Long, TablePath> tableIdToTablePath, FetchLogRequest fetchLogRequest) {
+    public FetchLogContext(Map<Long, TablePath> tableIdToTablePath, FetchLogRequest fetchLogRequest) {
         this.tableIdToTablePath = tableIdToTablePath;
         this.fetchLogRequest = fetchLogRequest;
     }

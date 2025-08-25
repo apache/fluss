@@ -55,12 +55,10 @@ public class LookupBatch {
         // if the size of return values of lookup operation are not equal to the number of lookups,
         // should complete an exception.
         if (values.size() != lookups.size()) {
-            completeExceptionally(
-                    new FlussRuntimeException(
-                            String.format(
-                                    "The number of return values of lookup operation is not equal to the number of "
-                                            + "lookups. Return %d values, but expected %d.",
-                                    values.size(), lookups.size())));
+            completeExceptionally(new FlussRuntimeException(String.format(
+                    "The number of return values of lookup operation is not equal to the number of "
+                            + "lookups. Return %d values, but expected %d.",
+                    values.size(), lookups.size())));
         } else {
             for (int i = 0; i < values.size(); i++) {
                 AbstractLookupQuery<byte[]> lookup = lookups.get(i);

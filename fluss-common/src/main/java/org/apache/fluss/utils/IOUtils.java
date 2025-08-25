@@ -53,8 +53,7 @@ public class IOUtils {
      * @return the number of bytes copied
      * @throws IOException thrown if an error occurred while writing to the output stream
      */
-    private static long copyBytes(
-            final InputStream in, final OutputStream out, final int buffSize, final boolean close)
+    private static long copyBytes(final InputStream in, final OutputStream out, final int buffSize, final boolean close)
             throws IOException {
 
         final PrintStream ps = out instanceof PrintStream ? (PrintStream) out : null;
@@ -102,8 +101,7 @@ public class IOUtils {
      * @return the number of bytes copied
      * @throws IOException thrown if an I/O error occurs while copying
      */
-    public static long copyBytes(final InputStream in, final OutputStream out, final boolean close)
-            throws IOException {
+    public static long copyBytes(final InputStream in, final OutputStream out, final boolean close) throws IOException {
         return copyBytes(in, out, BLOCKSIZE, close);
     }
 
@@ -147,7 +145,10 @@ public class IOUtils {
                 closeable.close();
             } catch (Throwable t) {
                 LOG.warn(
-                        "Failed to close {} with type {}", name, closeable.getClass().getName(), t);
+                        "Failed to close {} with type {}",
+                        name,
+                        closeable.getClass().getName(),
+                        t);
             }
         }
     }
@@ -178,8 +179,7 @@ public class IOUtils {
      * @throws IOException if it could not read requested number of bytes for any reason (including
      *     EOF)
      */
-    public static void readFully(final InputStream in, final byte[] buf, int off, final int len)
-            throws IOException {
+    public static void readFully(final InputStream in, final byte[] buf, int off, final int len) throws IOException {
         int toRead = len;
         while (toRead > 0) {
             final int ret = in.read(buf, off, toRead);
@@ -201,8 +201,7 @@ public class IOUtils {
      * @return number of byte read from the input stream
      * @throws IOException If an I/O error occurs
      */
-    public static int readFully(InputStream inputStream, ByteBuffer destinationBuffer)
-            throws IOException {
+    public static int readFully(InputStream inputStream, ByteBuffer destinationBuffer) throws IOException {
         if (!destinationBuffer.hasArray()) {
             throw new IllegalArgumentException("destinationBuffer must be backed by an array");
         }
@@ -211,9 +210,7 @@ public class IOUtils {
         int length = destinationBuffer.remaining();
         int totalBytesRead = 0;
         do {
-            int bytesRead =
-                    inputStream.read(
-                            array, initialOffset + totalBytesRead, length - totalBytesRead);
+            int bytesRead = inputStream.read(array, initialOffset + totalBytesRead, length - totalBytesRead);
             if (bytesRead == -1) {
                 break;
             }

@@ -55,11 +55,9 @@ public class FlinkRecordEmitterTest extends FlinkTestBase {
 
         TableBucket bucket0 = new TableBucket(tableId, 0);
 
-        HybridSnapshotLogSplit hybridSnapshotLogSplit =
-                new HybridSnapshotLogSplit(bucket0, null, 0L, 0L);
+        HybridSnapshotLogSplit hybridSnapshotLogSplit = new HybridSnapshotLogSplit(bucket0, null, 0L, 0L);
 
-        HybridSnapshotLogSplitState splitState =
-                new HybridSnapshotLogSplitState(hybridSnapshotLogSplit);
+        HybridSnapshotLogSplitState splitState = new HybridSnapshotLogSplitState(hybridSnapshotLogSplit);
 
         ScanRecord scanRecord = new ScanRecord(-1, 100L, ChangeType.INSERT, row(1, "a"));
 
@@ -94,39 +92,33 @@ public class FlinkRecordEmitterTest extends FlinkTestBase {
     @Test
     void testEmitPojoRecordWithHybridSplitInSnapshotPhase() throws Exception {
         // Setup
-        Schema tableSchema =
-                Schema.newBuilder()
-                        .primaryKey("orderId")
-                        .column("orderId", DataTypes.BIGINT())
-                        .column("itemId", DataTypes.BIGINT())
-                        .column("amount", DataTypes.INT())
-                        .column("address", DataTypes.STRING())
-                        .build();
+        Schema tableSchema = Schema.newBuilder()
+                .primaryKey("orderId")
+                .column("orderId", DataTypes.BIGINT())
+                .column("itemId", DataTypes.BIGINT())
+                .column("amount", DataTypes.INT())
+                .column("address", DataTypes.STRING())
+                .build();
 
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(tableSchema)
-                        .distributedBy(DEFAULT_BUCKET_NUM, "orderId")
-                        .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(tableSchema)
+                .distributedBy(DEFAULT_BUCKET_NUM, "orderId")
+                .build();
 
         long tableId = createTable(DEFAULT_TABLE_PATH, tableDescriptor);
 
         TableBucket bucket0 = new TableBucket(tableId, 0);
 
-        HybridSnapshotLogSplit hybridSnapshotLogSplit =
-                new HybridSnapshotLogSplit(bucket0, null, 0L, 0L);
+        HybridSnapshotLogSplit hybridSnapshotLogSplit = new HybridSnapshotLogSplit(bucket0, null, 0L, 0L);
 
-        HybridSnapshotLogSplitState splitState =
-                new HybridSnapshotLogSplitState(hybridSnapshotLogSplit);
+        HybridSnapshotLogSplitState splitState = new HybridSnapshotLogSplitState(hybridSnapshotLogSplit);
 
-        ScanRecord scanRecord =
-                new ScanRecord(-1, 100L, ChangeType.INSERT, row(1001L, 101L, 5, "Test 123 Addr."));
+        ScanRecord scanRecord = new ScanRecord(-1, 100L, ChangeType.INSERT, row(1001L, 101L, 5, "Test 123 Addr."));
 
         RecordAndPos recordAndPos = new RecordAndPos(scanRecord, 42L);
 
         OrderDeserializationSchema deserializationSchema = new OrderDeserializationSchema();
-        deserializationSchema.open(
-                new DeserializerInitContextImpl(null, null, tableSchema.getRowType()));
+        deserializationSchema.open(new DeserializerInitContextImpl(null, null, tableSchema.getRowType()));
         FlinkRecordEmitter<Order> emitter = new FlinkRecordEmitter<>(deserializationSchema);
 
         TestSourceOutput<Order> sourceOutput = new TestSourceOutput<>();

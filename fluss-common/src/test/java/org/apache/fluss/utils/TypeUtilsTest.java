@@ -37,17 +37,14 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public class TypeUtilsTest {
     @Test
     void testCastFromString() {
-        assertThat(castFromString("abc", DataTypes.CHAR(3)))
-                .isEqualTo(BinaryString.fromString("abc"));
+        assertThat(castFromString("abc", DataTypes.CHAR(3))).isEqualTo(BinaryString.fromString("abc"));
 
-        assertThat(castFromString("abc", DataTypes.STRING()))
-                .isEqualTo(BinaryString.fromString("abc"));
+        assertThat(castFromString("abc", DataTypes.STRING())).isEqualTo(BinaryString.fromString("abc"));
 
         assertThat((boolean) castFromString("true", DataTypes.BOOLEAN())).isTrue();
         assertThat((boolean) castFromString("false", DataTypes.BOOLEAN())).isFalse();
 
-        assertThat(castFromString("abc", DataTypes.BINARY(3)))
-                .isEqualTo(new byte[] {'a', 'b', 'c'});
+        assertThat(castFromString("abc", DataTypes.BINARY(3))).isEqualTo(new byte[] {'a', 'b', 'c'});
         assertThat(castFromString("abc", DataTypes.BYTES())).isEqualTo(new byte[] {'a', 'b', 'c'});
 
         assertThat(castFromString("13145678.90123", DataTypes.DECIMAL(15, 5)))

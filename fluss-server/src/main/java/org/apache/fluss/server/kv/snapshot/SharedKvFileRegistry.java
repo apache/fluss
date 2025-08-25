@@ -67,9 +67,7 @@ public class SharedKvFileRegistry implements AutoCloseable {
     }
 
     public KvFileHandle registerReference(
-            final SharedKvFileRegistryKey registrationKey,
-            final KvFileHandle newHandle,
-            final long snapshotID) {
+            final SharedKvFileRegistryKey registrationKey, final KvFileHandle newHandle, final long snapshotID) {
 
         checkNotNull(newHandle, "Kv handle should not be null.");
 
@@ -80,9 +78,7 @@ public class SharedKvFileRegistry implements AutoCloseable {
 
             entry = registeredKvEntries.get(registrationKey);
             if (entry == null) {
-                checkState(
-                        !isPlaceholder(newHandle),
-                        "Attempt to reference unknown kv file: " + registrationKey);
+                checkState(!isPlaceholder(newHandle), "Attempt to reference unknown kv file: " + registrationKey);
 
                 LOG.trace("Registered new kv file {} under key {}.", newHandle, registrationKey);
                 entry = new SharedKvEntry(newHandle, snapshotID);
@@ -91,37 +87,23 @@ public class SharedKvFileRegistry implements AutoCloseable {
                 // no further handling
                 return entry.kvFileHandle;
             } else if (Objects.equals(entry.kvFileHandle, newHandle)) {
-                LOG.trace(
-                        "Duplicated registration under key {} with the new object: {}.",
-                        registrationKey,
-                        newHandle);
+                LOG.trace("Duplicated registration under key {} with the new object: {}.", registrationKey, newHandle);
             } else if (isPlaceholder(newHandle)) {
-                LOG.trace(
-                        "Duplicated registration under key {} with a placeholder (normal case)",
-                        registrationKey);
+                LOG.trace("Duplicated registration under key {} with a placeholder (normal case)", registrationKey);
             } else {
                 // maybe a bug
-                LOG.warn(
-                        "Unexpected registration under key {} with the new object: {}.",
-                        registrationKey,
-                        newHandle);
+                LOG.warn("Unexpected registration under key {} with the new object: {}.", registrationKey, newHandle);
             }
         }
 
-        LOG.trace(
-                "Updating last snapshot for {} from {} to {}",
-                registrationKey,
-                entry.lastUsedSnapshotID,
-                snapshotID);
+        LOG.trace("Updating last snapshot for {} from {} to {}", registrationKey, entry.lastUsedSnapshotID, snapshotID);
         entry.advanceLastUsingSnapshotID(snapshotID);
         return entry.kvFileHandle;
     }
 
     public void unregisterUnusedKvFile(long lowestSnapshotID) {
         // delete kv files that aren't used
-        LOG.debug(
-                "Discard kv files created before snapshot {} and not used afterwards",
-                lowestSnapshotID);
+        LOG.debug("Discard kv files created before snapshot {} and not used afterwards", lowestSnapshotID);
         List<KvFileHandle> subsumed = new ArrayList<>();
         // Iterate over all the registered kv file handles.
         // Using a simple loop and NOT index by snapshotID because:
@@ -191,10 +173,7 @@ public class SharedKvFileRegistry implements AutoCloseable {
             try {
                 toDispose.discard();
             } catch (Exception e) {
-                LOG.warn(
-                        "A problem occurred during asynchronous disposal of a shared kv object: {}",
-                        toDispose,
-                        e);
+                LOG.warn("A problem occurred during asynchronous disposal of a shared kv object: {}", toDispose, e);
             }
         }
     }

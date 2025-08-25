@@ -50,14 +50,10 @@ public class DecimalUtils {
     }
 
     public static Decimal add(Decimal v1, Decimal v2, int precision, int scale) {
-        if (v1.isCompact()
-                && v2.isCompact()
-                && v1.scale() == v2.scale()
-                && Decimal.isCompact(precision)) {
+        if (v1.isCompact() && v2.isCompact() && v1.scale() == v2.scale() && Decimal.isCompact(precision)) {
             assert scale == v1.scale(); // no need to rescale
             try {
-                long ls =
-                        Math.addExact(v1.toUnscaledLong(), v2.toUnscaledLong()); // checks overflow
+                long ls = Math.addExact(v1.toUnscaledLong(), v2.toUnscaledLong()); // checks overflow
                 return Decimal.fromUnscaledLong(ls, precision, scale);
             } catch (ArithmeticException e) {
                 // overflow, fall through
@@ -68,15 +64,10 @@ public class DecimalUtils {
     }
 
     public static Decimal subtract(Decimal v1, Decimal v2, int precision, int scale) {
-        if (v1.isCompact()
-                && v2.isCompact()
-                && v1.scale() == v2.scale()
-                && Decimal.isCompact(precision)) {
+        if (v1.isCompact() && v2.isCompact() && v1.scale() == v2.scale() && Decimal.isCompact(precision)) {
             assert scale == v1.scale(); // no need to rescale
             try {
-                long ls =
-                        Math.subtractExact(
-                                v1.toUnscaledLong(), v2.toUnscaledLong()); // checks overflow
+                long ls = Math.subtractExact(v1.toUnscaledLong(), v2.toUnscaledLong()); // checks overflow
                 return Decimal.fromUnscaledLong(ls, precision, scale);
             } catch (ArithmeticException e) {
                 // overflow, fall through

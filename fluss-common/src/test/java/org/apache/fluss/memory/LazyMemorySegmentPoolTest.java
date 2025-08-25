@@ -61,8 +61,7 @@ public class LazyMemorySegmentPoolTest {
         int pageSize = (int) MemorySize.parse("1kb").getBytes();
         int totalSegmentCount = totalMemory / pageSize;
 
-        LazyMemorySegmentPool pool =
-                buildLazyMemorySegmentSource(totalSegmentCount, pageSize, 10, pageSize);
+        LazyMemorySegmentPool pool = buildLazyMemorySegmentSource(totalSegmentCount, pageSize, 10, pageSize);
 
         // allocate one page and check the segment and the memory pool
         List<MemorySegment> maybeSegments = pool.allocatePages(1);
@@ -250,10 +249,9 @@ public class LazyMemorySegmentPoolTest {
         pool.nextSegment();
 
         long start = System.currentTimeMillis();
-        assertThatThrownBy(
-                        () ->
-                                // will block for at least maxTimeToBlockMs
-                                pool.allocatePages(1))
+        assertThatThrownBy(() ->
+                        // will block for at least maxTimeToBlockMs
+                        pool.allocatePages(1))
                 .isInstanceOf(EOFException.class)
                 .hasMessageContaining("Available pages: 0. Requested pages: 1");
         assertThat(System.currentTimeMillis() - start).isGreaterThanOrEqualTo(maxTimeToBlockMs);
@@ -297,13 +295,12 @@ public class LazyMemorySegmentPoolTest {
 
     @Test
     void testOutOfMemoryOnAllocation() {
-        LazyMemorySegmentPool pool =
-                new LazyMemorySegmentPool(1, 1024, 10, 1024) {
-                    @Override
-                    protected void lazilyAllocatePages(int required) {
-                        throw new OutOfMemoryError();
-                    }
-                };
+        LazyMemorySegmentPool pool = new LazyMemorySegmentPool(1, 1024, 10, 1024) {
+            @Override
+            protected void lazilyAllocatePages(int required) {
+                throw new OutOfMemoryError();
+            }
+        };
 
         assertThatThrownBy(() -> pool.allocatePages(1)).isInstanceOf(OutOfMemoryError.class);
         assertThatThrownBy(pool::nextSegment).isInstanceOf(OutOfMemoryError.class);
@@ -319,13 +316,11 @@ public class LazyMemorySegmentPoolTest {
         MemorySegment segment = pool.allocatePages(1).get(0);
 
         ExecutorService executor = Executors.newFixedThreadPool(numWorkers);
-        Callable<Void> work =
-                () -> {
-                    assertThatThrownBy(() -> pool.allocatePages(1))
-                            .isInstanceOf(FlussRuntimeException.class);
-                    assertThatThrownBy(pool::nextSegment).isInstanceOf(FlussRuntimeException.class);
-                    return null;
-                };
+        Callable<Void> work = () -> {
+            assertThatThrownBy(() -> pool.allocatePages(1)).isInstanceOf(FlussRuntimeException.class);
+            assertThatThrownBy(pool::nextSegment).isInstanceOf(FlussRuntimeException.class);
+            return null;
+        };
 
         for (int i = 0; i < numWorkers; ++i) {
             executor.submit(work);
@@ -347,22 +342,21 @@ public class LazyMemorySegmentPoolTest {
         int maxPages = 10_000_000;
         final AtomicInteger freeSize = new AtomicInteger(maxPages);
 
-        LazyMemorySegmentPool pool =
-                new LazyMemorySegmentPool(maxPages, 2_000_000_000, 0, 2_000_000_000) {
-                    @Override
-                    protected void lazilyAllocatePages(int required) {
-                        for (int i = 0; i < required; i++) {
-                            // Ignore size to avoid OOM due to large buffers.
-                            this.getAllCachePages().add(MemorySegment.allocateHeapMemory(0));
-                            freeSize.decrementAndGet();
-                        }
-                    }
+        LazyMemorySegmentPool pool = new LazyMemorySegmentPool(maxPages, 2_000_000_000, 0, 2_000_000_000) {
+            @Override
+            protected void lazilyAllocatePages(int required) {
+                for (int i = 0; i < required; i++) {
+                    // Ignore size to avoid OOM due to large buffers.
+                    this.getAllCachePages().add(MemorySegment.allocateHeapMemory(0));
+                    freeSize.decrementAndGet();
+                }
+            }
 
-                    @Override
-                    public int freePages() {
-                        return freeSize.get();
-                    }
-                };
+            @Override
+            public int freePages() {
+                return freeSize.get();
+            }
+        };
 
         pool.allocatePages(1_000_000);
         assertThat(pool.availableMemory()).isEqualTo(18_000_000_000_000_000L);
@@ -399,9 +393,8 @@ public class LazyMemorySegmentPoolTest {
 
         assertThatThrownBy(source::nextSegment)
                 .isInstanceOf(EOFException.class)
-                .hasMessage(
-                        "Failed to allocate new segment within the configured max blocking time 100 ms. "
-                                + "Total memory: 640 bytes. Page size: 64 bytes. Available pages: 0. Requested pages: 1");
+                .hasMessage("Failed to allocate new segment within the configured max blocking time 100 ms. "
+                        + "Total memory: 640 bytes. Page size: 64 bytes. Available pages: 0. Requested pages: 1");
 
         CountDownLatch returnAllLatch = asyncReturnAll(source, Arrays.asList(ms1, ms2));
         CountDownLatch getNextSegmentLatch = asyncGetNextSegment(source);
@@ -415,27 +408,18 @@ public class LazyMemorySegmentPoolTest {
         assertThatThrownBy(() -> buildLazyMemorySegmentSource(0, 64, 100, 64))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("MaxPages for LazyMemorySegmentPool should be greater than 0.");
-        assertThatThrownBy(
-                        () ->
-                                buildLazyMemorySegmentSource(
-                                        10, 32 * 1024 * 1024, 100, (32 * 1024 * 1024) / 2))
+        assertThatThrownBy(() -> buildLazyMemorySegmentSource(10, 32 * 1024 * 1024, 100, (32 * 1024 * 1024) / 2))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage(
-                        "Page size should be less than or equal to per request memory size. "
-                                + "Page size is: 32768 KB, per request memory size is 16384 KB.");
+                .hasMessage("Page size should be less than or equal to per request memory size. "
+                        + "Page size is: 32768 KB, per request memory size is 16384 KB.");
         assertThatThrownBy(() -> buildLazyMemorySegmentSource(10, 30, 100, 30))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
                         "Page size should be greater than 64 bytes to include the record batch header, but is 30 bytes.");
 
-        LazyMemorySegmentPool lazyMemorySegmentPool =
-                buildLazyMemorySegmentSource(10, 100, 100, 100);
-        assertThatThrownBy(
-                        () ->
-                                lazyMemorySegmentPool.returnAll(
-                                        Arrays.asList(
-                                                MemorySegment.allocateHeapMemory(100),
-                                                MemorySegment.allocateHeapMemory(100))))
+        LazyMemorySegmentPool lazyMemorySegmentPool = buildLazyMemorySegmentSource(10, 100, 100, 100);
+        assertThatThrownBy(() -> lazyMemorySegmentPool.returnAll(
+                        Arrays.asList(MemorySegment.allocateHeapMemory(100), MemorySegment.allocateHeapMemory(100))))
                 .hasMessage("Return too more memories.");
     }
 
@@ -448,8 +432,7 @@ public class LazyMemorySegmentPoolTest {
         final int pageSize = 64;
         final int maxPages = 512;
         LazyMemorySegmentPool pool =
-                buildLazyMemorySegmentSource(
-                        maxPages, pageSize, 20_000, perRequestMemorySizeFactor * pageSize);
+                buildLazyMemorySegmentSource(maxPages, pageSize, 20_000, perRequestMemorySizeFactor * pageSize);
 
         List<StressTestThread> threads = new ArrayList<>();
         for (int i = 0; i < numThreads; i++) {
@@ -487,16 +470,19 @@ public class LazyMemorySegmentPoolTest {
             LazyMemorySegmentPool pool = LazyMemorySegmentPool.createWriterBufferPool(conf);
             assertThat(pool).isNotNull();
             assertThat(pool.totalSize())
-                    .isEqualTo(conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE).getBytes());
+                    .isEqualTo(conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE)
+                            .getBytes());
             assertThat(pool.pageSize())
-                    .isEqualTo(conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE).getBytes());
+                    .isEqualTo(conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE)
+                            .getBytes());
             assertThat(pool.availableMemory())
-                    .isEqualTo(conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE).getBytes());
+                    .isEqualTo(conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE)
+                            .getBytes());
             assertThat(pool.freePages())
-                    .isEqualTo(
-                            conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE).getBytes()
-                                    / conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE)
-                                            .getBytes());
+                    .isEqualTo(conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE)
+                                    .getBytes()
+                            / conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE)
+                                    .getBytes());
             assertThat(pool.getAllCachePages().size()).isEqualTo(0);
         }
 
@@ -511,16 +497,19 @@ public class LazyMemorySegmentPoolTest {
             LazyMemorySegmentPool pool = LazyMemorySegmentPool.createWriterBufferPool(conf);
             assertThat(pool).isNotNull();
             assertThat(pool.totalSize())
-                    .isEqualTo(conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE).getBytes());
+                    .isEqualTo(conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE)
+                            .getBytes());
             assertThat(pool.pageSize())
-                    .isEqualTo(conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE).getBytes());
+                    .isEqualTo(conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE)
+                            .getBytes());
             assertThat(pool.availableMemory())
-                    .isEqualTo(conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE).getBytes());
+                    .isEqualTo(conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE)
+                            .getBytes());
             assertThat(pool.freePages())
-                    .isEqualTo(
-                            conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE).getBytes()
-                                    / conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE)
-                                            .getBytes());
+                    .isEqualTo(conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE)
+                                    .getBytes()
+                            / conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE)
+                                    .getBytes());
             assertThat(pool.getAllCachePages().size()).isEqualTo(0);
 
             pool.allocatePages(64);
@@ -552,9 +541,8 @@ public class LazyMemorySegmentPoolTest {
             assertThat(pool.availableMemory())
                     .isEqualTo(conf.get(ConfigOptions.SERVER_BUFFER_MEMORY_SIZE).getBytes());
             assertThat(pool.freePages())
-                    .isEqualTo(
-                            conf.get(ConfigOptions.SERVER_BUFFER_MEMORY_SIZE).getBytes()
-                                    / conf.get(ConfigOptions.SERVER_BUFFER_PAGE_SIZE).getBytes());
+                    .isEqualTo(conf.get(ConfigOptions.SERVER_BUFFER_MEMORY_SIZE).getBytes()
+                            / conf.get(ConfigOptions.SERVER_BUFFER_PAGE_SIZE).getBytes());
             assertThat(pool.getAllCachePages().size()).isEqualTo(0);
         }
 
@@ -574,9 +562,8 @@ public class LazyMemorySegmentPoolTest {
             assertThat(pool.availableMemory())
                     .isEqualTo(conf.get(ConfigOptions.SERVER_BUFFER_MEMORY_SIZE).getBytes());
             assertThat(pool.freePages())
-                    .isEqualTo(
-                            conf.get(ConfigOptions.SERVER_BUFFER_MEMORY_SIZE).getBytes()
-                                    / conf.get(ConfigOptions.SERVER_BUFFER_PAGE_SIZE).getBytes());
+                    .isEqualTo(conf.get(ConfigOptions.SERVER_BUFFER_MEMORY_SIZE).getBytes()
+                            / conf.get(ConfigOptions.SERVER_BUFFER_PAGE_SIZE).getBytes());
             assertThat(pool.getAllCachePages().size()).isEqualTo(0);
 
             pool.allocatePages(64);
@@ -588,8 +575,7 @@ public class LazyMemorySegmentPoolTest {
 
     private static LazyMemorySegmentPool buildLazyMemorySegmentSource(
             int maxPages, int pageSize, long maxTimeToBlockMs, int perRequestMemorySize) {
-        return new LazyMemorySegmentPool(
-                maxPages, pageSize, maxTimeToBlockMs, perRequestMemorySize);
+        return new LazyMemorySegmentPool(maxPages, pageSize, maxTimeToBlockMs, perRequestMemorySize);
     }
 
     private static class MemorySegmentPoolAllocator implements Runnable {
@@ -606,55 +592,46 @@ public class LazyMemorySegmentPoolTest {
         }
     }
 
-    private static CountDownLatch asyncReturnAll(
-            LazyMemorySegmentPool source, List<MemorySegment> segments) {
+    private static CountDownLatch asyncReturnAll(LazyMemorySegmentPool source, List<MemorySegment> segments) {
         CountDownLatch latch = new CountDownLatch(1);
-        Thread thread =
-                new Thread(
-                        unchecked(
-                                () -> {
-                                    latch.await();
-                                    source.returnAll(segments);
-                                }));
+        Thread thread = new Thread(unchecked(() -> {
+            latch.await();
+            source.returnAll(segments);
+        }));
         thread.start();
         return latch;
     }
 
     private static CountDownLatch asyncGetNextSegment(LazyMemorySegmentPool source) {
         final CountDownLatch completed = new CountDownLatch(1);
-        Thread thread =
-                new Thread(
-                        () -> {
-                            try {
-                                try {
-                                    source.nextSegment();
-                                } catch (IOException e) {
-                                    throw new RuntimeException(e);
-                                }
-                            } finally {
-                                completed.countDown();
-                            }
-                        });
+        Thread thread = new Thread(() -> {
+            try {
+                try {
+                    source.nextSegment();
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            } finally {
+                completed.countDown();
+            }
+        });
         thread.start();
         return completed;
     }
 
-    private static CountDownLatch asyncAllocatePages(
-            LazyMemorySegmentPool source, int requiredPages) {
+    private static CountDownLatch asyncAllocatePages(LazyMemorySegmentPool source, int requiredPages) {
         final CountDownLatch completed = new CountDownLatch(1);
-        Thread thread =
-                new Thread(
-                        () -> {
-                            try {
-                                try {
-                                    source.allocatePages(requiredPages);
-                                } catch (IOException e) {
-                                    throw new RuntimeException(e);
-                                }
-                            } finally {
-                                completed.countDown();
-                            }
-                        });
+        Thread thread = new Thread(() -> {
+            try {
+                try {
+                    source.allocatePages(requiredPages);
+                } catch (IOException e) {
+                    throw new RuntimeException(e);
+                }
+            } finally {
+                completed.countDown();
+            }
+        });
         thread.start();
         return completed;
     }
@@ -682,12 +659,8 @@ public class LazyMemorySegmentPoolTest {
                     } else {
                         // allocate a random size, use discount factor to avoid lock contention that
                         // leads to timeout
-                        numPages =
-                                RandomUtils.nextInt(
-                                        0,
-                                        (int) ((pool.totalSize() / pool.pageSize()))
-                                                        / (this.numThreads / 2)
-                                                + 1);
+                        numPages = RandomUtils.nextInt(
+                                0, (int) ((pool.totalSize() / pool.pageSize())) / (this.numThreads / 2) + 1);
                     }
 
                     List<MemorySegment> segments = pool.allocatePages(numPages);

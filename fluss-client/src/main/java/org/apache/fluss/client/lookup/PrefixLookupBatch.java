@@ -55,12 +55,10 @@ public class PrefixLookupBatch {
 
     public void complete(List<List<byte[]>> values) {
         if (values.size() != prefixLookups.size()) {
-            completeExceptionally(
-                    new FlussRuntimeException(
-                            String.format(
-                                    "The number of values return by prefix lookup request is not equal to the number of "
-                                            + "prefix lookups send. Got %d values, but expected %d.",
-                                    values.size(), prefixLookups.size())));
+            completeExceptionally(new FlussRuntimeException(String.format(
+                    "The number of values return by prefix lookup request is not equal to the number of "
+                            + "prefix lookups send. Got %d values, but expected %d.",
+                    values.size(), prefixLookups.size())));
         } else {
             for (int i = 0; i < values.size(); i++) {
                 AbstractLookupQuery<List<byte[]>> lookup = prefixLookups.get(i);

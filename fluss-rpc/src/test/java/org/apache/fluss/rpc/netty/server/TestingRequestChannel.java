@@ -33,8 +33,7 @@ final class TestingRequestChannel extends RequestChannel {
 
         // Index out of bounds check.
         if (index >= requestQueue.size()) {
-            throw new IllegalArgumentException(
-                    "Index " + index + " is out of bounds for request channel.");
+            throw new IllegalArgumentException("Index " + index + " is out of bounds for request channel.");
         }
 
         int currentIndex = 0;

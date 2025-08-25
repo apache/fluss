@@ -63,29 +63,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 abstract class FlinkMetricsITCase {
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setClusterConf(
-                            new org.apache.fluss.config.Configuration()
-                                    // set snapshot interval to 1s for testing purposes
-                                    .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
-                                    // not to clean snapshots for test purpose
-                                    .set(
-                                            ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS,
-                                            Integer.MAX_VALUE))
-                    .setNumOfTabletServers(3)
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setClusterConf(new org.apache.fluss.config.Configuration()
+                    // set snapshot interval to 1s for testing purposes
+                    .set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
+                    // not to clean snapshots for test purpose
+                    .set(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS, Integer.MAX_VALUE))
+            .setNumOfTabletServers(3)
+            .build();
 
     private static final int DEFAULT_PARALLELISM = 4;
     private static final InMemoryReporter reporter = InMemoryReporter.createWithRetainedMetrics();
 
     public static final MiniClusterWithClientResource MINI_CLUSTER_EXTENSION =
-            new MiniClusterWithClientResource(
-                    new MiniClusterResourceConfiguration.Builder()
-                            .setNumberTaskManagers(1)
-                            .setNumberSlotsPerTaskManager(DEFAULT_PARALLELISM)
-                            .setConfiguration(reporter.addToConfiguration(new Configuration()))
-                            .build());
+            new MiniClusterWithClientResource(new MiniClusterResourceConfiguration.Builder()
+                    .setNumberTaskManagers(1)
+                    .setNumberSlotsPerTaskManager(DEFAULT_PARALLELISM)
+                    .setConfiguration(reporter.addToConfiguration(new Configuration()))
+                    .build());
 
     private static final String CATALOG_NAME = "testcatalog";
     private static final String DEFAULT_DB = "defaultdb";
@@ -114,10 +109,9 @@ abstract class FlinkMetricsITCase {
         tEnv = TableEnvironment.create(EnvironmentSettings.newInstance().build());
         String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
         // crate catalog using sql
-        tEnv.executeSql(
-                String.format(
-                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
+        tEnv.executeSql(String.format(
+                "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
+                CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
         // create database
         tEnv.executeSql("create database " + DEFAULT_DB);
@@ -145,28 +139,24 @@ abstract class FlinkMetricsITCase {
         MINI_CLUSTER_EXTENSION.after();
     }
 
-    protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
-            throws Exception {
+    protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor) throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
         return admin.getTableInfo(tablePath).get().getTableId();
     }
 
     @Test
     void testMetricsReport() throws Exception {
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("id", DataTypes.INT())
-                                        .column("name", DataTypes.STRING())
-                                        .build())
-                        .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .build())
+                .build();
         TablePath tablePath = TablePath.of(DEFAULT_DB, "test");
         createTable(tablePath, tableDescriptor);
 
         // test write
-        TableResult tableResult =
-                tEnv.executeSql("insert into test values (1, 'name1'), (2, 'name2'), (3, 'name3')");
+        TableResult tableResult = tEnv.executeSql("insert into test values (1, 'name1'), (2, 'name2'), (3, 'name3')");
         JobClient client = tableResult.getJobClient().get();
         JobID jobID = client.getJobID();
         tableResult.await();
@@ -185,9 +175,7 @@ abstract class FlinkMetricsITCase {
         client = tableResult.getJobClient().get();
         jobID = client.getJobID();
         assertResultsIgnoreOrder(
-                tableResult.collect(),
-                Arrays.asList("+I[1, name1]", "+I[2, name2]", "+I[3, name3]"),
-                true);
+                tableResult.collect(), Arrays.asList("+I[1, name1]", "+I[2, name2]", "+I[3, name3]"), true);
 
         // fluss client's scanner metrics should be registered
         metricsList = reporter.findJobMetricGroups(jobID, MetricNames.SCANNER_BYTES_PER_REQUEST);

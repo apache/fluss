@@ -81,11 +81,9 @@ public class ClosingFSDataInputStream extends FSDataInputStreamWrapper
     }
 
     public static ClosingFSDataInputStream wrapSafe(
-            FSDataInputStream delegate, SafetyNetCloseableRegistry registry, String debugInfo)
-            throws IOException {
+            FSDataInputStream delegate, SafetyNetCloseableRegistry registry, String debugInfo) throws IOException {
 
-        ClosingFSDataInputStream inputStream =
-                new ClosingFSDataInputStream(delegate, registry, debugInfo);
+        ClosingFSDataInputStream inputStream = new ClosingFSDataInputStream(delegate, registry, debugInfo);
         registry.registerCloseable(inputStream);
         return inputStream;
     }

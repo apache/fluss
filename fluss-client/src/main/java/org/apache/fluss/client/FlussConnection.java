@@ -71,9 +71,7 @@ public final class FlussConnection implements Connection {
         // init Filesystem with configuration from FlussConnection,
         // only pass options with 'client.fs.' prefix
         FileSystem.initialize(
-                Configuration.fromMap(
-                        extractPrefix(new HashMap<>(conf.toMap()), CLIENT_PREFIX + "fs.")),
-                null);
+                Configuration.fromMap(extractPrefix(new HashMap<>(conf.toMap()), CLIENT_PREFIX + "fs.")), null);
         // for client metrics.
         setupClientMetricsConfiguration();
         String clientId = conf.getString(ConfigOptions.CLIENT_ID);
@@ -120,9 +118,7 @@ public final class FlussConnection implements Connection {
         if (writerClient == null) {
             synchronized (this) {
                 if (writerClient == null) {
-                    writerClient =
-                            new WriterClient(
-                                    conf, metadataUpdater, clientMetricGroup, this.getAdmin());
+                    writerClient = new WriterClient(conf, metadataUpdater, clientMetricGroup, this.getAdmin());
                 }
             }
         }
@@ -145,25 +141,19 @@ public final class FlussConnection implements Connection {
             synchronized (this) {
                 if (remoteFileDownloader == null) {
                     remoteFileDownloader =
-                            new RemoteFileDownloader(
-                                    conf.getInt(ConfigOptions.REMOTE_FILE_DOWNLOAD_THREAD_NUM));
+                            new RemoteFileDownloader(conf.getInt(ConfigOptions.REMOTE_FILE_DOWNLOAD_THREAD_NUM));
                 }
                 // access remote files requires setting up filesystem security token manager
                 if (securityTokenManager == null) {
                     // prepare security token manager
                     // create the admin read only gateway
                     // todo: may add retry logic when no any available tablet server?
-                    AdminReadOnlyGateway gateway =
-                            GatewayClientProxy.createGatewayProxy(
-                                    () ->
-                                            getOneAvailableTabletServerNode(
-                                                    metadataUpdater.getCluster()),
-                                    rpcClient,
-                                    AdminReadOnlyGateway.class);
-                    SecurityTokenProvider securityTokenProvider =
-                            new DefaultSecurityTokenProvider(gateway);
-                    securityTokenManager =
-                            new DefaultSecurityTokenManager(conf, securityTokenProvider);
+                    AdminReadOnlyGateway gateway = GatewayClientProxy.createGatewayProxy(
+                            () -> getOneAvailableTabletServerNode(metadataUpdater.getCluster()),
+                            rpcClient,
+                            AdminReadOnlyGateway.class);
+                    SecurityTokenProvider securityTokenProvider = new DefaultSecurityTokenProvider(gateway);
+                    securityTokenManager = new DefaultSecurityTokenManager(conf, securityTokenProvider);
                     try {
                         securityTokenManager.start();
                     } catch (Exception e) {

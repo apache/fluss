@@ -29,7 +29,9 @@ import java.util.Objects;
 public final class FetchReqInfo {
     private final long tableId;
     private final long fetchOffset;
-    @Nullable private final int[] projectFields;
+
+    @Nullable
+    private final int[] projectFields;
 
     private int maxBytes;
 
@@ -37,8 +39,7 @@ public final class FetchReqInfo {
         this(tableId, fetchOffset, maxBytes, null);
     }
 
-    public FetchReqInfo(
-            long tableId, long fetchOffset, int maxBytes, @Nullable int[] projectFields) {
+    public FetchReqInfo(long tableId, long fetchOffset, int maxBytes, @Nullable int[] projectFields) {
         this.tableId = tableId;
         this.fetchOffset = fetchOffset;
         this.maxBytes = maxBytes;

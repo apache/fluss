@@ -50,13 +50,7 @@ public class NotIn extends LeafFunction {
     }
 
     @Override
-    public boolean test(
-            DataType type,
-            long rowCount,
-            Object min,
-            Object max,
-            Long nullCount,
-            List<Object> literals) {
+    public boolean test(DataType type, long rowCount, Object min, Object max, Long nullCount, List<Object> literals) {
         if (nullCount != null && rowCount == nullCount) {
             return false;
         }
@@ -65,8 +59,7 @@ public class NotIn extends LeafFunction {
                     // only if max == min == literal, the row set are all IN the literal, return
                     // false; other cases, the row set MAY contain elements NOT IN the literal,
                     // return true
-                    || (compareLiteral(type, literal, min) == 0
-                            && compareLiteral(type, literal, max) == 0)) {
+                    || (compareLiteral(type, literal, min) == 0 && compareLiteral(type, literal, max) == 0)) {
                 return false;
             }
         }

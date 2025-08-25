@@ -104,8 +104,7 @@ class BoundedSplitReaderTest {
         return rows;
     }
 
-    private void assertRecords(
-            List<RecordAndPos> readRecords, List<InternalRow> expectedRows, int startRecordCount) {
+    private void assertRecords(List<RecordAndPos> readRecords, List<InternalRow> expectedRows, int startRecordCount) {
         // check records num
         assertThat(readRecords.size()).isEqualTo(expectedRows.size());
 
@@ -129,8 +128,7 @@ class BoundedSplitReaderTest {
             }
             while (recordIter.hasNext()) {
                 RecordAndPos recordAndPos = recordIter.next();
-                records.add(
-                        new RecordAndPos(recordAndPos.scanRecord, recordAndPos.readRecordsCount));
+                records.add(new RecordAndPos(recordAndPos.scanRecord, recordAndPos.readRecordsCount));
             }
             recordIter.close();
         }

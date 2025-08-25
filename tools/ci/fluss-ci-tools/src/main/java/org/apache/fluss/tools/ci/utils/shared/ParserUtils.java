@@ -44,9 +44,7 @@ public class ParserUtils {
      * @param <D> block parser output
      */
     public static <D> Map<String, D> parsePluginOutput(
-            Stream<String> lines,
-            Pattern executionLinePattern,
-            Function<Iterator<String>, D> blockParser) {
+            Stream<String> lines, Pattern executionLinePattern, Function<Iterator<String>, D> blockParser) {
         final Map<String, D> result = new LinkedHashMap<>();
 
         final Iterator<String> iterator = lines.iterator();

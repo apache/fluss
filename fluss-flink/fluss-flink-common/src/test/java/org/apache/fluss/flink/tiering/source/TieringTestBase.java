@@ -61,87 +61,73 @@ import static org.apache.fluss.testutils.DataTestUtils.row;
 public class TieringTestBase extends AbstractTestBase {
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setClusterConf(flussClusterConfig())
-                    .setNumOfTabletServers(3)
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setClusterConf(flussClusterConfig())
+            .setNumOfTabletServers(3)
+            .build();
 
     protected static final int DEFAULT_BUCKET_NUM = 3;
 
-    protected static final Schema DEFAULT_PK_TABLE_SCHEMA =
-            Schema.newBuilder()
-                    .primaryKey("id")
+    protected static final Schema DEFAULT_PK_TABLE_SCHEMA = Schema.newBuilder()
+            .primaryKey("id")
+            .column("id", DataTypes.INT())
+            .column("name", DataTypes.STRING())
+            .build();
+
+    protected static final Schema DEFAULT_LOG_TABLE_SCHEMA = Schema.newBuilder()
+            .column("id", DataTypes.INT())
+            .column("name", DataTypes.STRING())
+            .build();
+
+    protected static final TableDescriptor DEFAULT_PK_TABLE_DESCRIPTOR = TableDescriptor.builder()
+            .schema(DEFAULT_PK_TABLE_SCHEMA)
+            .distributedBy(DEFAULT_BUCKET_NUM, "id")
+            .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+            .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(200))
+            .build();
+
+    protected static final TableDescriptor DEFAULT_LOG_TABLE_DESCRIPTOR = TableDescriptor.builder()
+            .schema(DEFAULT_LOG_TABLE_SCHEMA)
+            .distributedBy(DEFAULT_BUCKET_NUM, "id")
+            .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+            .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
+            .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(200))
+            .build();
+
+    protected static final TableDescriptor DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR = TableDescriptor.builder()
+            .schema(Schema.newBuilder()
                     .column("id", DataTypes.INT())
                     .column("name", DataTypes.STRING())
-                    .build();
+                    .column("date", DataTypes.STRING())
+                    .build())
+            .distributedBy(DEFAULT_BUCKET_NUM, "id")
+            .partitionedBy("date")
+            .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+            .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR)
+            .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+            .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
+            .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+            .build();
 
-    protected static final Schema DEFAULT_LOG_TABLE_SCHEMA =
-            Schema.newBuilder()
+    protected static final TableDescriptor DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR = TableDescriptor.builder()
+            .schema(Schema.newBuilder()
                     .column("id", DataTypes.INT())
                     .column("name", DataTypes.STRING())
-                    .build();
-
-    protected static final TableDescriptor DEFAULT_PK_TABLE_DESCRIPTOR =
-            TableDescriptor.builder()
-                    .schema(DEFAULT_PK_TABLE_SCHEMA)
-                    .distributedBy(DEFAULT_BUCKET_NUM, "id")
-                    .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(200))
-                    .build();
-
-    protected static final TableDescriptor DEFAULT_LOG_TABLE_DESCRIPTOR =
-            TableDescriptor.builder()
-                    .schema(DEFAULT_LOG_TABLE_SCHEMA)
-                    .distributedBy(DEFAULT_BUCKET_NUM, "id")
-                    .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                    .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
-                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(200))
-                    .build();
-
-    protected static final TableDescriptor DEFAULT_AUTO_PARTITIONED_LOG_TABLE_DESCRIPTOR =
-            TableDescriptor.builder()
-                    .schema(
-                            Schema.newBuilder()
-                                    .column("id", DataTypes.INT())
-                                    .column("name", DataTypes.STRING())
-                                    .column("date", DataTypes.STRING())
-                                    .build())
-                    .distributedBy(DEFAULT_BUCKET_NUM, "id")
-                    .partitionedBy("date")
-                    .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                    .property(
-                            ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
-                            AutoPartitionTimeUnit.YEAR)
-                    .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                    .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
-                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
-                    .build();
-
-    protected static final TableDescriptor DEFAULT_AUTO_PARTITIONED_PK_TABLE_DESCRIPTOR =
-            TableDescriptor.builder()
-                    .schema(
-                            Schema.newBuilder()
-                                    .column("id", DataTypes.INT())
-                                    .column("name", DataTypes.STRING())
-                                    .column("date", DataTypes.STRING())
-                                    .primaryKey("id", "date")
-                                    .build())
-                    .distributedBy(DEFAULT_BUCKET_NUM)
-                    .partitionedBy("date")
-                    .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                    .property(
-                            ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
-                            AutoPartitionTimeUnit.YEAR)
-                    .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                    .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
-                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
-                    .build();
+                    .column("date", DataTypes.STRING())
+                    .primaryKey("id", "date")
+                    .build())
+            .distributedBy(DEFAULT_BUCKET_NUM)
+            .partitionedBy("date")
+            .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+            .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR)
+            .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+            .property(ConfigOptions.TABLE_DATALAKE_FORMAT, DataLakeFormat.PAIMON)
+            .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+            .build();
 
     protected static final String DEFAULT_DB = "test-tiering-db";
 
-    protected static final TablePath DEFAULT_TABLE_PATH =
-            TablePath.of(DEFAULT_DB, "tiering-test-table");
+    protected static final TablePath DEFAULT_TABLE_PATH = TablePath.of(DEFAULT_DB, "tiering-test-table");
 
     protected static Connection conn;
     protected static Admin admin;
@@ -189,10 +175,9 @@ public class TieringTestBase extends AbstractTestBase {
         conf.setString("datalake.paimon.metastore", "filesystem");
         String warehousePath;
         try {
-            warehousePath =
-                    Files.createTempDirectory("fluss-testing-datalake-enabled")
-                            .resolve("warehouse")
-                            .toString();
+            warehousePath = Files.createTempDirectory("fluss-testing-datalake-enabled")
+                    .resolve("warehouse")
+                    .toString();
         } catch (Exception e) {
             throw new FlussRuntimeException("Failed to create warehouse path");
         }
@@ -201,8 +186,7 @@ public class TieringTestBase extends AbstractTestBase {
         return conf;
     }
 
-    protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
-            throws Exception {
+    protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor) throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
         long tableId = admin.getTableInfo(tablePath).get().getTableId();
         FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
@@ -213,8 +197,7 @@ public class TieringTestBase extends AbstractTestBase {
         admin.dropTable(tablePath, true).get();
     }
 
-    protected long createPartitionedTable(TablePath tablePath, TableDescriptor tableDescriptor)
-            throws Exception {
+    protected long createPartitionedTable(TablePath tablePath, TableDescriptor tableDescriptor) throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
         return admin.getTableInfo(tablePath).get().getTableId();
     }
@@ -250,16 +233,14 @@ public class TieringTestBase extends AbstractTestBase {
         Map<Long, Map<Integer, Long>> bucketRows = new HashMap<>();
         for (Map.Entry<String, Long> partitionEntry : partitionNameByIds.entrySet()) {
             Map<Integer, Long> bucketRowsForPartition =
-                    upsertRow(
-                            tablePath, tableDescriptor, pkStart, rowsNum, partitionEntry.getKey());
+                    upsertRow(tablePath, tableDescriptor, pkStart, rowsNum, partitionEntry.getKey());
             bucketRows.put(partitionEntry.getValue(), bucketRowsForPartition);
         }
         return bucketRows;
     }
 
     protected static Map<Integer, Long> upsertRow(
-            TablePath tablePath, TableDescriptor tableDescriptor, int pkStart, int rowsNum)
-            throws Exception {
+            TablePath tablePath, TableDescriptor tableDescriptor, int pkStart, int rowsNum) throws Exception {
         return upsertRow(tablePath, tableDescriptor, pkStart, rowsNum, null);
     }
 
@@ -272,17 +253,14 @@ public class TieringTestBase extends AbstractTestBase {
             throws Exception {
         RowType rowType = tableDescriptor.getSchema().getRowType();
         // use lake keyEncoder and bucketAssigner fot tiering tests
-        KeyEncoder keyEncoder =
-                KeyEncoder.of(rowType, tableDescriptor.getBucketKeys(), DataLakeFormat.PAIMON);
+        KeyEncoder keyEncoder = KeyEncoder.of(rowType, tableDescriptor.getBucketKeys(), DataLakeFormat.PAIMON);
         HashBucketAssigner hashBucketAssigner =
-                new HashBucketAssigner(
-                        DEFAULT_BUCKET_NUM, BucketingFunction.of(DataLakeFormat.PAIMON));
+                new HashBucketAssigner(DEFAULT_BUCKET_NUM, BucketingFunction.of(DataLakeFormat.PAIMON));
         Map<Integer, Long> bucketRows = new HashMap<>();
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = pkStart; i < pkStart + rowsNum; i++) {
-                InternalRow row =
-                        partitionName == null ? row(i, "v" + i) : row(i, "v" + i, partitionName);
+                InternalRow row = partitionName == null ? row(i, "v" + i) : row(i, "v" + i, partitionName);
                 upsertWriter.upsert(row);
                 // bucket statistics
                 byte[] key = keyEncoder.encodeKey(row);
@@ -304,16 +282,14 @@ public class TieringTestBase extends AbstractTestBase {
         Map<Long, Map<Integer, Long>> bucketRows = new HashMap<>();
         for (Map.Entry<String, Long> partitionEntry : partitionNameByIds.entrySet()) {
             Map<Integer, Long> bucketRowsForPartition =
-                    appendRow(
-                            tablePath, tableDescriptor, pkStart, rowsNum, partitionEntry.getKey());
+                    appendRow(tablePath, tableDescriptor, pkStart, rowsNum, partitionEntry.getKey());
             bucketRows.put(partitionEntry.getValue(), bucketRowsForPartition);
         }
         return bucketRows;
     }
 
     protected static Map<Integer, Long> appendRow(
-            TablePath tablePath, TableDescriptor tableDescriptor, int idStart, int rowsNum)
-            throws Exception {
+            TablePath tablePath, TableDescriptor tableDescriptor, int idStart, int rowsNum) throws Exception {
         return appendRow(tablePath, tableDescriptor, idStart, rowsNum, null);
     }
 
@@ -326,17 +302,14 @@ public class TieringTestBase extends AbstractTestBase {
             throws Exception {
         RowType rowType = tableDescriptor.getSchema().getRowType();
         // use lake keyEncoder and bucketAssigner fot tiering tests
-        KeyEncoder keyEncoder =
-                KeyEncoder.of(rowType, tableDescriptor.getBucketKeys(), DataLakeFormat.PAIMON);
+        KeyEncoder keyEncoder = KeyEncoder.of(rowType, tableDescriptor.getBucketKeys(), DataLakeFormat.PAIMON);
         HashBucketAssigner hashBucketAssigner =
-                new HashBucketAssigner(
-                        DEFAULT_BUCKET_NUM, BucketingFunction.of(DataLakeFormat.PAIMON));
+                new HashBucketAssigner(DEFAULT_BUCKET_NUM, BucketingFunction.of(DataLakeFormat.PAIMON));
         Map<Integer, Long> bucketRows = new HashMap<>();
         try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = idStart; i < idStart + rowsNum; i++) {
-                InternalRow row =
-                        partitionName == null ? row(i, "v" + i) : row(i, "v" + i, partitionName);
+                InternalRow row = partitionName == null ? row(i, "v" + i) : row(i, "v" + i, partitionName);
                 appendWriter.append(row);
                 byte[] key = keyEncoder.encodeKey(row);
                 int bucketId = hashBucketAssigner.assignBucket(key);

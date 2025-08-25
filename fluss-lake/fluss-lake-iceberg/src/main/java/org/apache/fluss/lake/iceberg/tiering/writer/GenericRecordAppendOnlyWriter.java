@@ -46,12 +46,10 @@ public class GenericRecordAppendOnlyWriter extends BaseTaskWriter<Record> {
             long targetFileSize,
             WriterInitContext writerInitContext) {
         super(icebergTable.spec(), format, appenderFactory, fileFactory, io, targetFileSize);
-        currentWriter =
-                new RollingFileWriter(
-                        toPartition(
-                                icebergTable,
-                                writerInitContext.partition(),
-                                writerInitContext.tableBucket().getBucket()));
+        currentWriter = new RollingFileWriter(toPartition(
+                icebergTable,
+                writerInitContext.partition(),
+                writerInitContext.tableBucket().getBucket()));
     }
 
     @Override

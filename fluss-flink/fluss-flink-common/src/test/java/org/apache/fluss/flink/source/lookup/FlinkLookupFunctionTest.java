@@ -50,16 +50,14 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "sync-lookup-table");
         prepareData(tablePath, 3);
 
-        RowType flinkRowType =
-                FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.getRowType());
-        FlinkLookupFunction lookupFunction =
-                new FlinkLookupFunction(
-                        clientConf,
-                        tablePath,
-                        flinkRowType,
-                        LookupOptions.MAX_RETRIES.defaultValue(),
-                        createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
-                        null);
+        RowType flinkRowType = FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.getRowType());
+        FlinkLookupFunction lookupFunction = new FlinkLookupFunction(
+                clientConf,
+                tablePath,
+                flinkRowType,
+                LookupOptions.MAX_RETRIES.defaultValue(),
+                createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
+                null);
 
         ListOutputCollector collector = new ListOutputCollector();
         lookupFunction.setCollector(collector);
@@ -73,10 +71,7 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
 
         // collect the result and check
         List<String> result =
-                collector.getOutputs().stream()
-                        .map(RowData::toString)
-                        .sorted()
-                        .collect(Collectors.toList());
+                collector.getOutputs().stream().map(RowData::toString).sorted().collect(Collectors.toList());
         assertThat(result).containsExactly("+I(0,name0)", "+I(1,name1)", "+I(2,name2)");
 
         lookupFunction.close();
@@ -88,16 +83,14 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
         int rows = 3;
         prepareData(tablePath, rows);
 
-        RowType flinkRowType =
-                FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.getRowType());
-        AsyncLookupFunction asyncLookupFunction =
-                new FlinkAsyncLookupFunction(
-                        clientConf,
-                        tablePath,
-                        flinkRowType,
-                        LookupOptions.MAX_RETRIES.defaultValue(),
-                        createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
-                        null);
+        RowType flinkRowType = FlinkConversions.toFlinkRowType(DEFAULT_PK_TABLE_SCHEMA.getRowType());
+        AsyncLookupFunction asyncLookupFunction = new FlinkAsyncLookupFunction(
+                clientConf,
+                tablePath,
+                flinkRowType,
+                LookupOptions.MAX_RETRIES.defaultValue(),
+                createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
+                null);
         asyncLookupFunction.open(null);
 
         int[] rowKeys = new int[] {0, 1, 2, 3, 4, 3, 0};
@@ -106,17 +99,16 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
         for (int rowKey : rowKeys) {
             CompletableFuture<Collection<RowData>> future = new CompletableFuture<>();
             asyncLookupFunction.eval(future, rowKey);
-            future.whenComplete(
-                    (rs, t) -> {
-                        synchronized (result) {
-                            if (rs.isEmpty()) {
-                                result.add(rowKey + ": null");
-                            } else {
-                                rs.forEach(row -> result.add(rowKey + ": " + row.toString()));
-                            }
-                        }
-                        latch.countDown();
-                    });
+            future.whenComplete((rs, t) -> {
+                synchronized (result) {
+                    if (rs.isEmpty()) {
+                        result.add(rowKey + ": null");
+                    } else {
+                        rs.forEach(row -> result.add(rowKey + ": " + row.toString()));
+                    }
+                }
+                latch.countDown();
+            });
         }
 
         // this verifies lookup calls are async

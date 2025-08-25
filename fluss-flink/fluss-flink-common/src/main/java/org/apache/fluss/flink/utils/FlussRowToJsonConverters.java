@@ -72,15 +72,12 @@ public class FlussRowToJsonConverters {
         switch (type.getTypeRoot()) {
             case CHAR:
             case STRING:
-                return ((mapper, reuse, value) ->
-                        mapper.getNodeFactory().textNode(value.toString()));
+                return ((mapper, reuse, value) -> mapper.getNodeFactory().textNode(value.toString()));
             case BOOLEAN:
-                return (mapper, reuse, value) ->
-                        mapper.getNodeFactory().booleanNode((boolean) value);
+                return (mapper, reuse, value) -> mapper.getNodeFactory().booleanNode((boolean) value);
             case BINARY:
             case BYTES:
-                return ((mapper, reuse, value) ->
-                        mapper.getNodeFactory().binaryNode((byte[]) value));
+                return ((mapper, reuse, value) -> mapper.getNodeFactory().binaryNode((byte[]) value));
             case DECIMAL:
                 return createDecimalConverter();
             case TINYINT:
@@ -107,8 +104,7 @@ public class FlussRowToJsonConverters {
                 return createArrayConverter((ArrayType) type);
             case MAP:
                 MapType mapType = (MapType) type;
-                return createMapConverter(
-                        mapType.asSummaryString(), mapType.getKeyType(), mapType.getValueType());
+                return createMapConverter(mapType.asSummaryString(), mapType.getKeyType(), mapType.getValueType());
             case ROW:
                 return createRowConverter((RowType) type);
             default:
@@ -120,10 +116,7 @@ public class FlussRowToJsonConverters {
         return (mapper, reuse, value) -> {
             BigDecimal bd = ((Decimal) value).toBigDecimal();
             return mapper.getNodeFactory()
-                    .numberNode(
-                            mapper.isEnabled(WRITE_BIGDECIMAL_AS_PLAIN)
-                                    ? bd
-                                    : bd.stripTrailingZeros());
+                    .numberNode(mapper.isEnabled(WRITE_BIGDECIMAL_AS_PLAIN) ? bd : bd.stripTrailingZeros());
         };
     }
 
@@ -154,8 +147,7 @@ public class FlussRowToJsonConverters {
             case SQL:
                 return (mapper, reuse, value) -> {
                     TimestampNtz timestamp = (TimestampNtz) value;
-                    return mapper.getNodeFactory()
-                            .textNode(SQL_TIMESTAMP_FORMAT.format(timestamp.toLocalDateTime()));
+                    return mapper.getNodeFactory().textNode(SQL_TIMESTAMP_FORMAT.format(timestamp.toLocalDateTime()));
                 };
             default:
                 throw new UnsupportedOperationException(
@@ -169,21 +161,15 @@ public class FlussRowToJsonConverters {
                 return (mapper, reuse, value) -> {
                     TimestampLtz timestampWithLocalZone = (TimestampLtz) value;
                     return mapper.getNodeFactory()
-                            .textNode(
-                                    ISO8601_TIMESTAMP_WITH_LOCAL_TIMEZONE_FORMAT.format(
-                                            timestampWithLocalZone
-                                                    .toInstant()
-                                                    .atOffset(ZoneOffset.UTC)));
+                            .textNode(ISO8601_TIMESTAMP_WITH_LOCAL_TIMEZONE_FORMAT.format(
+                                    timestampWithLocalZone.toInstant().atOffset(ZoneOffset.UTC)));
                 };
             case SQL:
                 return (mapper, reuse, value) -> {
                     TimestampLtz timestampWithLocalZone = (TimestampLtz) value;
                     return mapper.getNodeFactory()
-                            .textNode(
-                                    SQL_TIMESTAMP_WITH_LOCAL_TIMEZONE_FORMAT.format(
-                                            timestampWithLocalZone
-                                                    .toInstant()
-                                                    .atOffset(ZoneOffset.UTC)));
+                            .textNode(SQL_TIMESTAMP_WITH_LOCAL_TIMEZONE_FORMAT.format(
+                                    timestampWithLocalZone.toInstant().atOffset(ZoneOffset.UTC)));
                 };
             default:
                 throw new UnsupportedOperationException(
@@ -196,8 +182,7 @@ public class FlussRowToJsonConverters {
         return null;
     }
 
-    private FlussRowToJsonConverter createMapConverter(
-            String typeSummary, DataType keyType, DataType valueType) {
+    private FlussRowToJsonConverter createMapConverter(String typeSummary, DataType keyType, DataType valueType) {
         // TODO
         return null;
     }
@@ -207,9 +192,7 @@ public class FlussRowToJsonConverters {
         final DataType[] fieldTypes =
                 type.getFields().stream().map(DataField::getType).toArray(DataType[]::new);
         final FlussRowToJsonConverter[] fieldConverters =
-                Arrays.stream(fieldTypes)
-                        .map(this::createNullableConverter)
-                        .toArray(FlussRowToJsonConverter[]::new);
+                Arrays.stream(fieldTypes).map(this::createNullableConverter).toArray(FlussRowToJsonConverter[]::new);
         final int fieldCount = type.getFieldCount();
         final InternalRow.FieldGetter[] fieldGetters = new InternalRow.FieldGetter[fieldCount];
         for (int i = 0; i < fieldCount; i++) {
@@ -227,20 +210,16 @@ public class FlussRowToJsonConverters {
                 String fieldName = fieldNames[i];
                 try {
                     Object field = fieldGetters[i].getFieldOrNull(row);
-                    node.set(
-                            fieldName,
-                            fieldConverters[i].convert(mapper, node.get(fieldName), field));
+                    node.set(fieldName, fieldConverters[i].convert(mapper, node.get(fieldName), field));
                 } catch (Throwable t) {
-                    throw new RuntimeException(
-                            String.format("Fail to convert to json at field: %s.", fieldName), t);
+                    throw new RuntimeException(String.format("Fail to convert to json at field: %s.", fieldName), t);
                 }
             }
             return node;
         });
     }
 
-    private FlussRowToJsonConverter wrapIntoNullableConverter(
-            FlussRowToJsonConverter flussRowToJsonConverter) {
+    private FlussRowToJsonConverter wrapIntoNullableConverter(FlussRowToJsonConverter flussRowToJsonConverter) {
         return ((mapper, reuse, value) -> {
             if (value == null) {
                 return mapper.getNodeFactory().nullNode();

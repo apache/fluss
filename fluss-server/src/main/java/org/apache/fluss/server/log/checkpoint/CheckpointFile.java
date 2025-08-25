@@ -88,9 +88,7 @@ public final class CheckpointFile<T> {
             // write to temp file and then swap with the existing file
             try (FileOutputStream fileOutputStream = new FileOutputStream(tempPath.toFile());
                     BufferedWriter writer =
-                            new BufferedWriter(
-                                    new OutputStreamWriter(
-                                            fileOutputStream, StandardCharsets.UTF_8))) {
+                            new BufferedWriter(new OutputStreamWriter(fileOutputStream, StandardCharsets.UTF_8))) {
                 CheckpointWriteBuffer<T> checkpointWriteBuffer =
                         new CheckpointWriteBuffer<>(writer, version, formatter);
                 checkpointWriteBuffer.write(entries);
@@ -106,8 +104,7 @@ public final class CheckpointFile<T> {
         synchronized (lock) {
             try (BufferedReader reader = Files.newBufferedReader(absolutePath)) {
                 CheckpointReadBuffer<T> checkpointBuffer =
-                        new CheckpointReadBuffer<>(
-                                absolutePath.toString(), reader, version, formatter);
+                        new CheckpointReadBuffer<>(absolutePath.toString(), reader, version, formatter);
                 return checkpointBuffer.read();
             }
         }
@@ -119,8 +116,7 @@ public final class CheckpointFile<T> {
         private final int version;
         private final EntryFormatter<T> formatter;
 
-        public CheckpointWriteBuffer(
-                BufferedWriter writer, int version, EntryFormatter<T> formatter) {
+        public CheckpointWriteBuffer(BufferedWriter writer, int version, EntryFormatter<T> formatter) {
             this.writer = writer;
             this.version = version;
             this.formatter = formatter;
@@ -151,8 +147,7 @@ public final class CheckpointFile<T> {
         private final int version;
         private final EntryFormatter<T> formatter;
 
-        public CheckpointReadBuffer(
-                String location, BufferedReader reader, int version, EntryFormatter<T> formatter) {
+        public CheckpointReadBuffer(String location, BufferedReader reader, int version, EntryFormatter<T> formatter) {
             this.location = location;
             this.reader = reader;
             this.version = version;
@@ -167,13 +162,12 @@ public final class CheckpointFile<T> {
 
             int readVersion = toInt(line);
             if (readVersion != version) {
-                throw new IOException(
-                        "Unrecognised version:"
-                                + readVersion
-                                + ", expected version: "
-                                + version
-                                + " in checkpoint file at: "
-                                + location);
+                throw new IOException("Unrecognised version:"
+                        + readVersion
+                        + ", expected version: "
+                        + version
+                        + " in checkpoint file at: "
+                        + location);
             }
 
             line = reader.readLine();
@@ -193,14 +187,13 @@ public final class CheckpointFile<T> {
             }
 
             if (entries.size() != expectedSize) {
-                throw new IOException(
-                        "Expected ["
-                                + expectedSize
-                                + "] entries in checkpoint file ["
-                                + location
-                                + "], but found only ["
-                                + entries.size()
-                                + "]");
+                throw new IOException("Expected ["
+                        + expectedSize
+                        + "] entries in checkpoint file ["
+                        + location
+                        + "], but found only ["
+                        + entries.size()
+                        + "]");
             }
 
             return entries;
@@ -215,8 +208,7 @@ public final class CheckpointFile<T> {
         }
 
         private IOException buildMalformedLineException(String line) {
-            return new IOException(
-                    String.format("Malformed line in checkpoint file [%s]: %s", location, line));
+            return new IOException(String.format("Malformed line in checkpoint file [%s]: %s", location, line));
         }
     }
 

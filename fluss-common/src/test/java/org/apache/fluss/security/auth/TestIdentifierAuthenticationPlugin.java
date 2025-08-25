@@ -24,8 +24,7 @@ import org.apache.fluss.security.acl.FlussPrincipal;
 import javax.annotation.Nullable;
 
 /** A {@link AuthenticationPlugin} that is used to test authentication plugin identifier. */
-public class TestIdentifierAuthenticationPlugin
-        implements ClientAuthenticationPlugin, ServerAuthenticationPlugin {
+public class TestIdentifierAuthenticationPlugin implements ClientAuthenticationPlugin, ServerAuthenticationPlugin {
 
     public String authProtocol() {
         return "SSL_TEST";

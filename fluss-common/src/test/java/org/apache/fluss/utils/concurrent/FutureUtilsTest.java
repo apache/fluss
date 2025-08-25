@@ -54,13 +54,10 @@ class FutureUtilsTest {
         final CompletableFuture<Void> inputFuture = new CompletableFuture<>();
         final OneShotLatch composeLatch = new OneShotLatch();
 
-        final CompletableFuture<Void> composeFuture =
-                FutureUtils.composeAfterwards(
-                        inputFuture,
-                        () -> {
-                            composeLatch.trigger();
-                            return CompletableFuture.completedFuture(null);
-                        });
+        final CompletableFuture<Void> composeFuture = FutureUtils.composeAfterwards(inputFuture, () -> {
+            composeLatch.trigger();
+            return CompletableFuture.completedFuture(null);
+        });
 
         assertThat(composeLatch.isTriggered()).isFalse();
         assertThat(composeFuture).isNotDone();
@@ -78,13 +75,10 @@ class FutureUtilsTest {
         final OneShotLatch composeLatch = new OneShotLatch();
         final FlussException testException = new FlussException("Test exception");
 
-        final CompletableFuture<Void> composeFuture =
-                FutureUtils.composeAfterwards(
-                        inputFuture,
-                        () -> {
-                            composeLatch.trigger();
-                            return CompletableFuture.completedFuture(null);
-                        });
+        final CompletableFuture<Void> composeFuture = FutureUtils.composeAfterwards(inputFuture, () -> {
+            composeLatch.trigger();
+            return CompletableFuture.completedFuture(null);
+        });
 
         assertThat(composeLatch.isTriggered()).isFalse();
         assertThat(composeFuture).isNotDone();
@@ -105,13 +99,10 @@ class FutureUtilsTest {
         final OneShotLatch composeLatch = new OneShotLatch();
         final FlussException testException = new FlussException("Test exception");
 
-        final CompletableFuture<Void> composeFuture =
-                FutureUtils.composeAfterwards(
-                        inputFuture,
-                        () -> {
-                            composeLatch.trigger();
-                            return FutureUtils.completedExceptionally(testException);
-                        });
+        final CompletableFuture<Void> composeFuture = FutureUtils.composeAfterwards(inputFuture, () -> {
+            composeLatch.trigger();
+            return FutureUtils.completedExceptionally(testException);
+        });
 
         assertThat(composeLatch.isTriggered()).isFalse();
         assertThat(composeFuture).isNotDone();
@@ -133,13 +124,10 @@ class FutureUtilsTest {
         final FlussException testException2 = new FlussException("Test exception2");
         final OneShotLatch composeLatch = new OneShotLatch();
 
-        final CompletableFuture<Void> composeFuture =
-                FutureUtils.composeAfterwards(
-                        inputFuture,
-                        () -> {
-                            composeLatch.trigger();
-                            return FutureUtils.completedExceptionally(testException2);
-                        });
+        final CompletableFuture<Void> composeFuture = FutureUtils.composeAfterwards(inputFuture, () -> {
+            composeLatch.trigger();
+            return FutureUtils.completedExceptionally(testException2);
+        });
 
         assertThat(composeLatch.isTriggered()).isFalse();
         assertThat(composeFuture).isNotDone();
@@ -153,24 +141,20 @@ class FutureUtilsTest {
                 .eventuallyFailsWith(ExecutionException.class)
                 .extracting(Throwable::getCause)
                 .isEqualTo(testException1)
-                .satisfies(
-                        cause -> assertThat(cause.getSuppressed()).containsExactly(testException2));
+                .satisfies(cause -> assertThat(cause.getSuppressed()).containsExactly(testException2));
     }
 
     @Test
     void testCompleteAll() {
-        FutureUtils.ConjunctFuture<Void> emptyConjunctFuture =
-                FutureUtils.completeAll(Collections.emptyList());
+        FutureUtils.ConjunctFuture<Void> emptyConjunctFuture = FutureUtils.completeAll(Collections.emptyList());
         assertThatFuture(emptyConjunctFuture).isDone();
         assertThatFuture(emptyConjunctFuture).eventuallySucceeds().isNull();
 
         final CompletableFuture<String> inputFuture1 = new CompletableFuture<>();
         final CompletableFuture<Integer> inputFuture2 = new CompletableFuture<>();
 
-        final List<CompletableFuture<?>> futuresToComplete =
-                Arrays.asList(inputFuture1, inputFuture2);
-        final FutureUtils.ConjunctFuture<Void> completeFuture =
-                FutureUtils.completeAll(futuresToComplete);
+        final List<CompletableFuture<?>> futuresToComplete = Arrays.asList(inputFuture1, inputFuture2);
+        final FutureUtils.ConjunctFuture<Void> completeFuture = FutureUtils.completeAll(futuresToComplete);
 
         assertThat(completeFuture).isNotDone();
         assertThat(completeFuture.getNumFuturesCompleted()).isZero();
@@ -194,10 +178,8 @@ class FutureUtilsTest {
         final CompletableFuture<String> inputFuture1 = new CompletableFuture<>();
         final CompletableFuture<Integer> inputFuture2 = new CompletableFuture<>();
 
-        final List<CompletableFuture<?>> futuresToComplete =
-                Arrays.asList(inputFuture1, inputFuture2);
-        final FutureUtils.ConjunctFuture<Void> completeFuture =
-                FutureUtils.completeAll(futuresToComplete);
+        final List<CompletableFuture<?>> futuresToComplete = Arrays.asList(inputFuture1, inputFuture2);
+        final FutureUtils.ConjunctFuture<Void> completeFuture = FutureUtils.completeAll(futuresToComplete);
 
         assertThat(completeFuture).isNotDone();
         assertThat(completeFuture.getNumFuturesCompleted()).isZero();
@@ -224,10 +206,8 @@ class FutureUtilsTest {
         final CompletableFuture<String> inputFuture1 = new CompletableFuture<>();
         final CompletableFuture<Integer> inputFuture2 = new CompletableFuture<>();
 
-        final List<CompletableFuture<?>> futuresToComplete =
-                Arrays.asList(inputFuture1, inputFuture2);
-        final FutureUtils.ConjunctFuture<Void> completeFuture =
-                FutureUtils.completeAll(futuresToComplete);
+        final List<CompletableFuture<?>> futuresToComplete = Arrays.asList(inputFuture1, inputFuture2);
+        final FutureUtils.ConjunctFuture<Void> completeFuture = FutureUtils.completeAll(futuresToComplete);
 
         assertThat(completeFuture).isNotDone();
         assertThat(completeFuture.getNumFuturesCompleted()).isZero();
@@ -247,22 +227,19 @@ class FutureUtilsTest {
                 .eventuallyFailsWith(ExecutionException.class)
                 .withCauseInstanceOf(FlussException.class)
                 .extracting(Throwable::getCause)
-                .satisfies(
-                        e -> {
-                            final Throwable[] actualSuppressedExceptions = e.getSuppressed();
-                            final FlussException expectedSuppressedException =
-                                    e.equals(testException1) ? testException2 : testException1;
+                .satisfies(e -> {
+                    final Throwable[] actualSuppressedExceptions = e.getSuppressed();
+                    final FlussException expectedSuppressedException =
+                            e.equals(testException1) ? testException2 : testException1;
 
-                            assertThat(actualSuppressedExceptions)
-                                    .containsExactly(expectedSuppressedException);
-                        });
+                    assertThat(actualSuppressedExceptions).containsExactly(expectedSuppressedException);
+                });
     }
 
     @Test
     void testHandleUncaughtExceptionWithCompletedFuture() {
         final CompletableFuture<String> future = CompletableFuture.completedFuture("foobar");
-        final TestingUncaughtExceptionHandler uncaughtExceptionHandler =
-                new TestingUncaughtExceptionHandler();
+        final TestingUncaughtExceptionHandler uncaughtExceptionHandler = new TestingUncaughtExceptionHandler();
 
         FutureUtils.handleUncaughtException(future, uncaughtExceptionHandler);
 
@@ -273,8 +250,7 @@ class FutureUtilsTest {
     void testHandleUncaughtExceptionWithNormalCompletion() {
         final CompletableFuture<String> future = new CompletableFuture<>();
 
-        final TestingUncaughtExceptionHandler uncaughtExceptionHandler =
-                new TestingUncaughtExceptionHandler();
+        final TestingUncaughtExceptionHandler uncaughtExceptionHandler = new TestingUncaughtExceptionHandler();
 
         FutureUtils.handleUncaughtException(future, uncaughtExceptionHandler);
         future.complete("barfoo");
@@ -284,11 +260,9 @@ class FutureUtilsTest {
 
     @Test
     void testHandleUncaughtExceptionWithExceptionallyCompletedFuture() {
-        final CompletableFuture<String> future =
-                FutureUtils.completedExceptionally(new FlussException("foobar"));
+        final CompletableFuture<String> future = FutureUtils.completedExceptionally(new FlussException("foobar"));
 
-        final TestingUncaughtExceptionHandler uncaughtExceptionHandler =
-                new TestingUncaughtExceptionHandler();
+        final TestingUncaughtExceptionHandler uncaughtExceptionHandler = new TestingUncaughtExceptionHandler();
 
         FutureUtils.handleUncaughtException(future, uncaughtExceptionHandler);
 
@@ -299,8 +273,7 @@ class FutureUtilsTest {
     void testHandleUncaughtExceptionWithExceptionallyCompletion() {
         final CompletableFuture<String> future = new CompletableFuture<>();
 
-        final TestingUncaughtExceptionHandler uncaughtExceptionHandler =
-                new TestingUncaughtExceptionHandler();
+        final TestingUncaughtExceptionHandler uncaughtExceptionHandler = new TestingUncaughtExceptionHandler();
 
         FutureUtils.handleUncaughtException(future, uncaughtExceptionHandler);
 
@@ -318,15 +291,13 @@ class FutureUtilsTest {
     @Test
     void testHandleUncaughtExceptionWithBuggyErrorHandlingCode() {
         final Exception actualProductionCodeError =
-                new Exception(
-                        "Actual production code error that should be caught by the error handler.");
+                new Exception("Actual production code error that should be caught by the error handler.");
 
         final RuntimeException errorHandlingException =
                 new RuntimeException("Expected test error in error handling code.");
-        final Thread.UncaughtExceptionHandler buggyActualExceptionHandler =
-                (thread, ignoredActualException) -> {
-                    throw errorHandlingException;
-                };
+        final Thread.UncaughtExceptionHandler buggyActualExceptionHandler = (thread, ignoredActualException) -> {
+            throw errorHandlingException;
+        };
 
         final AtomicReference<Throwable> caughtErrorHandlingException = new AtomicReference<>();
         final Thread.UncaughtExceptionHandler fallbackExceptionHandler =
@@ -337,22 +308,15 @@ class FutureUtilsTest {
                 buggyActualExceptionHandler,
                 fallbackExceptionHandler);
 
-        assertThat(caughtErrorHandlingException)
-                .hasValueSatisfying(
-                        actualError -> {
-                            assertThat(actualError)
-                                    .isInstanceOf(IllegalStateException.class)
-                                    .hasRootCause(errorHandlingException)
-                                    .satisfies(
-                                            cause ->
-                                                    assertThat(cause.getSuppressed())
-                                                            .containsExactly(
-                                                                    actualProductionCodeError));
-                        });
+        assertThat(caughtErrorHandlingException).hasValueSatisfying(actualError -> {
+            assertThat(actualError)
+                    .isInstanceOf(IllegalStateException.class)
+                    .hasRootCause(errorHandlingException)
+                    .satisfies(cause -> assertThat(cause.getSuppressed()).containsExactly(actualProductionCodeError));
+        });
     }
 
-    private static class TestingUncaughtExceptionHandler
-            implements Thread.UncaughtExceptionHandler {
+    private static class TestingUncaughtExceptionHandler implements Thread.UncaughtExceptionHandler {
 
         private Throwable exception = null;
 
@@ -370,8 +334,7 @@ class FutureUtilsTest {
     void testForwardAsync() {
         final CompletableFuture<String> source = new CompletableFuture<>();
         final CompletableFuture<String> target = new CompletableFuture<>();
-        final ManuallyTriggeredScheduledExecutor executor =
-                new ManuallyTriggeredScheduledExecutor();
+        final ManuallyTriggeredScheduledExecutor executor = new ManuallyTriggeredScheduledExecutor();
 
         FutureUtils.forwardAsync(source, target, executor);
 
@@ -414,11 +377,9 @@ class FutureUtilsTest {
         assertThatFuture(successFuture).eventuallySucceeds().isEqualTo("Fluss");
 
         final CompletableFuture<String> failureFuture = new CompletableFuture<>();
-        FutureUtils.completeFromCallable(
-                failureFuture,
-                () -> {
-                    throw new RuntimeException("mock runtime exception");
-                });
+        FutureUtils.completeFromCallable(failureFuture, () -> {
+            throw new RuntimeException("mock runtime exception");
+        });
         assertThatFuture(failureFuture)
                 .eventuallyFailsWith(ExecutionException.class)
                 .withCauseInstanceOf(RuntimeException.class)
@@ -477,8 +438,7 @@ class FutureUtilsTest {
 
     @Test
     void testWaitForAll() {
-        FutureUtils.ConjunctFuture<Void> emptyConjunctFuture =
-                FutureUtils.waitForAll(Collections.emptyList());
+        FutureUtils.ConjunctFuture<Void> emptyConjunctFuture = FutureUtils.waitForAll(Collections.emptyList());
         assertThatFuture(emptyConjunctFuture).isDone();
         assertThatFuture(emptyConjunctFuture).eventuallySucceeds().isNull();
 
@@ -486,15 +446,13 @@ class FutureUtilsTest {
         CompletableFuture<String> future1 = new CompletableFuture<String>();
         CompletableFuture<String> future2 = new CompletableFuture<String>();
         FutureUtils.ConjunctFuture<Void> conjunctFuture =
-                FutureUtils.waitForAll(
-                        Arrays.asList(future1, future2),
-                        (val, throwable) -> {
-                            if (throwable == null) {
-                                successRes.add(val);
-                            } else {
-                                throw new RuntimeException(throwable);
-                            }
-                        });
+                FutureUtils.waitForAll(Arrays.asList(future1, future2), (val, throwable) -> {
+                    if (throwable == null) {
+                        successRes.add(val);
+                    } else {
+                        throw new RuntimeException(throwable);
+                    }
+                });
 
         assertThatFuture(conjunctFuture).isNotDone();
         assertThat(conjunctFuture.getNumFuturesTotal()).isEqualTo(2);
@@ -515,15 +473,13 @@ class FutureUtilsTest {
         CompletableFuture<String> successFuture = new CompletableFuture<String>();
         CompletableFuture<String> failureFuture = new CompletableFuture<String>();
         FutureUtils.ConjunctFuture<Void> failureConjunctFuture =
-                FutureUtils.waitForAll(
-                        Arrays.asList(successFuture, failureFuture),
-                        (val, throwable) -> {
-                            if (throwable == null) {
-                                failureRes.add(val);
-                            } else {
-                                throw new RuntimeException(throwable);
-                            }
-                        });
+                FutureUtils.waitForAll(Arrays.asList(successFuture, failureFuture), (val, throwable) -> {
+                    if (throwable == null) {
+                        failureRes.add(val);
+                    } else {
+                        throw new RuntimeException(throwable);
+                    }
+                });
 
         failureFuture.completeExceptionally(new RuntimeException("mock runtime exception"));
 
@@ -539,10 +495,9 @@ class FutureUtilsTest {
 
     @Test
     void testCatchingAndLoggingThrowables() {
-        Runnable task =
-                () -> {
-                    throw new RuntimeException("mock runtime exception");
-                };
+        Runnable task = () -> {
+            throw new RuntimeException("mock runtime exception");
+        };
 
         Runnable catchingRunnable = FutureUtils.catchingAndLoggingThrowables(task);
         assertThatNoException().isThrownBy(catchingRunnable::run);

@@ -94,7 +94,8 @@ public class DefaultSnapshotContext implements SnapshotContext {
                 (int) conf.get(ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE).getBytes(),
                 FlussPaths.remoteKvDir(conf),
                 new ZooKeeperCompletedSnapshotHandleStore(zkClient),
-                (int) conf.get(ConfigOptions.KV_RECOVER_LOG_RECORD_BATCH_MAX_SIZE).getBytes());
+                (int) conf.get(ConfigOptions.KV_RECOVER_LOG_RECORD_BATCH_MAX_SIZE)
+                        .getBytes());
     }
 
     public ZooKeeperClient getZooKeeperClient() {
@@ -138,8 +139,7 @@ public class DefaultSnapshotContext implements SnapshotContext {
     }
 
     @Override
-    public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-            getLatestCompletedSnapshotProvider() {
+    public FunctionWithException<TableBucket, CompletedSnapshot, Exception> getLatestCompletedSnapshotProvider() {
         return (tableBucket) -> {
             Optional<CompletedSnapshotHandle> optSnapshotHandle =
                     completedSnapshotHandleStore.getLatestCompletedSnapshotHandle(tableBucket);

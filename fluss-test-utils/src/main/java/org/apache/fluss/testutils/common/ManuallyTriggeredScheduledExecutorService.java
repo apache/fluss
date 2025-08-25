@@ -45,11 +45,9 @@ public class ManuallyTriggeredScheduledExecutorService implements ScheduledExecu
 
     private final ArrayDeque<Runnable> queuedRunnables = new ArrayDeque<>();
 
-    private final ConcurrentLinkedQueue<ScheduledTask<?>> nonPeriodicScheduledTasks =
-            new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<ScheduledTask<?>> nonPeriodicScheduledTasks = new ConcurrentLinkedQueue<>();
 
-    private final ConcurrentLinkedQueue<ScheduledTask<?>> periodicScheduledTasks =
-            new ConcurrentLinkedQueue<>();
+    private final ConcurrentLinkedQueue<ScheduledTask<?>> periodicScheduledTasks = new ConcurrentLinkedQueue<>();
 
     private boolean shutdown;
 
@@ -75,14 +73,12 @@ public class ManuallyTriggeredScheduledExecutorService implements ScheduledExecu
     }
 
     @Override
-    public ScheduledFuture<?> scheduleAtFixedRate(
-            Runnable command, long initialDelay, long period, TimeUnit unit) {
+    public ScheduledFuture<?> scheduleAtFixedRate(Runnable command, long initialDelay, long period, TimeUnit unit) {
         return insertPeriodicRunnable(command, initialDelay, period, unit);
     }
 
     @Override
-    public ScheduledFuture<?> scheduleWithFixedDelay(
-            Runnable command, long initialDelay, long delay, TimeUnit unit) {
+    public ScheduledFuture<?> scheduleWithFixedDelay(Runnable command, long initialDelay, long delay, TimeUnit unit) {
         return insertPeriodicRunnable(command, initialDelay, delay, unit);
     }
 
@@ -141,8 +137,7 @@ public class ManuallyTriggeredScheduledExecutorService implements ScheduledExecu
     }
 
     @Override
-    public <T> List<Future<T>> invokeAll(
-            Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit) {
+    public <T> List<Future<T>> invokeAll(Collection<? extends Callable<T>> tasks, long timeout, TimeUnit unit) {
         throw new UnsupportedOperationException();
     }
 
@@ -296,17 +291,15 @@ public class ManuallyTriggeredScheduledExecutorService implements ScheduledExecu
         }
     }
 
-    private ScheduledFuture<?> insertPeriodicRunnable(
-            Runnable command, long delay, long period, TimeUnit unit) {
+    private ScheduledFuture<?> insertPeriodicRunnable(Runnable command, long delay, long period, TimeUnit unit) {
 
-        final ScheduledTask<?> scheduledTask =
-                new ScheduledTask<>(
-                        () -> {
-                            command.run();
-                            return null;
-                        },
-                        unit.convert(delay, TimeUnit.MILLISECONDS),
-                        unit.convert(period, TimeUnit.MILLISECONDS));
+        final ScheduledTask<?> scheduledTask = new ScheduledTask<>(
+                () -> {
+                    command.run();
+                    return null;
+                },
+                unit.convert(delay, TimeUnit.MILLISECONDS),
+                unit.convert(period, TimeUnit.MILLISECONDS));
 
         periodicScheduledTasks.offer(scheduledTask);
 
@@ -323,8 +316,7 @@ public class ManuallyTriggeredScheduledExecutorService implements ScheduledExecu
                 unit);
     }
 
-    private <V> ScheduledFuture<V> insertNonPeriodicTask(
-            Callable<V> callable, long delay, TimeUnit unit) {
+    private <V> ScheduledFuture<V> insertNonPeriodicTask(Callable<V> callable, long delay, TimeUnit unit) {
         final ScheduledTask<V> scheduledTask =
                 new ScheduledTask<>(callable, unit.convert(delay, TimeUnit.MILLISECONDS));
 

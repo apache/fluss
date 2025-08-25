@@ -55,13 +55,16 @@ public class LookupNormalizer implements Serializable {
     private static final long serialVersionUID = 1L;
 
     /** Mapping from normalized key index to the lookup key index (in the lookup row). */
-    @Nullable private final FieldGetter[] normalizedKeyGetters;
+    @Nullable
+    private final FieldGetter[] normalizedKeyGetters;
 
     /** The field getter to get remaining condition value from the lookup key row. */
-    @Nullable private final FieldGetter[] conditionFieldGetters;
+    @Nullable
+    private final FieldGetter[] conditionFieldGetters;
 
     /** The field getter to get the remaining condition result from the lookup result row. */
-    @Nullable private final FieldGetter[] resultFieldGetters;
+    @Nullable
+    private final FieldGetter[] resultFieldGetters;
 
     /**
      * The lookup request type (primary key lookup or prefix lookup) requested from Flink to Fluss.
@@ -125,9 +128,7 @@ public class LookupNormalizer implements Serializable {
         FieldCondition[] fieldConditions = new FieldCondition[conditionFieldGetters.length];
         for (int i = 0; i < conditionFieldGetters.length; i++) {
             fieldConditions[i] =
-                    new FieldCondition(
-                            conditionFieldGetters[i].getFieldOrNull(lookupKey),
-                            resultFieldGetters[i]);
+                    new FieldCondition(conditionFieldGetters[i].getFieldOrNull(lookupKey), resultFieldGetters[i]);
         }
         return new RemainingFilter(fieldConditions);
     }
@@ -168,11 +169,9 @@ public class LookupNormalizer implements Serializable {
     // --------------------------------------------------------------------------------------------
 
     /** Create a {@link LookupNormalizer} for primary key lookup. */
-    public static LookupNormalizer createPrimaryKeyLookupNormalizer(
-            int[] primaryKeys, RowType schema) {
+    public static LookupNormalizer createPrimaryKeyLookupNormalizer(int[] primaryKeys, RowType schema) {
         List<String> primaryKeyNames = fieldNames(primaryKeys, schema);
-        return createLookupNormalizer(
-                primaryKeyNames, primaryKeyNames, primaryKeys, schema, LookupType.LOOKUP);
+        return createLookupNormalizer(primaryKeyNames, primaryKeyNames, primaryKeys, schema, LookupType.LOOKUP);
     }
 
     /**
@@ -198,19 +197,17 @@ public class LookupNormalizer implements Serializable {
         }
         // bucket keys must not be empty
         if (bucketKeys.length == 0 || !ArrayUtils.isSubset(primaryKeys, bucketKeys)) {
-            throw new IllegalArgumentException(
-                    "Illegal bucket keys: "
-                            + Arrays.toString(bucketKeys)
-                            + ", must be a part of primary keys: "
-                            + Arrays.toString(primaryKeys));
+            throw new IllegalArgumentException("Illegal bucket keys: "
+                    + Arrays.toString(bucketKeys)
+                    + ", must be a part of primary keys: "
+                    + Arrays.toString(primaryKeys));
         }
         // partition keys can be empty
         if (partitionKeys.length != 0 && !ArrayUtils.isSubset(primaryKeys, partitionKeys)) {
-            throw new IllegalArgumentException(
-                    "Illegal partition keys: "
-                            + Arrays.toString(partitionKeys)
-                            + ", must be a part of primary keys: "
-                            + Arrays.toString(primaryKeys));
+            throw new IllegalArgumentException("Illegal partition keys: "
+                    + Arrays.toString(partitionKeys)
+                    + ", must be a part of primary keys: "
+                    + Arrays.toString(primaryKeys));
         }
 
         int[] lookupKeysBeforeProjection = new int[lookupKeyIndexes.length];
@@ -233,8 +230,7 @@ public class LookupNormalizer implements Serializable {
 
         if (new HashSet<>(lookupKeyNames).containsAll(primaryKeyNames)) {
             // primary key lookup.
-            return createLookupNormalizer(
-                    lookupKeyNames, primaryKeyNames, lookupKeys, schema, LookupType.LOOKUP);
+            return createLookupNormalizer(lookupKeyNames, primaryKeyNames, lookupKeys, schema, LookupType.LOOKUP);
         } else {
             // the encoding primary key is the primary key without partition keys.
             int[] encodedPrimaryKeys = ArrayUtils.removeSet(primaryKeys, partitionKeys);
@@ -244,8 +240,7 @@ public class LookupNormalizer implements Serializable {
                 // try to create prefix lookup normalizer
                 // TODO: support prefix lookup with arbitrary part of prefix of primary key
                 int[] expectedLookupKeys =
-                        ArrayUtils.intersection(
-                                primaryKeys, ArrayUtils.concat(bucketKeys, partitionKeys));
+                        ArrayUtils.intersection(primaryKeys, ArrayUtils.concat(bucketKeys, partitionKeys));
                 return createLookupNormalizer(
                         lookupKeyNames,
                         fieldNames(expectedLookupKeys, schema),

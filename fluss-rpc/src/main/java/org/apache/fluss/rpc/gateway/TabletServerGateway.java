@@ -152,8 +152,7 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
      * @return notify remote log offsets response.
      */
     @RPC(api = ApiKeys.NOTIFY_REMOTE_LOG_OFFSETS)
-    CompletableFuture<NotifyRemoteLogOffsetsResponse> notifyRemoteLogOffsets(
-            NotifyRemoteLogOffsetsRequest request);
+    CompletableFuture<NotifyRemoteLogOffsetsResponse> notifyRemoteLogOffsets(NotifyRemoteLogOffsetsRequest request);
 
     /**
      * Notify log offset of a kv snapshot.
@@ -161,8 +160,7 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
      * @return notify snapshot offset response.
      */
     @RPC(api = ApiKeys.NOTIFY_KV_SNAPSHOT_OFFSET)
-    CompletableFuture<NotifyKvSnapshotOffsetResponse> notifyKvSnapshotOffset(
-            NotifyKvSnapshotOffsetRequest request);
+    CompletableFuture<NotifyKvSnapshotOffsetResponse> notifyKvSnapshotOffset(NotifyKvSnapshotOffsetRequest request);
 
     /**
      * Notify log offset of a lakehouse table.
@@ -170,6 +168,5 @@ public interface TabletServerGateway extends RpcGateway, AdminReadOnlyGateway {
      * @return notify lakehouse data response
      */
     @RPC(api = ApiKeys.NOTIFY_LAKE_TABLE_OFFSET)
-    CompletableFuture<NotifyLakeTableOffsetResponse> notifyLakeTableOffset(
-            NotifyLakeTableOffsetRequest request);
+    CompletableFuture<NotifyLakeTableOffsetResponse> notifyLakeTableOffset(NotifyLakeTableOffsetRequest request);
 }

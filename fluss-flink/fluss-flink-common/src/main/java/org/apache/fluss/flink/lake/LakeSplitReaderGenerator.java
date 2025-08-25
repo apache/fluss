@@ -40,9 +40,7 @@ public class LakeSplitReaderGenerator {
     private final @Nullable LakeSource<LakeSplit> lakeSource;
 
     public LakeSplitReaderGenerator(
-            Table table,
-            @Nullable int[] projectedFields,
-            @Nullable LakeSource<LakeSplit> lakeSource) {
+            Table table, @Nullable int[] projectedFields, @Nullable LakeSource<LakeSplit> lakeSource) {
         this.table = table;
         this.projectedFields = projectedFields;
         this.lakeSource = lakeSource;
@@ -62,19 +60,14 @@ public class LakeSplitReaderGenerator {
     public BoundedSplitReader getBoundedSplitScanner(SourceSplitBase split) {
         if (split instanceof LakeSnapshotSplit) {
             LakeSnapshotSplit lakeSnapshotSplit = (LakeSnapshotSplit) split;
-            LakeSnapshotScanner lakeSnapshotScanner =
-                    new LakeSnapshotScanner(lakeSource, lakeSnapshotSplit);
-            return new BoundedSplitReader(
-                    lakeSnapshotScanner, lakeSnapshotSplit.getRecordsToSplit());
+            LakeSnapshotScanner lakeSnapshotScanner = new LakeSnapshotScanner(lakeSource, lakeSnapshotSplit);
+            return new BoundedSplitReader(lakeSnapshotScanner, lakeSnapshotSplit.getRecordsToSplit());
         } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
-            LakeSnapshotAndFlussLogSplit lakeSnapshotAndFlussLogSplit =
-                    (LakeSnapshotAndFlussLogSplit) split;
-            LakeSnapshotAndLogSplitScanner lakeSnapshotAndLogSplitScanner =
-                    new LakeSnapshotAndLogSplitScanner(
-                            table, lakeSource, lakeSnapshotAndFlussLogSplit, projectedFields);
+            LakeSnapshotAndFlussLogSplit lakeSnapshotAndFlussLogSplit = (LakeSnapshotAndFlussLogSplit) split;
+            LakeSnapshotAndLogSplitScanner lakeSnapshotAndLogSplitScanner = new LakeSnapshotAndLogSplitScanner(
+                    table, lakeSource, lakeSnapshotAndFlussLogSplit, projectedFields);
             return new BoundedSplitReader(
-                    lakeSnapshotAndLogSplitScanner,
-                    lakeSnapshotAndFlussLogSplit.getRecordsToSkip());
+                    lakeSnapshotAndLogSplitScanner, lakeSnapshotAndFlussLogSplit.getRecordsToSkip());
         } else {
             throw new UnsupportedOperationException(
                     String.format("The split type of %s is not supported.", split.getClass()));

@@ -43,8 +43,7 @@ public class LessOrEqual extends NullFalseLeafBinaryFunction {
     }
 
     @Override
-    public boolean test(
-            DataType type, long rowCount, Object min, Object max, Long nullCount, Object literal) {
+    public boolean test(DataType type, long rowCount, Object min, Object max, Long nullCount, Object literal) {
         return compareLiteral(type, literal, min) >= 0;
     }
 

@@ -38,18 +38,15 @@ public final class PluginUtils {
     private static PluginManager createPluginManagerFromRootFolder(PluginConfig pluginConfig) {
         if (pluginConfig.getPluginsPath().isPresent()) {
             try {
-                Collection<PluginDescriptor> pluginDescriptors =
-                        new DirectoryBasedPluginFinder(pluginConfig.getPluginsPath().get())
-                                .findPlugins();
-                return new DefaultPluginManager(
-                        pluginDescriptors, pluginConfig.getAlwaysParentFirstPatterns());
+                Collection<PluginDescriptor> pluginDescriptors = new DirectoryBasedPluginFinder(
+                                pluginConfig.getPluginsPath().get())
+                        .findPlugins();
+                return new DefaultPluginManager(pluginDescriptors, pluginConfig.getAlwaysParentFirstPatterns());
             } catch (IOException e) {
-                throw new FlussRuntimeException(
-                        "Exception when trying to initialize plugin system.", e);
+                throw new FlussRuntimeException("Exception when trying to initialize plugin system.", e);
             }
         } else {
-            return new DefaultPluginManager(
-                    Collections.emptyList(), pluginConfig.getAlwaysParentFirstPatterns());
+            return new DefaultPluginManager(Collections.emptyList(), pluginConfig.getAlwaysParentFirstPatterns());
         }
     }
 }

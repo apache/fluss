@@ -55,8 +55,7 @@ import java.util.List;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Flink source for Fluss. */
-public class FlinkSource<OUT>
-        implements Source<OUT, SourceSplitBase, SourceEnumeratorState>, ResultTypeQueryable {
+public class FlinkSource<OUT> implements Source<OUT, SourceSplitBase, SourceEnumeratorState>, ResultTypeQueryable {
     private static final long serialVersionUID = 1L;
 
     private final Configuration flussConf;
@@ -64,7 +63,10 @@ public class FlinkSource<OUT>
     private final boolean hasPrimaryKey;
     private final boolean isPartitioned;
     private final RowType sourceOutputType;
-    @Nullable private final int[] projectedFields;
+
+    @Nullable
+    private final int[] projectedFields;
+
     protected final OffsetsInitializer offsetsInitializer;
     protected final long scanPartitionDiscoveryIntervalMs;
     private final boolean streaming;
@@ -179,18 +181,13 @@ public class FlinkSource<OUT>
     }
 
     @Override
-    public SourceReader<OUT, SourceSplitBase> createReader(SourceReaderContext context)
-            throws Exception {
+    public SourceReader<OUT, SourceSplitBase> createReader(SourceReaderContext context) throws Exception {
         FutureCompletingBlockingQueue<RecordsWithSplitIds<RecordAndPos>> elementsQueue =
                 new FutureCompletingBlockingQueue<>();
-        FlinkSourceReaderMetrics flinkSourceReaderMetrics =
-                new FlinkSourceReaderMetrics(context.metricGroup());
+        FlinkSourceReaderMetrics flinkSourceReaderMetrics = new FlinkSourceReaderMetrics(context.metricGroup());
 
-        deserializationSchema.open(
-                new DeserializerInitContextImpl(
-                        context.metricGroup().addGroup("deserializer"),
-                        context.getUserCodeClassLoader(),
-                        sourceOutputType));
+        deserializationSchema.open(new DeserializerInitContextImpl(
+                context.metricGroup().addGroup("deserializer"), context.getUserCodeClassLoader(), sourceOutputType));
         FlinkRecordEmitter<OUT> recordEmitter = new FlinkRecordEmitter<>(deserializationSchema);
 
         return new FlinkSourceReader<>(

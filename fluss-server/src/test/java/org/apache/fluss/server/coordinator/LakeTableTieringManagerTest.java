@@ -75,14 +75,13 @@ class LakeTableTieringManagerTest {
         TablePath tablePath2 = TablePath.of("db", "table2");
         TableInfo tableInfo2 = createTableInfo(tableId2, tablePath2, Duration.ofMinutes(3));
 
-        List<Tuple2<TableInfo, Long>> lakeTables =
-                Arrays.asList(
-                        Tuple2.of(tableInfo1, manualClock.milliseconds()),
-                        // the last lake snapshot of table2 is older than 3 minutes, should be
-                        // tiered right now
-                        Tuple2.of(
-                                tableInfo2,
-                                manualClock.milliseconds() - Duration.ofMinutes(3).toMillis()));
+        List<Tuple2<TableInfo, Long>> lakeTables = Arrays.asList(
+                Tuple2.of(tableInfo1, manualClock.milliseconds()),
+                // the last lake snapshot of table2 is older than 3 minutes, should be
+                // tiered right now
+                Tuple2.of(
+                        tableInfo2,
+                        manualClock.milliseconds() - Duration.ofMinutes(3).toMillis()));
         tableTieringManager.initWithLakeTables(lakeTables);
         // table2 should be PENDING at once without async scheduling
         assertRequestTable(tableId2, tablePath2, 1);
@@ -239,29 +238,22 @@ class LakeTableTieringManagerTest {
     }
 
     private TableInfo createTableInfo(long tableId, TablePath tablePath, Duration freshness) {
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(Schema.newBuilder().column("c1", DataTypes.INT()).build())
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, freshness)
-                        .distributedBy(1)
-                        .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder().column("c1", DataTypes.INT()).build())
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, freshness)
+                .distributedBy(1)
+                .build();
 
         return TableInfo.of(
-                tablePath,
-                tableId,
-                1,
-                tableDescriptor,
-                System.currentTimeMillis(),
-                System.currentTimeMillis());
+                tablePath, tableId, 1, tableDescriptor, System.currentTimeMillis(), System.currentTimeMillis());
     }
 
     private void assertRequestTable(long tableId, TablePath tablePath, long tieredEpoch) {
-        LakeTieringTableInfo table =
-                waitValue(
-                        () -> Optional.ofNullable(tableTieringManager.requestTable()),
-                        Duration.ofSeconds(10),
-                        "Request tiering table timout");
+        LakeTieringTableInfo table = waitValue(
+                () -> Optional.ofNullable(tableTieringManager.requestTable()),
+                Duration.ofSeconds(10),
+                "Request tiering table timout");
         assertThat(table).isEqualTo(new LakeTieringTableInfo(tableId, tablePath, tieredEpoch));
     }
 }

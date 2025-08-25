@@ -53,16 +53,10 @@ public class LeaderAndIsr {
     private final int bucketEpoch;
 
     public LeaderAndIsr(int leader, int coordinatorEpoch) {
-        this(
-                leader,
-                INITIAL_LEADER_EPOCH,
-                new ArrayList<>(),
-                coordinatorEpoch,
-                INITIAL_BUCKET_EPOCH);
+        this(leader, INITIAL_LEADER_EPOCH, new ArrayList<>(), coordinatorEpoch, INITIAL_BUCKET_EPOCH);
     }
 
-    public LeaderAndIsr(
-            int leader, int leaderEpoch, List<Integer> isr, int coordinatorEpoch, int bucketEpoch) {
+    public LeaderAndIsr(int leader, int leaderEpoch, List<Integer> isr, int coordinatorEpoch, int bucketEpoch) {
         this.leader = leader;
         this.leaderEpoch = leaderEpoch;
         this.isr = checkNotNull(isr);

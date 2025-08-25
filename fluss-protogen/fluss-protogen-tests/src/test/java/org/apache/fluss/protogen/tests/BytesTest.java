@@ -61,10 +61,10 @@ public class BytesTest {
         assertThat(lpb.getPayload()).isEqualTo(new byte[] {1, 2, 3, 4, 5});
 
         // test binary equals to protobuf
-        Bytes.B pbb =
-                Bytes.B.newBuilder()
-                        .setPayload(ByteString.copyFrom(new byte[] {1, 2, 3, 4, 5}))
-                        .build();
+        Bytes.B pbb = Bytes.B
+                .newBuilder()
+                .setPayload(ByteString.copyFrom(new byte[] {1, 2, 3, 4, 5}))
+                .build();
 
         assertThat(lpb.totalSize()).isEqualTo(pbb.getSerializedSize());
         lpb.writeTo(bb1);
@@ -175,13 +175,12 @@ public class BytesTest {
         MemorySegment segment = MemorySegment.allocateOffHeapMemory(2);
         segment.put(0, new byte[] {3, 4}, 0, 2);
 
-        MultiBytesView mbv =
-                MultiBytesView.builder()
-                        .addBytes(fileChannel, 0, 1)
-                        .addBytes(new byte[] {2})
-                        .addBytes(segment, 0, segment.size())
-                        .addBytes(fileChannel, 1, 1)
-                        .build();
+        MultiBytesView mbv = MultiBytesView.builder()
+                .addBytes(fileChannel, 0, 1)
+                .addBytes(new byte[] {2})
+                .addBytes(segment, 0, segment.size())
+                .addBytes(fileChannel, 1, 1)
+                .build();
 
         RD lpb = new RD();
         lpb.setRecordsBytesView(mbv);
@@ -194,15 +193,13 @@ public class BytesTest {
         assertThat(lpb.hasRecords()).isTrue();
         assertThat(lpb.getRecordsSize()).isEqualTo(5);
         assertThat(lpb.getRecords()).isEqualTo(new byte[] {1, 2, 3, 4, 5});
-        assertThat(lpb.getRecordsSlice())
-                .isEqualTo(Unpooled.wrappedBuffer(new byte[] {1, 2, 3, 4, 5}));
+        assertThat(lpb.getRecordsSlice()).isEqualTo(Unpooled.wrappedBuffer(new byte[] {1, 2, 3, 4, 5}));
 
         // test binary equals to protobuf
-        Bytes.RD pbb =
-                Bytes.RD
-                        .newBuilder()
-                        .setRecords(ByteString.copyFrom(new byte[] {1, 2, 3, 4, 5}))
-                        .build();
+        Bytes.RD pbb = Bytes.RD
+                .newBuilder()
+                .setRecords(ByteString.copyFrom(new byte[] {1, 2, 3, 4, 5}))
+                .build();
 
         assertThat(lpb.totalSize()).isEqualTo(pbb.getSerializedSize());
         lpb.writeTo(bb1);
@@ -218,8 +215,7 @@ public class BytesTest {
 
         assertThat(parsed.hasRecords()).isTrue();
         assertThat(parsed.getRecordsSize()).isEqualTo(5);
-        assertThat(parsed.getRecordsSlice())
-                .isEqualTo(Unpooled.wrappedBuffer(new byte[] {1, 2, 3, 4, 5}));
+        assertThat(parsed.getRecordsSlice()).isEqualTo(Unpooled.wrappedBuffer(new byte[] {1, 2, 3, 4, 5}));
         assertThat(parsed.getRecords()).isEqualTo(new byte[] {1, 2, 3, 4, 5});
 
         // test parsedBuf writeTo
@@ -253,11 +249,11 @@ public class BytesTest {
         assertThat(lpb.getExtraItemAt(0)).isEqualTo(new byte[] {1, 2, 3});
         assertThat(lpb.getExtraItemAt(1)).isEqualTo(new byte[] {4, 5, 6, 7});
 
-        Bytes.B pbb =
-                Bytes.B.newBuilder()
-                        .addExtraItems(ByteString.copyFrom(new byte[] {1, 2, 3}))
-                        .addExtraItems(ByteString.copyFrom(new byte[] {4, 5, 6, 7}))
-                        .build();
+        Bytes.B pbb = Bytes.B
+                .newBuilder()
+                .addExtraItems(ByteString.copyFrom(new byte[] {1, 2, 3}))
+                .addExtraItems(ByteString.copyFrom(new byte[] {4, 5, 6, 7}))
+                .build();
 
         assertThat(lpb.totalSize()).isEqualTo(pbb.getSerializedSize());
         lpb.writeTo(bb1);

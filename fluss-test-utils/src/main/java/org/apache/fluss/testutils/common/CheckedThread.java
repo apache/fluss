@@ -119,10 +119,8 @@ public abstract class CheckedThread extends Thread {
 
     private void checkFinished() throws Exception {
         if (getState() != State.TERMINATED) {
-            throw new Exception(
-                    String.format(
-                            "%s[name = %s] has not finished!",
-                            this.getClass().getSimpleName(), getName()));
+            throw new Exception(String.format(
+                    "%s[name = %s] has not finished!", this.getClass().getSimpleName(), getName()));
         }
     }
 }

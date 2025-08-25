@@ -82,9 +82,7 @@ class TableBucketStateMachineTest {
     @BeforeAll
     static void baseBeforeAll() {
         zookeeperClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+                ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getZooKeeperClient(NOPErrorHandler.INSTANCE);
     }
 
     @BeforeEach
@@ -94,19 +92,15 @@ class TableBucketStateMachineTest {
         conf.setString(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
         coordinatorContext = new CoordinatorContext();
         testCoordinatorChannelManager = new TestCoordinatorChannelManager();
-        coordinatorRequestBatch =
-                new CoordinatorRequestBatch(
-                        testCoordinatorChannelManager,
-                        event -> {
-                            // do nothing
-                        },
-                        coordinatorContext);
+        coordinatorRequestBatch = new CoordinatorRequestBatch(
+                testCoordinatorChannelManager,
+                event -> {
+                    // do nothing
+                },
+                coordinatorContext);
         serverMetadataCache = new CoordinatorMetadataCache();
-        autoPartitionManager =
-                new AutoPartitionManager(
-                        serverMetadataCache,
-                        new MetadataManager(zookeeperClient, new Configuration()),
-                        new Configuration());
+        autoPartitionManager = new AutoPartitionManager(
+                serverMetadataCache, new MetadataManager(zookeeperClient, new Configuration()), new Configuration());
         lakeTableTieringManager = new LakeTableTieringManager();
     }
 
@@ -121,8 +115,7 @@ class TableBucketStateMachineTest {
         coordinatorContext.putTablePath(t1Id, TablePath.of("db1", "t1"));
         coordinatorContext.putTablePath(t2Id, TablePath.of("db1", "t2"));
 
-        coordinatorContext.setLiveTabletServers(
-                CoordinatorTestUtils.createServers(Arrays.asList(0, 1, 3)));
+        coordinatorContext.setLiveTabletServers(CoordinatorTestUtils.createServers(Arrays.asList(0, 1, 3)));
         CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
                 coordinatorContext, testCoordinatorChannelManager);
         // set assignments
@@ -169,10 +162,8 @@ class TableBucketStateMachineTest {
         TableBucket tableBucket1 = new TableBucket(tableId, 1);
 
         // NonExistent to Online/Offline is invalid, shouldn't do state transmit
-        tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tableBucket0), OnlineBucket);
-        tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tableBucket1), OfflineBucket);
+        tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket0), OnlineBucket);
+        tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket1), OfflineBucket);
 
         // check it
         assertThat(coordinatorContext.getBucketState(tableBucket0)).isEqualTo(NonExistentBucket);
@@ -186,14 +177,13 @@ class TableBucketStateMachineTest {
         // init a table bucket assignment to coordinator context
         long tableId = 4;
         TableBucket tableBucket = new TableBucket(tableId, 0);
-        coordinatorContext.putTableInfo(
-                TableInfo.of(
-                        fakeTablePath,
-                        tableId,
-                        0,
-                        DATA1_TABLE_DESCRIPTOR,
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis()));
+        coordinatorContext.putTableInfo(TableInfo.of(
+                fakeTablePath,
+                tableId,
+                0,
+                DATA1_TABLE_DESCRIPTOR,
+                System.currentTimeMillis(),
+                System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, fakeTablePath);
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketState(tableBucket, NewBucket);
@@ -203,8 +193,7 @@ class TableBucketStateMachineTest {
         assertThat(coordinatorContext.getBucketState(tableBucket)).isEqualTo(NewBucket);
 
         // now, we set 3 live servers
-        coordinatorContext.setLiveTabletServers(
-                CoordinatorTestUtils.createServers(Arrays.asList(0, 1, 2)));
+        coordinatorContext.setLiveTabletServers(CoordinatorTestUtils.createServers(Arrays.asList(0, 1, 2)));
         CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
                 coordinatorContext, testCoordinatorChannelManager);
 
@@ -217,8 +206,7 @@ class TableBucketStateMachineTest {
 
         // case2: assuming the leader replica fail(we remove it to server list),
         // we need elect another replica,
-        coordinatorContext.setLiveTabletServers(
-                CoordinatorTestUtils.createServers(Arrays.asList(1, 2)));
+        coordinatorContext.setLiveTabletServers(CoordinatorTestUtils.createServers(Arrays.asList(1, 2)));
 
         tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket), OnlineBucket);
         // check state is online
@@ -230,8 +218,7 @@ class TableBucketStateMachineTest {
 
         // case4: the leader replica fail, but non replicas is available
         coordinatorContext.putBucketState(tableBucket, OfflineBucket);
-        coordinatorContext.setLiveTabletServers(
-                CoordinatorTestUtils.createServers(Collections.emptyList()));
+        coordinatorContext.setLiveTabletServers(CoordinatorTestUtils.createServers(Collections.emptyList()));
         tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket), OnlineBucket);
         // the state will still be offline
         assertThat(coordinatorContext.getBucketState(tableBucket)).isEqualTo(OfflineBucket);
@@ -239,35 +226,26 @@ class TableBucketStateMachineTest {
         // case5: new to online, but the leader and the follower fail, should elect a new leader
         // we need to create the state machine with an event manager so that the fail request
         // will be handled by which will then cause electing a new leader
-        CoordinatorEventProcessor coordinatorEventProcessor =
-                new CoordinatorEventProcessor(
-                        zookeeperClient,
-                        serverMetadataCache,
-                        new CoordinatorChannelManager(
-                                RpcClient.create(
-                                        new Configuration(),
-                                        TestingClientMetricGroup.newInstance(),
-                                        false)),
-                        coordinatorContext,
-                        autoPartitionManager,
-                        lakeTableTieringManager,
-                        TestingMetricGroups.COORDINATOR_METRICS,
-                        new Configuration(),
-                        Executors.newFixedThreadPool(
-                                1, new ExecutorThreadFactory("test-coordinator-io")));
+        CoordinatorEventProcessor coordinatorEventProcessor = new CoordinatorEventProcessor(
+                zookeeperClient,
+                serverMetadataCache,
+                new CoordinatorChannelManager(
+                        RpcClient.create(new Configuration(), TestingClientMetricGroup.newInstance(), false)),
+                coordinatorContext,
+                autoPartitionManager,
+                lakeTableTieringManager,
+                TestingMetricGroups.COORDINATOR_METRICS,
+                new Configuration(),
+                Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")));
         CoordinatorEventManager eventManager =
-                new CoordinatorEventManager(
-                        coordinatorEventProcessor, TestingMetricGroups.COORDINATOR_METRICS);
+                new CoordinatorEventManager(coordinatorEventProcessor, TestingMetricGroups.COORDINATOR_METRICS);
         coordinatorRequestBatch =
-                new CoordinatorRequestBatch(
-                        testCoordinatorChannelManager, eventManager, coordinatorContext);
+                new CoordinatorRequestBatch(testCoordinatorChannelManager, eventManager, coordinatorContext);
         tableBucketStateMachine =
-                new TableBucketStateMachine(
-                        coordinatorContext, coordinatorRequestBatch, zookeeperClient);
+                new TableBucketStateMachine(coordinatorContext, coordinatorRequestBatch, zookeeperClient);
         eventManager.start();
 
-        coordinatorContext.setLiveTabletServers(
-                CoordinatorTestUtils.createServers(Arrays.asList(0, 1, 2)));
+        coordinatorContext.setLiveTabletServers(CoordinatorTestUtils.createServers(Arrays.asList(0, 1, 2)));
         CoordinatorTestUtils.makeSendLeaderAndStopRequestFailContext(
                 coordinatorContext, testCoordinatorChannelManager, Sets.newHashSet(0, 2));
         // init a table bucket assignment to coordinator context
@@ -276,17 +254,13 @@ class TableBucketStateMachineTest {
         coordinatorContext.putTablePath(tableId, fakeTablePath);
         coordinatorContext.updateBucketReplicaAssignment(tableBucket1, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketState(tableBucket1, NewBucket);
-        tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tableBucket1), OnlineBucket);
+        tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket1), OnlineBucket);
         // retry util the leader has changed to 1
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    Optional<LeaderAndIsr> leaderAndIsrOpt =
-                            coordinatorContext.getBucketLeaderAndIsr(tableBucket1);
-                    assertThat(leaderAndIsrOpt).isPresent();
-                    assertThat(leaderAndIsrOpt.get().leader()).isEqualTo(1);
-                });
+        retry(Duration.ofMinutes(1), () -> {
+            Optional<LeaderAndIsr> leaderAndIsrOpt = coordinatorContext.getBucketLeaderAndIsr(tableBucket1);
+            assertThat(leaderAndIsrOpt).isPresent();
+            assertThat(leaderAndIsrOpt.get().leader()).isEqualTo(1);
+        });
 
         // check state is online
         assertThat(coordinatorContext.getBucketState(tableBucket1)).isEqualTo(OnlineBucket);
@@ -303,24 +277,19 @@ class TableBucketStateMachineTest {
         coordinatorContext.putBucketState(tableBucket0, OnlineBucket);
         coordinatorContext.putBucketState(tableBucket1, OnlineBucket);
 
-        tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tableBucket0), OfflineBucket);
-        tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tableBucket0), NonExistentBucket);
+        tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket0), OfflineBucket);
+        tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket0), NonExistentBucket);
         // bucket 0 should be removed
         assertThat(coordinatorContext.getBucketState(tableBucket0)).isNull();
         // bucket 1 should still exist
         assertThat(coordinatorContext.getBucketState(tableBucket1)).isNotNull();
 
-        tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tableBucket1), OfflineBucket);
-        tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tableBucket1), NonExistentBucket);
+        tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket1), OfflineBucket);
+        tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket1), NonExistentBucket);
         assertThat(coordinatorContext.getBucketState(tableBucket0)).isNull();
     }
 
     private TableBucketStateMachine createTableBucketStateMachine() {
-        return new TableBucketStateMachine(
-                coordinatorContext, coordinatorRequestBatch, zookeeperClient);
+        return new TableBucketStateMachine(coordinatorContext, coordinatorRequestBatch, zookeeperClient);
     }
 }

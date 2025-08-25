@@ -38,8 +38,7 @@ public final class LogOffsetMetadata {
 
     private static final long UNIFIED_LOG_UNKNOWN_OFFSET = -1L;
     private static final int UNKNOWN_FILE_POSITION = -1;
-    public static final LogOffsetMetadata UNKNOWN_OFFSET_METADATA =
-            new LogOffsetMetadata(UNKNOWN_OFFSET, 0L, 0);
+    public static final LogOffsetMetadata UNKNOWN_OFFSET_METADATA = new LogOffsetMetadata(UNKNOWN_OFFSET, 0L, 0);
 
     private final long messageOffset;
     private final long segmentBaseOffset;
@@ -49,8 +48,7 @@ public final class LogOffsetMetadata {
         this(messageOffset, UNIFIED_LOG_UNKNOWN_OFFSET, UNKNOWN_FILE_POSITION);
     }
 
-    public LogOffsetMetadata(
-            long messageOffset, long segmentBaseOffset, int relativePositionInSegment) {
+    public LogOffsetMetadata(long messageOffset, long segmentBaseOffset, int relativePositionInSegment) {
         this.messageOffset = messageOffset;
         this.segmentBaseOffset = segmentBaseOffset;
         this.relativePositionInSegment = relativePositionInSegment;
@@ -74,19 +72,15 @@ public final class LogOffsetMetadata {
      */
     public int positionDiff(LogOffsetMetadata that) {
         if (messageOffsetOnly()) {
-            throw new FlussRuntimeException(
-                    this
-                            + " cannot compare its message offset with "
-                            + that
-                            + " since it only has message offset info.");
+            throw new FlussRuntimeException(this
+                    + " cannot compare its message offset with "
+                    + that
+                    + " since it only has message offset info.");
         }
 
         if (!onSameSegment(that)) {
             throw new FlussRuntimeException(
-                    this
-                            + " is not on the same segment with "
-                            + that
-                            + " since they are not on the same segment.");
+                    this + " is not on the same segment with " + that + " since they are not on the same segment.");
         }
 
         return this.relativePositionInSegment - that.relativePositionInSegment;
@@ -96,18 +90,14 @@ public final class LogOffsetMetadata {
     public boolean onOlderSegment(LogOffsetMetadata that) {
         if (messageOffsetOnly()) {
             throw new FlussRuntimeException(
-                    this
-                            + " cannot compare its segment info with "
-                            + that
-                            + " since it only has message offset info.");
+                    this + " cannot compare its segment info with " + that + " since it only has message offset info.");
         }
         return this.segmentBaseOffset < that.segmentBaseOffset;
     }
 
     // decide if the offset metadata only contains message offset info
     public boolean messageOffsetOnly() {
-        return segmentBaseOffset == UNIFIED_LOG_UNKNOWN_OFFSET
-                && relativePositionInSegment == UNKNOWN_FILE_POSITION;
+        return segmentBaseOffset == UNIFIED_LOG_UNKNOWN_OFFSET && relativePositionInSegment == UNKNOWN_FILE_POSITION;
     }
 
     // check if this offset is on the same segment with the given offset
@@ -117,13 +107,7 @@ public final class LogOffsetMetadata {
 
     @Override
     public String toString() {
-        return "(offset="
-                + messageOffset
-                + ", segment=["
-                + segmentBaseOffset
-                + ":"
-                + relativePositionInSegment
-                + "])";
+        return "(offset=" + messageOffset + ", segment=[" + segmentBaseOffset + ":" + relativePositionInSegment + "])";
     }
 
     @Override

@@ -73,22 +73,17 @@ public abstract class MemorySegmentTestBase {
     @TestTemplate
     public void testByteAccess() {
         // test exceptions.
-        assertThatThrownBy(() -> segment.put(-1, (byte) 0))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.put(pageSize, (byte) 0))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.put(-1, (byte) 0)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.put(pageSize, (byte) 0)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.put(Integer.MAX_VALUE, (byte) 0))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.put(Integer.MIN_VALUE, (byte) 0))
                 .isInstanceOf(IndexOutOfBoundsException.class);
 
         assertThatThrownBy(() -> segment.get(-1)).isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.get(pageSize))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.get(Integer.MAX_VALUE))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.get(Integer.MIN_VALUE))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.get(pageSize)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.get(Integer.MAX_VALUE)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.get(Integer.MIN_VALUE)).isInstanceOf(IndexOutOfBoundsException.class);
 
         // test expected correct behavior, random access.
         long seed = random.nextLong();
@@ -137,23 +132,17 @@ public abstract class MemorySegmentTestBase {
     @TestTemplate
     public void testBooleanAccess() {
         // test exceptions.
-        assertThatThrownBy(() -> segment.putBoolean(-1, false))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.putBoolean(pageSize, false))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.putBoolean(-1, false)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.putBoolean(pageSize, false)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.putBoolean(Integer.MAX_VALUE, false))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.putBoolean(Integer.MIN_VALUE, false))
                 .isInstanceOf(IndexOutOfBoundsException.class);
 
-        assertThatThrownBy(() -> segment.getBoolean(-1))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.getBoolean(pageSize))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.getBoolean(Integer.MAX_VALUE))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.getBoolean(Integer.MIN_VALUE))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.getBoolean(-1)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.getBoolean(pageSize)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.getBoolean(Integer.MAX_VALUE)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.getBoolean(Integer.MIN_VALUE)).isInstanceOf(IndexOutOfBoundsException.class);
 
         // test expected correct behavior, sequential access.
         long seed = random.nextLong();
@@ -211,10 +200,8 @@ public abstract class MemorySegmentTestBase {
         assertThatThrownBy(() -> segment.putShortNativeEndian(Integer.MIN_VALUE, (short) 0))
                 .isInstanceOf(IndexOutOfBoundsException.class);
 
-        assertThatThrownBy(() -> segment.getShortNativeEndian(-1))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.getShortNativeEndian(pageSize))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.getShortNativeEndian(-1)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.getShortNativeEndian(pageSize)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.getShortNativeEndian(Integer.MAX_VALUE))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.getShortNativeEndian(Integer.MIN_VALUE))
@@ -268,19 +255,15 @@ public abstract class MemorySegmentTestBase {
     @TestTemplate
     public void testIntAccess() {
         // test exceptions.
-        assertThatThrownBy(() -> segment.putIntNativeEndian(-1, 0))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.putIntNativeEndian(pageSize, 0))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.putIntNativeEndian(-1, 0)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.putIntNativeEndian(pageSize, 0)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.putIntNativeEndian(Integer.MAX_VALUE - 3, 0))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.putIntNativeEndian(Integer.MIN_VALUE, 0))
                 .isInstanceOf(IndexOutOfBoundsException.class);
 
-        assertThatThrownBy(() -> segment.getIntNativeEndian(-1))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.getIntNativeEndian(pageSize))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.getIntNativeEndian(-1)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.getIntNativeEndian(pageSize)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.getIntNativeEndian(Integer.MAX_VALUE - 3))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.getIntNativeEndian(Integer.MIN_VALUE))
@@ -339,8 +322,7 @@ public abstract class MemorySegmentTestBase {
     @TestTemplate
     public void testLongAccess() {
         // test exceptions.
-        assertThatThrownBy(() -> segment.putLongNativeEndian(-1, 0L))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.putLongNativeEndian(-1, 0L)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.putLongNativeEndian(pageSize, 0L))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.putLongNativeEndian(Integer.MAX_VALUE - 7, 0L))
@@ -348,10 +330,8 @@ public abstract class MemorySegmentTestBase {
         assertThatThrownBy(() -> segment.putLongNativeEndian(Integer.MIN_VALUE, 0L))
                 .isInstanceOf(IndexOutOfBoundsException.class);
 
-        assertThatThrownBy(() -> segment.getLongNativeEndian(-1))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.getLongNativeEndian(pageSize))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.getLongNativeEndian(-1)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.getLongNativeEndian(pageSize)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.getLongNativeEndian(Integer.MAX_VALUE - 7))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.getLongNativeEndian(Integer.MIN_VALUE))
@@ -432,8 +412,7 @@ public abstract class MemorySegmentTestBase {
     @TestTemplate
     public void testFloatAccess() {
         // test exceptions.
-        assertThatThrownBy(() -> segment.putFloatNativeEndian(-1, 0.0f))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.putFloatNativeEndian(-1, 0.0f)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.putFloatNativeEndian(pageSize, 0.0f))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.putFloatNativeEndian(Integer.MAX_VALUE - 3, 0.0f))
@@ -441,10 +420,8 @@ public abstract class MemorySegmentTestBase {
         assertThatThrownBy(() -> segment.putFloatNativeEndian(Integer.MIN_VALUE, 0.0f))
                 .isInstanceOf(IndexOutOfBoundsException.class);
 
-        assertThatThrownBy(() -> segment.getFloatNativeEndian(-1))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.getFloatNativeEndian(pageSize))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.getFloatNativeEndian(-1)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.getFloatNativeEndian(pageSize)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.getFloatNativeEndian(Integer.MAX_VALUE - 3))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.getFloatNativeEndian(Integer.MIN_VALUE))
@@ -460,9 +437,7 @@ public abstract class MemorySegmentTestBase {
         random.setSeed(seed);
         for (int i = 0; i <= pageSize - 4; i += 4) {
             assertThat(random.nextFloat())
-                    .isCloseTo(
-                            segment.getFloatNativeEndian(i),
-                            Offset.offset(Float.parseFloat("0.0")));
+                    .isCloseTo(segment.getFloatNativeEndian(i), Offset.offset(Float.parseFloat("0.0")));
         }
 
         // test expected correct behavior, random access
@@ -500,17 +475,14 @@ public abstract class MemorySegmentTestBase {
             }
 
             assertThat(random.nextFloat())
-                    .isCloseTo(
-                            segment.getFloatNativeEndian(pos),
-                            Offset.offset(Float.parseFloat("0.0")));
+                    .isCloseTo(segment.getFloatNativeEndian(pos), Offset.offset(Float.parseFloat("0.0")));
         }
     }
 
     @TestTemplate
     public void testDoubleAccess() {
         // test exceptions.
-        assertThatThrownBy(() -> segment.putDoubleNativeEndian(-1, 0.0))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.putDoubleNativeEndian(-1, 0.0)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.putDoubleNativeEndian(pageSize, 0.0))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.putDoubleNativeEndian(Integer.MAX_VALUE - 7, 0.0))
@@ -518,10 +490,8 @@ public abstract class MemorySegmentTestBase {
         assertThatThrownBy(() -> segment.putDoubleNativeEndian(Integer.MIN_VALUE, 0.0))
                 .isInstanceOf(IndexOutOfBoundsException.class);
 
-        assertThatThrownBy(() -> segment.getDoubleNativeEndian(-1))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.getDoubleNativeEndian(pageSize))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.getDoubleNativeEndian(-1)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.getDoubleNativeEndian(pageSize)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.getDoubleNativeEndian(Integer.MAX_VALUE - 7))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.getDoubleNativeEndian(Integer.MIN_VALUE))
@@ -536,8 +506,7 @@ public abstract class MemorySegmentTestBase {
 
         random.setSeed(seed);
         for (int i = 0; i <= pageSize - 8; i += 8) {
-            assertThat(random.nextDouble())
-                    .isCloseTo(segment.getDoubleNativeEndian(i), Offset.offset(0.0));
+            assertThat(random.nextDouble()).isCloseTo(segment.getDoubleNativeEndian(i), Offset.offset(0.0));
         }
 
         // test expected correct behavior, random access.
@@ -596,8 +565,7 @@ public abstract class MemorySegmentTestBase {
                 occupied[pos + 7] = true;
             }
 
-            assertThat(random.nextDouble())
-                    .isCloseTo(segment.getDoubleNativeEndian(pos), Offset.offset(0.0));
+            assertThat(random.nextDouble()).isCloseTo(segment.getDoubleNativeEndian(pos), Offset.offset(0.0));
         }
     }
 
@@ -643,24 +611,16 @@ public abstract class MemorySegmentTestBase {
         random.nextBytes(bytes);
 
         // wrong positions into memory segment.
-        assertThatThrownBy(() -> segment.put(-1, bytes))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.put(-1, bytes, 4, 5))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.put(Integer.MIN_VALUE, bytes))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.put(pageSize, bytes))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.put(pageSize, bytes, 6, 44))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.put(pageSize, bytes, 6, 44))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.put(-1, bytes)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.put(-1, bytes, 4, 5)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.put(Integer.MIN_VALUE, bytes)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.put(pageSize, bytes)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.put(pageSize, bytes, 6, 44)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.put(pageSize, bytes, 6, 44)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.put(pageSize - bytes.length + 1, bytes))
                 .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.put(pageSize - 5, bytes, 3, 6))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.put(Integer.MAX_VALUE, bytes))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.put(pageSize - 5, bytes, 3, 6)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.put(Integer.MAX_VALUE, bytes)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.put(Integer.MAX_VALUE, bytes, 10, 20))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.put(Integer.MAX_VALUE - bytes.length + 1, bytes))
@@ -673,8 +633,7 @@ public abstract class MemorySegmentTestBase {
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.put(7 * (pageSize / 8) + 1, bytes, 0, bytes.length / 2))
                 .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.put(0, bytes, -1, 1))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.put(0, bytes, -1, 1)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.put(0, bytes, -1, bytes.length + 1))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.put(0, bytes, Integer.MIN_VALUE, bytes.length))
@@ -687,22 +646,16 @@ public abstract class MemorySegmentTestBase {
     public void testBulkByteGetExceptions() {
         byte[] bytes = new byte[pageSize / 4];
 
-        assertThatThrownBy(() -> segment.get(-1, bytes))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.get(-1, bytes, 4, 5))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.get(Integer.MIN_VALUE, bytes))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.get(-1, bytes)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.get(-1, bytes, 4, 5)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.get(Integer.MIN_VALUE, bytes)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.get(Integer.MIN_VALUE, bytes, 4, 5))
                 .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.get(pageSize, bytes))
-                .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.get(pageSize, bytes, 6, 44))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.get(pageSize, bytes)).isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.get(pageSize, bytes, 6, 44)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.get(pageSize - bytes.length + 1, bytes))
                 .isInstanceOf(IndexOutOfBoundsException.class);
-        assertThatThrownBy(() -> segment.get(pageSize - 5, bytes, 3, 6))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> segment.get(pageSize - 5, bytes, 3, 6)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.get(Integer.MAX_VALUE, bytes, 10, 20))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> segment.get(Integer.MAX_VALUE - bytes.length + 1, bytes))
@@ -847,8 +800,7 @@ public abstract class MemorySegmentTestBase {
 
         // out of bounds when writing.
         DataOutputStream out = new DataOutputStream(new ByteArrayOutputStream());
-        assertThatThrownBy(() -> seg.get(out, -1, segmentSize / 2))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> seg.get(out, -1, segmentSize / 2)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> seg.get(out, segmentSize, segmentSize / 2))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> seg.get(out, -segmentSize, segmentSize / 2))
@@ -860,8 +812,7 @@ public abstract class MemorySegmentTestBase {
 
         // out of bounds when reading.
         DataInputStream in = new DataInputStream(new ByteArrayInputStream(new byte[segmentSize]));
-        assertThatThrownBy(() -> seg.put(in, -1, segmentSize / 2))
-                .isInstanceOf(IndexOutOfBoundsException.class);
+        assertThatThrownBy(() -> seg.put(in, -1, segmentSize / 2)).isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> seg.put(in, segmentSize, segmentSize / 2))
                 .isInstanceOf(IndexOutOfBoundsException.class);
         assertThatThrownBy(() -> seg.put(in, -segmentSize, segmentSize / 2))
@@ -882,46 +833,41 @@ public abstract class MemorySegmentTestBase {
         seg.put(0, bytes);
 
         // a stream that we cannot fully write to.
-        DataOutputStream out =
-                new DataOutputStream(
-                        new OutputStream() {
+        DataOutputStream out = new DataOutputStream(new OutputStream() {
 
-                            int bytesSoFar = 0;
+            int bytesSoFar = 0;
 
-                            @Override
-                            public void write(int b) throws IOException {
-                                bytesSoFar++;
-                                if (bytesSoFar > segmentSize / 2) {
-                                    throw new IOException("overflow");
-                                }
-                            }
-                        });
+            @Override
+            public void write(int b) throws IOException {
+                bytesSoFar++;
+                if (bytesSoFar > segmentSize / 2) {
+                    throw new IOException("overflow");
+                }
+            }
+        });
 
-        assertThatThrownBy(
-                        () -> {
-                            int pos = 0;
-                            while (pos < pageSize) {
-                                int len = random.nextInt(segmentSize / 10);
-                                len = Math.min(len, pageSize - pos);
-                                seg.get(out, pos, len);
-                                pos += len;
-                            }
-                        })
+        assertThatThrownBy(() -> {
+                    int pos = 0;
+                    while (pos < pageSize) {
+                        int len = random.nextInt(segmentSize / 10);
+                        len = Math.min(len, pageSize - pos);
+                        seg.get(out, pos, len);
+                        pos += len;
+                    }
+                })
                 .isInstanceOf(IOException.class);
 
-        DataInputStream in =
-                new DataInputStream(new ByteArrayInputStream(new byte[segmentSize / 2]));
+        DataInputStream in = new DataInputStream(new ByteArrayInputStream(new byte[segmentSize / 2]));
 
-        assertThatThrownBy(
-                        () -> {
-                            int pos = 0;
-                            while (pos < pageSize) {
-                                int len = random.nextInt(segmentSize / 10);
-                                len = Math.min(len, pageSize - pos);
-                                seg.put(in, pos, len);
-                                pos += len;
-                            }
-                        })
+        assertThatThrownBy(() -> {
+                    int pos = 0;
+                    while (pos < pageSize) {
+                        int len = random.nextInt(segmentSize / 10);
+                        len = Math.min(len, pageSize - pos);
+                        seg.put(in, pos, len);
+                        pos += len;
+                    }
+                })
                 .isInstanceOf(IOException.class);
     }
 
@@ -937,10 +883,8 @@ public abstract class MemorySegmentTestBase {
 
     @TestTemplate
     public void testByteBufferGetReadOnly() {
-        assertThatThrownBy(() -> testByteBufferGetReadOnly(false))
-                .isInstanceOf(ReadOnlyBufferException.class);
-        assertThatThrownBy(() -> testByteBufferGetReadOnly(true))
-                .isInstanceOf(ReadOnlyBufferException.class);
+        assertThatThrownBy(() -> testByteBufferGetReadOnly(false)).isInstanceOf(ReadOnlyBufferException.class);
+        assertThatThrownBy(() -> testByteBufferGetReadOnly(true)).isInstanceOf(ReadOnlyBufferException.class);
     }
 
     @TestTemplate
@@ -973,26 +917,19 @@ public abstract class MemorySegmentTestBase {
     public void testByteBufferOutOfBounds() {
         final int bbCapacity = pageSize / 10;
         final int[] validOffsets = {0, 1, pageSize / 10 * 9};
-        final int[] invalidOffsets = {
-            -1, pageSize + 1, -pageSize, Integer.MAX_VALUE, Integer.MIN_VALUE
-        };
+        final int[] invalidOffsets = {-1, pageSize + 1, -pageSize, Integer.MAX_VALUE, Integer.MIN_VALUE};
 
         final int[] validLengths = {0, 1, bbCapacity, pageSize};
         final int[] invalidLengths = {-1, -pageSize, Integer.MAX_VALUE, Integer.MIN_VALUE};
 
         for (ByteBuffer bb :
-                new ByteBuffer[] {
-                    ByteBuffer.allocate(bbCapacity), ByteBuffer.allocateDirect(bbCapacity)
-                }) {
+                new ByteBuffer[] {ByteBuffer.allocate(bbCapacity), ByteBuffer.allocateDirect(bbCapacity)}) {
             for (int off : validOffsets) {
                 for (int len : invalidLengths) {
                     assertThatThrownBy(() -> segment.put(off, bb, len))
-                            .isInstanceOfAny(
-                                    IndexOutOfBoundsException.class,
-                                    BufferUnderflowException.class);
+                            .isInstanceOfAny(IndexOutOfBoundsException.class, BufferUnderflowException.class);
                     assertThatThrownBy(() -> segment.get(off, bb, len))
-                            .isInstanceOfAny(
-                                    IndexOutOfBoundsException.class, BufferOverflowException.class);
+                            .isInstanceOfAny(IndexOutOfBoundsException.class, BufferOverflowException.class);
 
                     // position/limit may not have changed.
                     assertThat(bb.position()).isEqualTo(0);
@@ -1003,12 +940,9 @@ public abstract class MemorySegmentTestBase {
             for (int off : invalidOffsets) {
                 for (int len : validLengths) {
                     assertThatThrownBy(() -> segment.put(off, bb, len))
-                            .isInstanceOfAny(
-                                    IndexOutOfBoundsException.class,
-                                    BufferUnderflowException.class);
+                            .isInstanceOfAny(IndexOutOfBoundsException.class, BufferUnderflowException.class);
                     assertThatThrownBy(() -> segment.get(off, bb, len))
-                            .isInstanceOfAny(
-                                    IndexOutOfBoundsException.class, BufferOverflowException.class);
+                            .isInstanceOfAny(IndexOutOfBoundsException.class, BufferOverflowException.class);
 
                     // position/limit may not have changed.
                     assertThat(bb.position()).isEqualTo(0);
@@ -1020,13 +954,9 @@ public abstract class MemorySegmentTestBase {
                 for (int len : validLengths) {
                     if (off + len > pageSize) {
                         assertThatThrownBy(() -> segment.put(off, bb, len))
-                                .isInstanceOfAny(
-                                        IndexOutOfBoundsException.class,
-                                        BufferUnderflowException.class);
+                                .isInstanceOfAny(IndexOutOfBoundsException.class, BufferUnderflowException.class);
                         assertThatThrownBy(() -> segment.get(off, bb, len))
-                                .isInstanceOfAny(
-                                        IndexOutOfBoundsException.class,
-                                        BufferOverflowException.class);
+                                .isInstanceOfAny(IndexOutOfBoundsException.class, BufferOverflowException.class);
 
                         // position/limit may not have changed.
                         assertThat(bb.position()).isEqualTo(0);
@@ -1106,10 +1036,7 @@ public abstract class MemorySegmentTestBase {
             int pos1 = random.nextInt(bytes1.length);
             int pos2 = random.nextInt(bytes2.length);
 
-            int len =
-                    Math.min(
-                            Math.min(bytes1.length - pos1, bytes2.length - pos2),
-                            random.nextInt(pageSize / 50));
+            int len = Math.min(Math.min(bytes1.length - pos1, bytes2.length - pos2), random.nextInt(pageSize / 50));
 
             int cmp = seg1.compare(seg2, pos1, pos2, len);
 
@@ -1255,10 +1182,7 @@ public abstract class MemorySegmentTestBase {
         random.nextBytes(bytes);
         seg.put(0, bytes);
 
-        ByteBuffer target =
-                directBuffer
-                        ? ByteBuffer.allocateDirect(3 * pageSize)
-                        : ByteBuffer.allocate(3 * pageSize);
+        ByteBuffer target = directBuffer ? ByteBuffer.allocateDirect(3 * pageSize) : ByteBuffer.allocate(3 * pageSize);
         target.position(2 * pageSize);
 
         // transfer the segment in chunks into the byte buffer.
@@ -1280,8 +1204,7 @@ public abstract class MemorySegmentTestBase {
     private void testByteBufferGetReadOnly(boolean directBuffer) throws ReadOnlyBufferException {
         MemorySegment seg = createSegment(pageSize);
         ByteBuffer target =
-                (directBuffer ? ByteBuffer.allocateDirect(pageSize) : ByteBuffer.allocate(pageSize))
-                        .asReadOnlyBuffer();
+                (directBuffer ? ByteBuffer.allocateDirect(pageSize) : ByteBuffer.allocate(pageSize)).asReadOnlyBuffer();
         seg.get(0, target, pageSize);
     }
 
@@ -1289,8 +1212,7 @@ public abstract class MemorySegmentTestBase {
         byte[] bytes = new byte[pageSize];
         random.nextBytes(bytes);
 
-        ByteBuffer source =
-                directBuffer ? ByteBuffer.allocateDirect(pageSize) : ByteBuffer.allocate(pageSize);
+        ByteBuffer source = directBuffer ? ByteBuffer.allocateDirect(pageSize) : ByteBuffer.allocate(pageSize);
 
         source.put(bytes);
         source.clear();
@@ -1321,9 +1243,7 @@ public abstract class MemorySegmentTestBase {
         seg.put(0, bytes);
 
         ByteBuffer target =
-                directBuffer
-                        ? ByteBuffer.allocateDirect(pageSize + 49)
-                        : ByteBuffer.allocate(pageSize + 49);
+                directBuffer ? ByteBuffer.allocateDirect(pageSize + 49) : ByteBuffer.allocate(pageSize + 49);
 
         target.position(19).limit(19 + pageSize);
 
@@ -1350,9 +1270,7 @@ public abstract class MemorySegmentTestBase {
         random.nextBytes(bytes);
 
         ByteBuffer source =
-                directBuffer
-                        ? ByteBuffer.allocateDirect(pageSize + 49)
-                        : ByteBuffer.allocate(pageSize + 49);
+                directBuffer ? ByteBuffer.allocateDirect(pageSize + 49) : ByteBuffer.allocate(pageSize + 49);
 
         source.put(bytes);
         source.position(19).limit(19 + pageSize);
@@ -1385,7 +1303,6 @@ public abstract class MemorySegmentTestBase {
 
     @Parameters(name = "segment-size = {0}")
     public static Collection<Object[]> executionModes() {
-        return Arrays.asList(
-                new Object[] {32 * 1024}, new Object[] {4 * 1024}, new Object[] {512 * 1024});
+        return Arrays.asList(new Object[] {32 * 1024}, new Object[] {4 * 1024}, new Object[] {512 * 1024});
     }
 }

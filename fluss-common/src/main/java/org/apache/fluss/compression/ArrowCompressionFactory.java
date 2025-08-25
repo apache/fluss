@@ -64,8 +64,7 @@ public class ArrowCompressionFactory implements CompressionCodec.Factory {
         }
     }
 
-    public static CompressionUtil.CodecType toArrowCompressionCodecType(
-            ArrowCompressionType compressionType) {
+    public static CompressionUtil.CodecType toArrowCompressionCodecType(ArrowCompressionType compressionType) {
         switch (compressionType) {
             case NONE:
                 return CompressionUtil.CodecType.NO_COMPRESSION;
@@ -74,8 +73,7 @@ public class ArrowCompressionFactory implements CompressionCodec.Factory {
             case ZSTD:
                 return CompressionUtil.CodecType.ZSTD;
             default:
-                throw new IllegalArgumentException(
-                        "Arrow compression type not supported: " + compressionType);
+                throw new IllegalArgumentException("Arrow compression type not supported: " + compressionType);
         }
     }
 }

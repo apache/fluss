@@ -91,9 +91,7 @@ public class FlinkRowToFlussRowConverter implements AutoCloseable {
     public InternalRow toInternalRow(RowData rowData) {
         rowEncoder.startNewRow();
         for (int i = 0; i < fieldLength; i++) {
-            rowEncoder.encodeField(
-                    i,
-                    toFlussFieldConverters[i].serialize(fieldGetters[i].getFieldOrNull(rowData)));
+            rowEncoder.encodeField(i, toFlussFieldConverters[i].serialize(fieldGetters[i].getFieldOrNull(rowData)));
         }
         return rowEncoder.finishRow();
     }
@@ -157,9 +155,7 @@ public class FlinkRowToFlussRowConverter implements AutoCloseable {
                 return (flinkField) -> {
                     DecimalData decimalData = (DecimalData) flinkField;
                     return Decimal.fromBigDecimal(
-                            decimalData.toBigDecimal(),
-                            decimalData.precision(),
-                            decimalData.scale());
+                            decimalData.toBigDecimal(), decimalData.precision(), decimalData.scale());
                 };
             case DATE:
             case TIME_WITHOUT_TIME_ZONE:
@@ -176,8 +172,7 @@ public class FlinkRowToFlussRowConverter implements AutoCloseable {
                             timestampData.getMillisecond(), timestampData.getNanoOfMillisecond());
                 };
             default:
-                throw new UnsupportedOperationException(
-                        "Fluss Unsupported data type: " + flinkDataType);
+                throw new UnsupportedOperationException("Fluss Unsupported data type: " + flinkDataType);
         }
     }
 }

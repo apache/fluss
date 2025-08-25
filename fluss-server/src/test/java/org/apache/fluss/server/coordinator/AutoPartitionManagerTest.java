@@ -71,9 +71,7 @@ class AutoPartitionManagerTest {
     @BeforeAll
     static void beforeAll() {
         zookeeperClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+                ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getZooKeeperClient(NOPErrorHandler.INSTANCE);
         metadataManager = new MetadataManager(zookeeperClient, new Configuration());
     }
 
@@ -85,218 +83,168 @@ class AutoPartitionManagerTest {
     static Stream<Arguments> parameters() {
         // numPreCreate = 4 (for table with single partition key only), numRetention = 2
         return Stream.of(
-                Arguments.of(
-                        TestParams.builder(AutoPartitionTimeUnit.HOUR)
-                                .startTime("2024-09-10T01:00:00")
-                                .expectedPartitions(
-                                        "2024091001", "2024091002", "2024091003", "2024091004")
-                                .manualCreatedPartition("2024091006")
-                                .manualDroppedPartition("2024091001")
-                                .advanceClock(c -> c.plusHours(3))
-                                // current partition is "2024091004"
-                                .expectedPartitionsAfterAdvance(
-                                        "2024091002",
-                                        "2024091003",
-                                        "2024091004",
-                                        "2024091005",
-                                        "2024091006",
-                                        "2024091007")
-                                .advanceClock2(c -> c.plusHours(2))
-                                .expectedPartitionsFinal(
-                                        "2024091004",
-                                        "2024091005",
-                                        "2024091006",
-                                        "2024091007",
-                                        "2024091008",
-                                        "2024091009")
-                                .build()),
-                Arguments.of(
-                        TestParams.builder(AutoPartitionTimeUnit.HOUR, true)
-                                .startTime("2024-09-10T01:00:00")
-                                // table with multiple partition keys not supports automatic
-                                // creation
-                                .expectedPartitions()
-                                .manualCreatedPartitions(
-                                        "2024091001$A",
-                                        "2024091001$B",
-                                        "2024091001$C",
-                                        "2024091002$A",
-                                        "2024091002$B",
-                                        "2024091003$A",
-                                        "2024091004$A",
-                                        "2024091005$A")
-                                .manualDroppedPartitions("2024091002$A")
-                                .advanceClock(c -> c.plusHours(3))
-                                // current time partition is "2024091004"
-                                .expectedPartitionsAfterAdvance(
-                                        "2024091002$B",
-                                        "2024091003$A",
-                                        "2024091004$A",
-                                        "2024091005$A")
-                                .advanceClock2(c -> c.plusHours(2))
-                                // current time partition is "2024091006"
-                                .expectedPartitionsFinal("2024091004$A", "2024091005$A")
-                                .build()),
-                Arguments.of(
-                        TestParams.builder(AutoPartitionTimeUnit.DAY)
-                                .startTime("2024-09-10T00:00:00")
-                                .expectedPartitions("20240910", "20240911", "20240912", "20240913")
-                                .manualCreatedPartition("20240915")
-                                .manualDroppedPartition("20240910")
-                                // plus 23 hours to make sure the partition can be created since
-                                // we introduce jitter for create day partition
-                                .advanceClock(c -> c.plusDays(3).plus(Duration.ofHours(23)))
-                                // current partition is "20240913", retain "20240911", "20240912"
-                                .expectedPartitionsAfterAdvance(
-                                        "20240911",
-                                        "20240912",
-                                        "20240913",
-                                        "20240914",
-                                        "20240915",
-                                        "20240916")
-                                .advanceClock2(c -> c.plusDays(2))
-                                .expectedPartitionsFinal(
-                                        "20240913",
-                                        "20240914",
-                                        "20240915",
-                                        "20240916",
-                                        "20240917",
-                                        "20240918")
-                                .build()),
-                Arguments.of(
-                        TestParams.builder(AutoPartitionTimeUnit.DAY, true)
-                                .startTime("2024-09-10T00:00:00")
-                                .expectedPartitions()
-                                .manualCreatedPartitions(
-                                        "20240910$A",
-                                        "20240910$B",
-                                        "20240910$C",
-                                        "20240911$A",
-                                        "20240911$B",
-                                        "20240912$A",
-                                        "20240913$A",
-                                        "20240914$A")
-                                .manualDroppedPartition("20240911$A")
-                                .advanceClock(c -> c.plusDays(3).plus(Duration.ofHours(23)))
-                                .expectedPartitionsAfterAdvance(
-                                        "20240911$B", "20240912$A", "20240913$A", "20240914$A")
-                                .advanceClock2(c -> c.plusDays(2))
-                                .expectedPartitionsFinal("20240913$A", "20240914$A")
-                                .build()),
-                Arguments.of(
-                        TestParams.builder(AutoPartitionTimeUnit.MONTH)
-                                .startTime("2024-09-10T00:00:00")
-                                .expectedPartitions("202409", "202410", "202411", "202412")
-                                .manualCreatedPartition("202502")
-                                .manualDroppedPartition("202409")
-                                .advanceClock(c -> c.plusMonths(3))
-                                // current partition is "202412", retain "202410", "202411"
-                                .expectedPartitionsAfterAdvance(
-                                        "202410", "202411", "202412", "202501", "202502", "202503")
-                                .advanceClock2(c -> c.plusMonths(2))
-                                .expectedPartitionsFinal(
-                                        "202412", "202501", "202502", "202503", "202504", "202505")
-                                .build()),
-                Arguments.of(
-                        TestParams.builder(AutoPartitionTimeUnit.MONTH, true)
-                                .startTime("2024-09-10T00:00:00")
-                                .expectedPartitions()
-                                .manualCreatedPartitions(
-                                        "202409$A",
-                                        "202409$B",
-                                        "202409$C",
-                                        "202410$A",
-                                        "202410$B",
-                                        "202411$A",
-                                        "202412$A",
-                                        "202413$A")
-                                .manualDroppedPartition("202410$A")
-                                .advanceClock(c -> c.plusMonths(3))
-                                // current partition is "202412"
-                                .expectedPartitionsAfterAdvance(
-                                        "202410$B", "202411$A", "202412$A", "202413$A")
-                                .advanceClock2(c -> c.plusMonths(2))
-                                .expectedPartitionsFinal("202412$A", "202413$A")
-                                .build()),
-                Arguments.of(
-                        TestParams.builder(AutoPartitionTimeUnit.QUARTER)
-                                .startTime("2024-09-10T00:00:00")
-                                .manualCreatedPartition("20254")
-                                .manualDroppedPartition("20243")
-                                .expectedPartitions("20243", "20244", "20251", "20252")
-                                .advanceClock(c -> c.plusMonths(3 * 3))
-                                // current partition is "20253", retain "20251", "20252"
-                                .expectedPartitionsAfterAdvance(
-                                        "20244", "20251", "20252", "20253", "20254", "20261")
-                                .advanceClock2(c -> c.plusMonths(2 * 3))
-                                .expectedPartitionsFinal(
-                                        "20252", "20253", "20254", "20261", "20262", "20263")
-                                .build()),
-                Arguments.of(
-                        TestParams.builder(AutoPartitionTimeUnit.QUARTER, true)
-                                .startTime("2024-09-10T00:00:00")
-                                .expectedPartitions()
-                                .manualCreatedPartitions(
-                                        "20243$A", "20243$B", "20243$C", "20244$A", "20244$B",
-                                        "20251$A", "20252$A", "20253$B", "20254$C")
-                                .manualDroppedPartition("20243$A")
-                                .advanceClock(c -> c.plusMonths(3 * 3))
-                                // current partition is "20252"
-                                .expectedPartitionsAfterAdvance(
-                                        "20244$A", "20244$B", "20251$A", "20252$A", "20253$B",
-                                        "20254$C")
-                                .advanceClock2(c -> c.plusMonths(2 * 3))
-                                .expectedPartitionsFinal("20252$A", "20253$B", "20254$C")
-                                .build()),
-                Arguments.of(
-                        TestParams.builder(AutoPartitionTimeUnit.YEAR)
-                                .startTime("2024-09-10T00:00:00")
-                                .manualCreatedPartition("2029")
-                                .manualDroppedPartition("2024")
-                                .expectedPartitions("2024", "2025", "2026", "2027")
-                                .advanceClock(c -> c.plusYears(3))
-                                // current partition is "2027", retain "2025", "2026"
-                                .expectedPartitionsAfterAdvance(
-                                        "2025", "2026", "2027", "2028", "2029", "2030")
-                                .advanceClock2(c -> c.plusYears(2))
-                                .expectedPartitionsFinal(
-                                        "2027", "2028", "2029", "2030", "2031", "2032")
-                                .build()),
-                Arguments.of(
-                        TestParams.builder(AutoPartitionTimeUnit.YEAR, true)
-                                .startTime("2024-09-10T00:00:00")
-                                .expectedPartitions()
-                                .manualCreatedPartitions(
-                                        "2024$A", "2024$B", "2024$C", "2025$A", "2025$B", "2026$A",
-                                        "2027$B", "2028$C")
-                                .manualDroppedPartition("2025$B")
-                                .advanceClock(c -> c.plusYears(3))
-                                // current partition is "2027", retain "2025", "2026"
-                                .expectedPartitionsAfterAdvance(
-                                        "2025$A", "2026$A", "2027$B", "2028$C")
-                                .advanceClock2(c -> c.plusYears(2))
-                                .expectedPartitionsFinal("2027$B", "2028$C")
-                                .build()));
+                Arguments.of(TestParams.builder(AutoPartitionTimeUnit.HOUR)
+                        .startTime("2024-09-10T01:00:00")
+                        .expectedPartitions("2024091001", "2024091002", "2024091003", "2024091004")
+                        .manualCreatedPartition("2024091006")
+                        .manualDroppedPartition("2024091001")
+                        .advanceClock(c -> c.plusHours(3))
+                        // current partition is "2024091004"
+                        .expectedPartitionsAfterAdvance(
+                                "2024091002", "2024091003", "2024091004", "2024091005", "2024091006", "2024091007")
+                        .advanceClock2(c -> c.plusHours(2))
+                        .expectedPartitionsFinal(
+                                "2024091004", "2024091005", "2024091006", "2024091007", "2024091008", "2024091009")
+                        .build()),
+                Arguments.of(TestParams.builder(AutoPartitionTimeUnit.HOUR, true)
+                        .startTime("2024-09-10T01:00:00")
+                        // table with multiple partition keys not supports automatic
+                        // creation
+                        .expectedPartitions()
+                        .manualCreatedPartitions(
+                                "2024091001$A",
+                                "2024091001$B",
+                                "2024091001$C",
+                                "2024091002$A",
+                                "2024091002$B",
+                                "2024091003$A",
+                                "2024091004$A",
+                                "2024091005$A")
+                        .manualDroppedPartitions("2024091002$A")
+                        .advanceClock(c -> c.plusHours(3))
+                        // current time partition is "2024091004"
+                        .expectedPartitionsAfterAdvance("2024091002$B", "2024091003$A", "2024091004$A", "2024091005$A")
+                        .advanceClock2(c -> c.plusHours(2))
+                        // current time partition is "2024091006"
+                        .expectedPartitionsFinal("2024091004$A", "2024091005$A")
+                        .build()),
+                Arguments.of(TestParams.builder(AutoPartitionTimeUnit.DAY)
+                        .startTime("2024-09-10T00:00:00")
+                        .expectedPartitions("20240910", "20240911", "20240912", "20240913")
+                        .manualCreatedPartition("20240915")
+                        .manualDroppedPartition("20240910")
+                        // plus 23 hours to make sure the partition can be created since
+                        // we introduce jitter for create day partition
+                        .advanceClock(c -> c.plusDays(3).plus(Duration.ofHours(23)))
+                        // current partition is "20240913", retain "20240911", "20240912"
+                        .expectedPartitionsAfterAdvance(
+                                "20240911", "20240912", "20240913", "20240914", "20240915", "20240916")
+                        .advanceClock2(c -> c.plusDays(2))
+                        .expectedPartitionsFinal("20240913", "20240914", "20240915", "20240916", "20240917", "20240918")
+                        .build()),
+                Arguments.of(TestParams.builder(AutoPartitionTimeUnit.DAY, true)
+                        .startTime("2024-09-10T00:00:00")
+                        .expectedPartitions()
+                        .manualCreatedPartitions(
+                                "20240910$A",
+                                "20240910$B",
+                                "20240910$C",
+                                "20240911$A",
+                                "20240911$B",
+                                "20240912$A",
+                                "20240913$A",
+                                "20240914$A")
+                        .manualDroppedPartition("20240911$A")
+                        .advanceClock(c -> c.plusDays(3).plus(Duration.ofHours(23)))
+                        .expectedPartitionsAfterAdvance("20240911$B", "20240912$A", "20240913$A", "20240914$A")
+                        .advanceClock2(c -> c.plusDays(2))
+                        .expectedPartitionsFinal("20240913$A", "20240914$A")
+                        .build()),
+                Arguments.of(TestParams.builder(AutoPartitionTimeUnit.MONTH)
+                        .startTime("2024-09-10T00:00:00")
+                        .expectedPartitions("202409", "202410", "202411", "202412")
+                        .manualCreatedPartition("202502")
+                        .manualDroppedPartition("202409")
+                        .advanceClock(c -> c.plusMonths(3))
+                        // current partition is "202412", retain "202410", "202411"
+                        .expectedPartitionsAfterAdvance("202410", "202411", "202412", "202501", "202502", "202503")
+                        .advanceClock2(c -> c.plusMonths(2))
+                        .expectedPartitionsFinal("202412", "202501", "202502", "202503", "202504", "202505")
+                        .build()),
+                Arguments.of(TestParams.builder(AutoPartitionTimeUnit.MONTH, true)
+                        .startTime("2024-09-10T00:00:00")
+                        .expectedPartitions()
+                        .manualCreatedPartitions(
+                                "202409$A",
+                                "202409$B",
+                                "202409$C",
+                                "202410$A",
+                                "202410$B",
+                                "202411$A",
+                                "202412$A",
+                                "202413$A")
+                        .manualDroppedPartition("202410$A")
+                        .advanceClock(c -> c.plusMonths(3))
+                        // current partition is "202412"
+                        .expectedPartitionsAfterAdvance("202410$B", "202411$A", "202412$A", "202413$A")
+                        .advanceClock2(c -> c.plusMonths(2))
+                        .expectedPartitionsFinal("202412$A", "202413$A")
+                        .build()),
+                Arguments.of(TestParams.builder(AutoPartitionTimeUnit.QUARTER)
+                        .startTime("2024-09-10T00:00:00")
+                        .manualCreatedPartition("20254")
+                        .manualDroppedPartition("20243")
+                        .expectedPartitions("20243", "20244", "20251", "20252")
+                        .advanceClock(c -> c.plusMonths(3 * 3))
+                        // current partition is "20253", retain "20251", "20252"
+                        .expectedPartitionsAfterAdvance("20244", "20251", "20252", "20253", "20254", "20261")
+                        .advanceClock2(c -> c.plusMonths(2 * 3))
+                        .expectedPartitionsFinal("20252", "20253", "20254", "20261", "20262", "20263")
+                        .build()),
+                Arguments.of(TestParams.builder(AutoPartitionTimeUnit.QUARTER, true)
+                        .startTime("2024-09-10T00:00:00")
+                        .expectedPartitions()
+                        .manualCreatedPartitions(
+                                "20243$A", "20243$B", "20243$C", "20244$A", "20244$B", "20251$A", "20252$A", "20253$B",
+                                "20254$C")
+                        .manualDroppedPartition("20243$A")
+                        .advanceClock(c -> c.plusMonths(3 * 3))
+                        // current partition is "20252"
+                        .expectedPartitionsAfterAdvance(
+                                "20244$A", "20244$B", "20251$A", "20252$A", "20253$B", "20254$C")
+                        .advanceClock2(c -> c.plusMonths(2 * 3))
+                        .expectedPartitionsFinal("20252$A", "20253$B", "20254$C")
+                        .build()),
+                Arguments.of(TestParams.builder(AutoPartitionTimeUnit.YEAR)
+                        .startTime("2024-09-10T00:00:00")
+                        .manualCreatedPartition("2029")
+                        .manualDroppedPartition("2024")
+                        .expectedPartitions("2024", "2025", "2026", "2027")
+                        .advanceClock(c -> c.plusYears(3))
+                        // current partition is "2027", retain "2025", "2026"
+                        .expectedPartitionsAfterAdvance("2025", "2026", "2027", "2028", "2029", "2030")
+                        .advanceClock2(c -> c.plusYears(2))
+                        .expectedPartitionsFinal("2027", "2028", "2029", "2030", "2031", "2032")
+                        .build()),
+                Arguments.of(TestParams.builder(AutoPartitionTimeUnit.YEAR, true)
+                        .startTime("2024-09-10T00:00:00")
+                        .expectedPartitions()
+                        .manualCreatedPartitions(
+                                "2024$A", "2024$B", "2024$C", "2025$A", "2025$B", "2026$A", "2027$B", "2028$C")
+                        .manualDroppedPartition("2025$B")
+                        .advanceClock(c -> c.plusYears(3))
+                        // current partition is "2027", retain "2025", "2026"
+                        .expectedPartitionsAfterAdvance("2025$A", "2026$A", "2027$B", "2028$C")
+                        .advanceClock2(c -> c.plusYears(2))
+                        .expectedPartitionsFinal("2027$B", "2028$C")
+                        .build()));
     }
 
     @ParameterizedTest
     @MethodSource("parameters")
     void testAddPartitionedTable(TestParams params) throws Exception {
         ManualClock clock = new ManualClock(params.startTimeMs);
-        ManuallyTriggeredScheduledExecutorService periodicExecutor =
-                new ManuallyTriggeredScheduledExecutorService();
+        ManuallyTriggeredScheduledExecutorService periodicExecutor = new ManuallyTriggeredScheduledExecutorService();
 
-        AutoPartitionManager autoPartitionManager =
-                new AutoPartitionManager(
-                        new TestingServerMetadataCache(3),
-                        new MetadataManager(zookeeperClient, new Configuration()),
-                        new Configuration(),
-                        clock,
-                        periodicExecutor);
+        AutoPartitionManager autoPartitionManager = new AutoPartitionManager(
+                new TestingServerMetadataCache(3),
+                new MetadataManager(zookeeperClient, new Configuration()),
+                new Configuration(),
+                clock,
+                periodicExecutor);
         autoPartitionManager.start();
 
-        TableInfo table =
-                createPartitionedTable(2, 4, params.timeUnit, params.multiplePartitionKeys);
+        TableInfo table = createPartitionedTable(2, 4, params.timeUnit, params.multiplePartitionKeys);
         TablePath tablePath = table.getTablePath();
         autoPartitionManager.addAutoPartitionTable(table, true);
         // the first auto-partition task is a non-periodic task
@@ -307,19 +255,15 @@ class AutoPartitionManagerTest {
         assertThat(partitions.keySet()).containsExactlyInAnyOrder(params.expectedPartitions);
 
         int replicaFactor = table.getTableConfig().getReplicationFactor();
-        Map<Integer, BucketAssignment> bucketAssignments =
-                generateAssignment(
-                                table.getNumBuckets(),
-                                replicaFactor,
-                                new TabletServerInfo[] {
-                                    new TabletServerInfo(0, "rack0"),
-                                    new TabletServerInfo(1, "rack1"),
-                                    new TabletServerInfo(2, "rack2")
-                                })
-                        .getBucketAssignments();
+        Map<Integer, BucketAssignment> bucketAssignments = generateAssignment(
+                        table.getNumBuckets(), replicaFactor, new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        })
+                .getBucketAssignments();
         long tableId = table.getTableId();
-        PartitionAssignment partitionAssignment =
-                new PartitionAssignment(tableId, bucketAssignments);
+        PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, bucketAssignments);
 
         // manually create partitions.
         for (String partitionName : params.manualCreatedPartitions) {
@@ -335,8 +279,7 @@ class AutoPartitionManagerTest {
 
         // manually drop partitions.
         for (String partitionName : params.manualDroppedPartitions) {
-            metadataManager.dropPartition(
-                    tablePath, fromPartitionName(table.getPartitionKeys(), partitionName), false);
+            metadataManager.dropPartition(tablePath, fromPartitionName(table.getPartitionKeys(), partitionName), false);
             // mock the partition is dropped in zk.
             autoPartitionManager.removePartition(tableId, partitionName);
         }
@@ -344,8 +287,7 @@ class AutoPartitionManagerTest {
         clock.advanceTime(params.advanceDuration);
         periodicExecutor.triggerPeriodicScheduledTasks();
         partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
-        assertThat(partitions.keySet())
-                .containsExactlyInAnyOrder(params.expectedPartitionsAfterAdvance);
+        assertThat(partitions.keySet()).containsExactlyInAnyOrder(params.expectedPartitionsAfterAdvance);
 
         clock.advanceTime(params.advanceDuration2);
         periodicExecutor.triggerPeriodicScheduledTasks();
@@ -365,20 +307,13 @@ class AutoPartitionManagerTest {
         config.set(ConfigOptions.MAX_PARTITION_NUM, expectPartitionNumber);
         MetadataManager metadataManager = new MetadataManager(zookeeperClient, config);
 
-        ZonedDateTime startTime =
-                LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
+        ZonedDateTime startTime = LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
         long startMs = startTime.toInstant().toEpochMilli();
         ManualClock clock = new ManualClock(startMs);
-        ManuallyTriggeredScheduledExecutorService periodicExecutor =
-                new ManuallyTriggeredScheduledExecutorService();
+        ManuallyTriggeredScheduledExecutorService periodicExecutor = new ManuallyTriggeredScheduledExecutorService();
 
-        AutoPartitionManager autoPartitionManager =
-                new AutoPartitionManager(
-                        new TestingServerMetadataCache(3),
-                        metadataManager,
-                        new Configuration(),
-                        clock,
-                        periodicExecutor);
+        AutoPartitionManager autoPartitionManager = new AutoPartitionManager(
+                new TestingServerMetadataCache(3), metadataManager, new Configuration(), clock, periodicExecutor);
         autoPartitionManager.start();
 
         // create a partitioned with -1 retention to never auto-drop partitions
@@ -391,24 +326,19 @@ class AutoPartitionManagerTest {
 
         Map<String, Long> partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
         // pre-create 4 partitions including current partition
-        assertThat(partitions.keySet())
-                .containsExactlyInAnyOrder("20240910", "20240911", "20240912", "20240913");
+        assertThat(partitions.keySet()).containsExactlyInAnyOrder("20240910", "20240911", "20240912", "20240913");
 
         // manually create 4 future partitions.
         int replicaFactor = table.getTableConfig().getReplicationFactor();
-        Map<Integer, BucketAssignment> bucketAssignments =
-                generateAssignment(
-                                table.getNumBuckets(),
-                                replicaFactor,
-                                new TabletServerInfo[] {
-                                    new TabletServerInfo(0, "rack0"),
-                                    new TabletServerInfo(1, "rack1"),
-                                    new TabletServerInfo(2, "rack2")
-                                })
-                        .getBucketAssignments();
+        Map<Integer, BucketAssignment> bucketAssignments = generateAssignment(
+                        table.getNumBuckets(), replicaFactor, new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        })
+                .getBucketAssignments();
         long tableId = table.getTableId();
-        PartitionAssignment partitionAssignment =
-                new PartitionAssignment(tableId, bucketAssignments);
+        PartitionAssignment partitionAssignment = new PartitionAssignment(tableId, bucketAssignments);
         for (int i = 20250101; i <= 20250104; i++) {
             metadataManager.createPartition(
                     tablePath,
@@ -442,19 +372,12 @@ class AutoPartitionManagerTest {
 
     @Test
     void testAutoCreateDayPartitionShouldJitter() throws Exception {
-        ZonedDateTime startTime =
-                LocalDateTime.parse("2025-04-19T00:00:00").atZone(ZoneId.systemDefault());
+        ZonedDateTime startTime = LocalDateTime.parse("2025-04-19T00:00:00").atZone(ZoneId.systemDefault());
         long startMs = startTime.toInstant().toEpochMilli();
         ManualClock clock = new ManualClock(startMs);
-        ManuallyTriggeredScheduledExecutorService periodicExecutor =
-                new ManuallyTriggeredScheduledExecutorService();
-        AutoPartitionManager autoPartitionManager =
-                new AutoPartitionManager(
-                        new TestingServerMetadataCache(3),
-                        metadataManager,
-                        new Configuration(),
-                        clock,
-                        periodicExecutor);
+        ManuallyTriggeredScheduledExecutorService periodicExecutor = new ManuallyTriggeredScheduledExecutorService();
+        AutoPartitionManager autoPartitionManager = new AutoPartitionManager(
+                new TestingServerMetadataCache(3), metadataManager, new Configuration(), clock, periodicExecutor);
         autoPartitionManager.start();
 
         // create one day partition table
@@ -464,18 +387,15 @@ class AutoPartitionManagerTest {
         periodicExecutor.triggerNonPeriodicScheduledTasks();
         Map<String, Long> partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
         // pre-create 4 partitions including current partition
-        assertThat(partitions.keySet())
-                .containsExactlyInAnyOrder("20250419", "20250420", "20250422", "20250421");
+        assertThat(partitions.keySet()).containsExactlyInAnyOrder("20250419", "20250420", "20250422", "20250421");
 
-        Integer delayInMinutes =
-                autoPartitionManager.getAutoCreateDayDelayMinutes(table.getTableId());
+        Integer delayInMinutes = autoPartitionManager.getAutoCreateDayDelayMinutes(table.getTableId());
         // advance 1 day + (delayInMinutes - 1), should still no next partition to create
         // since the current minutes in day don't advance the delayInMinutes
         clock.advanceTime(Duration.ofDays(1).plusMinutes(delayInMinutes - 1));
         periodicExecutor.triggerPeriodicScheduledTasks();
         partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
-        assertThat(partitions.keySet())
-                .containsExactlyInAnyOrder("20250419", "20250420", "20250422", "20250421");
+        assertThat(partitions.keySet()).containsExactlyInAnyOrder("20250419", "20250420", "20250422", "20250421");
 
         // now, advance a minutes again, should create a new partition since
         // the current minutes in day advance the delayInMinutes
@@ -483,8 +403,7 @@ class AutoPartitionManagerTest {
         periodicExecutor.triggerPeriodicScheduledTasks();
         partitions = zookeeperClient.getPartitionNameAndIds(tablePath);
         assertThat(partitions.keySet())
-                .containsExactlyInAnyOrder(
-                        "20250419", "20250420", "20250421", "20250422", "20250423");
+                .containsExactlyInAnyOrder("20250419", "20250420", "20250421", "20250422", "20250423");
     }
 
     /**
@@ -501,26 +420,17 @@ class AutoPartitionManagerTest {
         config.set(ConfigOptions.MAX_BUCKET_NUM, maxBucketNum);
         MetadataManager metadataManager = new MetadataManager(zookeeperClient, config);
 
-        ZonedDateTime startTime =
-                LocalDateTime.parse("2025-04-26T00:00:00").atZone(ZoneId.systemDefault());
+        ZonedDateTime startTime = LocalDateTime.parse("2025-04-26T00:00:00").atZone(ZoneId.systemDefault());
         long startMs = startTime.toInstant().toEpochMilli();
         ManualClock clock = new ManualClock(startMs);
-        ManuallyTriggeredScheduledExecutorService periodicExecutor =
-                new ManuallyTriggeredScheduledExecutorService();
+        ManuallyTriggeredScheduledExecutorService periodicExecutor = new ManuallyTriggeredScheduledExecutorService();
 
-        AutoPartitionManager autoPartitionManager =
-                new AutoPartitionManager(
-                        new TestingServerMetadataCache(3),
-                        metadataManager,
-                        config,
-                        clock,
-                        periodicExecutor);
+        AutoPartitionManager autoPartitionManager = new AutoPartitionManager(
+                new TestingServerMetadataCache(3), metadataManager, config, clock, periodicExecutor);
         autoPartitionManager.start();
 
         // Create a partitioned table with 10 buckets per partition and no auto-drop
-        TableInfo table =
-                createPartitionedTableWithBuckets(
-                        -1, 4, AutoPartitionTimeUnit.DAY, bucketCountPerPartition);
+        TableInfo table = createPartitionedTableWithBuckets(-1, 4, AutoPartitionTimeUnit.DAY, bucketCountPerPartition);
         TablePath tablePath = table.getTablePath();
         autoPartitionManager.addAutoPartitionTable(table, true);
         // Trigger immediate partition creation
@@ -585,8 +495,7 @@ class AutoPartitionManagerTest {
             return new TestParamsBuilder(timeUnit, false);
         }
 
-        static TestParamsBuilder builder(
-                AutoPartitionTimeUnit timeUnit, boolean multiplePartitionKeys) {
+        static TestParamsBuilder builder(AutoPartitionTimeUnit timeUnit, boolean multiplePartitionKeys) {
             return new TestParamsBuilder(timeUnit, multiplePartitionKeys);
         }
     }
@@ -640,24 +549,21 @@ class AutoPartitionManagerTest {
 
         public TestParamsBuilder advanceClock(Function<ZonedDateTime, ZonedDateTime> advance) {
             ZonedDateTime newDateTime = advance.apply(startTime);
-            this.advanceSeconds =
-                    newDateTime.toInstant().getEpochSecond()
-                            - startTime.toInstant().getEpochSecond();
+            this.advanceSeconds = newDateTime.toInstant().getEpochSecond()
+                    - startTime.toInstant().getEpochSecond();
             return this;
         }
 
-        public TestParamsBuilder expectedPartitionsAfterAdvance(
-                String... expectedPartitionsAfterAdvance) {
+        public TestParamsBuilder expectedPartitionsAfterAdvance(String... expectedPartitionsAfterAdvance) {
             this.expectedPartitionsAfterAdvance = expectedPartitionsAfterAdvance;
             return this;
         }
 
         public TestParamsBuilder advanceClock2(Function<ZonedDateTime, ZonedDateTime> advance) {
             ZonedDateTime newDateTime = advance.apply(startTime.plusSeconds(advanceSeconds));
-            this.advanceSeconds2 =
-                    newDateTime.toInstant().getEpochSecond()
-                            - startTime.toInstant().getEpochSecond()
-                            - advanceSeconds;
+            this.advanceSeconds2 = newDateTime.toInstant().getEpochSecond()
+                    - startTime.toInstant().getEpochSecond()
+                    - advanceSeconds;
             return this;
         }
 
@@ -684,10 +590,8 @@ class AutoPartitionManagerTest {
     // -------------------------------------------------------------------------------------------
 
     private TableInfo createPartitionedTable(
-            int partitionRetentionNum, int partitionPreCreateNum, AutoPartitionTimeUnit timeUnit)
-            throws Exception {
-        return createPartitionedTable(
-                partitionRetentionNum, partitionPreCreateNum, timeUnit, false);
+            int partitionRetentionNum, int partitionPreCreateNum, AutoPartitionTimeUnit timeUnit) throws Exception {
+        return createPartitionedTable(partitionRetentionNum, partitionPreCreateNum, timeUnit, false);
     }
 
     private TableInfo createPartitionedTable(
@@ -697,47 +601,33 @@ class AutoPartitionManagerTest {
             boolean multiplePartitionKeys)
             throws Exception {
         long tableId = 1;
-        TablePath tablePath =
-                multiplePartitionKeys
-                        ? TablePath.of("db", "test_multiple_partition_keys_" + UUID.randomUUID())
-                        : TablePath.of("db", "test_partition_" + UUID.randomUUID());
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("id", DataTypes.INT())
-                                        .column("dt", DataTypes.STRING())
-                                        .column("a", DataTypes.BIGINT())
-                                        .column("b", DataTypes.BIGINT())
-                                        .column("ts", DataTypes.TIMESTAMP())
-                                        .primaryKey(
-                                                multiplePartitionKeys
-                                                        ? new String[] {"id", "dt", "a", "b"}
-                                                        : new String[] {"id", "dt"})
-                                        .build())
-                        .comment(
-                                multiplePartitionKeys
-                                        ? "partitioned table with multiple partition keys"
-                                        : "partitioned table")
-                        .distributedBy(16)
-                        .partitionedBy(
-                                multiplePartitionKeys
-                                        ? new String[] {"dt", "a"}
-                                        : new String[] {"dt"})
-                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY, "dt")
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, timeUnit)
-                        .property(
-                                ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION,
-                                partitionRetentionNum)
-                        .property(
-                                ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE,
-                                multiplePartitionKeys ? 0 : partitionPreCreateNum)
-                        .build();
+        TablePath tablePath = multiplePartitionKeys
+                ? TablePath.of("db", "test_multiple_partition_keys_" + UUID.randomUUID())
+                : TablePath.of("db", "test_partition_" + UUID.randomUUID());
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("dt", DataTypes.STRING())
+                        .column("a", DataTypes.BIGINT())
+                        .column("b", DataTypes.BIGINT())
+                        .column("ts", DataTypes.TIMESTAMP())
+                        .primaryKey(
+                                multiplePartitionKeys ? new String[] {"id", "dt", "a", "b"} : new String[] {"id", "dt"})
+                        .build())
+                .comment(multiplePartitionKeys ? "partitioned table with multiple partition keys" : "partitioned table")
+                .distributedBy(16)
+                .partitionedBy(multiplePartitionKeys ? new String[] {"dt", "a"} : new String[] {"dt"})
+                .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_KEY, "dt")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, timeUnit)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, partitionRetentionNum)
+                .property(
+                        ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE,
+                        multiplePartitionKeys ? 0 : partitionPreCreateNum)
+                .build();
         long currentMillis = System.currentTimeMillis();
-        TableInfo tableInfo =
-                TableInfo.of(tablePath, tableId, 1, descriptor, currentMillis, currentMillis);
+        TableInfo tableInfo = TableInfo.of(tablePath, tableId, 1, descriptor, currentMillis, currentMillis);
         TableRegistration registration = TableRegistration.newTable(tableId, descriptor);
         zookeeperClient.registerTable(tablePath, registration);
         return tableInfo;
@@ -747,39 +637,29 @@ class AutoPartitionManagerTest {
      * Helper method creates a partitioned table with the specified number of buckets per partition.
      */
     private TableInfo createPartitionedTableWithBuckets(
-            int partitionRetentionNum,
-            int partitionPreCreateNum,
-            AutoPartitionTimeUnit timeUnit,
-            int bucketCount)
+            int partitionRetentionNum, int partitionPreCreateNum, AutoPartitionTimeUnit timeUnit, int bucketCount)
             throws Exception {
         long tableId = 1;
         TablePath tablePath = TablePath.of("db", "test_bucket_limit_" + UUID.randomUUID());
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("id", DataTypes.INT())
-                                        .column("name", DataTypes.STRING())
-                                        .column("dt", DataTypes.STRING())
-                                        .column("ts", DataTypes.TIMESTAMP())
-                                        .primaryKey("id", "dt")
-                                        .build())
-                        .comment("partitioned table with bucket limit")
-                        .distributedBy(bucketCount) // Specify bucket count here
-                        .partitionedBy("dt")
-                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, timeUnit)
-                        .property(
-                                ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION,
-                                partitionRetentionNum)
-                        .property(
-                                ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE,
-                                partitionPreCreateNum)
-                        .build();
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("dt", DataTypes.STRING())
+                        .column("ts", DataTypes.TIMESTAMP())
+                        .primaryKey("id", "dt")
+                        .build())
+                .comment("partitioned table with bucket limit")
+                .distributedBy(bucketCount) // Specify bucket count here
+                .partitionedBy("dt")
+                .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, timeUnit)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_RETENTION, partitionRetentionNum)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, partitionPreCreateNum)
+                .build();
         long currentMillis = System.currentTimeMillis();
-        TableInfo tableInfo =
-                TableInfo.of(tablePath, tableId, 1, descriptor, currentMillis, currentMillis);
+        TableInfo tableInfo = TableInfo.of(tablePath, tableId, 1, descriptor, currentMillis, currentMillis);
         TableRegistration registration = TableRegistration.newTable(tableId, descriptor);
         zookeeperClient.registerTable(tablePath, registration);
         return tableInfo;

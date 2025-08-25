@@ -42,10 +42,7 @@ public class PartitionMetadata {
     private final List<BucketMetadata> bucketMetadataList;
 
     public PartitionMetadata(
-            long tableId,
-            String partitionName,
-            long partitionId,
-            List<BucketMetadata> bucketMetadataList) {
+            long tableId, String partitionName, long partitionId, List<BucketMetadata> bucketMetadataList) {
         this.tableId = tableId;
         this.partitionName = partitionName;
         this.partitionId = partitionId;

@@ -35,8 +35,7 @@ import org.slf4j.LoggerFactory;
 @Internal
 public class DynamicTemporaryOssCredentialsProvider implements CredentialsProvider {
 
-    private static final Logger LOG =
-            LoggerFactory.getLogger(DynamicTemporaryOssCredentialsProvider.class);
+    private static final Logger LOG = LoggerFactory.getLogger(DynamicTemporaryOssCredentialsProvider.class);
 
     public static final String NAME = DynamicTemporaryOssCredentialsProvider.class.getName();
 
@@ -53,8 +52,6 @@ public class DynamicTemporaryOssCredentialsProvider implements CredentialsProvid
         }
         LOG.debug("Providing session credentials");
         return new BasicCredentials(
-                credentials.getAccessKeyId(),
-                credentials.getSecretAccessKey(),
-                credentials.getSecurityToken());
+                credentials.getAccessKeyId(), credentials.getSecretAccessKey(), credentials.getSecurityToken());
     }
 }

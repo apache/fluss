@@ -36,19 +36,18 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ReporterSetupTest {
 
     @RegisterExtension
-    static final ContextClassLoaderExtension CONTEXT_CLASS_LOADER_EXTENSION =
-            ContextClassLoaderExtension.builder()
-                    .withServiceEntry(
-                            MetricReporterPlugin.class,
-                            TestReporter1.class.getName(),
-                            TestReporter2.class.getName(),
-                            TestReporter11.class.getName(),
-                            TestReporter12.class.getName(),
-                            TestReporter13.class.getName(),
-                            TestReporterPlugin.class.getName(),
-                            FailingPlugin.class.getName(),
-                            ConfigExposingReporterPlugin.class.getName())
-                    .build();
+    static final ContextClassLoaderExtension CONTEXT_CLASS_LOADER_EXTENSION = ContextClassLoaderExtension.builder()
+            .withServiceEntry(
+                    MetricReporterPlugin.class,
+                    TestReporter1.class.getName(),
+                    TestReporter2.class.getName(),
+                    TestReporter11.class.getName(),
+                    TestReporter12.class.getName(),
+                    TestReporter13.class.getName(),
+                    TestReporterPlugin.class.getName(),
+                    FailingPlugin.class.getName(),
+                    ConfigExposingReporterPlugin.class.getName())
+            .build();
 
     /** TestReporter1 class only for type differentiation. */
     public static class TestReporter1 extends TestReporter {
@@ -121,9 +120,7 @@ class ReporterSetupTest {
     void testMultipleReporterInstantiation() {
         Configuration config = new Configuration();
 
-        config.set(
-                ConfigOptions.METRICS_REPORTERS,
-                Arrays.asList("reporter11", "reporter12", "reporter13"));
+        config.set(ConfigOptions.METRICS_REPORTERS, Arrays.asList("reporter11", "reporter12", "reporter13"));
 
         final List<MetricReporter> metricReporters = ReporterSetup.fromConfiguration(config, null);
 
@@ -197,9 +194,8 @@ class ReporterSetupTest {
         Configuration reporterConfig = testReporter.getConfig();
         assertThat(reporterConfig.get(ConfigBuilder.key("arg1").stringType().noDefaultValue()))
                 .isEqualTo("value1");
-        assertThat(
-                        reporterConfig.getString(
-                                ConfigBuilder.key("arg2").stringType().noDefaultValue()))
+        assertThat(reporterConfig.getString(
+                        ConfigBuilder.key("arg2").stringType().noDefaultValue()))
                 .isEqualTo("value2");
     }
 
@@ -213,9 +209,8 @@ class ReporterSetupTest {
         Configuration reporterConfig = testReporter.getConfig();
         assertThat(reporterConfig.get(ConfigBuilder.key("arg1").stringType().noDefaultValue()))
                 .isEqualTo("value1");
-        assertThat(
-                        reporterConfig.getString(
-                                ConfigBuilder.key("arg3").stringType().noDefaultValue()))
+        assertThat(reporterConfig.getString(
+                        ConfigBuilder.key("arg3").stringType().noDefaultValue()))
                 .isEqualTo("value3");
     }
 

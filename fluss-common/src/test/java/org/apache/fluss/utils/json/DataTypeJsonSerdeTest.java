@@ -51,33 +51,32 @@ public class DataTypeJsonSerdeTest extends JsonSerdeTestBase<DataType> {
 
     @Override
     protected DataType[] createObjects() {
-        final List<DataType> types =
-                Arrays.asList(
-                        new BooleanType(),
-                        new TinyIntType(),
-                        new SmallIntType(),
-                        new IntType(),
-                        new BigIntType(),
-                        new FloatType(),
-                        new DoubleType(),
-                        new DecimalType(10),
-                        new DecimalType(15, 5),
-                        new CharType(),
-                        new CharType(5),
-                        new StringType(),
-                        new BinaryType(),
-                        new BinaryType(100),
-                        new BytesType(),
-                        new DateType(),
-                        new TimeType(),
-                        new TimeType(3),
-                        new TimestampType(),
-                        new TimestampType(3),
-                        new LocalZonedTimestampType(),
-                        new LocalZonedTimestampType(3),
-                        new ArrayType(new IntType(false)),
-                        new MapType(new BigIntType(), new IntType(false)),
-                        RowType.of(new BigIntType(), new IntType(false), new StringType()));
+        final List<DataType> types = Arrays.asList(
+                new BooleanType(),
+                new TinyIntType(),
+                new SmallIntType(),
+                new IntType(),
+                new BigIntType(),
+                new FloatType(),
+                new DoubleType(),
+                new DecimalType(10),
+                new DecimalType(15, 5),
+                new CharType(),
+                new CharType(5),
+                new StringType(),
+                new BinaryType(),
+                new BinaryType(100),
+                new BytesType(),
+                new DateType(),
+                new TimeType(),
+                new TimeType(3),
+                new TimestampType(),
+                new TimestampType(3),
+                new LocalZonedTimestampType(),
+                new LocalZonedTimestampType(3),
+                new ArrayType(new IntType(false)),
+                new MapType(new BigIntType(), new IntType(false)),
+                RowType.of(new BigIntType(), new IntType(false), new StringType()));
 
         final List<DataType> allTypes = new ArrayList<>();
         // consider nullable

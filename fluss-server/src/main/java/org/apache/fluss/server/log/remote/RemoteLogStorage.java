@@ -115,8 +115,7 @@ public interface RemoteLogStorage extends Closeable {
      * @return input stream of the requested index.
      * @throws RemoteStorageException if there are any errors while fetching the index.
      */
-    InputStream fetchIndex(RemoteLogSegment remoteLogSegment, IndexType indexType)
-            throws RemoteStorageException;
+    InputStream fetchIndex(RemoteLogSegment remoteLogSegment, IndexType indexType) throws RemoteStorageException;
 
     /**
      * Read the remote log manifest from remote manifest file path.
@@ -126,8 +125,7 @@ public interface RemoteLogStorage extends Closeable {
      * @throws RemoteStorageException if there are any errors while download remote log manifest
      *     snapshot.
      */
-    RemoteLogManifest readRemoteLogManifestSnapshot(FsPath remoteLogManifestPath)
-            throws RemoteStorageException;
+    RemoteLogManifest readRemoteLogManifestSnapshot(FsPath remoteLogManifestPath) throws RemoteStorageException;
 
     /**
      * Deletes the remote log manifest file from remote storage.
@@ -137,8 +135,7 @@ public interface RemoteLogStorage extends Closeable {
      * @throws RemoteStorageException if there are any errors while delete remote log manifest
      *     snapshot.
      */
-    void deleteRemoteLogManifestSnapshot(FsPath remoteLogManifestPath)
-            throws RemoteStorageException;
+    void deleteRemoteLogManifestSnapshot(FsPath remoteLogManifestPath) throws RemoteStorageException;
 
     /**
      * Writes the remote log manifest to remote manifest file path.
@@ -159,6 +156,5 @@ public interface RemoteLogStorage extends Closeable {
      * @throws RemoteStorageException if there are any errors while delete remote log data and
      *     metadata.
      */
-    void deleteTableBucket(PhysicalTablePath physicalTablePath, TableBucket tableBucket)
-            throws RemoteStorageException;
+    void deleteTableBucket(PhysicalTablePath physicalTablePath, TableBucket tableBucket) throws RemoteStorageException;
 }

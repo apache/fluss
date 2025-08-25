@@ -59,11 +59,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     private boolean aborted = false;
 
     private KvRecordBatchBuilder(
-            int schemaId,
-            byte magic,
-            int writeLimit,
-            AbstractPagedOutputView pagedOutputView,
-            KvFormat kvFormat) {
+            int schemaId, byte magic, int writeLimit, AbstractPagedOutputView pagedOutputView, KvFormat kvFormat) {
         checkArgument(
                 schemaId <= Short.MAX_VALUE,
                 "schemaId shouldn't be greater than the max value of short: " + Short.MAX_VALUE);
@@ -85,8 +81,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
 
     public static KvRecordBatchBuilder builder(
             int schemaId, int writeLimit, AbstractPagedOutputView outputView, KvFormat kvFormat) {
-        return new KvRecordBatchBuilder(
-                schemaId, CURRENT_KV_MAGIC_VALUE, writeLimit, outputView, kvFormat);
+        return new KvRecordBatchBuilder(schemaId, CURRENT_KV_MAGIC_VALUE, writeLimit, outputView, kvFormat);
     }
 
     /**
@@ -118,8 +113,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
         currentRecordNumber++;
         if (currentRecordNumber == Integer.MAX_VALUE) {
             throw new IllegalArgumentException(
-                    "Maximum number of records per batch exceeded, max records: "
-                            + Integer.MAX_VALUE);
+                    "Maximum number of records per batch exceeded, max records: " + Integer.MAX_VALUE);
         }
         sizeInBytes += recordByteSizes;
     }
@@ -146,10 +140,9 @@ public class KvRecordBatchBuilder implements AutoCloseable {
         }
 
         writeBatchHeader();
-        builtBuffer =
-                MultiBytesView.builder()
-                        .addMemorySegmentByteViewList(pagedOutputView.getWrittenSegments())
-                        .build();
+        builtBuffer = MultiBytesView.builder()
+                .addMemorySegmentByteViewList(pagedOutputView.getWrittenSegments())
+                .build();
         return builtBuffer;
     }
 
@@ -172,8 +165,7 @@ public class KvRecordBatchBuilder implements AutoCloseable {
     @Override
     public void close() throws IOException {
         if (aborted) {
-            throw new IllegalStateException(
-                    "Cannot close KvRecordBatchBuilder as it has already been aborted");
+            throw new IllegalStateException("Cannot close KvRecordBatchBuilder as it has already been aborted");
         }
 
         isClosed = true;
@@ -220,19 +212,17 @@ public class KvRecordBatchBuilder implements AutoCloseable {
             } else {
                 // currently, we don't support to do row conversion for simplicity,
                 // just throw exception
-                throw new IllegalArgumentException(
-                        "The row to be appended to kv record batch with compacted format "
-                                + "should be a compacted row, but got a "
-                                + row.getClass().getSimpleName());
+                throw new IllegalArgumentException("The row to be appended to kv record batch with compacted format "
+                        + "should be a compacted row, but got a "
+                        + row.getClass().getSimpleName());
             }
         } else if (kvFormat == KvFormat.INDEXED) {
             if (row instanceof IndexedRow) {
                 return row;
             } else {
-                throw new IllegalArgumentException(
-                        "The row to be appended to kv record batch "
-                                + "with indexed format should be a indexed row, but got "
-                                + row.getClass().getSimpleName());
+                throw new IllegalArgumentException("The row to be appended to kv record batch "
+                        + "with indexed format should be a indexed row, but got "
+                        + row.getClass().getSimpleName());
             }
         } else {
             throw new UnsupportedOperationException("Unsupported kv format: " + kvFormat);

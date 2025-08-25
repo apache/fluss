@@ -33,26 +33,24 @@ public class TableDescriptorJsonSerdeTest extends JsonSerdeTestBase<TableDescrip
     protected TableDescriptor[] createObjects() {
         TableDescriptor[] tableDescriptors = new TableDescriptor[2];
 
-        tableDescriptors[0] =
-                TableDescriptor.builder()
-                        .schema(SchemaJsonSerdeTest.SCHEMA_0)
-                        .comment("first table")
-                        .partitionedBy("c")
-                        .distributedBy(16, "a")
-                        .property("option-1", "100")
-                        .property("option-2", "200")
-                        .customProperties(Collections.singletonMap("custom-1", "\"value-1\""))
-                        .build();
+        tableDescriptors[0] = TableDescriptor.builder()
+                .schema(SchemaJsonSerdeTest.SCHEMA_0)
+                .comment("first table")
+                .partitionedBy("c")
+                .distributedBy(16, "a")
+                .property("option-1", "100")
+                .property("option-2", "200")
+                .customProperties(Collections.singletonMap("custom-1", "\"value-1\""))
+                .build();
 
-        tableDescriptors[1] =
-                TableDescriptor.builder()
-                        .schema(SchemaJsonSerdeTest.SCHEMA_1)
-                        .distributedBy(32)
-                        .property("option-3", "300")
-                        .property("option-4", "400")
-                        .logFormat(LogFormat.INDEXED)
-                        .kvFormat(KvFormat.INDEXED)
-                        .build();
+        tableDescriptors[1] = TableDescriptor.builder()
+                .schema(SchemaJsonSerdeTest.SCHEMA_1)
+                .distributedBy(32)
+                .property("option-3", "300")
+                .property("option-4", "400")
+                .logFormat(LogFormat.INDEXED)
+                .kvFormat(KvFormat.INDEXED)
+                .build();
 
         return tableDescriptors;
     }

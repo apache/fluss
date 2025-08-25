@@ -186,9 +186,7 @@ public abstract class FileSystemBehaviorTestSuite {
         // this test applies to object stores as well, as rely on the fact that they
         // return true when things are not bad
 
-        final FsPath directory =
-                new FsPath(
-                        new FsPath(new FsPath(basePath, randomName()), randomName()), randomName());
+        final FsPath directory = new FsPath(new FsPath(new FsPath(basePath, randomName()), randomName()), randomName());
         assertThat(fs.mkdirs(directory)).isTrue();
     }
 
@@ -239,8 +237,7 @@ public abstract class FileSystemBehaviorTestSuite {
         final FsPath path = new FsPath(basePath, "test.txt");
         try {
             try (FSDataOutputStream out = fs.create(path, FileSystem.WriteMode.OVERWRITE);
-                    OutputStreamWriter writer =
-                            new OutputStreamWriter(out, StandardCharsets.UTF_8)) {
+                    OutputStreamWriter writer = new OutputStreamWriter(out, StandardCharsets.UTF_8)) {
                 writer.write(testLine);
             }
             // just in case, wait for the path to exist
@@ -273,8 +270,7 @@ public abstract class FileSystemBehaviorTestSuite {
             for (int i = 0; i < numFiles; i++) {
                 FsPath file = new FsPath(directory, "/file-" + i);
                 try (FSDataOutputStream out = fs.create(file, FileSystem.WriteMode.OVERWRITE);
-                        OutputStreamWriter writer =
-                                new OutputStreamWriter(out, StandardCharsets.UTF_8)) {
+                        OutputStreamWriter writer = new OutputStreamWriter(out, StandardCharsets.UTF_8)) {
                     writer.write("hello-" + i + "\n");
                 }
                 // just in case, wait for the file to exist (should then also be reflected in the
@@ -322,8 +318,7 @@ public abstract class FileSystemBehaviorTestSuite {
         checkPathExistence(path, true, getConsistencyToleranceNS());
     }
 
-    private void checkPathExistence(
-            FsPath path, boolean expectedExists, long consistencyToleranceNS)
+    private void checkPathExistence(FsPath path, boolean expectedExists, long consistencyToleranceNS)
             throws IOException, InterruptedException {
         if (consistencyToleranceNS == 0) {
             // strongly consistency
@@ -343,15 +338,13 @@ public abstract class FileSystemBehaviorTestSuite {
             throws IOException, InterruptedException {
         boolean dirExists;
         long deadline = System.nanoTime() + consistencyToleranceNS;
-        while ((dirExists = fs.exists(path)) != expectedExists
-                && System.nanoTime() - deadline < 0) {
+        while ((dirExists = fs.exists(path)) != expectedExists && System.nanoTime() - deadline < 0) {
             Thread.sleep(10);
         }
         assertThat(dirExists).isEqualTo(expectedExists);
     }
 
-    private static void cleanupDirectoryWithRetry(
-            FileSystem fs, FsPath path, long consistencyToleranceNS)
+    private static void cleanupDirectoryWithRetry(FileSystem fs, FsPath path, long consistencyToleranceNS)
             throws IOException, InterruptedException {
         fs.delete(path, true);
         long deadline = System.nanoTime() + consistencyToleranceNS;

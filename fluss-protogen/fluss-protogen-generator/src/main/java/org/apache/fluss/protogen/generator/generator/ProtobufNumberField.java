@@ -83,15 +83,13 @@ public class ProtobufNumberField extends ProtobufField<Field<?>> {
         } else if (field.getProtoType().equals("float")) {
             w.format("                _w.writeFloat(%s);\n", name);
         } else {
-            throw new IllegalArgumentException(
-                    "Failed to write serializer for field: " + field.getProtoType());
+            throw new IllegalArgumentException("Failed to write serializer for field: " + field.getProtoType());
         }
     }
 
     static String parseNumber(Field<?> field) {
         if (field.isEnumField()) {
-            return String.format(
-                    "%s.valueOf(ProtoCodecUtils.readVarInt(_buffer))", field.getJavaType());
+            return String.format("%s.valueOf(ProtoCodecUtils.readVarInt(_buffer))", field.getJavaType());
         } else if (field.getProtoType().equals("bool")) {
             return "ProtoCodecUtils.readVarInt(_buffer) == 1";
         } else if (field.getProtoType().equals("int32")) {
@@ -119,8 +117,7 @@ public class ProtobufNumberField extends ProtobufField<Field<?>> {
         } else if (field.getProtoType().equals("float")) {
             return "ProtoCodecUtils.readFloat(_buffer)";
         } else {
-            throw new IllegalArgumentException(
-                    "Failed to write parser for field: " + field.getProtoType());
+            throw new IllegalArgumentException("Failed to write parser for field: " + field.getProtoType());
         }
     }
 
@@ -154,8 +151,7 @@ public class ProtobufNumberField extends ProtobufField<Field<?>> {
         } else if (field.getProtoType().equals("float")) {
             return "4";
         } else {
-            throw new IllegalArgumentException(
-                    "Failed to write serializer for field: " + field.getProtoType());
+            throw new IllegalArgumentException("Failed to write serializer for field: " + field.getProtoType());
         }
     }
 
@@ -171,14 +167,10 @@ public class ProtobufNumberField extends ProtobufField<Field<?>> {
         if (isErrorField) {
             w.format("       @Override\n");
         }
-        w.format(
-                "        public %s %s() {\n",
-                field.getJavaType(), ProtoGenUtil.camelCase("get", field.getName()));
+        w.format("        public %s %s() {\n", field.getJavaType(), ProtoGenUtil.camelCase("get", field.getName()));
         if (!field.isDefaultValueSet()) {
             w.format("            if (!%s()) {\n", ProtoGenUtil.camelCase("has", ccName));
-            w.format(
-                    "                throw new IllegalStateException(\"Field '%s' is not set\");\n",
-                    field.getName());
+            w.format("                throw new IllegalStateException(\"Field '%s' is not set\");\n", field.getName());
             w.format("            }\n");
         }
         w.format("            return %s;\n", ccName);
@@ -219,9 +211,7 @@ public class ProtobufNumberField extends ProtobufField<Field<?>> {
     @Override
     public void declaration(PrintWriter w) {
         if (field.isDefaultValueSet()) {
-            w.format(
-                    "private %s %s = %s;\n",
-                    field.getJavaType(), ccName, field.getDefaultValueAsString());
+            w.format("private %s %s = %s;\n", field.getJavaType(), ccName, field.getDefaultValueAsString());
         } else {
             w.format("private %s %s;\n", field.getJavaType(), ccName);
         }

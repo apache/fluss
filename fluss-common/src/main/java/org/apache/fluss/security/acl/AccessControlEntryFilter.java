@@ -35,14 +35,18 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 @PublicEvolving
 public class AccessControlEntryFilter {
-    @Nullable private final FlussPrincipal principal;
+    @Nullable
+    private final FlussPrincipal principal;
+
     private final PermissionType permissionType;
-    @Nullable private final String host;
+
+    @Nullable
+    private final String host;
+
     private final OperationType operationType;
 
     public static final AccessControlEntryFilter ANY =
-            new AccessControlEntryFilter(
-                    FlussPrincipal.ANY, null, OperationType.ANY, PermissionType.ANY);
+            new AccessControlEntryFilter(FlussPrincipal.ANY, null, OperationType.ANY, PermissionType.ANY);
 
     public AccessControlEntryFilter(
             @Nullable FlussPrincipal principal,
@@ -57,20 +61,16 @@ public class AccessControlEntryFilter {
 
     /** Returns true if this filter matches the given AccessControlEntry. */
     public boolean matches(AccessControlEntry other) {
-        if ((principal != null)
-                && principal != FlussPrincipal.ANY
-                && (!principal.equals(other.getPrincipal()))) {
+        if ((principal != null) && principal != FlussPrincipal.ANY && (!principal.equals(other.getPrincipal()))) {
             return false;
         }
         if ((host != null) && (!host.equals(other.getHost()))) {
             return false;
         }
-        if ((operationType != OperationType.ANY)
-                && (!operationType.equals(other.getOperationType()))) {
+        if ((operationType != OperationType.ANY) && (!operationType.equals(other.getOperationType()))) {
             return false;
         }
-        if ((permissionType != PermissionType.ANY)
-                && (!permissionType.equals(other.getPermissionType()))) {
+        if ((permissionType != PermissionType.ANY) && (!permissionType.equals(other.getPermissionType()))) {
             return false;
         }
         return true;

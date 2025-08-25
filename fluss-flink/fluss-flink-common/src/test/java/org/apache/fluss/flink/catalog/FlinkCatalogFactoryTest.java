@@ -50,21 +50,18 @@ abstract class FlinkCatalogFactoryTest {
         options.put(CommonCatalogOptions.CATALOG_TYPE.key(), FlinkCatalogFactory.IDENTIFIER);
 
         // test create catalog
-        FlinkCatalog actualCatalog =
-                (FlinkCatalog)
-                        FactoryUtil.createCatalog(
-                                CATALOG_NAME,
-                                options,
-                                new Configuration(),
-                                Thread.currentThread().getContextClassLoader());
+        FlinkCatalog actualCatalog = (FlinkCatalog) FactoryUtil.createCatalog(
+                CATALOG_NAME,
+                options,
+                new Configuration(),
+                Thread.currentThread().getContextClassLoader());
 
-        FlinkCatalog flinkCatalog =
-                new FlinkCatalog(
-                        CATALOG_NAME,
-                        DB_NAME,
-                        BOOTSTRAP_SERVERS_NAME,
-                        Thread.currentThread().getContextClassLoader(),
-                        Collections.emptyMap());
+        FlinkCatalog flinkCatalog = new FlinkCatalog(
+                CATALOG_NAME,
+                DB_NAME,
+                BOOTSTRAP_SERVERS_NAME,
+                Thread.currentThread().getContextClassLoader(),
+                Collections.emptyMap());
 
         checkEquals(flinkCatalog, actualCatalog);
 
@@ -76,13 +73,11 @@ abstract class FlinkCatalogFactoryTest {
         securityMap.put("client.security.sasl.password", "password");
 
         options.putAll(securityMap);
-        FlinkCatalog actualCatalog2 =
-                (FlinkCatalog)
-                        FactoryUtil.createCatalog(
-                                CATALOG_NAME,
-                                options,
-                                new Configuration(),
-                                Thread.currentThread().getContextClassLoader());
+        FlinkCatalog actualCatalog2 = (FlinkCatalog) FactoryUtil.createCatalog(
+                CATALOG_NAME,
+                options,
+                new Configuration(),
+                Thread.currentThread().getContextClassLoader());
 
         assertThat(actualCatalog2.getSecurityConfigs()).isEqualTo(securityMap);
     }
@@ -93,30 +88,24 @@ abstract class FlinkCatalogFactoryTest {
         options.put(CommonCatalogOptions.CATALOG_TYPE.key(), FlinkCatalogFactory.IDENTIFIER);
 
         // test required options
-        assertThatThrownBy(
-                        () ->
-                                FactoryUtil.createCatalog(
-                                        CATALOG_NAME,
-                                        options,
-                                        new Configuration(),
-                                        Thread.currentThread().getContextClassLoader()))
+        assertThatThrownBy(() -> FactoryUtil.createCatalog(
+                        CATALOG_NAME,
+                        options,
+                        new Configuration(),
+                        Thread.currentThread().getContextClassLoader()))
                 .rootCause()
                 .isInstanceOf(ValidationException.class)
-                .hasMessageContaining(
-                        "Missing required options are:\n" + "\n" + "bootstrap.servers");
+                .hasMessageContaining("Missing required options are:\n" + "\n" + "bootstrap.servers");
 
         // test op options
         options.put(FlinkConnectorOptions.BOOTSTRAP_SERVERS.key(), BOOTSTRAP_SERVERS_NAME);
-        FlinkCatalog actualCatalog =
-                (FlinkCatalog)
-                        FactoryUtil.createCatalog(
-                                CATALOG_NAME,
-                                options,
-                                new Configuration(),
-                                Thread.currentThread().getContextClassLoader());
+        FlinkCatalog actualCatalog = (FlinkCatalog) FactoryUtil.createCatalog(
+                CATALOG_NAME,
+                options,
+                new Configuration(),
+                Thread.currentThread().getContextClassLoader());
 
-        assertThat(actualCatalog.getDefaultDatabase())
-                .isEqualTo(FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue());
+        assertThat(actualCatalog.getDefaultDatabase()).isEqualTo(FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue());
     }
 
     private static void checkEquals(FlinkCatalog c1, FlinkCatalog c2) {
@@ -130,9 +119,7 @@ abstract class FlinkCatalogFactoryTest {
 
         // Test that optionalOptions() correctly declares DEFAULT_DATABASE
         Set<ConfigOption<?>> optionalOptions = factory.optionalOptions();
-        assertThat(optionalOptions)
-                .hasSize(1)
-                .containsExactly(FlinkCatalogOptions.DEFAULT_DATABASE);
+        assertThat(optionalOptions).hasSize(1).containsExactly(FlinkCatalogOptions.DEFAULT_DATABASE);
 
         ConfigOption<?> defaultDbOption = FlinkCatalogOptions.DEFAULT_DATABASE;
         assertThat(defaultDbOption.key()).isEqualTo("default-database");

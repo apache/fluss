@@ -45,19 +45,12 @@ public class InternalRowTest {
         assertThat(InternalRow.getDataClass(DataTypes.FLOAT())).isEqualTo(Float.class);
         assertThat(InternalRow.getDataClass(DataTypes.DOUBLE())).isEqualTo(Double.class);
         assertThat(InternalRow.getDataClass(DataTypes.TIMESTAMP())).isEqualTo(TimestampNtz.class);
-        assertThat(InternalRow.getDataClass(DataTypes.TIMESTAMP_LTZ()))
-                .isEqualTo(TimestampLtz.class);
+        assertThat(InternalRow.getDataClass(DataTypes.TIMESTAMP_LTZ())).isEqualTo(TimestampLtz.class);
         assertThatThrownBy(() -> InternalRow.getDataClass(DataTypes.ARRAY(DataTypes.TIMESTAMP())))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(
-                        () ->
-                                InternalRow.getDataClass(
-                                        DataTypes.MAP(DataTypes.INT(), DataTypes.TIMESTAMP())))
+        assertThatThrownBy(() -> InternalRow.getDataClass(DataTypes.MAP(DataTypes.INT(), DataTypes.TIMESTAMP())))
                 .isInstanceOf(IllegalArgumentException.class);
-        assertThatThrownBy(
-                        () ->
-                                InternalRow.getDataClass(
-                                        DataTypes.ROW(new DataField("a", DataTypes.INT()))))
+        assertThatThrownBy(() -> InternalRow.getDataClass(DataTypes.ROW(new DataField("a", DataTypes.INT()))))
                 .isInstanceOf(IllegalArgumentException.class);
     }
 }

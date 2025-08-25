@@ -59,69 +59,64 @@ public class DelayedOperationTest {
 
     @Test
     void testLockInTryCompleteElseWatch() {
-        DelayedOperation op =
-                new DelayedOperation(100000L) {
-                    @Override
-                    public void onExpiration() {}
+        DelayedOperation op = new DelayedOperation(100000L) {
+            @Override
+            public void onExpiration() {}
 
-                    @Override
-                    public void onComplete() {}
+            @Override
+            public void onComplete() {}
 
-                    @Override
-                    public boolean tryComplete() {
-                        assertThat(((ReentrantLock) lock).isHeldByCurrentThread()).isTrue();
-                        return false;
-                    }
+            @Override
+            public boolean tryComplete() {
+                assertThat(((ReentrantLock) lock).isHeldByCurrentThread()).isTrue();
+                return false;
+            }
 
-                    @Override
-                    public boolean safeTryComplete() {
-                        Assertions.fail("tryCompleteElseWatch should not use safeTryComplete");
-                        return super.safeTryComplete();
-                    }
-                };
+            @Override
+            public boolean safeTryComplete() {
+                Assertions.fail("tryCompleteElseWatch should not use safeTryComplete");
+                return super.safeTryComplete();
+            }
+        };
 
         delayedOperationManager.tryCompleteElseWatch(op, Collections.singletonList("key"));
     }
 
     @Test
     void testSafeTryCompleteOrElse() {
-        DelayedOperation opFalse =
-                new DelayedOperation(100000L) {
-                    @Override
-                    public void onExpiration() {}
+        DelayedOperation opFalse = new DelayedOperation(100000L) {
+            @Override
+            public void onExpiration() {}
 
-                    @Override
-                    public void onComplete() {}
+            @Override
+            public void onComplete() {}
 
-                    @Override
-                    public boolean tryComplete() {
-                        assertThat(((ReentrantLock) lock).isHeldByCurrentThread()).isTrue();
-                        return false;
-                    }
-                };
+            @Override
+            public boolean tryComplete() {
+                assertThat(((ReentrantLock) lock).isHeldByCurrentThread()).isTrue();
+                return false;
+            }
+        };
 
         final boolean[] pass = new boolean[1];
         assertThat(opFalse.safeTryCompleteOrElse(() -> pass[0] = true)).isFalse();
         assertThat(pass[0]).isTrue();
 
-        DelayedOperation opTrue =
-                new DelayedOperation(100000L) {
-                    @Override
-                    public void onExpiration() {}
+        DelayedOperation opTrue = new DelayedOperation(100000L) {
+            @Override
+            public void onExpiration() {}
 
-                    @Override
-                    public void onComplete() {}
+            @Override
+            public void onComplete() {}
 
-                    @Override
-                    public boolean tryComplete() {
-                        assertThat(((ReentrantLock) lock).isHeldByCurrentThread()).isTrue();
-                        return true;
-                    }
-                };
+            @Override
+            public boolean tryComplete() {
+                assertThat(((ReentrantLock) lock).isHeldByCurrentThread()).isTrue();
+                return true;
+            }
+        };
 
-        assertThat(
-                        opTrue.safeTryCompleteOrElse(
-                                () -> Assertions.fail("this method should NOT be executed")))
+        assertThat(opTrue.safeTryCompleteOrElse(() -> Assertions.fail("this method should NOT be executed")))
                 .isTrue();
     }
 
@@ -133,16 +128,12 @@ public class DelayedOperationTest {
         // With no waiting requests, nothing should be satisfied.
         assertThat(delayedOperationManager.checkAndComplete("test1")).isEqualTo(0);
         // r1 not satisfied and hence watched.
-        assertThat(
-                        delayedOperationManager.tryCompleteElseWatch(
-                                r1, Collections.singletonList("test1")))
+        assertThat(delayedOperationManager.tryCompleteElseWatch(r1, Collections.singletonList("test1")))
                 .isFalse();
         // Still nothing satisfied.
         assertThat(delayedOperationManager.checkAndComplete("test1")).isEqualTo(0);
         // r2 not satisfied and hence watched.
-        assertThat(
-                        delayedOperationManager.tryCompleteElseWatch(
-                                r2, Collections.singletonList("test2")))
+        assertThat(delayedOperationManager.tryCompleteElseWatch(r2, Collections.singletonList("test2")))
                 .isFalse();
         // Still nothing satisfied.
         assertThat(delayedOperationManager.checkAndComplete("test2")).isEqualTo(0);
@@ -167,14 +158,10 @@ public class DelayedOperationTest {
         TestDelayedOperation r1 = new TestDelayedOperation(expiration);
         TestDelayedOperation r2 = new TestDelayedOperation(200000L);
         // r1 not satisfied and hence watched.
-        assertThat(
-                        delayedOperationManager.tryCompleteElseWatch(
-                                r1, Collections.singletonList("test1")))
+        assertThat(delayedOperationManager.tryCompleteElseWatch(r1, Collections.singletonList("test1")))
                 .isFalse();
         // r2 not satisfied and hence watched.
-        assertThat(
-                        delayedOperationManager.tryCompleteElseWatch(
-                                r2, Collections.singletonList("test2")))
+        assertThat(delayedOperationManager.tryCompleteElseWatch(r2, Collections.singletonList("test2")))
                 .isFalse();
         r1.awaitExpiration();
         long elapsed = TimeUnit.NANOSECONDS.toMillis(System.nanoTime()) - start;
@@ -294,16 +281,15 @@ public class DelayedOperationTest {
         for (int i = 0; i < completionAttempts; i++) {
             for (TestDelayedOperationV2 op : ops) {
                 long delayMs = random.nextInt(maxDelayMs);
-                Future<?> future =
-                        executor.schedule(
-                                () -> {
-                                    if (op.completionAttemptsRemaining.decrementAndGet() == 0) {
-                                        op.completable = true;
-                                    }
-                                    delayedOperationManager.checkAndComplete(op.key);
-                                },
-                                delayMs,
-                                TimeUnit.MILLISECONDS);
+                Future<?> future = executor.schedule(
+                        () -> {
+                            if (op.completionAttemptsRemaining.decrementAndGet() == 0) {
+                                op.completable = true;
+                            }
+                            delayedOperationManager.checkAndComplete(op.key);
+                        },
+                        delayMs,
+                        TimeUnit.MILLISECONDS);
                 futures.add(future);
             }
         }

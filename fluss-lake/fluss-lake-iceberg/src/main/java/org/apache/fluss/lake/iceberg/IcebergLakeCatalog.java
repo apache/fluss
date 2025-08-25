@@ -86,20 +86,20 @@ public class IcebergLakeCatalog implements LakeCatalog {
         Map<String, String> icebergProps = configuration.toMap();
         String catalogName = icebergProps.getOrDefault("name", ICEBERG_CATALOG_DEFAULT_NAME);
         return buildIcebergCatalog(
-                catalogName, icebergProps, IcebergConfiguration.from(configuration).get());
+                catalogName,
+                icebergProps,
+                IcebergConfiguration.from(configuration).get());
     }
 
     @Override
-    public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
-            throws TableAlreadyExistException {
+    public void createTable(TablePath tablePath, TableDescriptor tableDescriptor) throws TableAlreadyExistException {
         // convert Fluss table path to iceberg table
         boolean isPkTable = tableDescriptor.hasPrimaryKey();
         TableIdentifier icebergId = toIcebergTableIdentifier(tablePath);
         Schema icebergSchema = convertToIcebergSchema(tableDescriptor, isPkTable);
         Catalog.TableBuilder tableBuilder = icebergCatalog.buildTable(icebergId, icebergSchema);
 
-        PartitionSpec partitionSpec =
-                createPartitionSpec(tableDescriptor, icebergSchema, isPkTable);
+        PartitionSpec partitionSpec = createPartitionSpec(tableDescriptor, icebergSchema, isPkTable);
         SortOrder sortOrder = createSortOrder(icebergSchema);
         tableBuilder.withProperties(buildTableProperties(tableDescriptor, isPkTable));
         tableBuilder.withPartitionSpec(partitionSpec);
@@ -112,12 +112,11 @@ public class IcebergLakeCatalog implements LakeCatalog {
                 createTable(tablePath, tableBuilder);
             } catch (NoSuchNamespaceException t) {
                 // shouldn't happen in normal cases
-                throw new RuntimeException(
-                        String.format(
-                                "Fail to create table %s in Iceberg, because "
-                                        + "Namespace %s still doesn't exist although create namespace "
-                                        + "successfully, please try again.",
-                                tablePath, tablePath.getDatabaseName()));
+                throw new RuntimeException(String.format(
+                        "Fail to create table %s in Iceberg, because "
+                                + "Namespace %s still doesn't exist although create namespace "
+                                + "successfully, please try again.",
+                        tablePath, tablePath.getDatabaseName()));
             }
         }
     }
@@ -148,30 +147,24 @@ public class IcebergLakeCatalog implements LakeCatalog {
             }
             Types.NestedField field;
             if (column.getDataType().isNullable()) {
-                field =
-                        Types.NestedField.optional(
-                                fieldId++,
-                                colName,
-                                column.getDataType()
-                                        .accept(FlussDataTypeToIcebergDataType.INSTANCE),
-                                column.getComment().orElse(null));
+                field = Types.NestedField.optional(
+                        fieldId++,
+                        colName,
+                        column.getDataType().accept(FlussDataTypeToIcebergDataType.INSTANCE),
+                        column.getComment().orElse(null));
             } else {
-                field =
-                        Types.NestedField.required(
-                                fieldId++,
-                                colName,
-                                column.getDataType()
-                                        .accept(FlussDataTypeToIcebergDataType.INSTANCE),
-                                column.getComment().orElse(null));
+                field = Types.NestedField.required(
+                        fieldId++,
+                        colName,
+                        column.getDataType().accept(FlussDataTypeToIcebergDataType.INSTANCE),
+                        column.getComment().orElse(null));
             }
             fields.add(field);
         }
 
         // system columns
         for (Map.Entry<String, Type> systemColumn : SYSTEM_COLUMNS.entrySet()) {
-            fields.add(
-                    Types.NestedField.required(
-                            fieldId++, systemColumn.getKey(), systemColumn.getValue()));
+            fields.add(Types.NestedField.required(fieldId++, systemColumn.getKey(), systemColumn.getValue()));
         }
 
         if (isPkTable) {
@@ -190,25 +183,19 @@ public class IcebergLakeCatalog implements LakeCatalog {
     private PartitionSpec createPartitionSpec(
             TableDescriptor tableDescriptor, Schema icebergSchema, boolean isPkTable) {
         List<String> bucketKeys = tableDescriptor.getBucketKeys();
-        int bucketCount =
-                tableDescriptor
-                        .getTableDistribution()
-                        .flatMap(TableDescriptor.TableDistribution::getBucketCount)
-                        .orElseThrow(
-                                () ->
-                                        new IllegalArgumentException(
-                                                "Bucket count (bucket.num) must be set"));
+        int bucketCount = tableDescriptor
+                .getTableDistribution()
+                .flatMap(TableDescriptor.TableDistribution::getBucketCount)
+                .orElseThrow(() -> new IllegalArgumentException("Bucket count (bucket.num) must be set"));
 
         // Only support one bucket key for now
         if (bucketKeys.size() > 1) {
-            throw new UnsupportedOperationException(
-                    "Only one bucket key is supported for Iceberg at the moment");
+            throw new UnsupportedOperationException("Only one bucket key is supported for Iceberg at the moment");
         }
 
         // pk table must have bucket key
         if (bucketKeys.isEmpty() && isPkTable) {
-            throw new IllegalArgumentException(
-                    "Bucket key must be set for primary key Iceberg tables");
+            throw new IllegalArgumentException("Bucket key must be set for primary key Iceberg tables");
         }
 
         PartitionSpec.Builder builder = PartitionSpec.builderFor(icebergSchema);
@@ -232,8 +219,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
         return builder.build();
     }
 
-    private void setFlussPropertyToIceberg(
-            String key, String value, Map<String, String> icebergProperties) {
+    private void setFlussPropertyToIceberg(String key, String value, Map<String, String> icebergProperties) {
         if (key.startsWith(ICEBERG_CONF_PREFIX)) {
             icebergProperties.put(key.substring(ICEBERG_CONF_PREFIX.length()), value);
         } else {
@@ -261,8 +247,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
         return builder.build();
     }
 
-    private Map<String, String> buildTableProperties(
-            TableDescriptor tableDescriptor, boolean isPkTable) {
+    private Map<String, String> buildTableProperties(TableDescriptor tableDescriptor, boolean isPkTable) {
         Map<String, String> icebergProperties = new HashMap<>();
 
         if (isPkTable) {
@@ -272,12 +257,8 @@ public class IcebergLakeCatalog implements LakeCatalog {
             icebergProperties.put("write.merge.mode", "merge-on-read");
         }
 
-        tableDescriptor
-                .getProperties()
-                .forEach((k, v) -> setFlussPropertyToIceberg(k, v, icebergProperties));
-        tableDescriptor
-                .getCustomProperties()
-                .forEach((k, v) -> setFlussPropertyToIceberg(k, v, icebergProperties));
+        tableDescriptor.getProperties().forEach((k, v) -> setFlussPropertyToIceberg(k, v, icebergProperties));
+        tableDescriptor.getCustomProperties().forEach((k, v) -> setFlussPropertyToIceberg(k, v, icebergProperties));
 
         return icebergProperties;
     }

@@ -32,8 +32,7 @@ public class CatalogTableTestUtils {
     private CatalogTableTestUtils() {}
 
     /** create a table with a newly added options. */
-    public static CatalogTable addOptions(
-            CatalogTable catalogTable, Map<String, String> addedOptions) {
+    public static CatalogTable addOptions(CatalogTable catalogTable, Map<String, String> addedOptions) {
         Map<String, String> options = new HashMap<>(catalogTable.getOptions());
         options.putAll(addedOptions);
         return catalogTable.copy(options);
@@ -43,8 +42,7 @@ public class CatalogTableTestUtils {
      * Check the catalog table {@code actualTable} is equal to the catalog table {@code
      * expectedTable} without ignoring schema.
      */
-    public static void checkEqualsRespectSchema(
-            CatalogTable actualTable, CatalogTable expectedTable) {
+    public static void checkEqualsRespectSchema(CatalogTable actualTable, CatalogTable expectedTable) {
         checkEquals(actualTable, expectedTable, false);
     }
 
@@ -52,8 +50,7 @@ public class CatalogTableTestUtils {
      * Check the catalog table {@code actualTable} is equal to the catalog table {@code
      * expectedTable} with ignoring schema.
      */
-    public static void checkEqualsIgnoreSchema(
-            CatalogTable actualTable, CatalogTable expectedTable) {
+    public static void checkEqualsIgnoreSchema(CatalogTable actualTable, CatalogTable expectedTable) {
         checkEquals(actualTable, expectedTable, true);
     }
 
@@ -63,12 +60,10 @@ public class CatalogTableTestUtils {
      *
      * @param ignoreSchema whether to ignore schema
      */
-    private static void checkEquals(
-            CatalogTable actualTable, CatalogTable expectedTable, boolean ignoreSchema) {
+    private static void checkEquals(CatalogTable actualTable, CatalogTable expectedTable, boolean ignoreSchema) {
         assertThat(actualTable.getTableKind()).isEqualTo(expectedTable.getTableKind());
         if (!ignoreSchema) {
-            assertThat(actualTable.getUnresolvedSchema())
-                    .isEqualTo(expectedTable.getUnresolvedSchema());
+            assertThat(actualTable.getUnresolvedSchema()).isEqualTo(expectedTable.getUnresolvedSchema());
         }
         assertThat(actualTable.getComment()).isEqualTo(expectedTable.getComment());
         assertThat(actualTable.getPartitionKeys()).isEqualTo(expectedTable.getPartitionKeys());
@@ -76,8 +71,7 @@ public class CatalogTableTestUtils {
         assertOptionsEqual(actualTable.getOptions(), expectedTable.getOptions());
     }
 
-    private static void assertOptionsEqual(
-            Map<String, String> actualOptions, Map<String, String> expectedOptions) {
+    private static void assertOptionsEqual(Map<String, String> actualOptions, Map<String, String> expectedOptions) {
         actualOptions.remove(BOOTSTRAP_SERVERS.key());
         actualOptions.remove(TABLE_REPLICATION_FACTOR.key());
         assertThat(actualOptions).isEqualTo(expectedOptions);

@@ -112,9 +112,7 @@ public interface IsrState {
         private final CommittedIsrState lastCommittedState;
 
         public PendingExpandIsrState(
-                int newInSyncReplicaId,
-                LeaderAndIsr sentLeaderAndIsr,
-                CommittedIsrState lastCommittedState) {
+                int newInSyncReplicaId, LeaderAndIsr sentLeaderAndIsr, CommittedIsrState lastCommittedState) {
             this.newInSyncReplicaId = newInSyncReplicaId;
             this.sentLeaderAndIsr = sentLeaderAndIsr;
             this.lastCommittedState = lastCommittedState;

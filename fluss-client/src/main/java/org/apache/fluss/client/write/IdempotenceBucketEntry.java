@@ -65,8 +65,7 @@ public class IdempotenceBucketEntry {
      * into account.
      */
     private static final Comparator<WriteBatch> WRITE_BATCH_COMPARATOR =
-            Comparator.comparingLong(WriteBatch::writerId)
-                    .thenComparingInt(WriteBatch::batchSequence);
+            Comparator.comparingLong(WriteBatch::writerId).thenComparingInt(WriteBatch::batchSequence);
 
     IdempotenceBucketEntry(TableBucket tableBucket) {
         this.tableBucket = tableBucket;
@@ -85,18 +84,15 @@ public class IdempotenceBucketEntry {
     }
 
     Optional<Integer> lastAckedBatchSequence() {
-        return lastAckedSequence == NO_LAST_ACKED_BATCH_SEQUENCE
-                ? Optional.empty()
-                : Optional.of(lastAckedSequence);
+        return lastAckedSequence == NO_LAST_ACKED_BATCH_SEQUENCE ? Optional.empty() : Optional.of(lastAckedSequence);
     }
 
     void startBatchSequencesAtBeginning(long newWriterId) {
         final int[] sequence = {0};
-        resetSequenceNumbers(
-                inFlightBatch -> {
-                    inFlightBatch.resetWriterState(newWriterId, sequence[0]);
-                    sequence[0] += 1;
-                });
+        resetSequenceNumbers(inFlightBatch -> {
+            inFlightBatch.resetWriterState(newWriterId, sequence[0]);
+            sequence[0] += 1;
+        });
         writerId = newWriterId;
         nextSequence = sequence[0];
         lastAckedSequence = NO_LAST_ACKED_BATCH_SEQUENCE;
@@ -145,25 +141,23 @@ public class IdempotenceBucketEntry {
      */
     void adjustSequencesDueToFailedBatch(WriteBatch batch) {
         decrementSequence();
-        resetSequenceNumbers(
-                inFlightBatch -> {
-                    int inFlightBatchSequence = inFlightBatch.batchSequence();
-                    if (inFlightBatchSequence < batch.batchSequence()) {
-                        return;
-                    }
+        resetSequenceNumbers(inFlightBatch -> {
+            int inFlightBatchSequence = inFlightBatch.batchSequence();
+            if (inFlightBatchSequence < batch.batchSequence()) {
+                return;
+            }
 
-                    int newSequence = inFlightBatchSequence - 1;
-                    if (newSequence < 0) {
-                        throw new IllegalStateException(
-                                "Batch sequence for batch with sequence "
-                                        + inFlightBatchSequence
-                                        + " for table bucket "
-                                        + tableBucket
-                                        + " is going to become negative :"
-                                        + newSequence);
-                    }
-                    inFlightBatch.resetWriterState(writerId, newSequence);
-                });
+            int newSequence = inFlightBatchSequence - 1;
+            if (newSequence < 0) {
+                throw new IllegalStateException("Batch sequence for batch with sequence "
+                        + inFlightBatchSequence
+                        + " for table bucket "
+                        + tableBucket
+                        + " is going to become negative :"
+                        + newSequence);
+            }
+            inFlightBatch.resetWriterState(writerId, newSequence);
+        });
     }
 
     private void resetSequenceNumbers(Consumer<WriteBatch> resetSequence) {
@@ -179,11 +173,10 @@ public class IdempotenceBucketEntry {
         int updatedSequence = nextSequence;
         updatedSequence -= 1;
         if (updatedSequence < 0) {
-            throw new IllegalStateException(
-                    "Sequence number for table bucket "
-                            + tableBucket
-                            + " is going to become negative: "
-                            + updatedSequence);
+            throw new IllegalStateException("Sequence number for table bucket "
+                    + tableBucket
+                    + " is going to become negative: "
+                    + updatedSequence);
         }
         this.nextSequence = updatedSequence;
     }

@@ -149,8 +149,7 @@ public class CoordinatorServer extends ServerBase {
     }
 
     public static void main(String[] args) {
-        Configuration configuration =
-                loadConfiguration(args, CoordinatorServer.class.getSimpleName());
+        Configuration configuration = loadConfiguration(args, CoordinatorServer.class.getSimpleName());
         CoordinatorServer coordinatorServer = new CoordinatorServer(configuration);
         startServer(coordinatorServer);
     }
@@ -164,12 +163,11 @@ public class CoordinatorServer extends ServerBase {
 
             // for metrics
             this.metricRegistry = MetricRegistry.create(conf, pluginManager);
-            this.serverMetricGroup =
-                    ServerMetricUtils.createCoordinatorGroup(
-                            metricRegistry,
-                            ServerMetricUtils.validateAndGetClusterId(conf),
-                            endpoints.get(0).getHost(),
-                            serverId);
+            this.serverMetricGroup = ServerMetricUtils.createCoordinatorGroup(
+                    metricRegistry,
+                    ServerMetricUtils.validateAndGetClusterId(conf),
+                    endpoints.get(0).getHost(),
+                    serverId);
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
@@ -184,26 +182,23 @@ public class CoordinatorServer extends ServerBase {
             this.lakeTableTieringManager = new LakeTableTieringManager();
 
             MetadataManager metadataManager = new MetadataManager(zkClient, conf);
-            this.coordinatorService =
-                    new CoordinatorService(
-                            conf,
-                            remoteFileSystem,
-                            zkClient,
-                            this::getCoordinatorEventProcessor,
-                            metadataCache,
-                            metadataManager,
-                            authorizer,
-                            createLakeCatalog(),
-                            lakeTableTieringManager);
+            this.coordinatorService = new CoordinatorService(
+                    conf,
+                    remoteFileSystem,
+                    zkClient,
+                    this::getCoordinatorEventProcessor,
+                    metadataCache,
+                    metadataManager,
+                    authorizer,
+                    createLakeCatalog(),
+                    lakeTableTieringManager);
 
-            this.rpcServer =
-                    RpcServer.create(
-                            conf,
-                            endpoints,
-                            coordinatorService,
-                            serverMetricGroup,
-                            RequestsMetrics.createCoordinatorServerRequestMetrics(
-                                    serverMetricGroup));
+            this.rpcServer = RpcServer.create(
+                    conf,
+                    endpoints,
+                    coordinatorService,
+                    serverMetricGroup,
+                    RequestsMetrics.createCoordinatorServerRequestMetrics(serverMetricGroup));
             rpcServer.start();
 
             registerCoordinatorLeader();
@@ -216,31 +211,28 @@ public class CoordinatorServer extends ServerBase {
 
             this.coordinatorChannelManager = new CoordinatorChannelManager(rpcClient);
 
-            this.autoPartitionManager =
-                    new AutoPartitionManager(metadataCache, metadataManager, conf);
+            this.autoPartitionManager = new AutoPartitionManager(metadataCache, metadataManager, conf);
             autoPartitionManager.start();
 
             int ioExecutorPoolSize = conf.get(ConfigOptions.COORDINATOR_IO_POOL_SIZE);
             this.ioExecutor =
-                    Executors.newFixedThreadPool(
-                            ioExecutorPoolSize, new ExecutorThreadFactory("coordinator-io"));
+                    Executors.newFixedThreadPool(ioExecutorPoolSize, new ExecutorThreadFactory("coordinator-io"));
 
             // start coordinator event processor after we register coordinator leader to zk
             // so that the event processor can get the coordinator leader node from zk during start
             // up.
             // in HA for coordinator server, the processor also need to know the leader node during
             // start up
-            this.coordinatorEventProcessor =
-                    new CoordinatorEventProcessor(
-                            zkClient,
-                            metadataCache,
-                            coordinatorChannelManager,
-                            coordinatorContext,
-                            autoPartitionManager,
-                            lakeTableTieringManager,
-                            serverMetricGroup,
-                            conf,
-                            ioExecutor);
+            this.coordinatorEventProcessor = new CoordinatorEventProcessor(
+                    zkClient,
+                    metadataCache,
+                    coordinatorChannelManager,
+                    coordinatorContext,
+                    autoPartitionManager,
+                    lakeTableTieringManager,
+                    serverMetricGroup,
+                    conf,
+                    ioExecutor);
             coordinatorEventProcessor.startup();
 
             createDefaultDatabase();
@@ -257,8 +249,7 @@ public class CoordinatorServer extends ServerBase {
                 LakeStoragePluginSetUp.fromDataLakeFormat(dataLakeFormat.toString(), pluginManager);
         Map<String, String> lakeProperties = extractLakeProperties(conf);
         LakeStorage lakeStorage =
-                lakeStoragePlugin.createLakeStorage(
-                        Configuration.fromMap(checkNotNull(lakeProperties)));
+                lakeStoragePlugin.createLakeStorage(Configuration.fromMap(checkNotNull(lakeProperties)));
         return lakeStorage.createLakeCatalog();
     }
 
@@ -268,14 +259,13 @@ public class CoordinatorServer extends ServerBase {
             LOG.info("Shutting down Coordinator server ({}).", result);
             CompletableFuture<Void> serviceShutdownFuture = stopServices();
 
-            serviceShutdownFuture.whenComplete(
-                    ((Void ignored2, Throwable serviceThrowable) -> {
-                        if (serviceThrowable != null) {
-                            terminationFuture.completeExceptionally(serviceThrowable);
-                        } else {
-                            terminationFuture.complete(result);
-                        }
-                    }));
+            serviceShutdownFuture.whenComplete(((Void ignored2, Throwable serviceThrowable) -> {
+                if (serviceThrowable != null) {
+                    terminationFuture.completeExceptionally(serviceThrowable);
+                } else {
+                    terminationFuture.complete(result);
+                }
+            }));
         }
 
         return terminationFuture;
@@ -285,8 +275,7 @@ public class CoordinatorServer extends ServerBase {
         long startTime = System.currentTimeMillis();
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
         CoordinatorAddress coordinatorAddress =
-                new CoordinatorAddress(
-                        this.serverId, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf));
+                new CoordinatorAddress(this.serverId, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf));
 
         // we need to retry to register since although
         // zkClient reconnect, the ephemeral node may still exist
@@ -307,8 +296,7 @@ public class CoordinatorServer extends ServerBase {
                 }
 
                 LOG.warn(
-                        "Coordinator server already registered in Zookeeper. "
-                                + "retrying register after {} ms....",
+                        "Coordinator server already registered in Zookeeper. " + "retrying register after {} ms....",
                         ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS);
                 try {
                     Thread.sleep(ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS);
@@ -499,23 +487,20 @@ public class CoordinatorServer extends ServerBase {
 
     private static void validateConfigs(Configuration conf) {
         if (conf.get(ConfigOptions.DEFAULT_REPLICATION_FACTOR) < 1) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.DEFAULT_REPLICATION_FACTOR.key()));
+            throw new IllegalConfigurationException(String.format(
+                    "Invalid configuration for %s, it must be greater than or equal 1.",
+                    ConfigOptions.DEFAULT_REPLICATION_FACTOR.key()));
         }
         if (conf.get(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS) < 1) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS.key()));
+            throw new IllegalConfigurationException(String.format(
+                    "Invalid configuration for %s, it must be greater than or equal 1.",
+                    ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS.key()));
         }
 
         if (conf.get(ConfigOptions.COORDINATOR_IO_POOL_SIZE) < 1) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.COORDINATOR_IO_POOL_SIZE.key()));
+            throw new IllegalConfigurationException(String.format(
+                    "Invalid configuration for %s, it must be greater than or equal 1.",
+                    ConfigOptions.COORDINATOR_IO_POOL_SIZE.key()));
         }
 
         if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {

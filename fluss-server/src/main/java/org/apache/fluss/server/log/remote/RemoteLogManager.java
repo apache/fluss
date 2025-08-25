@@ -80,8 +80,7 @@ public class RemoteLogManager implements Closeable {
     private final Map<TableBucket, TaskWithFuture> rlmTasks = MapUtils.newConcurrentHashMap();
     private final Map<TableBucket, RemoteLogTablet> remoteLogs = MapUtils.newConcurrentHashMap();
 
-    public RemoteLogManager(
-            Configuration conf, ZooKeeperClient zkClient, CoordinatorGateway coordinatorGateway)
+    public RemoteLogManager(Configuration conf, ZooKeeperClient zkClient, CoordinatorGateway coordinatorGateway)
             throws IOException {
         this(
                 conf,
@@ -108,12 +107,10 @@ public class RemoteLogManager implements Closeable {
         this.coordinatorGateway = coordinatorGateway;
 
         File dataDir = new File(conf.getString(ConfigOptions.DATA_DIR));
-        this.remoteLogIndexCache =
-                new RemoteLogIndexCache(
-                        (int) conf.get(ConfigOptions.REMOTE_LOG_INDEX_FILE_CACHE_SIZE).getBytes(),
-                        remoteLogStorage,
-                        dataDir);
-        this.taskInterval = conf.get(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION).toMillis();
+        this.remoteLogIndexCache = new RemoteLogIndexCache(
+                (int) conf.get(ConfigOptions.REMOTE_LOG_INDEX_FILE_CACHE_SIZE).getBytes(), remoteLogStorage, dataDir);
+        this.taskInterval =
+                conf.get(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION).toMillis();
         this.rlManagerScheduledThreadPool = scheduledExecutor;
         this.clock = clock;
     }
@@ -134,16 +131,13 @@ public class RemoteLogManager implements Closeable {
         TableBucket tableBucket = replica.getTableBucket();
         PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
         LogTablet log = replica.getLogTablet();
-        RemoteLogTablet remoteLog =
-                new RemoteLogTablet(physicalTablePath, tableBucket, replica.getLogTTLMs());
-        Optional<RemoteLogManifestHandle> remoteLogManifestHandleOpt =
-                zkClient.getRemoteLogManifestHandle(tableBucket);
+        RemoteLogTablet remoteLog = new RemoteLogTablet(physicalTablePath, tableBucket, replica.getLogTTLMs());
+        Optional<RemoteLogManifestHandle> remoteLogManifestHandleOpt = zkClient.getRemoteLogManifestHandle(tableBucket);
         if (remoteLogManifestHandleOpt.isPresent()) {
             // If there is remote log manifest handle in remote, we will download
             // the manifest snapshot from remote storage and write to cache.
-            RemoteLogManifest manifest =
-                    remoteLogStorage.readRemoteLogManifestSnapshot(
-                            remoteLogManifestHandleOpt.get().getRemoteLogManifestPath());
+            RemoteLogManifest manifest = remoteLogStorage.readRemoteLogManifestSnapshot(
+                    remoteLogManifestHandleOpt.get().getRemoteLogManifestPath());
             remoteLog.loadRemoteLogManifest(manifest);
         }
         remoteLog.getRemoteLogEndOffset().ifPresent(log::updateRemoteLogEndOffset);
@@ -165,10 +159,9 @@ public class RemoteLogManager implements Closeable {
         RemoteLogTablet remoteLog = remoteLogs.remove(tb);
 
         if (remoteLog != null) {
-            List<UUID> remoteLogSegmentIdList =
-                    remoteLog.allRemoteLogSegments().stream()
-                            .map(RemoteLogSegment::remoteLogSegmentId)
-                            .collect(Collectors.toList());
+            List<UUID> remoteLogSegmentIdList = remoteLog.allRemoteLogSegments().stream()
+                    .map(RemoteLogSegment::remoteLogSegmentId)
+                    .collect(Collectors.toList());
             // remove cache.
             remoteLogIndexCache.removeAll(remoteLogSegmentIdList);
             // unregister the remote log metrics, only leader needs to report
@@ -258,47 +251,32 @@ public class RemoteLogManager implements Closeable {
             // TODO: maybe need to optimize to delete on specific file path
             remoteLogStorage.deleteTableBucket(physicalTablePath, tableBucket);
         } catch (RemoteStorageException e) {
-            LOG.error(
-                    "Error occurred while deleting remote log for table-bucket: {}",
-                    tableBucket,
-                    e);
+            LOG.error("Error occurred while deleting remote log for table-bucket: {}", tableBucket, e);
         }
     }
 
-    private void doHandleLeaderReplica(
-            Replica replica, RemoteLogTablet remoteLog, TableBucket tableBucket) {
-        rlmTasks.compute(
-                tableBucket,
-                (tb, prevTask) -> {
-                    if (prevTask != null) {
-                        LOG.info(
-                                "Cancelling the remote log task for table-bucket: {}", tableBucket);
-                        prevTask.cancel();
-                    }
-                    LogTieringTask task =
-                            new LogTieringTask(
-                                    replica,
-                                    remoteLog,
-                                    remoteLogStorage,
-                                    coordinatorGateway,
-                                    clock);
-                    LOG.info("Created a new remote log task: {} and getting scheduled", task);
-                    ScheduledFuture<?> future =
-                            rlManagerScheduledThreadPool.scheduleWithFixedDelay(
-                                    task,
-                                    Math.abs(ThreadLocalRandom.current().nextLong(taskInterval)),
-                                    taskInterval,
-                                    TimeUnit.MILLISECONDS);
-                    return new TaskWithFuture(task, future);
-                });
+    private void doHandleLeaderReplica(Replica replica, RemoteLogTablet remoteLog, TableBucket tableBucket) {
+        rlmTasks.compute(tableBucket, (tb, prevTask) -> {
+            if (prevTask != null) {
+                LOG.info("Cancelling the remote log task for table-bucket: {}", tableBucket);
+                prevTask.cancel();
+            }
+            LogTieringTask task = new LogTieringTask(replica, remoteLog, remoteLogStorage, coordinatorGateway, clock);
+            LOG.info("Created a new remote log task: {} and getting scheduled", task);
+            ScheduledFuture<?> future = rlManagerScheduledThreadPool.scheduleWithFixedDelay(
+                    task,
+                    Math.abs(ThreadLocalRandom.current().nextLong(taskInterval)),
+                    taskInterval,
+                    TimeUnit.MILLISECONDS);
+            return new TaskWithFuture(task, future);
+        });
     }
 
     @VisibleForTesting
     RemoteLogTablet remoteLogTablet(TableBucket tableBucket) {
         RemoteLogTablet remoteLog = remoteLogs.get(tableBucket);
         if (remoteLog == null) {
-            throw new IllegalStateException(
-                    "RemoteLogTablet can't be found for table-bucket " + tableBucket);
+            throw new IllegalStateException("RemoteLogTablet can't be found for table-bucket " + tableBucket);
         }
         return remoteLog;
     }
@@ -309,8 +287,7 @@ public class RemoteLogManager implements Closeable {
         IOUtils.closeQuietly(remoteLogStorage, "RemoteLogStorageManager");
         IOUtils.closeQuietly(remoteLogIndexCache, "RemoteIndexCache");
 
-        shutdownAndAwaitTermination(
-                rlManagerScheduledThreadPool, "RLMScheduledThreadPool", 10, TimeUnit.SECONDS);
+        shutdownAndAwaitTermination(rlManagerScheduledThreadPool, "RLMScheduledThreadPool", 10, TimeUnit.SECONDS);
 
         rlmTasks.clear();
     }

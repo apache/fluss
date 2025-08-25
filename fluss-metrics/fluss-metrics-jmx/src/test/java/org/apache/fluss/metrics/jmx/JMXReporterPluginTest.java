@@ -44,11 +44,8 @@ class JMXReporterPluginTest {
         JMXReporter metricReporter = new JMXReporterPlugin().createMetricReporter(conf);
         try {
             assertThat(metricReporter.getPort())
-                    .hasValueSatisfying(
-                            port ->
-                                    assertThat(port)
-                                            .isGreaterThanOrEqualTo(9000)
-                                            .isLessThanOrEqualTo(9010));
+                    .hasValueSatisfying(port ->
+                            assertThat(port).isGreaterThanOrEqualTo(9000).isLessThanOrEqualTo(9010));
         } finally {
             metricReporter.close();
         }
@@ -56,8 +53,7 @@ class JMXReporterPluginTest {
 
     @Test
     void testWithoutArgument() {
-        JMXReporter metricReporter =
-                new JMXReporterPlugin().createMetricReporter(new Configuration());
+        JMXReporter metricReporter = new JMXReporterPlugin().createMetricReporter(new Configuration());
 
         try {
             assertThat(metricReporter.getPort()).isEmpty();

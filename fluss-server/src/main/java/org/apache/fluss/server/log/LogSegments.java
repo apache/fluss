@@ -95,9 +95,7 @@ public final class LogSegments {
     }
 
     public List<Long> baseOffsets() {
-        return segments.values().stream()
-                .map(LogSegment::getBaseOffset)
-                .collect(Collectors.toList());
+        return segments.values().stream().map(LogSegment::getBaseOffset).collect(Collectors.toList());
     }
 
     /**
@@ -134,18 +132,16 @@ public final class LogSegments {
         if (from == to) {
             return new ArrayList<>();
         } else if (from > to) {
-            throw new IllegalArgumentException(
-                    "Invalid log segment range: requested segments in "
-                            + tableBucket
-                            + " from offset "
-                            + from
-                            + " which is greater than limit offset "
-                            + to);
+            throw new IllegalArgumentException("Invalid log segment range: requested segments in "
+                    + tableBucket
+                    + " from offset "
+                    + from
+                    + " which is greater than limit offset "
+                    + to);
         } else {
-            ConcurrentNavigableMap<Long, LogSegment> fromToMap =
-                    Optional.ofNullable(segments.floorKey(from))
-                            .map(floor -> segments.subMap(floor, to))
-                            .orElse(segments.headMap(to));
+            ConcurrentNavigableMap<Long, LogSegment> fromToMap = Optional.ofNullable(segments.floorKey(from))
+                    .map(floor -> segments.subMap(floor, to))
+                    .orElse(segments.headMap(to));
             return new ArrayList<>(fromToMap.values());
         }
     }

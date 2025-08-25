@@ -65,25 +65,13 @@ public class LogRecordBatchAssert extends AbstractAssert<LogRecordBatchAssert, L
             throw new IllegalStateException(
                     "LogRecordBatchAssert#isEqualTo(LogRecordBatch) must be invoked after #withSchema(RowType).");
         }
-        assertThat(actual.schemaId())
-                .as("LogRecordBatch#schemaId()")
-                .isEqualTo(expected.schemaId());
-        assertThat(actual.baseLogOffset())
-                .as("LogRecordBatch#baseLogOffset()")
-                .isEqualTo(expected.baseLogOffset());
-        assertThat(actual.lastLogOffset())
-                .as("LogRecordBatch#lastLogOffset()")
-                .isEqualTo(expected.lastLogOffset());
-        assertThat(actual.nextLogOffset())
-                .as("LogRecordBatch#nextLogOffset()")
-                .isEqualTo(expected.nextLogOffset());
+        assertThat(actual.schemaId()).as("LogRecordBatch#schemaId()").isEqualTo(expected.schemaId());
+        assertThat(actual.baseLogOffset()).as("LogRecordBatch#baseLogOffset()").isEqualTo(expected.baseLogOffset());
+        assertThat(actual.lastLogOffset()).as("LogRecordBatch#lastLogOffset()").isEqualTo(expected.lastLogOffset());
+        assertThat(actual.nextLogOffset()).as("LogRecordBatch#nextLogOffset()").isEqualTo(expected.nextLogOffset());
         assertThat(actual.magic()).as("LogRecordBatch#magic()").isEqualTo(expected.magic());
-        assertThat(actual.writerId())
-                .as("LogRecordBatch#writerId()")
-                .isEqualTo(expected.writerId());
-        assertThat(actual.batchSequence())
-                .as("LogRecordBatch#batchSequence()")
-                .isEqualTo(expected.batchSequence());
+        assertThat(actual.writerId()).as("LogRecordBatch#writerId()").isEqualTo(expected.writerId());
+        assertThat(actual.batchSequence()).as("LogRecordBatch#batchSequence()").isEqualTo(expected.batchSequence());
         assertThat(actual.getRecordCount())
                 .as("LogRecordBatch#getRecordCount()")
                 .isEqualTo(expected.getRecordCount());
@@ -92,21 +80,15 @@ public class LogRecordBatchAssert extends AbstractAssert<LogRecordBatchAssert, L
                 CloseableIterator<LogRecord> expectIter = expected.records(readContext)) {
             while (expectIter.hasNext()) {
                 assertThat(actualIter.hasNext()).isTrue();
-                assertThatLogRecord(actualIter.next())
-                        .withSchema(rowType)
-                        .isEqualTo(expectIter.next());
+                assertThatLogRecord(actualIter.next()).withSchema(rowType).isEqualTo(expectIter.next());
             }
             assertThat(actualIter.hasNext()).isFalse();
         }
         // put less readable assertions last
-        assertThat(actual.sizeInBytes())
-                .as("LogRecordBatch#sizeInBytes()")
-                .isEqualTo(expected.sizeInBytes());
+        assertThat(actual.sizeInBytes()).as("LogRecordBatch#sizeInBytes()").isEqualTo(expected.sizeInBytes());
 
         if (assertCheckSum) {
-            assertThat(actual.checksum())
-                    .as("LogRecordBatch#checksum()")
-                    .isEqualTo(expected.checksum());
+            assertThat(actual.checksum()).as("LogRecordBatch#checksum()").isEqualTo(expected.checksum());
         }
         return this;
     }

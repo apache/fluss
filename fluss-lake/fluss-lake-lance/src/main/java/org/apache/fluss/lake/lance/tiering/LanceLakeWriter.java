@@ -40,29 +40,24 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
     private final LanceArrowWriter arrowWriter;
     private final FutureTask<List<FragmentMetadata>> fragmentCreationTask;
 
-    public LanceLakeWriter(Configuration options, WriterInitContext writerInitContext)
-            throws IOException {
-        LanceConfig config =
-                LanceConfig.from(
-                        options.toMap(),
-                        writerInitContext.customProperties(),
-                        writerInitContext.tablePath().getDatabaseName(),
-                        writerInitContext.tablePath().getTableName());
+    public LanceLakeWriter(Configuration options, WriterInitContext writerInitContext) throws IOException {
+        LanceConfig config = LanceConfig.from(
+                options.toMap(),
+                writerInitContext.customProperties(),
+                writerInitContext.tablePath().getDatabaseName(),
+                writerInitContext.tablePath().getTableName());
         int batchSize = LanceConfig.getBatchSize(config);
         Optional<Schema> schema = LanceDatasetAdapter.getSchema(config);
         if (!schema.isPresent()) {
             throw new IOException("Fail to get dataset " + config.getDatasetUri() + " in Lance.");
         }
 
-        this.arrowWriter =
-                LanceDatasetAdapter.getArrowWriter(
-                        schema.get(), batchSize, writerInitContext.schema().getRowType());
+        this.arrowWriter = LanceDatasetAdapter.getArrowWriter(
+                schema.get(), batchSize, writerInitContext.schema().getRowType());
 
         WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
         Callable<List<FragmentMetadata>> fragmentCreator =
-                () ->
-                        LanceDatasetAdapter.createFragment(
-                                config.getDatasetUri(), arrowWriter, params);
+                () -> LanceDatasetAdapter.createFragment(config.getDatasetUri(), arrowWriter, params);
         fragmentCreationTask = new FutureTask<>(fragmentCreator);
         Thread fragmentCreationThread = new Thread(fragmentCreationTask);
         fragmentCreationThread.start();

@@ -126,8 +126,7 @@ public class LogFetchCollector {
                             // a time per bucket, but it might conceivably happen in some rare
                             // cases (such as bucket leader changes). we have to copy to a new list
                             // because the old one may be immutable
-                            List<ScanRecord> newScanRecords =
-                                    new ArrayList<>(records.size() + currentRecords.size());
+                            List<ScanRecord> newScanRecords = new ArrayList<>(records.size() + currentRecords.size());
                             newScanRecords.addAll(currentRecords);
                             newScanRecords.addAll(records);
                             fetched.put(tableBucket, newScanRecords);
@@ -246,8 +245,7 @@ public class LogFetchCollector {
         return completedFetch;
     }
 
-    private void handleInitializeErrors(
-            CompletedFetch completedFetch, Errors error, String errorMessage) {
+    private void handleInitializeErrors(CompletedFetch completedFetch, Errors error, String errorMessage) {
         TableBucket tb = completedFetch.tableBucket;
         long fetchOffset = completedFetch.nextFetchOffset();
         if (error == Errors.NOT_LEADER_OR_FOLLOWER
@@ -255,20 +253,14 @@ public class LogFetchCollector {
                 || error == Errors.KV_STORAGE_EXCEPTION
                 || error == Errors.STORAGE_EXCEPTION
                 || error == Errors.FENCED_LEADER_EPOCH_EXCEPTION) {
-            LOG.debug(
-                    "Error in fetch for bucket {}: {}:{}",
-                    tb,
-                    error.exceptionName(),
-                    error.exception(errorMessage));
+            LOG.debug("Error in fetch for bucket {}: {}:{}", tb, error.exceptionName(), error.exception(errorMessage));
             metadataUpdater.checkAndUpdateMetadata(tablePath, tb);
         } else if (error == Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION) {
             LOG.warn("Received unknown table or bucket error in fetch for bucket {}", tb);
             metadataUpdater.checkAndUpdateMetadata(tablePath, tb);
         } else if (error == Errors.LOG_OFFSET_OUT_OF_RANGE_EXCEPTION) {
-            throw new FetchException(
-                    String.format(
-                            "The fetching offset %s is out of range: %s",
-                            fetchOffset, error.exception(errorMessage)));
+            throw new FetchException(String.format(
+                    "The fetching offset %s is out of range: %s", fetchOffset, error.exception(errorMessage)));
         } else if (error == Errors.AUTHORIZATION_EXCEPTION) {
             throw new AuthorizationException(errorMessage);
         } else if (error == Errors.UNKNOWN_SERVER_ERROR) {
@@ -278,15 +270,13 @@ public class LogFetchCollector {
                     tb,
                     error.exception(errorMessage));
         } else if (error == Errors.CORRUPT_MESSAGE) {
-            throw new FetchException(
-                    String.format(
-                            "Encountered corrupt message when fetching offset %s for bucket %s: %s",
-                            fetchOffset, tb, error.exception(errorMessage)));
+            throw new FetchException(String.format(
+                    "Encountered corrupt message when fetching offset %s for bucket %s: %s",
+                    fetchOffset, tb, error.exception(errorMessage)));
         } else {
-            throw new FetchException(
-                    String.format(
-                            "Unexpected error code %s while fetching at offset %s from bucket %s: %s",
-                            error, fetchOffset, tb, error.exception(errorMessage)));
+            throw new FetchException(String.format(
+                    "Unexpected error code %s while fetching at offset %s from bucket %s: %s",
+                    error, fetchOffset, tb, error.exception(errorMessage)));
         }
     }
 }

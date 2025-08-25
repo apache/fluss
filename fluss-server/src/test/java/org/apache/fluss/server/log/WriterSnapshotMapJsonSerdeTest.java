@@ -33,11 +33,10 @@ public class WriterSnapshotMapJsonSerdeTest extends JsonSerdeTestBase<WriterSnap
 
     @Override
     protected WriterSnapshotMap[] createObjects() {
-        List<WriterSnapshotEntry> entries =
-                Arrays.asList(
-                        new WriterSnapshotEntry(1001, 23, 100, 1000, 2000),
-                        new WriterSnapshotEntry(1001, 25, 200, 3000, 4000),
-                        new WriterSnapshotEntry(1002, 33, 300, 4000, 5000));
+        List<WriterSnapshotEntry> entries = Arrays.asList(
+                new WriterSnapshotEntry(1001, 23, 100, 1000, 2000),
+                new WriterSnapshotEntry(1001, 25, 200, 3000, 4000),
+                new WriterSnapshotEntry(1002, 33, 300, 4000, 5000));
         WriterSnapshotMap map = new WriterSnapshotMap(entries);
         return new WriterSnapshotMap[] {map};
     }

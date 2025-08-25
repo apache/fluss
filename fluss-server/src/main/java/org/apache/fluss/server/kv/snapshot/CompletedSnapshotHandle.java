@@ -92,11 +92,8 @@ public class CompletedSnapshotHandle {
         if (!success || actualException != null) {
             if (fs.exists(metadataFilePath)) {
                 throw Optional.ofNullable(actualException)
-                        .orElse(
-                                new IOException(
-                                        "Unknown error caused the file '"
-                                                + metadataFilePath
-                                                + "' to not be deleted."));
+                        .orElse(new IOException(
+                                "Unknown error caused the file '" + metadataFilePath + "' to not be deleted."));
             }
         }
     }

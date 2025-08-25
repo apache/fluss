@@ -54,31 +54,26 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     private final FieldGetter[] fieldGetters;
 
     UpsertWriterImpl(
-            TablePath tablePath,
-            TableInfo tableInfo,
-            @Nullable int[] partialUpdateColumns,
-            WriterClient writerClient) {
+            TablePath tablePath, TableInfo tableInfo, @Nullable int[] partialUpdateColumns, WriterClient writerClient) {
         super(tablePath, tableInfo, writerClient);
         RowType rowType = tableInfo.getRowType();
         sanityCheck(rowType, tableInfo.getPrimaryKeys(), partialUpdateColumns);
 
         this.targetColumns = partialUpdateColumns;
-        DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
+        DataLakeFormat lakeFormat =
+                tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
         // encode primary key using physical primary key
-        this.primaryKeyEncoder =
-                KeyEncoder.of(rowType, tableInfo.getPhysicalPrimaryKeys(), lakeFormat);
-        this.bucketKeyEncoder =
-                tableInfo.isDefaultBucketKey()
-                        ? primaryKeyEncoder
-                        : KeyEncoder.of(rowType, tableInfo.getBucketKeys(), lakeFormat);
+        this.primaryKeyEncoder = KeyEncoder.of(rowType, tableInfo.getPhysicalPrimaryKeys(), lakeFormat);
+        this.bucketKeyEncoder = tableInfo.isDefaultBucketKey()
+                ? primaryKeyEncoder
+                : KeyEncoder.of(rowType, tableInfo.getBucketKeys(), lakeFormat);
 
         this.kvFormat = tableInfo.getTableConfig().getKvFormat();
         this.rowEncoder = RowEncoder.create(kvFormat, rowType);
         this.fieldGetters = InternalRow.createFieldGetters(rowType);
     }
 
-    private static void sanityCheck(
-            RowType rowType, List<String> primaryKeys, @Nullable int[] targetColumns) {
+    private static void sanityCheck(RowType rowType, List<String> primaryKeys, @Nullable int[] targetColumns) {
         // skip check when target columns is null
         if (targetColumns == null) {
             return;
@@ -93,10 +88,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
         for (String key : primaryKeys) {
             int pkIndex = rowType.getFieldIndex(key);
             if (!targetColumnsSet.get(pkIndex)) {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "The target write columns %s must contain the primary key columns %s.",
-                                rowType.project(targetColumns).getFieldNames(), primaryKeys));
+                throw new IllegalArgumentException(String.format(
+                        "The target write columns %s must contain the primary key columns %s.",
+                        rowType.project(targetColumns).getFieldNames(), primaryKeys));
             }
             pkColumnSet.set(pkIndex);
         }
@@ -107,10 +101,9 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
             if (!pkColumnSet.get(i)) {
                 // the column should be nullable
                 if (!rowType.getTypeAt(i).isNullable()) {
-                    throw new IllegalArgumentException(
-                            String.format(
-                                    "Partial Update requires all columns except primary key to be nullable, but column %s is NOT NULL.",
-                                    rowType.getFieldNames().get(i)));
+                    throw new IllegalArgumentException(String.format(
+                            "Partial Update requires all columns except primary key to be nullable, but column %s is NOT NULL.",
+                            rowType.getFieldNames().get(i)));
                 }
             }
         }
@@ -125,11 +118,8 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     public CompletableFuture<UpsertResult> upsert(InternalRow row) {
         checkFieldCount(row);
         byte[] key = primaryKeyEncoder.encodeKey(row);
-        byte[] bucketKey =
-                bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
-        WriteRecord record =
-                WriteRecord.forUpsert(
-                        getPhysicalPath(row), encodeRow(row), key, bucketKey, targetColumns);
+        byte[] bucketKey = bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
+        WriteRecord record = WriteRecord.forUpsert(getPhysicalPath(row), encodeRow(row), key, bucketKey, targetColumns);
         return send(record).thenApply(ignored -> UPSERT_SUCCESS);
     }
 
@@ -143,10 +133,8 @@ class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
     public CompletableFuture<DeleteResult> delete(InternalRow row) {
         checkFieldCount(row);
         byte[] key = primaryKeyEncoder.encodeKey(row);
-        byte[] bucketKey =
-                bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
-        WriteRecord record =
-                WriteRecord.forDelete(getPhysicalPath(row), key, bucketKey, targetColumns);
+        byte[] bucketKey = bucketKeyEncoder == primaryKeyEncoder ? key : bucketKeyEncoder.encodeKey(row);
+        WriteRecord record = WriteRecord.forDelete(getPhysicalPath(row), key, bucketKey, targetColumns);
         return send(record).thenApply(ignored -> DELETE_SUCCESS);
     }
 

@@ -37,12 +37,9 @@ public class CoordinatorAddressJsonSerdeTest extends JsonSerdeTestBase<Coordinat
 
     @Override
     protected CoordinatorAddress[] createObjects() {
-        CoordinatorAddress coordinatorAddress =
-                new CoordinatorAddress(
-                        "1",
-                        Arrays.asList(
-                                new Endpoint("localhost", 1001, "CLIENT"),
-                                new Endpoint("127.0.0.1", 9124, "FLUSS")));
+        CoordinatorAddress coordinatorAddress = new CoordinatorAddress(
+                "1",
+                Arrays.asList(new Endpoint("localhost", 1001, "CLIENT"), new Endpoint("127.0.0.1", 9124, "FLUSS")));
         return new CoordinatorAddress[] {coordinatorAddress};
     }
 
@@ -55,17 +52,13 @@ public class CoordinatorAddressJsonSerdeTest extends JsonSerdeTestBase<Coordinat
 
     @Test
     void testCompatibility() throws IOException {
-        JsonNode jsonInVersion1 =
-                new ObjectMapper()
-                        .readTree(
-                                "{\"version\":1,\"id\":\"1\",\"host\":\"localhost\",\"port\":1001}"
-                                        .getBytes(StandardCharsets.UTF_8));
+        JsonNode jsonInVersion1 = new ObjectMapper()
+                .readTree("{\"version\":1,\"id\":\"1\",\"host\":\"localhost\",\"port\":1001}"
+                        .getBytes(StandardCharsets.UTF_8));
 
-        CoordinatorAddress coordinatorAddress =
-                CoordinatorAddressJsonSerde.INSTANCE.deserialize(jsonInVersion1);
+        CoordinatorAddress coordinatorAddress = CoordinatorAddressJsonSerde.INSTANCE.deserialize(jsonInVersion1);
         CoordinatorAddress expectedCoordinator =
-                new CoordinatorAddress(
-                        "1", Endpoint.fromListenersString("CLIENT://localhost:1001"));
+                new CoordinatorAddress("1", Endpoint.fromListenersString("CLIENT://localhost:1001"));
         assertEquals(coordinatorAddress, expectedCoordinator);
     }
 }

@@ -55,16 +55,15 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
     private final int maxFetchWaitMs;
 
     RemoteLeaderEndpoint(
-            Configuration conf,
-            int followerServerId,
-            int remoteServerId,
-            TabletServerGateway tabletServerGateway) {
+            Configuration conf, int followerServerId, int remoteServerId, TabletServerGateway tabletServerGateway) {
         this.followerServerId = followerServerId;
         this.remoteServerId = remoteServerId;
-        this.maxFetchSize = (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes();
-        this.maxFetchSizeForBucket =
-                (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES_FOR_BUCKET).getBytes();
-        this.minFetchBytes = (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MIN_BYTES).getBytes();
+        this.maxFetchSize =
+                (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes();
+        this.maxFetchSizeForBucket = (int)
+                conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES_FOR_BUCKET).getBytes();
+        this.minFetchBytes =
+                (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MIN_BYTES).getBytes();
         this.maxFetchWaitMs =
                 (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_WAIT_MAX_TIME).toMillis();
         this.tabletServerGateway = tabletServerGateway;
@@ -93,48 +92,32 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
     @Override
     public CompletableFuture<FetchData> fetchLog(FetchLogContext fetchLogContext) {
         FetchLogRequest fetchLogRequest = fetchLogContext.getFetchLogRequest();
-        return tabletServerGateway
-                .fetchLog(fetchLogRequest)
-                .thenApply(
-                        fetchLogResponse -> {
-                            Map<TableBucket, FetchLogResultForBucket> fetchLogResultMap =
-                                    new HashMap<>();
-                            List<PbFetchLogRespForTable> tablesRespList =
-                                    fetchLogResponse.getTablesRespsList();
-                            for (PbFetchLogRespForTable tableResp : tablesRespList) {
-                                long tableId = tableResp.getTableId();
-                                List<PbFetchLogRespForBucket> bucketsRespList =
-                                        tableResp.getBucketsRespsList();
-                                for (PbFetchLogRespForBucket bucketResp : bucketsRespList) {
-                                    TableBucket tableBucket =
-                                            new TableBucket(
-                                                    tableId,
-                                                    bucketResp.hasPartitionId()
-                                                            ? bucketResp.getPartitionId()
-                                                            : null,
-                                                    bucketResp.getBucketId());
-                                    TablePath tablePath = fetchLogContext.getTablePath(tableId);
-                                    FetchLogResultForBucket fetchLogResultForBucket =
-                                            getFetchLogResultForBucket(
-                                                    tableBucket, tablePath, bucketResp);
-                                    fetchLogResultMap.put(tableBucket, fetchLogResultForBucket);
-                                }
-                            }
+        return tabletServerGateway.fetchLog(fetchLogRequest).thenApply(fetchLogResponse -> {
+            Map<TableBucket, FetchLogResultForBucket> fetchLogResultMap = new HashMap<>();
+            List<PbFetchLogRespForTable> tablesRespList = fetchLogResponse.getTablesRespsList();
+            for (PbFetchLogRespForTable tableResp : tablesRespList) {
+                long tableId = tableResp.getTableId();
+                List<PbFetchLogRespForBucket> bucketsRespList = tableResp.getBucketsRespsList();
+                for (PbFetchLogRespForBucket bucketResp : bucketsRespList) {
+                    TableBucket tableBucket = new TableBucket(
+                            tableId,
+                            bucketResp.hasPartitionId() ? bucketResp.getPartitionId() : null,
+                            bucketResp.getBucketId());
+                    TablePath tablePath = fetchLogContext.getTablePath(tableId);
+                    FetchLogResultForBucket fetchLogResultForBucket =
+                            getFetchLogResultForBucket(tableBucket, tablePath, bucketResp);
+                    fetchLogResultMap.put(tableBucket, fetchLogResultForBucket);
+                }
+            }
 
-                            return new FetchData(fetchLogResponse, fetchLogResultMap);
-                        });
+            return new FetchData(fetchLogResponse, fetchLogResultMap);
+        });
     }
 
     @Override
-    public Optional<FetchLogContext> buildFetchLogContext(
-            Map<TableBucket, BucketFetchStatus> replicas) {
+    public Optional<FetchLogContext> buildFetchLogContext(Map<TableBucket, BucketFetchStatus> replicas) {
         return buildFetchLogContext(
-                replicas,
-                followerServerId,
-                maxFetchSize,
-                maxFetchSizeForBucket,
-                minFetchBytes,
-                maxFetchWaitMs);
+                replicas, followerServerId, maxFetchSize, maxFetchSizeForBucket, minFetchBytes, maxFetchWaitMs);
     }
 
     @Override
@@ -150,23 +133,21 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
             int minFetchBytes,
             int maxFetchWaitMs) {
         Map<Long, TablePath> tableIdToTablePath = new HashMap<>();
-        FetchLogRequest fetchRequest =
-                new FetchLogRequest()
-                        .setFollowerServerId(followerServerId)
-                        .setMaxBytes(maxFetchSize)
-                        .setMinBytes(minFetchBytes)
-                        .setMaxWaitMs(maxFetchWaitMs);
+        FetchLogRequest fetchRequest = new FetchLogRequest()
+                .setFollowerServerId(followerServerId)
+                .setMaxBytes(maxFetchSize)
+                .setMinBytes(minFetchBytes)
+                .setMaxWaitMs(maxFetchWaitMs);
         Map<Long, List<PbFetchLogReqForBucket>> fetchLogReqForBuckets = new HashMap<>();
         int readyForFetchCount = 0;
         for (Map.Entry<TableBucket, BucketFetchStatus> entry : replicas.entrySet()) {
             TableBucket tb = entry.getKey();
             BucketFetchStatus bucketFetchStatus = entry.getValue();
             if (bucketFetchStatus.isReadyForFetch()) {
-                PbFetchLogReqForBucket fetchLogReqForBucket =
-                        new PbFetchLogReqForBucket()
-                                .setBucketId(tb.getBucket())
-                                .setFetchOffset(bucketFetchStatus.fetchOffset())
-                                .setMaxFetchBytes(maxFetchSizeForBucket);
+                PbFetchLogReqForBucket fetchLogReqForBucket = new PbFetchLogReqForBucket()
+                        .setBucketId(tb.getBucket())
+                        .setFetchOffset(bucketFetchStatus.fetchOffset())
+                        .setMaxFetchBytes(maxFetchSizeForBucket);
                 if (tb.getPartitionId() != null) {
                     fetchLogReqForBucket.setPartitionId(tb.getPartitionId());
                 }
@@ -182,13 +163,11 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
         if (readyForFetchCount == 0) {
             return Optional.empty();
         } else {
-            fetchLogReqForBuckets.forEach(
-                    (tableId, buckets) ->
-                            fetchRequest
-                                    .addTablesReq()
-                                    .setProjectionPushdownEnabled(false)
-                                    .setTableId(tableId)
-                                    .addAllBucketsReqs(buckets));
+            fetchLogReqForBuckets.forEach((tableId, buckets) -> fetchRequest
+                    .addTablesReq()
+                    .setProjectionPushdownEnabled(false)
+                    .setTableId(tableId)
+                    .addAllBucketsReqs(buckets));
             return Optional.of(new FetchLogContext(tableIdToTablePath, fetchRequest));
         }
     }
@@ -196,23 +175,20 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
     /** Fetch log offset with given offset type. */
     private CompletableFuture<Long> fetchLogOffset(TableBucket tableBucket, int offsetType) {
         return tabletServerGateway
-                .listOffsets(
-                        makeListOffsetsRequest(
-                                followerServerId,
-                                offsetType,
-                                tableBucket.getTableId(),
-                                tableBucket.getPartitionId(),
-                                tableBucket.getBucket()))
-                .thenApply(
-                        response -> {
-                            PbListOffsetsRespForBucket respForBucket =
-                                    response.getBucketsRespsList().get(0);
-                            if (respForBucket.hasErrorCode()) {
-                                throw Errors.forCode(respForBucket.getErrorCode())
-                                        .exception(respForBucket.getErrorMessage());
-                            } else {
-                                return respForBucket.getOffset();
-                            }
-                        });
+                .listOffsets(makeListOffsetsRequest(
+                        followerServerId,
+                        offsetType,
+                        tableBucket.getTableId(),
+                        tableBucket.getPartitionId(),
+                        tableBucket.getBucket()))
+                .thenApply(response -> {
+                    PbListOffsetsRespForBucket respForBucket =
+                            response.getBucketsRespsList().get(0);
+                    if (respForBucket.hasErrorCode()) {
+                        throw Errors.forCode(respForBucket.getErrorCode()).exception(respForBucket.getErrorMessage());
+                    } else {
+                        return respForBucket.getOffset();
+                    }
+                });
     }
 }

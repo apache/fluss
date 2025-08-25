@@ -37,13 +37,15 @@ import static org.assertj.core.api.Assumptions.assumeThat;
 /** Tests for the {@link FileUtils}. */
 class FileUtilsTest {
 
-    @TempDir private Path temporaryFolder;
+    @TempDir
+    private Path temporaryFolder;
 
     @Test
     void testDeleteQuietly() throws Exception {
         // should ignore the call
         FileUtils.deleteDirectoryQuietly(null);
-        File doesNotExist = Files.createDirectory(temporaryFolder.resolve("abc")).toFile();
+        File doesNotExist =
+                Files.createDirectory(temporaryFolder.resolve("abc")).toFile();
         FileUtils.deleteDirectoryQuietly(doesNotExist);
 
         File cannotDeleteParent = temporaryFolder.toFile();
@@ -117,8 +119,7 @@ class FileUtilsTest {
         assertThat(parent.exists()).isFalse();
     }
 
-    private static void generateRandomDirs(File dir, int numFiles, int numDirs, int depth)
-            throws IOException {
+    private static void generateRandomDirs(File dir, int numFiles, int numDirs, int depth) throws IOException {
         // generate the random files
         for (int i = 0; i < numFiles; i++) {
             File file = new File(dir, UUID.randomUUID().toString());

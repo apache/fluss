@@ -58,8 +58,7 @@ public class FileLogRecords implements LogRecords, Closeable {
     private volatile File file;
     private final FileChannel channel;
 
-    FileLogRecords(File file, FileChannel channel, int start, int end, boolean isSlice)
-            throws IOException {
+    FileLogRecords(File file, FileChannel channel, int start, int end, boolean isSlice) throws IOException {
         this.file = file;
         this.channel = channel;
         this.start = start;
@@ -73,13 +72,12 @@ public class FileLogRecords implements LogRecords, Closeable {
             size.set(end - start);
         } else {
             if (channel.size() > Integer.MAX_VALUE) {
-                throw new FlussRuntimeException(
-                        "The size of segment "
-                                + file
-                                + " ("
-                                + channel.size()
-                                + ") is larger than the maximum allowed segment size of "
-                                + Integer.MAX_VALUE);
+                throw new FlussRuntimeException("The size of segment "
+                        + file
+                        + " ("
+                        + channel.size()
+                        + ") is larger than the maximum allowed segment size of "
+                        + Integer.MAX_VALUE);
             }
 
             int limit = Math.min((int) channel.size(), end);
@@ -140,8 +138,7 @@ public class FileLogRecords implements LogRecords, Closeable {
     public FileLogRecords slice(int position, int size) throws IOException {
         int availableBytes = availableBytes(position, size);
         int startPosition = this.start + position;
-        return new FileLogRecords(
-                file, channel, startPosition, startPosition + availableBytes, true);
+        return new FileLogRecords(file, channel, startPosition, startPosition + availableBytes, true);
     }
 
     private int availableBytes(int position, int size) {
@@ -149,13 +146,11 @@ public class FileLogRecords implements LogRecords, Closeable {
         int currentSizeInBytes = sizeInBytes();
 
         if (position < 0) {
-            throw new IllegalArgumentException(
-                    "Invalid position: " + position + " in read from " + this);
+            throw new IllegalArgumentException("Invalid position: " + position + " in read from " + this);
         }
 
         if (position > currentSizeInBytes - start) {
-            throw new IllegalArgumentException(
-                    "Slice from position " + position + " exceeds end position of " + this);
+            throw new IllegalArgumentException("Slice from position " + position + " exceeds end position of " + this);
         }
 
         if (size < 0) {
@@ -172,11 +167,10 @@ public class FileLogRecords implements LogRecords, Closeable {
 
     public int append(MemoryLogRecords records) throws IOException {
         if (records.sizeInBytes() > Integer.MAX_VALUE - size.get()) {
-            throw new IllegalArgumentException(
-                    "Append of size "
-                            + records.sizeInBytes()
-                            + " bytes is too large for segment with current file position at "
-                            + size.get());
+            throw new IllegalArgumentException("Append of size "
+                    + records.sizeInBytes()
+                    + " bytes is too large for segment with current file position at "
+                    + size.get());
         }
 
         int written = records.writeFullyTo(channel);
@@ -245,15 +239,14 @@ public class FileLogRecords implements LogRecords, Closeable {
     public int truncateTo(int targetSize) throws IOException {
         int originalSize = sizeInBytes();
         if (targetSize > originalSize || targetSize < 0) {
-            throw new FlussRuntimeException(
-                    "Attempt to truncate log segment "
-                            + file
-                            + " to "
-                            + targetSize
-                            + " bytes failed, "
-                            + " size of this log segment is "
-                            + originalSize
-                            + " bytes.");
+            throw new FlussRuntimeException("Attempt to truncate log segment "
+                    + file
+                    + " to "
+                    + targetSize
+                    + " bytes failed, "
+                    + " size of this log segment is "
+                    + originalSize
+                    + " bytes.");
         }
         if (targetSize < (int) channel.size()) {
             channel.truncate(targetSize);
@@ -307,8 +300,7 @@ public class FileLogRecords implements LogRecords, Closeable {
         return new FileChannelChunk(channel, start, sizeInBytes());
     }
 
-    private AbstractIterator<FileChannelLogRecordBatch> batchIterator(int start)
-            throws IOException {
+    private AbstractIterator<FileChannelLogRecordBatch> batchIterator(int start) throws IOException {
         final int end;
         if (isSlice) {
             end = this.end;
@@ -395,32 +387,18 @@ public class FileLogRecords implements LogRecords, Closeable {
 
     @Override
     public String toString() {
-        return "FileRecords(size="
-                + sizeInBytes()
-                + ", file="
-                + file
-                + ", start="
-                + start
-                + ", end="
-                + end
-                + ")";
+        return "FileRecords(size=" + sizeInBytes() + ", file=" + file + ", start=" + start + ", end=" + end + ")";
     }
 
     public static FileLogRecords open(
-            File file,
-            boolean mutable,
-            boolean fileAlreadyExists,
-            int initFileSize,
-            boolean preallocate)
+            File file, boolean mutable, boolean fileAlreadyExists, int initFileSize, boolean preallocate)
             throws IOException {
-        FileChannel channel =
-                openChannel(file, mutable, fileAlreadyExists, initFileSize, preallocate);
+        FileChannel channel = openChannel(file, mutable, fileAlreadyExists, initFileSize, preallocate);
         int end = (!fileAlreadyExists && preallocate) ? 0 : Integer.MAX_VALUE;
         return new FileLogRecords(file, channel, 0, end, false);
     }
 
-    public static FileLogRecords open(
-            File file, boolean fileAlreadyExists, int initFileSize, boolean preallocate)
+    public static FileLogRecords open(File file, boolean fileAlreadyExists, int initFileSize, boolean preallocate)
             throws IOException {
         return open(file, true, fileAlreadyExists, initFileSize, preallocate);
     }
@@ -445,19 +423,12 @@ public class FileLogRecords implements LogRecords, Closeable {
      * @param preallocate Pre-allocate file or not, gotten from configuration.
      */
     private static FileChannel openChannel(
-            File file,
-            boolean mutable,
-            boolean fileAlreadyExists,
-            int initFileSize,
-            boolean preallocate)
+            File file, boolean mutable, boolean fileAlreadyExists, int initFileSize, boolean preallocate)
             throws IOException {
         if (mutable) {
             if (fileAlreadyExists || !preallocate) {
                 return FileChannel.open(
-                        file.toPath(),
-                        StandardOpenOption.CREATE,
-                        StandardOpenOption.READ,
-                        StandardOpenOption.WRITE);
+                        file.toPath(), StandardOpenOption.CREATE, StandardOpenOption.READ, StandardOpenOption.WRITE);
             } else {
                 RandomAccessFile randomAccessFile = new RandomAccessFile(file, "rw");
                 randomAccessFile.setLength(initFileSize);
@@ -521,14 +492,7 @@ public class FileLogRecords implements LogRecords, Closeable {
 
         @Override
         public String toString() {
-            return "LogOffsetPosition("
-                    + "offset="
-                    + offset
-                    + ", position="
-                    + position
-                    + ", size="
-                    + size
-                    + ')';
+            return "LogOffsetPosition(" + "offset=" + offset + ", position=" + position + ", size=" + size + ')';
         }
     }
 }

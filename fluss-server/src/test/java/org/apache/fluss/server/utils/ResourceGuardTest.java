@@ -55,15 +55,14 @@ class ResourceGuardTest {
         ResourceGuard.Lease lease = resourceGuard.acquireResource();
         AtomicBoolean checker = new AtomicBoolean(true);
 
-        Thread closerThread =
-                new Thread() {
-                    @Override
-                    public void run() {
-                        // this line should block until all acquires are matched by releases.
-                        resourceGuard.close();
-                        checker.set(false);
-                    }
-                };
+        Thread closerThread = new Thread() {
+            @Override
+            public void run() {
+                // this line should block until all acquires are matched by releases.
+                resourceGuard.close();
+                checker.set(false);
+            }
+        };
 
         closerThread.start();
 
@@ -90,15 +89,14 @@ class ResourceGuardTest {
         ResourceGuard.Lease lease = resourceGuard.acquireResource();
         AtomicBoolean checker = new AtomicBoolean(true);
 
-        Thread closerThread =
-                new Thread() {
-                    @Override
-                    public void run() {
-                        // this line should block until all acquires are matched by releases.
-                        resourceGuard.close();
-                        checker.set(false);
-                    }
-                };
+        Thread closerThread = new Thread() {
+            @Override
+            public void run() {
+                // this line should block until all acquires are matched by releases.
+                resourceGuard.close();
+                checker.set(false);
+            }
+        };
 
         closerThread.start();
 

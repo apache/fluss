@@ -111,18 +111,12 @@ public final class LogManager extends TabletManagerBase {
         initializeCheckpointMaps();
     }
 
-    public static LogManager create(
-            Configuration conf, ZooKeeperClient zkClient, Scheduler scheduler, Clock clock)
+    public static LogManager create(Configuration conf, ZooKeeperClient zkClient, Scheduler scheduler, Clock clock)
             throws Exception {
         String dataDirString = conf.getString(ConfigOptions.DATA_DIR);
         File dataDir = new File(dataDirString).getAbsoluteFile();
         return new LogManager(
-                dataDir,
-                conf,
-                zkClient,
-                conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
-                scheduler,
-                clock);
+                dataDir, conf, zkClient, conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS), scheduler, clock);
     }
 
     public void startup() {
@@ -136,8 +130,7 @@ public final class LogManager extends TabletManagerBase {
     }
 
     private void initializeCheckpointMaps() throws IOException {
-        recoveryPointCheckpoint =
-                new OffsetCheckpointFile(new File(dataDir, RECOVERY_POINT_CHECKPOINT_FILE));
+        recoveryPointCheckpoint = new OffsetCheckpointFile(new File(dataDir, RECOVERY_POINT_CHECKPOINT_FILE));
     }
 
     /** Recover and load all logs in the given data directories. */
@@ -179,30 +172,20 @@ public final class LogManager extends TabletManagerBase {
             final Map<TableBucket, Long> finalRecoveryPoints = recoveryPoints;
             final boolean cleanShutdown = isCleanShutdown;
             // set runnable job.
-            Runnable[] jobsForDir =
-                    tabletsToLoad.stream()
-                            .map(
-                                    tabletDir ->
-                                            (Runnable)
-                                                    () -> {
-                                                        LOG.debug("Loading log {}", tabletDir);
-                                                        try {
-                                                            loadLog(
-                                                                    tabletDir,
-                                                                    cleanShutdown,
-                                                                    finalRecoveryPoints,
-                                                                    conf,
-                                                                    clock);
-                                                        } catch (Exception e) {
-                                                            throw new FlussRuntimeException(e);
-                                                        }
-                                                    })
-                            .toArray(Runnable[]::new);
+            Runnable[] jobsForDir = tabletsToLoad.stream()
+                    .map(tabletDir -> (Runnable) () -> {
+                        LOG.debug("Loading log {}", tabletDir);
+                        try {
+                            loadLog(tabletDir, cleanShutdown, finalRecoveryPoints, conf, clock);
+                        } catch (Exception e) {
+                            throw new FlussRuntimeException(e);
+                        }
+                    })
+                    .toArray(Runnable[]::new);
 
             long startTime = System.currentTimeMillis();
 
-            int successLoadCount =
-                    runInThreadPool(jobsForDir, "log-recovery-" + dataDirAbsolutePath);
+            int successLoadCount = runInThreadPool(jobsForDir, "log-recovery-" + dataDirAbsolutePath);
 
             loadLogsCompletedFlag = true;
             LOG.info(
@@ -232,36 +215,30 @@ public final class LogManager extends TabletManagerBase {
             int tieredLogLocalSegments,
             boolean isChangelog)
             throws Exception {
-        return inLock(
-                logCreationOrDeletionLock,
-                () -> {
-                    if (currentLogs.containsKey(tableBucket)) {
-                        return currentLogs.get(tableBucket);
-                    }
+        return inLock(logCreationOrDeletionLock, () -> {
+            if (currentLogs.containsKey(tableBucket)) {
+                return currentLogs.get(tableBucket);
+            }
 
-                    File tabletDir = getOrCreateTabletDir(tablePath, tableBucket);
+            File tabletDir = getOrCreateTabletDir(tablePath, tableBucket);
 
-                    LogTablet logTablet =
-                            LogTablet.create(
-                                    tablePath,
-                                    tabletDir,
-                                    conf,
-                                    0L,
-                                    scheduler,
-                                    logFormat,
-                                    tieredLogLocalSegments,
-                                    isChangelog,
-                                    clock,
-                                    true);
-                    currentLogs.put(tableBucket, logTablet);
+            LogTablet logTablet = LogTablet.create(
+                    tablePath,
+                    tabletDir,
+                    conf,
+                    0L,
+                    scheduler,
+                    logFormat,
+                    tieredLogLocalSegments,
+                    isChangelog,
+                    clock,
+                    true);
+            currentLogs.put(tableBucket, logTablet);
 
-                    LOG.info(
-                            "Loaded log for bucket {} in dir {}",
-                            tableBucket,
-                            tabletDir.getAbsolutePath());
+            LOG.info("Loaded log for bucket {} in dir {}", tableBucket, tabletDir.getAbsolutePath());
 
-                    return logTablet;
-                });
+            return logTablet;
+        });
     }
 
     public Optional<LogTablet> getLog(TableBucket tableBucket) {
@@ -269,8 +246,7 @@ public final class LogManager extends TabletManagerBase {
     }
 
     public void dropLog(TableBucket tableBucket) {
-        LogTablet dropLogTablet =
-                inLock(logCreationOrDeletionLock, () -> currentLogs.remove(tableBucket));
+        LogTablet dropLogTablet = inLock(logCreationOrDeletionLock, () -> currentLogs.remove(tableBucket));
 
         if (dropLogTablet != null) {
             TablePath tablePath = dropLogTablet.getTablePath();
@@ -302,9 +278,7 @@ public final class LogManager extends TabletManagerBase {
             }
         } else {
             throw new LogStorageException(
-                    String.format(
-                            "Failed to delete log bucket %s as it does not exist.",
-                            tableBucket.getBucket()));
+                    String.format("Failed to delete log bucket %s as it does not exist.", tableBucket.getBucket()));
         }
     }
 
@@ -343,31 +317,29 @@ public final class LogManager extends TabletManagerBase {
         PhysicalTablePath physicalTablePath = pathAndBucket.f0;
         TablePath tablePath = physicalTablePath.getTablePath();
         TableInfo tableInfo = getTableInfo(zkClient, tablePath);
-        LogTablet logTablet =
-                LogTablet.create(
-                        physicalTablePath,
-                        tabletDir,
-                        conf,
-                        logRecoveryPoint,
-                        scheduler,
-                        tableInfo.getTableConfig().getLogFormat(),
-                        tableInfo.getTableConfig().getTieredLogLocalSegments(),
-                        tableInfo.hasPrimaryKey(),
-                        clock,
-                        isCleanShutdown);
+        LogTablet logTablet = LogTablet.create(
+                physicalTablePath,
+                tabletDir,
+                conf,
+                logRecoveryPoint,
+                scheduler,
+                tableInfo.getTableConfig().getLogFormat(),
+                tableInfo.getTableConfig().getTieredLogLocalSegments(),
+                tableInfo.hasPrimaryKey(),
+                clock,
+                isCleanShutdown);
 
         if (currentLogs.containsKey(tableBucket)) {
-            throw new IllegalStateException(
-                    String.format(
-                            "Duplicate log tablet directories for bucket %s are found in both %s and %s. "
-                                    + "It is likely because tablet directory failure happened while server was "
-                                    + "replacing current replica with future replica. Recover server from this "
-                                    + "failure by manually deleting one of the two log directories for this bucket. "
-                                    + "It is recommended to delete the bucket in the log tablet directory that is "
-                                    + "known to have failed recently.",
-                            tableBucket,
-                            tabletDir.getAbsolutePath(),
-                            currentLogs.get(tableBucket).getLogDir().getAbsolutePath()));
+            throw new IllegalStateException(String.format(
+                    "Duplicate log tablet directories for bucket %s are found in both %s and %s. "
+                            + "It is likely because tablet directory failure happened while server was "
+                            + "replacing current replica with future replica. Recover server from this "
+                            + "failure by manually deleting one of the two log directories for this bucket. "
+                            + "It is recommended to delete the bucket in the log tablet directory that is "
+                            + "known to have failed recently.",
+                    tableBucket,
+                    tabletDir.getAbsolutePath(),
+                    currentLogs.get(tableBucket).getLogDir().getAbsolutePath()));
         }
         currentLogs.put(tableBucket, logTablet);
 
@@ -376,29 +348,21 @@ public final class LogManager extends TabletManagerBase {
 
     private void createAndValidateDataDir(File dataDir) {
         try {
-            inLock(
-                    logCreationOrDeletionLock,
-                    () -> {
-                        if (!dataDir.exists()) {
-                            LOG.info(
-                                    "Data directory {} not found, creating it.",
-                                    dataDir.getAbsolutePath());
-                            boolean created = dataDir.mkdirs();
-                            if (!created) {
-                                throw new IOException(
-                                        "Failed to create data directory "
-                                                + dataDir.getAbsolutePath());
-                            }
-                            Path parentPath =
-                                    dataDir.toPath().toAbsolutePath().normalize().getParent();
-                            FileUtils.flushDir(parentPath);
-                        }
-                        if (!dataDir.isDirectory() || !dataDir.canRead()) {
-                            throw new IOException(
-                                    dataDir.getAbsolutePath()
-                                            + " is not a readable data directory.");
-                        }
-                    });
+            inLock(logCreationOrDeletionLock, () -> {
+                if (!dataDir.exists()) {
+                    LOG.info("Data directory {} not found, creating it.", dataDir.getAbsolutePath());
+                    boolean created = dataDir.mkdirs();
+                    if (!created) {
+                        throw new IOException("Failed to create data directory " + dataDir.getAbsolutePath());
+                    }
+                    Path parentPath =
+                            dataDir.toPath().toAbsolutePath().normalize().getParent();
+                    FileUtils.flushDir(parentPath);
+                }
+                if (!dataDir.isDirectory() || !dataDir.canRead()) {
+                    throw new IOException(dataDir.getAbsolutePath() + " is not a readable data directory.");
+                }
+            });
         } catch (IOException e) {
             throw new FlussRuntimeException(
                     "Failed to create or validate data directory " + dataDir.getAbsolutePath(), e);
@@ -415,15 +379,14 @@ public final class LogManager extends TabletManagerBase {
         List<LogTablet> logs = new ArrayList<>(currentLogs.values());
         List<Future<?>> jobsForTabletDir = new ArrayList<>();
         for (LogTablet logTablet : logs) {
-            Runnable runnable =
-                    () -> {
-                        try {
-                            logTablet.flush(true);
-                            logTablet.close();
-                        } catch (IOException e) {
-                            throw new FlussRuntimeException(e);
-                        }
-                    };
+            Runnable runnable = () -> {
+                try {
+                    logTablet.flush(true);
+                    logTablet.close();
+                } catch (IOException e) {
+                    throw new FlussRuntimeException(e);
+                }
+            };
             jobsForTabletDir.add(pool.submit(runnable));
         }
 
@@ -434,9 +397,7 @@ public final class LogManager extends TabletManagerBase {
                 } catch (InterruptedException e) {
                     LOG.warn("Interrupted while shutting down LogManager.");
                 } catch (ExecutionException e) {
-                    LOG.warn(
-                            "There was an error in one of the threads during LogManager shutdown",
-                            e);
+                    LOG.warn("There was an error in one of the threads during LogManager shutdown", e);
                 }
             }
 

@@ -35,13 +35,11 @@ public final class ObtainedSecurityToken {
     private final Map<String, String> additionInfos;
 
     /** Time until the tokens are valid, if valid forever, it should be null. */
-    @Nullable private final Long validUntil;
+    @Nullable
+    private final Long validUntil;
 
     public ObtainedSecurityToken(
-            String scheme,
-            byte[] token,
-            @Nullable Long validUntil,
-            Map<String, String> additionInfos) {
+            String scheme, byte[] token, @Nullable Long validUntil, Map<String, String> additionInfos) {
         this.scheme = scheme;
         this.token = token;
         this.validUntil = validUntil;

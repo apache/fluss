@@ -42,19 +42,18 @@ public class TableScan implements Scan {
     private final TableInfo tableInfo;
 
     /** The projected fields to do projection. No projection if is null. */
-    @Nullable private final int[] projectedColumns;
+    @Nullable
+    private final int[] projectedColumns;
     /** The limited row number to read. No limit if is null. */
-    @Nullable private final Integer limit;
+    @Nullable
+    private final Integer limit;
 
     public TableScan(FlussConnection conn, TableInfo tableInfo) {
         this(conn, tableInfo, null, null);
     }
 
     private TableScan(
-            FlussConnection conn,
-            TableInfo tableInfo,
-            @Nullable int[] projectedColumns,
-            @Nullable Integer limit) {
+            FlussConnection conn, TableInfo tableInfo, @Nullable int[] projectedColumns, @Nullable Integer limit) {
         this.conn = conn;
         this.tableInfo = tableInfo;
         this.projectedColumns = projectedColumns;
@@ -103,21 +102,17 @@ public class TableScan implements Scan {
     @Override
     public BatchScanner createBatchScanner(TableBucket tableBucket) {
         if (limit == null) {
-            throw new UnsupportedOperationException(
-                    "Currently, BatchScanner is only available when limit is set.");
+            throw new UnsupportedOperationException("Currently, BatchScanner is only available when limit is set.");
         }
-        return new LimitBatchScanner(
-                tableInfo, tableBucket, conn.getMetadataUpdater(), projectedColumns, limit);
+        return new LimitBatchScanner(tableInfo, tableBucket, conn.getMetadataUpdater(), projectedColumns, limit);
     }
 
     @Override
     public BatchScanner createBatchScanner(TableBucket tableBucket, long snapshotId) {
         if (limit != null) {
-            throw new UnsupportedOperationException(
-                    "Currently, SnapshotBatchScanner doesn't support limit pushdown.");
+            throw new UnsupportedOperationException("Currently, SnapshotBatchScanner doesn't support limit pushdown.");
         }
-        String scannerTmpDir =
-                conn.getConfiguration().getString(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR);
+        String scannerTmpDir = conn.getConfiguration().getString(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR);
         Admin admin = conn.getAdmin();
         final KvSnapshotMetadata snapshotMeta;
         try {

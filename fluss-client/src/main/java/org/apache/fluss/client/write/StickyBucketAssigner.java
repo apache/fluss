@@ -69,8 +69,7 @@ public class StickyBucketAssigner extends DynamicBucketAssigner {
         // bucket that triggered the new batch matches the sticky bucket that needs to be
         // changed.
         if (oldBucket < 0 || oldBucket == preBucketId) {
-            List<BucketLocation> availableBuckets =
-                    cluster.getAvailableBucketsForPhysicalTablePath(physicalTablePath);
+            List<BucketLocation> availableBuckets = cluster.getAvailableBucketsForPhysicalTablePath(physicalTablePath);
             if (availableBuckets.isEmpty()) {
                 int random = MathUtils.toPositive(ThreadLocalRandom.current().nextInt());
                 newBucket = random % cluster.getBucketCount(physicalTablePath.getTablePath());
@@ -78,9 +77,11 @@ public class StickyBucketAssigner extends DynamicBucketAssigner {
                 newBucket = availableBuckets.get(0).getBucketId();
             } else {
                 while (newBucket < 0 || newBucket == oldBucket) {
-                    int random = MathUtils.toPositive(ThreadLocalRandom.current().nextInt());
-                    newBucket =
-                            availableBuckets.get(random % availableBuckets.size()).getBucketId();
+                    int random =
+                            MathUtils.toPositive(ThreadLocalRandom.current().nextInt());
+                    newBucket = availableBuckets
+                            .get(random % availableBuckets.size())
+                            .getBucketId();
                 }
             }
 

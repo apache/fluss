@@ -228,8 +228,7 @@ public class ConfigBuilder {
          */
         @SafeVarargs
         public final ConfigOption<List<E>> defaultValues(E... values) {
-            return new ConfigOption<>(
-                    key, clazz, ConfigOption.EMPTY_DESCRIPTION, Arrays.asList(values), true);
+            return new ConfigOption<>(key, clazz, ConfigOption.EMPTY_DESCRIPTION, Arrays.asList(values), true);
         }
 
         /**

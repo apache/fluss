@@ -47,10 +47,9 @@ public class FileLock {
         if (normalizedFileName.isEmpty()) {
             throw new IllegalArgumentException("There are no legal characters in the file name");
         }
-        this.file =
-                path.getParent() == null
-                        ? new File(TEMP_DIR, normalizedFileName)
-                        : new File(path.getParent().toString(), normalizedFileName);
+        this.file = path.getParent() == null
+                ? new File(TEMP_DIR, normalizedFileName)
+                : new File(path.getParent().toString(), normalizedFileName);
     }
 
     /**

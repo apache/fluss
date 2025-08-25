@@ -37,8 +37,7 @@ import static org.apache.fluss.shaded.curator5.org.apache.curator.framework.reci
 
 /** A watcher to watch the change notification (create/delete/alter) in zookeeper. */
 public class ZkNodeChangeNotificationWatcher {
-    private static final Logger LOG =
-            LoggerFactory.getLogger(ZkNodeChangeNotificationWatcher.class);
+    private static final Logger LOG = LoggerFactory.getLogger(ZkNodeChangeNotificationWatcher.class);
 
     private final CuratorCache curatorCache;
     private final NotificationHandler notificationHandler;
@@ -69,13 +68,10 @@ public class ZkNodeChangeNotificationWatcher {
         this.clock = clock;
         this.curatorCache
                 .listenable()
-                .addListener(
-                        CuratorCacheListener.builder()
-                                .forPathChildrenCache(
-                                        seqNodeRoot,
-                                        zooKeeperClient.getCuratorClient(),
-                                        new ZkNodeChangeNotificationListener())
-                                .build());
+                .addListener(CuratorCacheListener.builder()
+                        .forPathChildrenCache(
+                                seqNodeRoot, zooKeeperClient.getCuratorClient(), new ZkNodeChangeNotificationListener())
+                        .build());
     }
 
     public void start() {
@@ -113,8 +109,7 @@ public class ZkNodeChangeNotificationWatcher {
                 }
 
             } catch (Exception e) {
-                LOG.error(
-                        "Error while processing notification change for path = {}", seqNodeRoot, e);
+                LOG.error("Error while processing notification change for path = {}", seqNodeRoot, e);
             }
         }
     }
@@ -127,10 +122,7 @@ public class ZkNodeChangeNotificationWatcher {
                 notificationHandler.processNotification(data.get());
             }
         } catch (Exception e) {
-            LOG.error(
-                    "Error while processing notification change for path = {}",
-                    notificationNode,
-                    e);
+            LOG.error("Error while processing notification change for path = {}", notificationNode, e);
         }
     }
 
@@ -145,10 +137,7 @@ public class ZkNodeChangeNotificationWatcher {
                     zooKeeperClient.deletePath(notificationNode);
                 }
             } catch (Exception e) {
-                LOG.error(
-                        "Error while purging obsolete notification change for path = {}",
-                        notificationNode,
-                        e);
+                LOG.error("Error while purging obsolete notification change for path = {}", notificationNode, e);
             }
         }
     }

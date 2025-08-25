@@ -56,8 +56,7 @@ class MetricGroupTest {
     @Test
     void sameGroupOnNameCollision() {
         GenericMetricGroup group =
-                new GenericMetricGroup(
-                        registry, new DummyAbstractMetricGroup(registry), "somegroup");
+                new GenericMetricGroup(registry, new DummyAbstractMetricGroup(registry), "somegroup");
 
         String groupName = "sometestname";
         MetricGroup subgroup1 = group.addGroup(groupName);
@@ -69,8 +68,7 @@ class MetricGroupTest {
     @Test
     void testAddVariable() {
         MetricRegistry registry = NOPMetricRegistry.INSTANCE;
-        GenericMetricGroup root =
-                new GenericMetricGroup(registry, new DummyAbstractMetricGroup(registry), "root");
+        GenericMetricGroup root = new GenericMetricGroup(registry, new DummyAbstractMetricGroup(registry), "root");
 
         String key = "key";
         String value = "value";
@@ -103,8 +101,7 @@ class MetricGroupTest {
     @Test
     void testDefinedVariableOnKeyGroup() {
         MetricRegistry registry = NOPMetricRegistry.INSTANCE;
-        GenericMetricGroup root =
-                new GenericMetricGroup(registry, new DummyAbstractMetricGroup(registry), "root");
+        GenericMetricGroup root = new GenericMetricGroup(registry, new DummyAbstractMetricGroup(registry), "root");
 
         String key1 = "key1";
         String value1 = "value1";
@@ -147,8 +144,7 @@ class MetricGroupTest {
     @Test
     void testNameCollisionForKeyAfterGenericGroup() {
         MetricRegistry registry = NOPMetricRegistry.INSTANCE;
-        GenericMetricGroup root =
-                new GenericMetricGroup(registry, new DummyAbstractMetricGroup(registry), "root");
+        GenericMetricGroup root = new GenericMetricGroup(registry, new DummyAbstractMetricGroup(registry), "root");
 
         String key = "key";
         String value = "value";
@@ -183,8 +179,7 @@ class MetricGroupTest {
     @Test
     void testNameCollisionForKeyAndValueAfterGenericGroup() {
         MetricRegistry registry = NOPMetricRegistry.INSTANCE;
-        GenericMetricGroup root =
-                new GenericMetricGroup(registry, new DummyAbstractMetricGroup(registry), "root");
+        GenericMetricGroup root = new GenericMetricGroup(registry, new DummyAbstractMetricGroup(registry), "root");
 
         String key = "key";
         String value = "value";
@@ -219,8 +214,7 @@ class MetricGroupTest {
     @Test
     void testNameCollisionAfterKeyValueGroup() {
         MetricRegistry registry = NOPMetricRegistry.INSTANCE;
-        GenericMetricGroup root =
-                new GenericMetricGroup(registry, new DummyAbstractMetricGroup(registry), "root");
+        GenericMetricGroup root = new GenericMetricGroup(registry, new DummyAbstractMetricGroup(registry), "root");
 
         String key = "key";
         String value = "value";
@@ -250,11 +244,8 @@ class MetricGroupTest {
 
     @Test
     void closedGroupDoesNotRegisterMetrics() {
-        GenericMetricGroup group =
-                new GenericMetricGroup(
-                        exceptionOnRegister,
-                        new DummyAbstractMetricGroup(exceptionOnRegister),
-                        "testgroup");
+        GenericMetricGroup group = new GenericMetricGroup(
+                exceptionOnRegister, new DummyAbstractMetricGroup(exceptionOnRegister), "testgroup");
         assertThat(group.isClosed()).isFalse();
 
         group.close();
@@ -267,11 +258,8 @@ class MetricGroupTest {
 
     @Test
     void closedGroupCreatesClosedGroups() {
-        GenericMetricGroup group =
-                new GenericMetricGroup(
-                        exceptionOnRegister,
-                        new DummyAbstractMetricGroup(exceptionOnRegister),
-                        "testgroup");
+        GenericMetricGroup group = new GenericMetricGroup(
+                exceptionOnRegister, new DummyAbstractMetricGroup(exceptionOnRegister), "testgroup");
         assertThat(group.isClosed()).isFalse();
 
         group.close();
@@ -283,11 +271,8 @@ class MetricGroupTest {
 
     @Test
     void addClosedGroupReturnsNewGroupInstance() {
-        GenericMetricGroup mainGroup =
-                new GenericMetricGroup(
-                        exceptionOnRegister,
-                        new DummyAbstractMetricGroup(exceptionOnRegister),
-                        "mainGroup");
+        GenericMetricGroup mainGroup = new GenericMetricGroup(
+                exceptionOnRegister, new DummyAbstractMetricGroup(exceptionOnRegister), "mainGroup");
 
         AbstractMetricGroup subGroup = (AbstractMetricGroup) mainGroup.addGroup("subGroup");
 
@@ -296,8 +281,7 @@ class MetricGroupTest {
         subGroup.close();
         assertThat(subGroup.isClosed()).isTrue();
 
-        AbstractMetricGroup newSubGroupWithSameNameAsClosedGroup =
-                (AbstractMetricGroup) mainGroup.addGroup("subGroup");
+        AbstractMetricGroup newSubGroupWithSameNameAsClosedGroup = (AbstractMetricGroup) mainGroup.addGroup("subGroup");
         assertThat(newSubGroupWithSameNameAsClosedGroup.isClosed())
                 .withFailMessage("The new subgroup should not be closed")
                 .isFalse();
@@ -310,8 +294,7 @@ class MetricGroupTest {
     void tolerateMetricNameCollisions() {
         final String name = "abctestname";
         GenericMetricGroup group =
-                new GenericMetricGroup(
-                        registry, new DummyAbstractMetricGroup(registry), "testgroup");
+                new GenericMetricGroup(registry, new DummyAbstractMetricGroup(registry), "testgroup");
 
         assertThat(group.counter(name)).isNotNull();
         assertThat(group.counter(name)).isNotNull();
@@ -321,8 +304,7 @@ class MetricGroupTest {
     void tolerateMetricAndGroupNameCollisions() {
         final String name = "abctestname";
         GenericMetricGroup group =
-                new GenericMetricGroup(
-                        registry, new DummyAbstractMetricGroup(registry), "testgroup");
+                new GenericMetricGroup(registry, new DummyAbstractMetricGroup(registry), "testgroup");
 
         assertThat(group.addGroup(name)).isNotNull();
         assertThat(group.counter(name)).isNotNull();
@@ -331,8 +313,7 @@ class MetricGroupTest {
     @Test
     void testMeter() {
         GenericMetricGroup group =
-                new GenericMetricGroup(
-                        registry, new DummyAbstractMetricGroup(registry), "testgroup");
+                new GenericMetricGroup(registry, new DummyAbstractMetricGroup(registry), "testgroup");
 
         MeterView meterView = new MeterView(1);
         group.meter("testMeter", meterView);

@@ -68,8 +68,7 @@ public class PluginConfig {
     }
 
     public static Optional<File> getPluginsDir() {
-        String pluginsDir =
-                System.getenv().getOrDefault(ENV_FLUSS_PLUGINS_DIR, DEFAULT_FLUSS_PLUGINS_DIRS);
+        String pluginsDir = System.getenv().getOrDefault(ENV_FLUSS_PLUGINS_DIR, DEFAULT_FLUSS_PLUGINS_DIRS);
 
         File pluginsDirFile = new File(pluginsDir);
         if (!pluginsDirFile.isDirectory()) {

@@ -135,24 +135,14 @@ public class TieringSplitSerializer implements SimpleVersionedSerializer<Tiering
             // deserialize log offset of snapshot
             long logOffsetOfSnapshot = in.readLong();
             return new TieringSnapshotSplit(
-                    tablePath,
-                    tableBucket,
-                    partitionName,
-                    snapshotId,
-                    logOffsetOfSnapshot,
-                    numberOfSplits);
+                    tablePath, tableBucket, partitionName, snapshotId, logOffsetOfSnapshot, numberOfSplits);
         } else {
             // deserialize starting offset
             long startingOffset = in.readLong();
             // deserialize starting offset
             long stoppingOffset = in.readLong();
             return new TieringLogSplit(
-                    tablePath,
-                    tableBucket,
-                    partitionName,
-                    startingOffset,
-                    stoppingOffset,
-                    numberOfSplits);
+                    tablePath, tableBucket, partitionName, startingOffset, stoppingOffset, numberOfSplits);
         }
     }
 }

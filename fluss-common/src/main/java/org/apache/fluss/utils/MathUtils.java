@@ -34,8 +34,7 @@ public class MathUtils {
             throw new ArithmeticException("Logarithm of zero is undefined.");
         }
         if ((value & (value - 1)) != 0) {
-            throw new IllegalArgumentException(
-                    "The given value " + value + " is not a power of two.");
+            throw new IllegalArgumentException("The given value " + value + " is not a power of two.");
         }
         return 31 - Integer.numberOfLeadingZeros(value);
     }

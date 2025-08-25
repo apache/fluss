@@ -74,12 +74,11 @@ public class MemoryLogRecords implements LogRecords {
 
     public void ensureValid() {
         if (sizeInBytes < DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE) {
-            throw new RuntimeException(
-                    "Record batch is corrupt (the size "
-                            + sizeInBytes
-                            + " is smaller than the minimum allowed overhead "
-                            + DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE
-                            + ")");
+            throw new RuntimeException("Record batch is corrupt (the size "
+                    + sizeInBytes
+                    + " is smaller than the minimum allowed overhead "
+                    + DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE
+                    + ")");
         }
     }
 
@@ -94,8 +93,7 @@ public class MemoryLogRecords implements LogRecords {
     }
 
     public AbstractIterator<LogRecordBatch> batchIterator() {
-        return new LogRecordBatchIterator<>(
-                new MemorySegmentLogInputStream(memorySegment, position, sizeInBytes));
+        return new LogRecordBatchIterator<>(new MemorySegmentLogInputStream(memorySegment, position, sizeInBytes));
     }
 
     public MemorySegment getMemorySegment() {

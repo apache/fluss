@@ -81,9 +81,7 @@ public class Preconditions {
      * @throws NullPointerException Thrown, if the passed reference was null.
      */
     public static <T> T checkNotNull(
-            T reference,
-            @Nullable String errorMessageTemplate,
-            @Nullable Object... errorMessageArgs) {
+            T reference, @Nullable String errorMessageTemplate, @Nullable Object... errorMessageArgs) {
 
         if (reference == null) {
             throw new NullPointerException(format(errorMessageTemplate, errorMessageArgs));
@@ -121,9 +119,7 @@ public class Preconditions {
      * @throws IllegalArgumentException Thrown, if the condition is violated.
      */
     public static void checkArgument(
-            boolean condition,
-            @Nullable String errorMessageTemplate,
-            @Nullable Object... errorMessageArgs) {
+            boolean condition, @Nullable String errorMessageTemplate, @Nullable Object... errorMessageArgs) {
 
         if (!condition) {
             throw new IllegalArgumentException(format(errorMessageTemplate, errorMessageArgs));
@@ -175,9 +171,7 @@ public class Preconditions {
      * @throws IllegalStateException Thrown, if the condition is violated.
      */
     public static void checkState(
-            boolean condition,
-            @Nullable String errorMessageTemplate,
-            @Nullable Object... errorMessageArgs) {
+            boolean condition, @Nullable String errorMessageTemplate, @Nullable Object... errorMessageArgs) {
 
         if (!condition) {
             throw new IllegalStateException(format(errorMessageTemplate, errorMessageArgs));

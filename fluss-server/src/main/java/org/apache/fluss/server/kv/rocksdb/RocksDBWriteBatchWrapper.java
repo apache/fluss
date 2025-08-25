@@ -60,7 +60,8 @@ public class RocksDBWriteBatchWrapper implements KvBatchWriter {
     // and according to the doc of rocksdb, it's best practice to set it to hundreds of keys
     private final int capacity = 500;
 
-    @Nonnegative private final long batchSize;
+    @Nonnegative
+    private final long batchSize;
 
     /** List of all objects that we need to close in close(). */
     private final List<AutoCloseable> toClose;
@@ -71,9 +72,7 @@ public class RocksDBWriteBatchWrapper implements KvBatchWriter {
         this.batchSize = batchSize;
         this.toClose = new ArrayList<>(2);
         if (this.batchSize > 0) {
-            this.batch =
-                    new WriteBatch(
-                            (int) Math.min(this.batchSize, this.capacity * PER_RECORD_BYTES));
+            this.batch = new WriteBatch((int) Math.min(this.batchSize, this.capacity * PER_RECORD_BYTES));
         } else {
             this.batch = new WriteBatch(this.capacity * PER_RECORD_BYTES);
         }
@@ -115,14 +114,11 @@ public class RocksDBWriteBatchWrapper implements KvBatchWriter {
                 LOG.warn("Failed to flush RocksDB, try time is {}, retrying.", tryTime, e);
             }
         }
-        throw new IOException(
-                "Failed to flush to RocksDB after retrying " + MAX_TRY_TIMES + " times.",
-                lastException);
+        throw new IOException("Failed to flush to RocksDB after retrying " + MAX_TRY_TIMES + " times.", lastException);
     }
 
     private void flushIfNeeded() throws IOException {
-        boolean needFlush =
-                batch.count() == capacity || (batchSize > 0 && batch.getDataSize() >= batchSize);
+        boolean needFlush = batch.count() == capacity || (batchSize > 0 && batch.getDataSize() >= batchSize);
         if (needFlush) {
             flush();
         }

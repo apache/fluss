@@ -102,14 +102,10 @@ public class DataField implements Serializable {
 
     private String formatString(String typeString, boolean excludeDescription) {
         if (description == null) {
-            return String.format(
-                    FIELD_FORMAT_NO_DESCRIPTION, EncodingUtils.escapeIdentifier(name), typeString);
+            return String.format(FIELD_FORMAT_NO_DESCRIPTION, EncodingUtils.escapeIdentifier(name), typeString);
         } else if (excludeDescription) {
             return String.format(
-                    FIELD_FORMAT_WITH_DESCRIPTION,
-                    EncodingUtils.escapeIdentifier(name),
-                    typeString,
-                    "...");
+                    FIELD_FORMAT_WITH_DESCRIPTION, EncodingUtils.escapeIdentifier(name), typeString, "...");
         } else {
             return String.format(
                     FIELD_FORMAT_WITH_DESCRIPTION,

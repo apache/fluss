@@ -42,8 +42,7 @@ public class GSFileSystem extends HadoopFileSystem {
      *
      * @param hadoopGSFileSystem The Hadoop FileSystem that will be used under the hood.
      */
-    public GSFileSystem(
-            String scheme, org.apache.hadoop.fs.FileSystem hadoopGSFileSystem, Configuration conf) {
+    public GSFileSystem(String scheme, org.apache.hadoop.fs.FileSystem hadoopGSFileSystem, Configuration conf) {
         super(hadoopGSFileSystem);
         this.scheme = scheme;
         this.conf = conf;

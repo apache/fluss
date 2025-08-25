@@ -58,8 +58,7 @@ public class FlinkMetricRegistry implements MetricRegistry {
         this(flinkOperatorMetricGroup, Collections.emptySet());
     }
 
-    public FlinkMetricRegistry(
-            MetricGroup flinkOperatorMetricGroup, Set<String> exposedMetricNames) {
+    public FlinkMetricRegistry(MetricGroup flinkOperatorMetricGroup, Set<String> exposedMetricNames) {
         this.metricGroupForFluss = flinkOperatorMetricGroup.addGroup(FLUSS_GROUP_NAME);
         this.metrics = new HashMap<>();
         this.exposedMetricNames = exposedMetricNames;
@@ -75,13 +74,11 @@ public class FlinkMetricRegistry implements MetricRegistry {
     public void register(Metric metric, String metricName, AbstractMetricGroup group) {
         // use the logical group name from Fluss's metrics group as the group name
         // of Flink's metric group the metrics will be registered in
-        String logicalGroupName =
-                group.getLogicalScope(CharacterFilter.NO_OP_FILTER, FIELD_DELIMITER);
+        String logicalGroupName = group.getLogicalScope(CharacterFilter.NO_OP_FILTER, FIELD_DELIMITER);
         MetricGroup currentMetricGroup = metricGroupForFluss.addGroup(logicalGroupName);
         // we need to put all the variables of the Fluss's metrics group to Flink's metrics group
         for (Map.Entry<String, String> variablesEntry : getVariables(group).entrySet()) {
-            currentMetricGroup =
-                    currentMetricGroup.addGroup(variablesEntry.getKey(), variablesEntry.getValue());
+            currentMetricGroup = currentMetricGroup.addGroup(variablesEntry.getKey(), variablesEntry.getValue());
         }
 
         // now, register to the Flink's metrics group
@@ -144,8 +141,7 @@ public class FlinkMetricRegistry implements MetricRegistry {
 
     @Override
     public CompletableFuture<Void> closeAsync() {
-        ((org.apache.flink.runtime.metrics.groups.AbstractMetricGroup<?>) metricGroupForFluss)
-                .close();
+        ((org.apache.flink.runtime.metrics.groups.AbstractMetricGroup<?>) metricGroupForFluss).close();
         return CompletableFuture.completedFuture(null);
     }
 }

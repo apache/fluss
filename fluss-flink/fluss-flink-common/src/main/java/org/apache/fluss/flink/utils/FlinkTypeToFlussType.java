@@ -73,8 +73,7 @@ class FlinkTypeToFlussType extends LogicalTypeDefaultVisitor<DataType> {
 
     @Override
     public DataType visit(BinaryType binaryType) {
-        return new org.apache.fluss.types.BinaryType(
-                binaryType.isNullable(), binaryType.getLength());
+        return new org.apache.fluss.types.BinaryType(binaryType.isNullable(), binaryType.getLength());
     }
 
     @Override
@@ -134,8 +133,7 @@ class FlinkTypeToFlussType extends LogicalTypeDefaultVisitor<DataType> {
 
     @Override
     public DataType visit(TimestampType timestampType) {
-        return new org.apache.fluss.types.TimestampType(
-                timestampType.isNullable(), timestampType.getPrecision());
+        return new org.apache.fluss.types.TimestampType(timestampType.isNullable(), timestampType.getPrecision());
     }
 
     @Override
@@ -163,8 +161,8 @@ class FlinkTypeToFlussType extends LogicalTypeDefaultVisitor<DataType> {
         List<DataField> dataFields = new ArrayList<>();
         for (RowType.RowField field : rowType.getFields()) {
             DataType fieldType = field.getType().accept(this);
-            dataFields.add(
-                    new DataField(field.getName(), fieldType, field.getDescription().orElse(null)));
+            dataFields.add(new DataField(
+                    field.getName(), fieldType, field.getDescription().orElse(null)));
         }
         return new org.apache.fluss.types.RowType(rowType.isNullable(), dataFields);
     }

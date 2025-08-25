@@ -48,9 +48,7 @@ class RecordAndPosTest {
         assertThat(recordAndPos2.readRecordsCount()).isEqualTo(3);
         assertThat(recordAndPos2).isNotEqualTo(recordAndPos);
 
-        assertThat(recordAndPos.toString())
-                .isEqualTo("RecordAndPos{scanRecord=+A(1,null,3)@0, readRecordsCount=-1}");
-        assertThat(recordAndPos2.toString())
-                .isEqualTo("RecordAndPos{scanRecord=+A(1,null,3)@0, readRecordsCount=3}");
+        assertThat(recordAndPos.toString()).isEqualTo("RecordAndPos{scanRecord=+A(1,null,3)@0, readRecordsCount=-1}");
+        assertThat(recordAndPos2.toString()).isEqualTo("RecordAndPos{scanRecord=+A(1,null,3)@0, readRecordsCount=3}");
     }
 }

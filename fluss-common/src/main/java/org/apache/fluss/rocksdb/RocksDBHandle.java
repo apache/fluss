@@ -57,9 +57,7 @@ public class RocksDBHandle implements AutoCloseable {
     }
 
     public RocksDBHandle(
-            File instanceRocksDBPath,
-            DBOptions dbOptions,
-            ColumnFamilyOptions defaultColumnFamilyOptions) {
+            File instanceRocksDBPath, DBOptions dbOptions, ColumnFamilyOptions defaultColumnFamilyOptions) {
         this(instanceRocksDBPath, dbOptions, defaultColumnFamilyOptions, false);
     }
 
@@ -69,14 +67,10 @@ public class RocksDBHandle implements AutoCloseable {
 
     private void loadDb() throws IOException {
         // we only have one column family, default column family
-        List<ColumnFamilyDescriptor> columnFamilyDescriptors =
-                Collections.singletonList(
-                        new ColumnFamilyDescriptor(
-                                RocksDB.DEFAULT_COLUMN_FAMILY, defaultColumnFamilyOptions));
+        List<ColumnFamilyDescriptor> columnFamilyDescriptors = Collections.singletonList(
+                new ColumnFamilyDescriptor(RocksDB.DEFAULT_COLUMN_FAMILY, defaultColumnFamilyOptions));
         List<ColumnFamilyHandle> defaultCfHandle = new ArrayList<>(1);
-        db =
-                RocksDBOperationUtils.openDB(
-                        dbPath, columnFamilyDescriptors, defaultCfHandle, dbOptions, isReadOnly);
+        db = RocksDBOperationUtils.openDB(dbPath, columnFamilyDescriptors, defaultCfHandle, dbOptions, isReadOnly);
         // remove the default column family which is located at the first index
         defaultColumnFamilyHandle = defaultCfHandle.remove(0);
     }

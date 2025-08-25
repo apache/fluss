@@ -41,16 +41,12 @@ public class IndexWalBuilder implements WalBuilder {
         this.memorySegmentPool = memorySegmentPool;
         this.outputView = new ManagedPagedOutputView(memorySegmentPool);
         // unlimited write size as we don't know the WAL size in advance
-        this.recordsBuilder =
-                MemoryLogRecordsIndexedBuilder.builder(
-                        schemaId, Integer.MAX_VALUE, outputView, false);
+        this.recordsBuilder = MemoryLogRecordsIndexedBuilder.builder(schemaId, Integer.MAX_VALUE, outputView, false);
     }
 
     @Override
     public void append(ChangeType changeType, InternalRow row) throws Exception {
-        checkArgument(
-                row instanceof IndexedRow,
-                "IndexWalBuilder requires the log row to be IndexedRow.");
+        checkArgument(row instanceof IndexedRow, "IndexWalBuilder requires the log row to be IndexedRow.");
         recordsBuilder.append(changeType, (IndexedRow) row);
     }
 

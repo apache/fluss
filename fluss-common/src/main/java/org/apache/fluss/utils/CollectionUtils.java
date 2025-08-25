@@ -37,8 +37,7 @@ public class CollectionUtils {
      */
     public static <K, V> HashMap<K, V> newHashMapWithExpectedSize(int expectedSize) {
         return new HashMap<>(
-                computeRequiredCapacity(expectedSize, HASH_MAP_DEFAULT_LOAD_FACTOR),
-                HASH_MAP_DEFAULT_LOAD_FACTOR);
+                computeRequiredCapacity(expectedSize, HASH_MAP_DEFAULT_LOAD_FACTOR), HASH_MAP_DEFAULT_LOAD_FACTOR);
     }
 
     /**

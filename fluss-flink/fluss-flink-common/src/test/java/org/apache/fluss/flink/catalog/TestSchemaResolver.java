@@ -47,12 +47,12 @@ public class TestSchemaResolver implements SchemaResolver {
     public ResolvedSchema resolve(Schema schema) {
         final List<Column> columns = resolveColumns(schema.getColumns());
 
-        final List<WatermarkSpec> watermarkSpecs =
-                schema.getWatermarkSpecs().stream()
-                        .map(this::resolveWatermarkSpecs)
-                        .collect(Collectors.toList());
+        final List<WatermarkSpec> watermarkSpecs = schema.getWatermarkSpecs().stream()
+                .map(this::resolveWatermarkSpecs)
+                .collect(Collectors.toList());
 
-        final UniqueConstraint primaryKey = resolvePrimaryKey(schema.getPrimaryKey().orElse(null));
+        final UniqueConstraint primaryKey =
+                resolvePrimaryKey(schema.getPrimaryKey().orElse(null));
 
         return new ResolvedSchema(columns, watermarkSpecs, primaryKey);
     }
@@ -63,35 +63,27 @@ public class TestSchemaResolver implements SchemaResolver {
         int i = 0;
         for (Schema.UnresolvedColumn unresolvedColumn : unresolvedColumns) {
             if (unresolvedColumn instanceof Schema.UnresolvedPhysicalColumn) {
-                resolvedColumns[i] =
-                        resolvePhysicalColumn((Schema.UnresolvedPhysicalColumn) unresolvedColumn);
+                resolvedColumns[i] = resolvePhysicalColumn((Schema.UnresolvedPhysicalColumn) unresolvedColumn);
             } else if (unresolvedColumn instanceof Schema.UnresolvedMetadataColumn) {
-                resolvedColumns[i] =
-                        resolveMetadataColumn((Schema.UnresolvedMetadataColumn) unresolvedColumn);
+                resolvedColumns[i] = resolveMetadataColumn((Schema.UnresolvedMetadataColumn) unresolvedColumn);
             } else if (unresolvedColumn instanceof Schema.UnresolvedComputedColumn) {
-                resolvedColumns[i] =
-                        Column.computed(
-                                        unresolvedColumn.getName(),
-                                        resolveExpression(
-                                                ((Schema.UnresolvedComputedColumn) unresolvedColumn)
-                                                        .getExpression()))
-                                .withComment(unresolvedColumn.getComment().orElse(null));
+                resolvedColumns[i] = Column.computed(
+                                unresolvedColumn.getName(),
+                                resolveExpression(((Schema.UnresolvedComputedColumn) unresolvedColumn).getExpression()))
+                        .withComment(unresolvedColumn.getComment().orElse(null));
             }
             i++;
         }
         return Arrays.asList(resolvedColumns);
     }
 
-    private Column.PhysicalColumn resolvePhysicalColumn(
-            Schema.UnresolvedPhysicalColumn unresolvedColumn) {
+    private Column.PhysicalColumn resolvePhysicalColumn(Schema.UnresolvedPhysicalColumn unresolvedColumn) {
         return Column.physical(
-                        unresolvedColumn.getName(),
-                        dataTypeFactory.createDataType(unresolvedColumn.getDataType()))
+                        unresolvedColumn.getName(), dataTypeFactory.createDataType(unresolvedColumn.getDataType()))
                 .withComment(unresolvedColumn.getComment().orElse(null));
     }
 
-    private Column.MetadataColumn resolveMetadataColumn(
-            Schema.UnresolvedMetadataColumn unresolvedColumn) {
+    private Column.MetadataColumn resolveMetadataColumn(Schema.UnresolvedMetadataColumn unresolvedColumn) {
         return Column.metadata(
                         unresolvedColumn.getName(),
                         dataTypeFactory.createDataType(unresolvedColumn.getDataType()),
@@ -100,15 +92,13 @@ public class TestSchemaResolver implements SchemaResolver {
                 .withComment(unresolvedColumn.getComment().orElse(null));
     }
 
-    private WatermarkSpec resolveWatermarkSpecs(
-            Schema.UnresolvedWatermarkSpec unresolvedWatermarkSpec) {
+    private WatermarkSpec resolveWatermarkSpecs(Schema.UnresolvedWatermarkSpec unresolvedWatermarkSpec) {
         return WatermarkSpec.of(
                 unresolvedWatermarkSpec.getColumnName(),
                 resolveExpression(unresolvedWatermarkSpec.getWatermarkExpression()));
     }
 
-    private @Nullable UniqueConstraint resolvePrimaryKey(
-            @Nullable Schema.UnresolvedPrimaryKey unresolvedPrimaryKey) {
+    private @Nullable UniqueConstraint resolvePrimaryKey(@Nullable Schema.UnresolvedPrimaryKey unresolvedPrimaryKey) {
         if (unresolvedPrimaryKey == null) {
             return null;
         }
@@ -127,10 +117,8 @@ public class TestSchemaResolver implements SchemaResolver {
         throw new IllegalArgumentException("Unsupported expression: " + expression);
     }
 
-    public TestSchemaResolver addExpression(
-            String callExpression, ResolvedExpression resolvedExpression) {
-        ResolvedExpression oldValue =
-                resolveExpressionTable.put(callExpression, resolvedExpression);
+    public TestSchemaResolver addExpression(String callExpression, ResolvedExpression resolvedExpression) {
+        ResolvedExpression oldValue = resolveExpressionTable.put(callExpression, resolvedExpression);
         if (oldValue != null) {
             throw new IllegalArgumentException("Conflict key for expression: " + callExpression);
         }

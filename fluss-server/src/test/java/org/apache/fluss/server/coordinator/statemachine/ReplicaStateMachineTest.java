@@ -72,9 +72,7 @@ class ReplicaStateMachineTest {
     @BeforeAll
     static void baseBeforeAll() {
         zookeeperClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+                ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getZooKeeperClient(NOPErrorHandler.INSTANCE);
     }
 
     @Test
@@ -119,14 +117,12 @@ class ReplicaStateMachineTest {
 
         // replica0 is valid, replica1 is invalid
         Collection<TableBucketReplica> validReplicas =
-                replicaStateMachine.checkValidReplicaStateChange(
-                        Arrays.asList(replica0, replica1), OnlineReplica);
+                replicaStateMachine.checkValidReplicaStateChange(Arrays.asList(replica0, replica1), OnlineReplica);
         assertThat(validReplicas).isEqualTo(Collections.singletonList(replica1));
 
         replicaStateMachine.handleStateChanges(Arrays.asList(replica0, replica1), OnlineReplica);
         // only replica1 is valid, and then replica1's state should be online
-        assertThat(coordinatorContext.getReplicaState(replica0))
-                .isEqualTo(ReplicaState.NonExistentReplica);
+        assertThat(coordinatorContext.getReplicaState(replica0)).isEqualTo(ReplicaState.NonExistentReplica);
         assertThat(coordinatorContext.getReplicaState(replica1)).isEqualTo(OnlineReplica);
     }
 
@@ -134,15 +130,12 @@ class ReplicaStateMachineTest {
     void testDeleteReplicaStateChange() {
         Map<TableBucketReplica, Boolean> isReplicaDeleteSuccess = new HashMap<>();
         CoordinatorContext coordinatorContext = new CoordinatorContext();
-        coordinatorContext.setLiveTabletServers(
-                CoordinatorTestUtils.createServers(Arrays.asList(0, 1)));
+        coordinatorContext.setLiveTabletServers(CoordinatorTestUtils.createServers(Arrays.asList(0, 1)));
         // use a context that will return a gateway that always get success ack
 
-        TestCoordinatorChannelManager testCoordinatorChannelManager =
-                new TestCoordinatorChannelManager();
+        TestCoordinatorChannelManager testCoordinatorChannelManager = new TestCoordinatorChannelManager();
         ReplicaStateMachine replicaStateMachine =
-                createReplicaStateMachine(
-                        coordinatorContext, testCoordinatorChannelManager, isReplicaDeleteSuccess);
+                createReplicaStateMachine(coordinatorContext, testCoordinatorChannelManager, isReplicaDeleteSuccess);
         CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
                 coordinatorContext, testCoordinatorChannelManager);
 
@@ -153,8 +146,7 @@ class ReplicaStateMachineTest {
         TableBucket tableBucket2 = new TableBucket(tableId, 2);
         TableBucketReplica b2Replica0 = new TableBucketReplica(tableBucket2, 0);
         TableBucketReplica b2Replica1 = new TableBucketReplica(tableBucket2, 1);
-        List<TableBucketReplica> replicas =
-                Arrays.asList(b1Replica0, b1Replica1, b2Replica0, b2Replica1);
+        List<TableBucketReplica> replicas = Arrays.asList(b1Replica0, b1Replica1, b2Replica0, b2Replica1);
         coordinatorContext.putBucketLeaderAndIsr(tableBucket1, new LeaderAndIsr(0, 0));
         coordinatorContext.putBucketLeaderAndIsr(tableBucket2, new LeaderAndIsr(0, 0));
 
@@ -165,21 +157,17 @@ class ReplicaStateMachineTest {
 
         // now, we change a context that some gateway will return exception
         coordinatorContext = new CoordinatorContext();
-        coordinatorContext.setLiveTabletServers(
-                CoordinatorTestUtils.createServers(Arrays.asList(0, 1)));
+        coordinatorContext.setLiveTabletServers(CoordinatorTestUtils.createServers(Arrays.asList(0, 1)));
         coordinatorContext.putBucketLeaderAndIsr(tableBucket1, new LeaderAndIsr(0, 0));
         coordinatorContext.putBucketLeaderAndIsr(tableBucket2, new LeaderAndIsr(0, 0));
 
         // delete replica will fail for some gateway will return exception
         CoordinatorTestUtils.makeSendLeaderAndStopRequestFailContext(
-                coordinatorContext,
-                testCoordinatorChannelManager,
-                new HashSet<>(Arrays.asList(0, 1)));
+                coordinatorContext, testCoordinatorChannelManager, new HashSet<>(Arrays.asList(0, 1)));
 
         isReplicaDeleteSuccess = new HashMap<>();
         replicaStateMachine =
-                createReplicaStateMachine(
-                        coordinatorContext, testCoordinatorChannelManager, isReplicaDeleteSuccess);
+                createReplicaStateMachine(coordinatorContext, testCoordinatorChannelManager, isReplicaDeleteSuccess);
 
         // deletion should always fail
         toReplicaDeletionStartedState(replicaStateMachine, replicas);
@@ -196,14 +184,13 @@ class ReplicaStateMachineTest {
 
         // put the replica to online
         long tableId = 1;
-        coordinatorContext.putTableInfo(
-                TableInfo.of(
-                        DATA1_TABLE_PATH,
-                        tableId,
-                        0,
-                        DATA1_TABLE_DESCRIPTOR,
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis()));
+        coordinatorContext.putTableInfo(TableInfo.of(
+                DATA1_TABLE_PATH,
+                tableId,
+                0,
+                DATA1_TABLE_DESCRIPTOR,
+                System.currentTimeMillis(),
+                System.currentTimeMillis()));
         coordinatorContext.putTablePath(tableId, DATA1_TABLE_PATH);
         TableBucket tableBucket = new TableBucket(tableId, 0);
         for (int i = 0; i < 3; i++) {
@@ -226,17 +213,14 @@ class ReplicaStateMachineTest {
         replicaStateMachine.handleStateChanges(
                 Collections.singleton(new TableBucketReplica(tableBucket, 2)), OfflineReplica);
         leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get();
-        assertThat(leaderAndIsr)
-                .isEqualTo(new LeaderAndIsr(0, 0, Collections.singletonList(0), 0, 2));
+        assertThat(leaderAndIsr).isEqualTo(new LeaderAndIsr(0, 0, Collections.singletonList(0), 0, 2));
 
         // set replica 0 to offline, isr shouldn't be empty, leader should be NO_LEADER
         replicaStateMachine.handleStateChanges(
                 Collections.singleton(new TableBucketReplica(tableBucket, 0)), OfflineReplica);
         leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get();
         assertThat(leaderAndIsr)
-                .isEqualTo(
-                        new LeaderAndIsr(
-                                LeaderAndIsr.NO_LEADER, 0, Collections.singletonList(0), 0, 3));
+                .isEqualTo(new LeaderAndIsr(LeaderAndIsr.NO_LEADER, 0, Collections.singletonList(0), 0, 3));
     }
 
     private void toReplicaDeletionStartedState(
@@ -251,10 +235,7 @@ class ReplicaStateMachineTest {
                 coordinatorContext,
                 new CoordinatorRequestBatch(
                         new CoordinatorChannelManager(
-                                RpcClient.create(
-                                        new Configuration(),
-                                        TestingClientMetricGroup.newInstance(),
-                                        false)),
+                                RpcClient.create(new Configuration(), TestingClientMetricGroup.newInstance(), false)),
                         (event) -> {
                             // do nothing
                         },
@@ -274,12 +255,10 @@ class ReplicaStateMachineTest {
                             if (event instanceof DeleteReplicaResponseReceivedEvent) {
                                 // get replica delete success or not from
                                 // DeleteReplicaResponseReceivedEvent
-                                DeleteReplicaResponseReceivedEvent
-                                        deleteReplicaResponseReceivedEvent =
-                                                (DeleteReplicaResponseReceivedEvent) event;
+                                DeleteReplicaResponseReceivedEvent deleteReplicaResponseReceivedEvent =
+                                        (DeleteReplicaResponseReceivedEvent) event;
                                 List<DeleteReplicaResultForBucket> deleteReplicaResultForBuckets =
-                                        deleteReplicaResponseReceivedEvent
-                                                .getDeleteReplicaResults();
+                                        deleteReplicaResponseReceivedEvent.getDeleteReplicaResults();
                                 for (DeleteReplicaResultForBucket deleteReplicaResultForBucket :
                                         deleteReplicaResultForBuckets) {
                                     // set replica delete success or not
@@ -296,12 +275,11 @@ class ReplicaStateMachineTest {
     private List<ServerInfo> createServers(int[] serverIds) {
         List<ServerInfo> servers = new ArrayList<>();
         for (int serverId : serverIds) {
-            servers.add(
-                    new ServerInfo(
-                            serverId,
-                            "RACK" + serverId,
-                            Endpoint.fromListenersString("CLIENT://host:23"),
-                            ServerType.TABLET_SERVER));
+            servers.add(new ServerInfo(
+                    serverId,
+                    "RACK" + serverId,
+                    Endpoint.fromListenersString("CLIENT://host:23"),
+                    ServerType.TABLET_SERVER));
         }
         return servers;
     }

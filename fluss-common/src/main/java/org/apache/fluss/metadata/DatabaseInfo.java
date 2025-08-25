@@ -32,10 +32,7 @@ public class DatabaseInfo {
     private final long modifiedTime;
 
     public DatabaseInfo(
-            String databaseName,
-            DatabaseDescriptor databaseDescriptor,
-            long createdTime,
-            long modifiedTime) {
+            String databaseName, DatabaseDescriptor databaseDescriptor, long createdTime, long modifiedTime) {
         this.databaseName = databaseName;
         this.databaseDescriptor = databaseDescriptor;
         this.createdTime = createdTime;

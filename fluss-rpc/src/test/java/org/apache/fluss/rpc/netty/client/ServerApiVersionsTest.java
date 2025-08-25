@@ -39,11 +39,10 @@ class ServerApiVersionsTest {
         Set<ApiKeys> apiKeys = apiManager.enabledApis();
         List<PbApiVersion> apiVersions = new ArrayList<>();
         for (ApiKeys api : apiKeys) {
-            apiVersions.add(
-                    new PbApiVersion()
-                            .setApiKey(api.id)
-                            .setMinVersion(api.lowestSupportedVersion)
-                            .setMaxVersion(api.highestSupportedVersion));
+            apiVersions.add(new PbApiVersion()
+                    .setApiKey(api.id)
+                    .setMinVersion(api.lowestSupportedVersion)
+                    .setMaxVersion(api.highestSupportedVersion));
         }
         // add a api key that client don't support, we use -1 as apiKey to mock
         // the client unsupported api key

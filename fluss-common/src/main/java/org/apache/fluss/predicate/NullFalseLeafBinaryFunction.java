@@ -32,8 +32,7 @@ public abstract class NullFalseLeafBinaryFunction extends LeafFunction {
 
     public abstract boolean test(DataType type, Object field, Object literal);
 
-    public abstract boolean test(
-            DataType type, long rowCount, Object min, Object max, Long nullCount, Object literal);
+    public abstract boolean test(DataType type, long rowCount, Object min, Object max, Long nullCount, Object literal);
 
     @Override
     public boolean test(DataType type, Object field, List<Object> literals) {
@@ -44,13 +43,7 @@ public abstract class NullFalseLeafBinaryFunction extends LeafFunction {
     }
 
     @Override
-    public boolean test(
-            DataType type,
-            long rowCount,
-            Object min,
-            Object max,
-            Long nullCount,
-            List<Object> literals) {
+    public boolean test(DataType type, long rowCount, Object min, Object max, Long nullCount, List<Object> literals) {
         if (nullCount != null) {
             if (rowCount == nullCount || literals.get(0) == null) {
                 return false;

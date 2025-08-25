@@ -118,13 +118,13 @@ public final class LogSegment {
         return baseOffset;
     }
 
-    public static LogSegment open(
-            File dir, long baseOffset, Configuration logConfig, LogFormat logFormat)
+    public static LogSegment open(File dir, long baseOffset, Configuration logConfig, LogFormat logFormat)
             throws IOException {
 
         int initFileSize = 0;
         if (logConfig.getBoolean(ConfigOptions.LOG_FILE_PREALLOCATE)) {
-            initFileSize = (int) logConfig.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes();
+            initFileSize =
+                    (int) logConfig.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes();
         }
 
         return open(dir, baseOffset, logConfig, false, initFileSize, logFormat);
@@ -138,7 +138,8 @@ public final class LogSegment {
             int initFileSize,
             LogFormat logFormat)
             throws IOException {
-        int maxIndexSize = (int) logConfig.get(ConfigOptions.LOG_INDEX_FILE_SIZE).getBytes();
+        int maxIndexSize =
+                (int) logConfig.get(ConfigOptions.LOG_INDEX_FILE_SIZE).getBytes();
 
         return new LogSegment(
                 logFormat,
@@ -147,10 +148,8 @@ public final class LogSegment {
                         fileAlreadyExists,
                         initFileSize,
                         logConfig.getBoolean(ConfigOptions.LOG_FILE_PREALLOCATE)),
-                LazyIndex.forOffset(
-                        FlussPaths.offsetIndexFile(dir, baseOffset), baseOffset, maxIndexSize),
-                LazyIndex.forTime(
-                        FlussPaths.timeIndexFile(dir, baseOffset), baseOffset, maxIndexSize),
+                LazyIndex.forOffset(FlussPaths.offsetIndexFile(dir, baseOffset), baseOffset, maxIndexSize),
+                LazyIndex.forTime(FlussPaths.timeIndexFile(dir, baseOffset), baseOffset, maxIndexSize),
                 baseOffset,
                 (int) logConfig.get(ConfigOptions.LOG_INDEX_INTERVAL_SIZE).getBytes());
     }
@@ -223,20 +222,16 @@ public final class LogSegment {
      * @throws LogSegmentOffsetOverflowException if the largest offset causes index offset overflow
      */
     public void append(
-            long largestOffset,
-            long maxTimestampMs,
-            long startOffsetOfMaxTimestamp,
-            MemoryLogRecords records)
+            long largestOffset, long maxTimestampMs, long startOffsetOfMaxTimestamp, MemoryLogRecords records)
             throws IOException {
         if (records.sizeInBytes() > 0) {
             if (LOG.isTraceEnabled()) {
-                LOG.trace(
-                        "Inserting "
-                                + records.sizeInBytes()
-                                + " bytes at end offset "
-                                + largestOffset
-                                + " at position "
-                                + fileLogRecords.sizeInBytes());
+                LOG.trace("Inserting "
+                        + records.sizeInBytes()
+                        + " bytes at end offset "
+                        + largestOffset
+                        + " at position "
+                        + fileLogRecords.sizeInBytes());
             }
 
             int physicalPosition = fileLogRecords.sizeInBytes();
@@ -244,19 +239,17 @@ public final class LogSegment {
             int appendedBytes = fileLogRecords.append(records);
 
             if (LOG.isTraceEnabled()) {
-                LOG.trace(
-                        "Appended "
-                                + appendedBytes
-                                + " to "
-                                + fileLogRecords.file()
-                                + " at end offset "
-                                + largestOffset);
+                LOG.trace("Appended "
+                        + appendedBytes
+                        + " to "
+                        + fileLogRecords.file()
+                        + " at end offset "
+                        + largestOffset);
             }
 
             // Update the in memory max timestamp and corresponding start offset.
             if (maxTimestampMs > maxTimestampSoFar()) {
-                maxTimestampAndStartOffsetSoFar =
-                        new TimestampOffset(maxTimestampMs, startOffsetOfMaxTimestamp);
+                maxTimestampAndStartOffsetSoFar = new TimestampOffset(maxTimestampMs, startOffsetOfMaxTimestamp);
             }
 
             if (bytesSinceLastIndexEntry > indexIntervalBytes) {
@@ -313,25 +306,23 @@ public final class LogSegment {
                 validBytes += batch.sizeInBytes();
             }
         } catch (CorruptRecordException | InvalidRecordException e) {
-            LOG.warn(
-                    "Found invalid messages in log segment "
-                            + fileLogRecords.file().getAbsolutePath()
-                            + " at byte offset "
-                            + validBytes
-                            + ": "
-                            + e.getMessage()
-                            + ". "
-                            + e.getCause());
+            LOG.warn("Found invalid messages in log segment "
+                    + fileLogRecords.file().getAbsolutePath()
+                    + " at byte offset "
+                    + validBytes
+                    + ": "
+                    + e.getMessage()
+                    + ". "
+                    + e.getCause());
         }
 
         int truncated = fileLogRecords.sizeInBytes() - validBytes;
         if (truncated > 0) {
-            LOG.debug(
-                    "Truncated "
-                            + truncated
-                            + " invalid bytes at the end of segment "
-                            + fileLogRecords.file().getAbsolutePath()
-                            + " during recovery");
+            LOG.debug("Truncated "
+                    + truncated
+                    + " invalid bytes at the end of segment "
+                    + fileLogRecords.file().getAbsolutePath()
+                    + " during recovery");
         }
         fileLogRecords.truncateTo(validBytes);
         offsetIndex().trimToValidSize();
@@ -360,8 +351,7 @@ public final class LogSegment {
         offsetIndex.resize(offsetIndex.maxIndexSize());
         timeIndex.resize(timeIndex.maxIndexSize());
 
-        int bytesTruncated =
-                (mapping == null) ? 0 : fileLogRecords.truncateTo(mapping.getPosition());
+        int bytesTruncated = (mapping == null) ? 0 : fileLogRecords.truncateTo(mapping.getPosition());
         bytesSinceLastIndexEntry = 0;
         if (maxTimestampSoFar() >= 0) {
             maxTimestampAndStartOffsetSoFar = readLargestTimestamp();
@@ -383,11 +373,7 @@ public final class LogSegment {
      */
     public long readNextOffset() throws IOException {
         FetchDataInfo fetchData =
-                read(
-                        offsetIndex().lastOffset(),
-                        fileLogRecords.sizeInBytes(),
-                        fileLogRecords.sizeInBytes(),
-                        false);
+                read(offsetIndex().lastOffset(), fileLogRecords.sizeInBytes(), fileLogRecords.sizeInBytes(), false);
         if (fetchData == null) {
             return baseOffset;
         } else {
@@ -433,11 +419,9 @@ public final class LogSegment {
      * <p>The startingFilePosition argument is an optimization that can be used if we already know a
      * valid starting position in the file higher than the greatest-lower-bound from the index.
      */
-    private FileLogRecords.LogOffsetPosition translateOffset(long offset, int startingFilePosition)
-            throws IOException {
+    private FileLogRecords.LogOffsetPosition translateOffset(long offset, int startingFilePosition) throws IOException {
         OffsetPosition mapping = offsetIndex().lookup(offset);
-        return fileLogRecords.searchForOffsetWithSize(
-                offset, Math.max(mapping.getPosition(), startingFilePosition));
+        return fileLogRecords.searchForOffsetWithSize(offset, Math.max(mapping.getPosition(), startingFilePosition));
     }
 
     /**
@@ -454,8 +438,7 @@ public final class LogSegment {
      *     startOffset, or null if the startOffset is larger than the largest offset in this log
      */
     @Nullable
-    public FetchDataInfo read(
-            long startOffset, int maxSize, long maxPosition, boolean minOneMessage)
+    public FetchDataInfo read(long startOffset, int maxSize, long maxPosition, boolean minOneMessage)
             throws IOException {
         return read(startOffset, maxSize, maxPosition, minOneMessage, null);
     }
@@ -491,17 +474,14 @@ public final class LogSegment {
             return null;
         }
         int startPosition = startOffsetAndSize.getPosition();
-        LogOffsetMetadata offsetMetadata =
-                new LogOffsetMetadata(startOffset, this.baseOffset, startPosition);
-        int adjustedMaxSize =
-                minOneMessage ? Math.max(maxSize, startOffsetAndSize.getSize()) : maxSize;
+        LogOffsetMetadata offsetMetadata = new LogOffsetMetadata(startOffset, this.baseOffset, startPosition);
+        int adjustedMaxSize = minOneMessage ? Math.max(maxSize, startOffsetAndSize.getSize()) : maxSize;
         if (adjustedMaxSize <= RECORD_BATCH_HEADER_SIZE) {
             return new FetchDataInfo(offsetMetadata, MemoryLogRecords.EMPTY);
         }
         if (projection == null) {
             int fetchSize = Math.min((int) (maxPosition - startPosition), adjustedMaxSize);
-            return new FetchDataInfo(
-                    offsetMetadata, fileLogRecords.slice(startPosition, fetchSize));
+            return new FetchDataInfo(offsetMetadata, fileLogRecords.slice(startPosition, fetchSize));
         } else {
             if (logFormat != LogFormat.ARROW) {
                 throw new InvalidColumnProjectionException(
@@ -509,30 +489,24 @@ public final class LogSegment {
             }
             // allow to fetch all the data available in the segment
             int fetchSize = (int) (maxPosition - startPosition);
-            FileChannelChunk chunk = fileLogRecords.slice(startPosition, fetchSize).toChunk();
-            LogRecords projectedRecords =
-                    projection.project(
-                            chunk.getFileChannel(),
-                            chunk.getPosition(),
-                            chunk.getPosition() + chunk.getSize(),
-                            adjustedMaxSize);
+            FileChannelChunk chunk =
+                    fileLogRecords.slice(startPosition, fetchSize).toChunk();
+            LogRecords projectedRecords = projection.project(
+                    chunk.getFileChannel(),
+                    chunk.getPosition(),
+                    chunk.getPosition() + chunk.getSize(),
+                    adjustedMaxSize);
             return new FetchDataInfo(offsetMetadata, projectedRecords);
         }
     }
 
     public void changeFileSuffixes(String oldSuffix, String newSuffix) throws IOException {
         fileLogRecords.renameTo(
-                new File(
-                        FileUtils.replaceSuffix(
-                                fileLogRecords.file().getPath(), oldSuffix, newSuffix)));
+                new File(FileUtils.replaceSuffix(fileLogRecords.file().getPath(), oldSuffix, newSuffix)));
         lazyOffsetIndex.renameTo(
-                new File(
-                        FileUtils.replaceSuffix(
-                                lazyOffsetIndex.file().getPath(), oldSuffix, newSuffix)));
+                new File(FileUtils.replaceSuffix(lazyOffsetIndex.file().getPath(), oldSuffix, newSuffix)));
         lazyTimeIndex.renameTo(
-                new File(
-                        FileUtils.replaceSuffix(
-                                lazyTimeIndex.file().getPath(), oldSuffix, newSuffix)));
+                new File(FileUtils.replaceSuffix(lazyTimeIndex.file().getPath(), oldSuffix, newSuffix)));
     }
 
     private void ensureOffsetInRange(long offset) throws IOException {
@@ -546,27 +520,17 @@ public final class LogSegment {
         return offsetIndex().canAppendOffset(offset);
     }
 
-    private void delete(
-            StorageAction<Boolean, IOException> delete,
-            String fileType,
-            File file,
-            boolean logIfMissing)
+    private void delete(StorageAction<Boolean, IOException> delete, String fileType, File file, boolean logIfMissing)
             throws IOException {
         try {
             Boolean result = delete.execute();
             if (result) {
                 LOG.info("Deleted " + fileType + " " + file.getAbsolutePath() + ".");
             } else if (logIfMissing) {
-                LOG.info(
-                        "Failed to delete "
-                                + fileType
-                                + " "
-                                + file.getAbsolutePath()
-                                + " because it does not exist.");
+                LOG.info("Failed to delete " + fileType + " " + file.getAbsolutePath() + " because it does not exist.");
             }
         } catch (IOException e) {
-            throw new IOException(
-                    "Delete of " + fileType + " " + file.getAbsolutePath() + " failed.", e);
+            throw new IOException("Delete of " + fileType + " " + file.getAbsolutePath() + " failed.", e);
         }
     }
 
@@ -602,14 +566,12 @@ public final class LogSegment {
             throws IOException {
         // Get the index entry with a timestamp less than or equal to the target timestamp.
         TimestampOffset timestampOffset = timeIndex().lookup(timestampMs);
-        int position =
-                offsetIndex()
-                        .lookup(Math.max(timestampOffset.offset, startingOffset))
-                        .getPosition();
+        int position = offsetIndex()
+                .lookup(Math.max(timestampOffset.offset, startingOffset))
+                .getPosition();
 
         // search the timestamp.
-        return Optional.ofNullable(
-                fileLogRecords.searchForTimestamp(timestampMs, position, startingOffset));
+        return Optional.ofNullable(fileLogRecords.searchForTimestamp(timestampMs, position, startingOffset));
     }
 
     private TimestampOffset readLargestTimestamp() throws IOException {

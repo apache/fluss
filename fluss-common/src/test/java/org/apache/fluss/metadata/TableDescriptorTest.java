@@ -33,13 +33,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Test for {@link org.apache.fluss.metadata.TableDescriptor}. */
 class TableDescriptorTest {
 
-    private static final Schema SCHEMA_1 =
-            Schema.newBuilder()
-                    .column("f0", DataTypes.STRING())
-                    .column("f1", DataTypes.BIGINT())
-                    .column("f3", DataTypes.STRING())
-                    .primaryKey("f0", "f3")
-                    .build();
+    private static final Schema SCHEMA_1 = Schema.newBuilder()
+            .column("f0", DataTypes.STRING())
+            .column("f1", DataTypes.BIGINT())
+            .column("f3", DataTypes.STRING())
+            .primaryKey("f0", "f3")
+            .build();
 
     private static final ConfigOption<Boolean> OPTION_A =
             ConfigBuilder.key("a").booleanType().noDefaultValue();
@@ -49,12 +48,11 @@ class TableDescriptorTest {
 
     @Test
     void testBasic() {
-        final TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(SCHEMA_1)
-                        .partitionedBy("f0")
-                        .comment("Test Comment")
-                        .build();
+        final TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(SCHEMA_1)
+                .partitionedBy("f0")
+                .comment("Test Comment")
+                .build();
 
         assertThat(descriptor.getSchema()).isEqualTo(SCHEMA_1);
         assertThat(descriptor.isPartitioned()).isTrue();
@@ -63,8 +61,7 @@ class TableDescriptorTest {
         assertThat(descriptor.getProperties()).hasSize(0);
         assertThat(descriptor.getComment().orElse(null)).isEqualTo("Test Comment");
 
-        Optional<TableDescriptor.TableDistribution> distribution =
-                descriptor.getTableDistribution();
+        Optional<TableDescriptor.TableDistribution> distribution = descriptor.getTableDistribution();
         assertThat(distribution).isPresent();
         assertThat(distribution.get().getBucketCount()).isEmpty();
         assertThat(distribution.get().getBucketKeys()).hasSize(1);
@@ -73,14 +70,13 @@ class TableDescriptorTest {
 
     @Test
     void testProperties() {
-        final TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(Schema.newBuilder().build())
-                        .property(OPTION_A, false)
-                        .property(OPTION_B, 42)
-                        .property("c", "C")
-                        .customProperty("d", "D")
-                        .build();
+        final TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder().build())
+                .property(OPTION_A, false)
+                .property(OPTION_B, 42)
+                .property("c", "C")
+                .customProperty("d", "D")
+                .build();
 
         assertThat(descriptor.getProperties()).hasSize(3);
         assertThat(descriptor.getProperties().get("a")).isEqualTo("false");
@@ -92,10 +88,11 @@ class TableDescriptorTest {
 
     @Test
     void testDistribution() {
-        TableDescriptor descriptor =
-                TableDescriptor.builder().schema(SCHEMA_1).distributedBy(10, "f0", "f3").build();
-        Optional<TableDescriptor.TableDistribution> distribution =
-                descriptor.getTableDistribution();
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(SCHEMA_1)
+                .distributedBy(10, "f0", "f3")
+                .build();
+        Optional<TableDescriptor.TableDistribution> distribution = descriptor.getTableDistribution();
         assertThat(distribution).isPresent();
         assertThat(distribution.get().getBucketCount()).hasValue(10);
         assertThat(distribution.get().getBucketKeys()).hasSize(2);
@@ -103,7 +100,10 @@ class TableDescriptorTest {
         assertThat(descriptor.isDefaultBucketKey()).isTrue();
 
         // a subset of primary key
-        descriptor = TableDescriptor.builder().schema(SCHEMA_1).distributedBy(10, "f3").build();
+        descriptor = TableDescriptor.builder()
+                .schema(SCHEMA_1)
+                .distributedBy(10, "f3")
+                .build();
         distribution = descriptor.getTableDistribution();
         assertThat(distribution).isPresent();
         assertThat(distribution.get().getBucketCount()).hasValue(10);
@@ -111,7 +111,8 @@ class TableDescriptorTest {
         assertThat(descriptor.isDefaultBucketKey()).isFalse();
 
         // default bucket key for partitioned table
-        descriptor = TableDescriptor.builder().schema(SCHEMA_1).partitionedBy("f0").build();
+        descriptor =
+                TableDescriptor.builder().schema(SCHEMA_1).partitionedBy("f0").build();
         distribution = descriptor.getTableDistribution();
         assertThat(distribution).isPresent();
         assertThat(distribution.get().getBucketCount()).isEmpty();
@@ -119,12 +120,11 @@ class TableDescriptorTest {
         assertThat(descriptor.isDefaultBucketKey()).isTrue();
 
         // test subset of primary key for partitioned table
-        descriptor =
-                TableDescriptor.builder()
-                        .schema(SCHEMA_1)
-                        .partitionedBy("f0")
-                        .distributedBy(10, "f3")
-                        .build();
+        descriptor = TableDescriptor.builder()
+                .schema(SCHEMA_1)
+                .partitionedBy("f0")
+                .distributedBy(10, "f3")
+                .build();
         distribution = descriptor.getTableDistribution();
         assertThat(distribution).isPresent();
         assertThat(distribution.get().getBucketCount()).hasValue(10);
@@ -134,15 +134,13 @@ class TableDescriptorTest {
 
     @Test
     void testSchemaWithoutPrimaryKeyAndDistributionWithEmptyBucketKeys() {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("f0", DataTypes.STRING())
-                        .column("f1", DataTypes.BIGINT())
-                        .build();
+        Schema schema = Schema.newBuilder()
+                .column("f0", DataTypes.STRING())
+                .column("f1", DataTypes.BIGINT())
+                .build();
         final TableDescriptor descriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(12).build();
-        Optional<TableDescriptor.TableDistribution> distribution =
-                descriptor.getTableDistribution();
+        Optional<TableDescriptor.TableDistribution> distribution = descriptor.getTableDistribution();
         assertThat(distribution).isPresent();
         assertThat(distribution.get().getBucketCount()).hasValue(12);
         assertThat(distribution.get().getBucketKeys()).hasSize(0);
@@ -151,24 +149,20 @@ class TableDescriptorTest {
 
     @Test
     void testPrimaryKeyDifferentWithBucketKeys() {
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptor.builder()
-                                        .schema(SCHEMA_1)
-                                        .distributedBy(12, "f1")
-                                        .build())
+        assertThatThrownBy(() -> TableDescriptor.builder()
+                        .schema(SCHEMA_1)
+                        .distributedBy(12, "f1")
+                        .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
                         "Bucket keys must be a subset of primary keys excluding partition keys for primary-key tables. "
                                 + "The primary keys are [f0, f3], the partition keys are [], "
                                 + "but the user-defined bucket keys are [f1].");
 
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptor.builder()
-                                        .schema(SCHEMA_1)
-                                        .distributedBy(12, "f0", "f1")
-                                        .build())
+        assertThatThrownBy(() -> TableDescriptor.builder()
+                        .schema(SCHEMA_1)
+                        .distributedBy(12, "f0", "f1")
+                        .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
                         "Bucket keys must be a subset of primary keys excluding partition keys for primary-key tables. "
@@ -176,29 +170,24 @@ class TableDescriptorTest {
                                 + "but the user-defined bucket keys are [f0, f1].");
 
         // bucket key shouldn't include partition key
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptor.builder()
-                                        .schema(SCHEMA_1)
-                                        .partitionedBy("f0")
-                                        .distributedBy(3, "f0", "f3")
-                                        .build())
+        assertThatThrownBy(() -> TableDescriptor.builder()
+                        .schema(SCHEMA_1)
+                        .partitionedBy("f0")
+                        .distributedBy(3, "f0", "f3")
+                        .build())
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage(
-                        "Bucket key [f0, f3] shouldn't include any column in partition keys [f0].");
+                .hasMessage("Bucket key [f0, f3] shouldn't include any column in partition keys [f0].");
     }
 
     @Test
     void testSchemaWithPrimaryKeysButDistributionIsNull() {
         // primary key is "f0", but distribution is null, we will use primary key as bucket key.
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(SCHEMA_1)
-                        .partitionedBy("f0")
-                        .comment("Test Comment")
-                        .build();
-        Optional<TableDescriptor.TableDistribution> distribution =
-                descriptor.getTableDistribution();
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(SCHEMA_1)
+                .partitionedBy("f0")
+                .comment("Test Comment")
+                .build();
+        Optional<TableDescriptor.TableDistribution> distribution = descriptor.getTableDistribution();
         assertThat(distribution).isPresent();
         assertThat(distribution.get().getBucketCount()).isEmpty();
         assertThat(distribution.get().getBucketKeys()).hasSize(1);
@@ -208,15 +197,13 @@ class TableDescriptorTest {
     @Test
     void testSchemaWithPrimaryKeysButDistributionWithEmptyBucketKey() {
         // primary key is "f0", but bucket key is empty, we will use primary key as bucket key.
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(SCHEMA_1)
-                        .partitionedBy("f0")
-                        .distributedBy(10)
-                        .comment("Test Comment")
-                        .build();
-        Optional<TableDescriptor.TableDistribution> distribution =
-                descriptor.getTableDistribution();
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(SCHEMA_1)
+                .partitionedBy("f0")
+                .distributedBy(10)
+                .comment("Test Comment")
+                .build();
+        Optional<TableDescriptor.TableDistribution> distribution = descriptor.getTableDistribution();
         assertThat(distribution).isPresent();
         assertThat(distribution.get().getBucketCount()).hasValue(10);
         assertThat(distribution.get().getBucketKeys()).hasSize(1);
@@ -225,13 +212,12 @@ class TableDescriptorTest {
 
     @Test
     void testWithProperties() {
-        final TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(SCHEMA_1)
-                        .partitionedBy("f0")
-                        .comment("Test Comment")
-                        .property(OPTION_A, true)
-                        .build();
+        final TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(SCHEMA_1)
+                .partitionedBy("f0")
+                .comment("Test Comment")
+                .property(OPTION_A, true)
+                .build();
 
         final TableDescriptor copy = descriptor.withProperties(new HashMap<>());
         assertThat(copy.isPartitioned()).isEqualTo(descriptor.isPartitioned());
@@ -245,42 +231,34 @@ class TableDescriptorTest {
     @Test
     void testInvalidTableDescriptor() {
         // schema without primary key.
-        Schema schema =
-                Schema.newBuilder()
-                        .column("f0", DataTypes.STRING())
-                        .column("f1", DataTypes.BIGINT())
-                        .build();
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptor.builder()
-                                        .schema(schema)
-                                        .partitionedBy("unknown_p")
-                                        .build())
+        Schema schema = Schema.newBuilder()
+                .column("f0", DataTypes.STRING())
+                .column("f1", DataTypes.BIGINT())
+                .build();
+        assertThatThrownBy(() -> TableDescriptor.builder()
+                        .schema(schema)
+                        .partitionedBy("unknown_p")
+                        .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Partition key 'unknown_p' does not exist in the schema.");
 
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptor.builder()
-                                        .schema(schema)
-                                        .distributedBy(12, "unknown_f")
-                                        .build())
+        assertThatThrownBy(() -> TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(12, "unknown_f")
+                        .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("Bucket key 'unknown_f' does not exist in the schema.");
 
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptor.builder()
-                                        .schema(
-                                                Schema.newBuilder()
-                                                        .column("id", DataTypes.INT())
-                                                        .column("dt", DataTypes.STRING())
-                                                        .column("a", DataTypes.BIGINT())
-                                                        .column("ts", DataTypes.TIMESTAMP())
-                                                        .primaryKey("id")
-                                                        .build())
-                                        .partitionedBy("dt")
-                                        .build())
+        assertThatThrownBy(() -> TableDescriptor.builder()
+                        .schema(Schema.newBuilder()
+                                .column("id", DataTypes.INT())
+                                .column("dt", DataTypes.STRING())
+                                .column("a", DataTypes.BIGINT())
+                                .column("ts", DataTypes.TIMESTAMP())
+                                .primaryKey("id")
+                                .build())
+                        .partitionedBy("dt")
+                        .build())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
                         "Partitioned Primary Key Table requires partition key [dt] is a subset of the primary key [id].");
@@ -289,15 +267,12 @@ class TableDescriptorTest {
     @Test
     void testPartitionedTable() {
         // will partitioned keys are equal to primary keys, will no bucket key.
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptor.builder()
-                                        .schema(SCHEMA_1)
-                                        .partitionedBy("f0", "f3")
-                                        .build())
+        assertThatThrownBy(() -> TableDescriptor.builder()
+                        .schema(SCHEMA_1)
+                        .partitionedBy("f0", "f3")
+                        .build())
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage(
-                        "Primary Key constraint [f0, f3] should not be same with partition fields [f0, f3].");
+                .hasMessage("Primary Key constraint [f0, f3] should not be same with partition fields [f0, f3].");
 
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(SCHEMA_1).partitionedBy("f0").build();
@@ -305,15 +280,12 @@ class TableDescriptorTest {
                 .isEqualTo(Collections.singletonList("f3"));
 
         // bucket key contains partitioned key, throw exception
-        assertThatThrownBy(
-                        () ->
-                                TableDescriptor.builder()
-                                        .schema(SCHEMA_1)
-                                        .partitionedBy("f0")
-                                        .distributedBy(1, "f0", "f3")
-                                        .build())
+        assertThatThrownBy(() -> TableDescriptor.builder()
+                        .schema(SCHEMA_1)
+                        .partitionedBy("f0")
+                        .distributedBy(1, "f0", "f3")
+                        .build())
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage(
-                        "Bucket key [f0, f3] shouldn't include any column in partition keys [f0].");
+                .hasMessage("Bucket key [f0, f3] shouldn't include any column in partition keys [f0].");
     }
 }

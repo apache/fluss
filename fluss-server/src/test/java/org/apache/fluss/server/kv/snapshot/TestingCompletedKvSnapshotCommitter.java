@@ -35,14 +35,11 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
  */
 public class TestingCompletedKvSnapshotCommitter implements CompletedKvSnapshotCommitter {
 
-    protected final Map<TableBucket, Deque<CompletedSnapshot>> snapshots =
-            MapUtils.newConcurrentHashMap();
-    protected final Map<TableBucket, Map<Long, Integer>> bucketSnapshotLeaderEpoch =
-            new HashMap<>();
+    protected final Map<TableBucket, Deque<CompletedSnapshot>> snapshots = MapUtils.newConcurrentHashMap();
+    protected final Map<TableBucket, Map<Long, Integer>> bucketSnapshotLeaderEpoch = new HashMap<>();
 
     @Override
-    public void commitKvSnapshot(
-            CompletedSnapshot snapshot, int coordinatorEpoch, int bucketLeaderEpoch) {
+    public void commitKvSnapshot(CompletedSnapshot snapshot, int coordinatorEpoch, int bucketLeaderEpoch) {
         snapshots
                 .computeIfAbsent(snapshot.getTableBucket(), k -> new LinkedBlockingDeque<>())
                 .add(snapshot);
@@ -51,13 +48,11 @@ public class TestingCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
                 .put(snapshot.getSnapshotID(), bucketLeaderEpoch);
     }
 
-    public CompletedSnapshot waitUntilSnapshotComplete(
-            TableBucket tableBucket, int snapshotIdToWait) {
+    public CompletedSnapshot waitUntilSnapshotComplete(TableBucket tableBucket, int snapshotIdToWait) {
         return waitValue(
                 () -> {
                     CompletedSnapshot completedSnapshot = getLatestCompletedSnapshot(tableBucket);
-                    if (completedSnapshot != null
-                            && completedSnapshot.getSnapshotID() >= snapshotIdToWait) {
+                    if (completedSnapshot != null && completedSnapshot.getSnapshotID() >= snapshotIdToWait) {
                         return Optional.of(completedSnapshot);
                     }
                     return Optional.empty();
@@ -75,8 +70,7 @@ public class TestingCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
     }
 
     public int getSnapshotLeaderEpoch(TableBucket tableBucket, long snapshotId) {
-        Map<Long, Integer> bucketSnapshotLeaderEpochMap =
-                bucketSnapshotLeaderEpoch.get(tableBucket);
+        Map<Long, Integer> bucketSnapshotLeaderEpochMap = bucketSnapshotLeaderEpoch.get(tableBucket);
         if (bucketSnapshotLeaderEpochMap != null) {
             Integer leaderEpoch = bucketSnapshotLeaderEpochMap.get(snapshotId);
             if (leaderEpoch != null) {

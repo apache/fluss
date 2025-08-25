@@ -43,7 +43,9 @@ public class DropAclsResult {
     /** A class containing either the deleted ACL binding or an exception if the delete failed. */
     public static class FilterResult {
         private final AclBinding binding;
-        @Nullable private final ApiException exception;
+
+        @Nullable
+        private final ApiException exception;
 
         FilterResult(AclBinding binding, @Nullable ApiException exception) {
             this.binding = binding;
@@ -99,8 +101,7 @@ public class DropAclsResult {
                 .thenApply(v -> getAclBindings(futures));
     }
 
-    private List<AclBinding> getAclBindings(
-            Map<AclBindingFilter, CompletableFuture<FilterResults>> futures) {
+    private List<AclBinding> getAclBindings(Map<AclBindingFilter, CompletableFuture<FilterResults>> futures) {
         List<AclBinding> acls = new ArrayList<>();
         for (CompletableFuture<FilterResults> value : futures.values()) {
             FilterResults results;
@@ -127,36 +128,30 @@ public class DropAclsResult {
 
     public void complete(List<PbDropAclsFilterResult> results) {
         Iterator<PbDropAclsFilterResult> iter = results.iterator();
-        futures.forEach(
-                (bindingFilter, future) -> {
-                    if (!iter.hasNext()) {
-                        future.completeExceptionally(
-                                new UnknownServerException(
-                                        "The broker reported no deletion result for the given filter."));
-                    } else {
-                        PbDropAclsFilterResult filterResult = iter.next();
-                        ApiError error = ApiError.fromErrorMessage(filterResult);
-                        if (error.isFailure()) {
-                            future.completeExceptionally(error.exception());
+        futures.forEach((bindingFilter, future) -> {
+            if (!iter.hasNext()) {
+                future.completeExceptionally(
+                        new UnknownServerException("The broker reported no deletion result for the given filter."));
+            } else {
+                PbDropAclsFilterResult filterResult = iter.next();
+                ApiError error = ApiError.fromErrorMessage(filterResult);
+                if (error.isFailure()) {
+                    future.completeExceptionally(error.exception());
+                } else {
+                    List<FilterResult> filterResults = new ArrayList<>();
+                    for (PbDropAclsMatchingAcl matchingAcl : filterResult.getMatchingAclsList()) {
+                        ApiError aclError = ApiError.fromErrorMessage(matchingAcl);
+                        AclBinding aclBinding = toAclBinding(matchingAcl.getAcl());
+                        if (aclError.isFailure()) {
+                            filterResults.add(new FilterResult(aclBinding, aclError.exception()));
                         } else {
-                            List<FilterResult> filterResults = new ArrayList<>();
-                            for (PbDropAclsMatchingAcl matchingAcl :
-                                    filterResult.getMatchingAclsList()) {
-                                ApiError aclError = ApiError.fromErrorMessage(matchingAcl);
-                                AclBinding aclBinding = toAclBinding(matchingAcl.getAcl());
-                                if (aclError.isFailure()) {
-                                    filterResults.add(
-                                            new FilterResult(aclBinding, aclError.exception()));
-                                } else {
-                                    filterResults.add(
-                                            new FilterResult(
-                                                    toAclBinding(matchingAcl.getAcl()), null));
-                                }
-                            }
-                            future.complete(new FilterResults(filterResults));
+                            filterResults.add(new FilterResult(toAclBinding(matchingAcl.getAcl()), null));
                         }
                     }
-                });
+                    future.complete(new FilterResults(filterResults));
+                }
+            }
+        });
     }
 
     /**

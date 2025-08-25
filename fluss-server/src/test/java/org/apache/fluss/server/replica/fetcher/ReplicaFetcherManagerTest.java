@@ -55,18 +55,11 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
         super.setup();
         // with local test leader end point.
         leader = new ServerNode(1, "localhost", 9099, ServerType.COORDINATOR);
-        fetcherThread =
-                new ReplicaFetcherThread(
-                        "test-fetcher-thread",
-                        replicaManager,
-                        new RemoteLeaderEndpoint(
-                                conf,
-                                TABLET_SERVER_ID,
-                                leader.id(),
-                                new TestTabletServerGateway(false)),
-                        (int)
-                                conf.get(ConfigOptions.LOG_REPLICA_FETCH_BACKOFF_INTERVAL)
-                                        .toMillis());
+        fetcherThread = new ReplicaFetcherThread(
+                "test-fetcher-thread",
+                replicaManager,
+                new RemoteLeaderEndpoint(conf, TABLET_SERVER_ID, leader.id(), new TestTabletServerGateway(false)),
+                (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_BACKOFF_INTERVAL).toMillis());
     }
 
     @Test
@@ -82,17 +75,16 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
         // fetched data from leader.
         replicaManager.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
-                Collections.singletonList(
-                        new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                tb,
+                Collections.singletonList(new NotifyLeaderAndIsrData(
+                        PhysicalTablePath.of(DATA1_TABLE_PATH),
+                        tb,
+                        Arrays.asList(leader.id(), TABLET_SERVER_ID),
+                        new LeaderAndIsr(
+                                leader.id(),
+                                LeaderAndIsr.INITIAL_LEADER_EPOCH,
                                 Arrays.asList(leader.id(), TABLET_SERVER_ID),
-                                new LeaderAndIsr(
-                                        leader.id(),
-                                        LeaderAndIsr.INITIAL_LEADER_EPOCH,
-                                        Arrays.asList(leader.id(), TABLET_SERVER_ID),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        LeaderAndIsr.INITIAL_BUCKET_EPOCH))),
+                                INITIAL_COORDINATOR_EPOCH,
+                                LeaderAndIsr.INITIAL_BUCKET_EPOCH))),
                 result -> {});
 
         InitialFetchStatus initialFetchStatus =
@@ -104,8 +96,7 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
         Map<ReplicaFetcherManager.ServerIdAndFetcherId, ReplicaFetcherThread> fetcherThreadMap =
                 fetcherManager.getFetcherThreadMap();
         assertThat(fetcherThreadMap.size()).isEqualTo(1);
-        ReplicaFetcherThread thread =
-                fetcherThreadMap.get(new ServerIdAndFetcherId(1, tb.hashCode() % numFetchers));
+        ReplicaFetcherThread thread = fetcherThreadMap.get(new ServerIdAndFetcherId(1, tb.hashCode() % numFetchers));
         assertThat(thread).isEqualTo(fetcherThread);
         assertThat(fetcherThread.fetchStatus(tb).isPresent()).isTrue();
 

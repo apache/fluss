@@ -61,8 +61,7 @@ public class TimestampNtzTest {
     @Test
     public void testToString() {
         LocalDateTime ldt = LocalDateTime.of(1969, 1, 2, 0, 0, 0, 123456789);
-        assertThat(TimestampNtz.fromLocalDateTime(ldt).toString())
-                .isEqualTo("1969-01-02T00:00:00.123456789");
+        assertThat(TimestampNtz.fromLocalDateTime(ldt).toString()).isEqualTo("1969-01-02T00:00:00.123456789");
     }
 
     @Test

@@ -30,8 +30,8 @@ import java.util.Optional;
 /** An internal class which represents the API versions supported by a particular server node. */
 final class ServerApiVersions {
     // A map of the usable versions of each API, keyed by the ApiKeys instance
-    private final Map<ApiKeys, Either<Short, UnsupportedVersionException>>
-            highestAvailableVersions = new EnumMap<>(ApiKeys.class);
+    private final Map<ApiKeys, Either<Short, UnsupportedVersionException>> highestAvailableVersions =
+            new EnumMap<>(ApiKeys.class);
 
     ServerApiVersions(Collection<PbApiVersion> serverApiVersions) {
         for (PbApiVersion serverVersion : serverApiVersions) {
@@ -39,31 +39,28 @@ final class ServerApiVersions {
                 continue;
             }
             ApiKeys apiKey = ApiKeys.forId(serverVersion.getApiKey());
-            Optional<Short> version =
-                    availableMaxVersion(
-                            apiKey.lowestSupportedVersion,
-                            apiKey.highestSupportedVersion,
-                            (short) serverVersion.getMinVersion(),
-                            (short) serverVersion.getMaxVersion());
+            Optional<Short> version = availableMaxVersion(
+                    apiKey.lowestSupportedVersion,
+                    apiKey.highestSupportedVersion,
+                    (short) serverVersion.getMinVersion(),
+                    (short) serverVersion.getMaxVersion());
             if (version.isPresent()) {
                 highestAvailableVersions.put(apiKey, Either.left(version.get()));
             } else {
                 highestAvailableVersions.put(
                         apiKey,
-                        Either.right(
-                                new UnsupportedVersionException(
-                                        "The server does not support "
-                                                + apiKey
-                                                + " with version in range ["
-                                                + apiKey.lowestSupportedVersion
-                                                + ","
-                                                + apiKey.highestSupportedVersion
-                                                + "]. The supported"
-                                                + " range is ["
-                                                + serverVersion.getMinVersion()
-                                                + ","
-                                                + serverVersion.getMaxVersion()
-                                                + "].")));
+                        Either.right(new UnsupportedVersionException("The server does not support "
+                                + apiKey
+                                + " with version in range ["
+                                + apiKey.lowestSupportedVersion
+                                + ","
+                                + apiKey.highestSupportedVersion
+                                + "]. The supported"
+                                + " range is ["
+                                + serverVersion.getMinVersion()
+                                + ","
+                                + serverVersion.getMaxVersion()
+                                + "].")));
             }
         }
     }
@@ -82,10 +79,7 @@ final class ServerApiVersions {
     }
 
     static Optional<Short> availableMaxVersion(
-            short clientMinVersion,
-            short clientMaxVersion,
-            short serverMinVersion,
-            short serverMaxVersion) {
+            short clientMinVersion, short clientMaxVersion, short serverMinVersion, short serverMaxVersion) {
         short minVersion = (short) Math.max(clientMinVersion, serverMinVersion);
         short maxVersion = (short) Math.min(clientMaxVersion, serverMaxVersion);
         return minVersion > maxVersion ? Optional.empty() : Optional.of(maxVersion);

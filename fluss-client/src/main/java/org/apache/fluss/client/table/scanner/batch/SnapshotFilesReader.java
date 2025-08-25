@@ -53,7 +53,10 @@ import java.nio.file.Path;
 class SnapshotFilesReader implements CloseableIterator<InternalRow> {
 
     private final ValueDecoder valueDecoder;
-    @Nullable private final int[] projectedFields;
+
+    @Nullable
+    private final int[] projectedFields;
+
     private RocksIteratorWrapper rocksIteratorWrapper;
 
     private Snapshot snapshot;
@@ -62,16 +65,10 @@ class SnapshotFilesReader implements CloseableIterator<InternalRow> {
 
     private final CloseableRegistry closeableRegistry;
 
-    SnapshotFilesReader(
-            KvFormat kvFormat,
-            Path rocksDbPath,
-            RowType tableRowType,
-            @Nullable int[] projectedFields)
+    SnapshotFilesReader(KvFormat kvFormat, Path rocksDbPath, RowType tableRowType, @Nullable int[] projectedFields)
             throws IOException {
-        this.valueDecoder =
-                new ValueDecoder(
-                        RowDecoder.create(
-                                kvFormat, tableRowType.getChildren().toArray(new DataType[0])));
+        this.valueDecoder = new ValueDecoder(
+                RowDecoder.create(kvFormat, tableRowType.getChildren().toArray(new DataType[0])));
         this.projectedFields = projectedFields;
         closeableRegistry = new CloseableRegistry();
         try {
@@ -93,8 +90,7 @@ class SnapshotFilesReader implements CloseableIterator<InternalRow> {
         ColumnFamilyOptions columnFamilyOptions = new ColumnFamilyOptions();
         closeableRegistry.registerCloseable(columnFamilyOptions::close);
 
-        rocksDBHandle =
-                new RocksDBHandle(rocksDbPath.toFile(), dbOptions, columnFamilyOptions, true);
+        rocksDBHandle = new RocksDBHandle(rocksDbPath.toFile(), dbOptions, columnFamilyOptions, true);
         closeableRegistry.registerCloseable(rocksDBHandle::close);
     }
 

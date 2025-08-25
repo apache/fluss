@@ -44,9 +44,7 @@ public class ProtobufRepeatedMessageField extends ProtobufAbstractRepeated<Messa
         w.format("public int %s() {\n", ProtoGenUtil.camelCase("get", pluralName, "count"));
         w.format("    return _%sCount;\n", pluralName);
         w.format("}\n");
-        w.format(
-                "public %s %s(int idx) {\n",
-                field.getJavaType(), ProtoGenUtil.camelCase("get", singularName, "at"));
+        w.format("public %s %s(int idx) {\n", field.getJavaType(), ProtoGenUtil.camelCase("get", singularName, "at"));
         w.format("    if (idx < 0 || idx >= _%sCount) {\n", pluralName);
         w.format(
                 "        throw new IndexOutOfBoundsException(\"Index \" + idx + \" is out of the list size (\" + _%sCount + \") for field '%s'\");\n",
@@ -69,9 +67,7 @@ public class ProtobufRepeatedMessageField extends ProtobufAbstractRepeated<Messa
     @Override
     public void parse(PrintWriter w) {
         w.format("int _%sSize = ProtoCodecUtils.readVarInt(_buffer);\n", ccName);
-        w.format(
-                "%s().parseFrom(_buffer, _%sSize);\n",
-                ProtoGenUtil.camelCase("add", singularName), ccName);
+        w.format("%s().parseFrom(_buffer, _%sSize);\n", ProtoGenUtil.camelCase("add", singularName), ccName);
     }
 
     @Override
@@ -86,35 +82,25 @@ public class ProtobufRepeatedMessageField extends ProtobufAbstractRepeated<Messa
 
     @Override
     public void copy(PrintWriter w) {
-        w.format(
-                "for (int i = 0; i < _other.%s(); i++) {\n",
-                ProtoGenUtil.camelCase("get", pluralName, "count"));
+        w.format("for (int i = 0; i < _other.%s(); i++) {\n", ProtoGenUtil.camelCase("get", pluralName, "count"));
         w.format(
                 "    %s().copyFrom(_other.%s(i));\n",
-                ProtoGenUtil.camelCase("add", singularName),
-                ProtoGenUtil.camelCase("get", singularName, "at"));
+                ProtoGenUtil.camelCase("add", singularName), ProtoGenUtil.camelCase("get", singularName, "at"));
         w.format("}\n");
     }
 
     @Override
     public void setter(PrintWriter w, String enclosingType) {
         // add and new
-        w.format(
-                "public %s %s() {\n",
-                field.getJavaType(), ProtoGenUtil.camelCase("add", singularName));
-        w.format(
-                "    return %s(new %s());\n",
-                ProtoGenUtil.camelCase("add", singularName), field.getJavaType());
+        w.format("public %s %s() {\n", field.getJavaType(), ProtoGenUtil.camelCase("add", singularName));
+        w.format("    return %s(new %s());\n", ProtoGenUtil.camelCase("add", singularName), field.getJavaType());
         w.format("}\n");
         w.println();
 
         // add
         w.format(
                 "private %s %s(%s %s) {\n",
-                field.getJavaType(),
-                ProtoGenUtil.camelCase("add", singularName),
-                field.getJavaType(),
-                singularName);
+                field.getJavaType(), ProtoGenUtil.camelCase("add", singularName), field.getJavaType(), singularName);
         w.format("    if (%s == null) {\n", pluralName);
         w.format("        %s = new java.util.ArrayList<%s>();\n", pluralName, field.getJavaType());
         w.format("    }\n");
@@ -127,10 +113,7 @@ public class ProtobufRepeatedMessageField extends ProtobufAbstractRepeated<Messa
         // add Collection
         w.format(
                 "public %s %s(java.util.Collection<%s> %s) {\n",
-                enclosingType,
-                ProtoGenUtil.camelCase("addAll", pluralName),
-                field.getJavaType(),
-                pluralName);
+                enclosingType, ProtoGenUtil.camelCase("addAll", pluralName), field.getJavaType(), pluralName);
         w.format("    if (this.%s == null) {\n", pluralName);
         w.format("        if (%s instanceof java.util.ArrayList) {\n", pluralName);
         w.format("            this.%s = (java.util.ArrayList) %s;\n", pluralName, pluralName);

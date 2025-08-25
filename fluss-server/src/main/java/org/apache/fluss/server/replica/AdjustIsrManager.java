@@ -62,21 +62,18 @@ public class AdjustIsrManager {
     private final int serverId;
 
     /** Used to allow only one pending adjust Isr request per bucket (visible for testing). */
-    protected final Map<TableBucket, AdjustIsrItem> unsentAdjustIsrMap =
-            MapUtils.newConcurrentHashMap();
+    protected final Map<TableBucket, AdjustIsrItem> unsentAdjustIsrMap = MapUtils.newConcurrentHashMap();
 
     /** Used to allow only one in-flight request at a time. */
     private final AtomicBoolean inflightRequest = new AtomicBoolean(false);
 
-    public AdjustIsrManager(
-            Scheduler scheduler, CoordinatorGateway coordinatorGateway, int serverId) {
+    public AdjustIsrManager(Scheduler scheduler, CoordinatorGateway coordinatorGateway, int serverId) {
         this.coordinatorGateway = coordinatorGateway;
         this.scheduler = scheduler;
         this.serverId = serverId;
     }
 
-    public CompletableFuture<LeaderAndIsr> submit(
-            TableBucket tableBucket, LeaderAndIsr leaderAndIsr) {
+    public CompletableFuture<LeaderAndIsr> submit(TableBucket tableBucket, LeaderAndIsr leaderAndIsr) {
         // TODO add coordinatorEpoch.
         CompletableFuture<LeaderAndIsr> future = new CompletableFuture<>();
         AdjustIsrItem adjustIsrItem = new AdjustIsrItem(tableBucket, leaderAndIsr, future);
@@ -85,12 +82,10 @@ public class AdjustIsrManager {
             // start send adjust isr request to coordinator.
             maybePropagateIsrAdjust();
         } else {
-            future.completeExceptionally(
-                    new OperationNotAttemptedException(
-                            String.format(
-                                    "Failed to enqueue ISR change state %s for bucket %s because there is already a "
-                                            + "pending change isr request for that bucket.",
-                                    leaderAndIsr, tableBucket)));
+            future.completeExceptionally(new OperationNotAttemptedException(String.format(
+                    "Failed to enqueue ISR change state %s for bucket %s because there is already a "
+                            + "pending change isr request for that bucket.",
+                    leaderAndIsr, tableBucket)));
         }
 
         return future;
@@ -108,8 +103,7 @@ public class AdjustIsrManager {
 
     protected void sendAdjustIsrRequest(List<AdjustIsrItem> adjustIsrItemList) {
         Map<TableBucket, LeaderAndIsr> isrMap = new HashMap<>();
-        adjustIsrItemList.forEach(
-                adjustIsrItem -> isrMap.put(adjustIsrItem.tableBucket, adjustIsrItem.leaderAndIsr));
+        adjustIsrItemList.forEach(adjustIsrItem -> isrMap.put(adjustIsrItem.tableBucket, adjustIsrItem.leaderAndIsr));
         AdjustIsrRequest adjustIsrRequest = makeAdjustIsrRequest(serverId, isrMap);
         LOG.debug(
                 "Sending adjust isr request {} to coordinator server from tablet server {}",
@@ -119,68 +113,57 @@ public class AdjustIsrManager {
         // We will not time out AdjustIsrRequest, instead letting it retry indefinitely until a
         // response is received, or a new LeaderAndIsr overwrites the existing isrState which causes
         // the response for those replicas to be ignored.
-        coordinatorGateway
-                .adjustIsr(adjustIsrRequest)
-                .whenComplete(
-                        (response, exception) -> {
-                            Errors errors;
-                            try {
-                                if (exception != null) {
-                                    errors = Errors.forException(exception);
-                                } else {
-                                    handleAdjustIsrResponse(response, adjustIsrItemList);
-                                    errors = Errors.NONE;
-                                }
-                            } finally {
-                                // clear the flag so future requests can proceed.
-                                clearInFlightRequest();
-                            }
+        coordinatorGateway.adjustIsr(adjustIsrRequest).whenComplete((response, exception) -> {
+            Errors errors;
+            try {
+                if (exception != null) {
+                    errors = Errors.forException(exception);
+                } else {
+                    handleAdjustIsrResponse(response, adjustIsrItemList);
+                    errors = Errors.NONE;
+                }
+            } finally {
+                // clear the flag so future requests can proceed.
+                clearInFlightRequest();
+            }
 
-                            if (errors == Errors.NONE) {
-                                maybePropagateIsrAdjust();
-                            } else {
-                                // If we received a top-level error from the coordinator, retry
-                                // the request in near future.
-                                scheduler.scheduleOnce(
-                                        "send-adjust-isr", this::maybePropagateIsrAdjust, 50);
-                            }
-                        });
+            if (errors == Errors.NONE) {
+                maybePropagateIsrAdjust();
+            } else {
+                // If we received a top-level error from the coordinator, retry
+                // the request in near future.
+                scheduler.scheduleOnce("send-adjust-isr", this::maybePropagateIsrAdjust, 50);
+            }
+        });
     }
 
-    private void handleAdjustIsrResponse(
-            AdjustIsrResponse response, List<AdjustIsrItem> adjustIsrItemList) {
-        Map<TableBucket, AdjustIsrResultForBucket> resultForBucketMap =
-                getAdjustIsrResponseData(response);
+    private void handleAdjustIsrResponse(AdjustIsrResponse response, List<AdjustIsrItem> adjustIsrItemList) {
+        Map<TableBucket, AdjustIsrResultForBucket> resultForBucketMap = getAdjustIsrResponseData(response);
         // Iterate across the items we sent rather than what we received to ensure we run the
         // callback even if a replica was somehow erroneously excluded from the response. Note that
         // these callbacks are run from the leaderIsrUpdateLock write lock in
         // Replica#sendAdjustIsrRequest.
-        adjustIsrItemList.forEach(
-                adjustIsrItem -> {
-                    TableBucket tableBucket = adjustIsrItem.tableBucket;
-                    if (resultForBucketMap.containsKey(tableBucket)) {
-                        unsentAdjustIsrMap.remove(tableBucket);
-                        AdjustIsrResultForBucket resultForBucket =
-                                resultForBucketMap.get(tableBucket);
-                        if (resultForBucket.failed()) {
-                            adjustIsrItem.future.completeExceptionally(
-                                    resultForBucket.getError().exception());
-                        } else {
-                            adjustIsrItem.future.complete(resultForBucket.leaderAndIsr());
-                        }
-                    } else {
-                        // Don't remove this replica from the update map, so it will get re-sent.
-                        LOG.warn(
-                                "Replica {} was sent in adjust isr request, but not included in the response",
-                                tableBucket);
-                    }
-                });
+        adjustIsrItemList.forEach(adjustIsrItem -> {
+            TableBucket tableBucket = adjustIsrItem.tableBucket;
+            if (resultForBucketMap.containsKey(tableBucket)) {
+                unsentAdjustIsrMap.remove(tableBucket);
+                AdjustIsrResultForBucket resultForBucket = resultForBucketMap.get(tableBucket);
+                if (resultForBucket.failed()) {
+                    adjustIsrItem.future.completeExceptionally(
+                            resultForBucket.getError().exception());
+                } else {
+                    adjustIsrItem.future.complete(resultForBucket.leaderAndIsr());
+                }
+            } else {
+                // Don't remove this replica from the update map, so it will get re-sent.
+                LOG.warn("Replica {} was sent in adjust isr request, but not included in the response", tableBucket);
+            }
+        });
     }
 
     protected void clearInFlightRequest() {
         if (!inflightRequest.compareAndSet(true, false)) {
-            LOG.warn(
-                    "Attempting to clear adjust isr in-flight flag when no apparent request is in-flight.");
+            LOG.warn("Attempting to clear adjust isr in-flight flag when no apparent request is in-flight.");
         }
     }
 
@@ -192,9 +175,7 @@ public class AdjustIsrManager {
         protected final CompletableFuture<LeaderAndIsr> future;
 
         public AdjustIsrItem(
-                TableBucket tableBucket,
-                LeaderAndIsr leaderAndIsr,
-                CompletableFuture<LeaderAndIsr> future) {
+                TableBucket tableBucket, LeaderAndIsr leaderAndIsr, CompletableFuture<LeaderAndIsr> future) {
             this.tableBucket = tableBucket;
             this.leaderAndIsr = leaderAndIsr;
             this.future = future;

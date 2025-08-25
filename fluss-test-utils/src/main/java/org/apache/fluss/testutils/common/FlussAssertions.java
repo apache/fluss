@@ -57,16 +57,9 @@ public class FlussAssertions {
      */
     public static ThrowingConsumer<? super Throwable> anyCauseMatches(
             Class<? extends Throwable> clazz, String containsMessage) {
-        return t ->
-                assertThatChainOfCauses(t)
-                        .as(
-                                "Any cause is instance of class '%s' and contains message '%s'",
-                                clazz, containsMessage)
-                        .anySatisfy(
-                                cause ->
-                                        assertThat(cause)
-                                                .isInstanceOf(clazz)
-                                                .hasMessageContaining(containsMessage));
+        return t -> assertThatChainOfCauses(t)
+                .as("Any cause is instance of class '%s' and contains message '%s'", clazz, containsMessage)
+                .anySatisfy(cause -> assertThat(cause).isInstanceOf(clazz).hasMessageContaining(containsMessage));
     }
 
     /**
@@ -81,12 +74,10 @@ public class FlussAssertions {
      *                  .isInstanceOf(clazz));
      * }</pre>
      */
-    public static ThrowingConsumer<? super Throwable> anyCauseMatches(
-            Class<? extends Throwable> clazz) {
-        return t ->
-                assertThatChainOfCauses(t)
-                        .as("Any cause is instance of class '%s'", clazz)
-                        .anySatisfy(cause -> assertThat(cause).isInstanceOf(clazz));
+    public static ThrowingConsumer<? super Throwable> anyCauseMatches(Class<? extends Throwable> clazz) {
+        return t -> assertThatChainOfCauses(t)
+                .as("Any cause is instance of class '%s'", clazz)
+                .anySatisfy(cause -> assertThat(cause).isInstanceOf(clazz));
     }
 
     /**
@@ -102,10 +93,9 @@ public class FlussAssertions {
      * }</pre>
      */
     public static ThrowingConsumer<? super Throwable> anyCauseMatches(String containsMessage) {
-        return t ->
-                assertThatChainOfCauses(t)
-                        .as("Any cause contains message '%s'", containsMessage)
-                        .anySatisfy(t1 -> assertThat(t1).hasMessageContaining(containsMessage));
+        return t -> assertThatChainOfCauses(t)
+                .as("Any cause contains message '%s'", containsMessage)
+                .anySatisfy(t1 -> assertThat(t1).hasMessageContaining(containsMessage));
     }
 
     /**
@@ -150,8 +140,7 @@ public class FlussAssertions {
      *     java.util.concurrent.CompletableFuture}.
      * @return the created assertion object.
      */
-    public static <T> FlussCompletableFutureAssert<T> assertThatFuture(
-            CompletableFuture<T> actual) {
+    public static <T> FlussCompletableFutureAssert<T> assertThatFuture(CompletableFuture<T> actual) {
         return new FlussCompletableFutureAssert<>(actual);
     }
 }

@@ -38,15 +38,13 @@ class KvPreWriteBufferTest {
 
         assertThatThrownBy(() -> bufferPut(buffer, "key2", "value2", 2))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage(
-                        "The log sequence number must be non-decreasing. The current "
-                                + "log sequence number is 3, but the new log sequence number is 2");
+                .hasMessage("The log sequence number must be non-decreasing. The current "
+                        + "log sequence number is 3, but the new log sequence number is 2");
 
         assertThatThrownBy(() -> bufferDelete(buffer, "key2", 1))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage(
-                        "The log sequence number must be non-decreasing. The current "
-                                + "log sequence number is 3, but the new log sequence number is 1");
+                .hasMessage("The log sequence number must be non-decreasing. The current "
+                        + "log sequence number is 3, but the new log sequence number is 1");
     }
 
     @Test
@@ -183,13 +181,11 @@ class KvPreWriteBufferTest {
         assertThat(buffer.getKvEntryMap().size()).isEqualTo(0);
     }
 
-    private static void bufferPut(
-            KvPreWriteBuffer kvPreWriteBuffer, String key, String value, int elementCount) {
+    private static void bufferPut(KvPreWriteBuffer kvPreWriteBuffer, String key, String value, int elementCount) {
         kvPreWriteBuffer.put(toKey(key), value.getBytes(), elementCount);
     }
 
-    private static void bufferDelete(
-            KvPreWriteBuffer kvPreWriteBuffer, String key, int elementCount) {
+    private static void bufferDelete(KvPreWriteBuffer kvPreWriteBuffer, String key, int elementCount) {
         kvPreWriteBuffer.delete(toKey(key), elementCount);
     }
 

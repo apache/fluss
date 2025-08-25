@@ -77,17 +77,13 @@ public abstract class ServerITCaseBase {
         TestProcessBuilder.TestProcess serverProcess = null;
 
         try {
-            serverProcess =
-                    new TestProcessBuilder(getServerClass().getName())
-                            .addConfigAsMainClassArgs(configuration)
-                            .addMainClassArg(
-                                    String.format(
-                                            "-D%s=%s",
-                                            ConfigOptions.ZOOKEEPER_ADDRESS.key(),
-                                            ZOO_KEEPER_EXTENSION_WRAPPER
-                                                    .getCustomExtension()
-                                                    .getConnectString()))
-                            .start();
+            serverProcess = new TestProcessBuilder(getServerClass().getName())
+                    .addConfigAsMainClassArgs(configuration)
+                    .addMainClassArg(String.format(
+                            "-D%s=%s",
+                            ConfigOptions.ZOOKEEPER_ADDRESS.key(),
+                            ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString()))
+                    .start();
 
             // now, wait until server startup
             waitUntilServerStartup(serverProcess);
@@ -113,9 +109,8 @@ public abstract class ServerITCaseBase {
 
     private void waitUntilServerStartup(TestProcessBuilder.TestProcess process) {
         CommonTestUtils.waitUntil(
-                () ->
-                        process.getProcessOutput().toString().contains(SERVER_STARTED_MARKER)
-                                || !process.getErrorOutput().toString().isEmpty(),
+                () -> process.getProcessOutput().toString().contains(SERVER_STARTED_MARKER)
+                        || !process.getErrorOutput().toString().isEmpty(),
                 Duration.ofMinutes(2),
                 null);
         String errorMsg = process.getErrorOutput().toString();
@@ -125,29 +120,23 @@ public abstract class ServerITCaseBase {
     }
 
     private void testConnectionToServer() throws Exception {
-        try (NettyClient client =
-                new NettyClient(
-                        new Configuration(), TestingClientMetricGroup.newInstance(), false)) {
+        try (NettyClient client = new NettyClient(new Configuration(), TestingClientMetricGroup.newInstance(), false)) {
             RpcGateway gateway =
-                    GatewayClientProxy.createGatewayProxy(
-                            this::getServerNode, client, getRpcGatewayClass());
-            ApiVersionsResponse response =
-                    gateway.apiVersions(
-                                    new ApiVersionsRequest()
-                                            .setClientSoftwareVersion("1.0.0")
-                                            .setClientSoftwareName("test"))
-                            .get();
+                    GatewayClientProxy.createGatewayProxy(this::getServerNode, client, getRpcGatewayClass());
+            ApiVersionsResponse response = gateway.apiVersions(new ApiVersionsRequest()
+                            .setClientSoftwareVersion("1.0.0")
+                            .setClientSoftwareName("test"))
+                    .get();
             ApiManager apiManager = new ApiManager(getServerNode().serverType());
-            assertThat(response.getApiVersionsCount()).isEqualTo(apiManager.enabledApis().size());
+            assertThat(response.getApiVersionsCount())
+                    .isEqualTo(apiManager.enabledApis().size());
         }
     }
 
-    private static void generateYamlFile(Path yamlFile, Configuration configuration)
-            throws Exception {
-        final List<String> configurationLines =
-                configuration.toMap().entrySet().stream()
-                        .map(entry -> entry.getKey() + ": " + entry.getValue())
-                        .collect(Collectors.toList());
+    private static void generateYamlFile(Path yamlFile, Configuration configuration) throws Exception {
+        final List<String> configurationLines = configuration.toMap().entrySet().stream()
+                .map(entry -> entry.getKey() + ": " + entry.getValue())
+                .collect(Collectors.toList());
         Files.write(yamlFile, configurationLines);
     }
 }

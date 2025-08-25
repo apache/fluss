@@ -72,8 +72,7 @@ public class CompactedRow implements BinaryRow {
         this.deserializer = deserializer;
     }
 
-    public static CompactedRow from(
-            DataType[] dataTypes, byte[] dataBytes, CompactedRowDeserializer compactedDecoder) {
+    public static CompactedRow from(DataType[] dataTypes, byte[] dataBytes, CompactedRowDeserializer compactedDecoder) {
         MemorySegment memorySegment = MemorySegment.wrap(dataBytes);
         CompactedRow compactedRow = new CompactedRow(dataTypes.length, compactedDecoder);
         compactedRow.pointTo(memorySegment, 0, memorySegment.size());
@@ -234,8 +233,7 @@ public class CompactedRow implements BinaryRow {
             return false;
         }
         CompactedRow that = (CompactedRow) o;
-        return sizeInBytes == that.sizeInBytes
-                && segment.equalTo(that.segment, offset, that.offset, sizeInBytes);
+        return sizeInBytes == that.sizeInBytes && segment.equalTo(that.segment, offset, that.offset, sizeInBytes);
     }
 
     @Override

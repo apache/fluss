@@ -112,19 +112,14 @@ class TableManagerITCase {
     private Configuration clientConf;
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setCoordinatorServerListeners(
-                            String.format(
-                                    "%s://localhost:0, %s://localhost:0",
-                                    DEFAULT_LISTENER_NAME, CLIENT_LISTENER))
-                    .setTabletServerListeners(
-                            String.format(
-                                    "%s://localhost:0, %s://localhost:0",
-                                    DEFAULT_LISTENER_NAME, CLIENT_LISTENER))
-                    .setClusterConf(initConf())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setCoordinatorServerListeners(
+                    String.format("%s://localhost:0, %s://localhost:0", DEFAULT_LISTENER_NAME, CLIENT_LISTENER))
+            .setTabletServerListeners(
+                    String.format("%s://localhost:0, %s://localhost:0", DEFAULT_LISTENER_NAME, CLIENT_LISTENER))
+            .setClusterConf(initConf())
+            .build();
 
     private static Configuration initConf() {
         Configuration conf = new Configuration();
@@ -141,38 +136,23 @@ class TableManagerITCase {
     @Test
     void testCreateInvalidDatabaseAndTable() {
         AdminGateway adminGateway = getAdminGateway();
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .createDatabase(
-                                                newCreateDatabaseRequest("*invalid_db*", true))
-                                        .get())
+        assertThatThrownBy(() -> adminGateway
+                        .createDatabase(newCreateDatabaseRequest("*invalid_db*", true))
+                        .get())
                 .cause()
                 .isInstanceOf(InvalidDatabaseException.class)
                 .hasMessageContaining(
                         "Database name *invalid_db* is invalid: '*invalid_db*' contains one or more characters other than");
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .createTable(
-                                                newCreateTableRequest(
-                                                        new TablePath("db", "=invalid_table!"),
-                                                        newTable(),
-                                                        true))
-                                        .get())
+        assertThatThrownBy(() -> adminGateway
+                        .createTable(newCreateTableRequest(new TablePath("db", "=invalid_table!"), newTable(), true))
+                        .get())
                 .cause()
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining(
                         "Table name =invalid_table! is invalid: '=invalid_table!' contains one or more characters other than");
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .createTable(
-                                                newCreateTableRequest(
-                                                        new TablePath("", "=invalid_table!"),
-                                                        newTable(),
-                                                        true))
-                                        .get())
+        assertThatThrownBy(() -> adminGateway
+                        .createTable(newCreateTableRequest(new TablePath("", "=invalid_table!"), newTable(), true))
+                        .get())
                 .cause()
                 .isInstanceOf(InvalidDatabaseException.class)
                 .hasMessageContaining("Database name  is invalid: the empty string is not allowed");
@@ -192,14 +172,13 @@ class TableManagerITCase {
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
 
         // check it again
-        assertThat(gateway.databaseExists(newDatabaseExistsRequest(db1)).get().isExists()).isTrue();
+        assertThat(gateway.databaseExists(newDatabaseExistsRequest(db1)).get().isExists())
+                .isTrue();
 
         // now, should throw exception when create it again
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .createDatabase(newCreateDatabaseRequest(db1, false))
-                                        .get())
+        assertThatThrownBy(() -> adminGateway
+                        .createDatabase(newCreateDatabaseRequest(db1, false))
+                        .get())
                 .cause()
                 .isInstanceOf(DatabaseAlreadyExistException.class)
                 .hasMessageContaining("Database db1 already exists.");
@@ -220,7 +199,8 @@ class TableManagerITCase {
                 .isEmpty();
 
         // list a not exist database, should throw exception
-        assertThatThrownBy(() -> gateway.listTables(newListTablesRequest("not_exist")).get())
+        assertThatThrownBy(() ->
+                        gateway.listTables(newListTablesRequest("not_exist")).get())
                 .cause()
                 .isInstanceOf(DatabaseNotExistException.class)
                 .hasMessageContaining("Database not_exist does not exist.");
@@ -232,11 +212,9 @@ class TableManagerITCase {
                 .isEqualTo(Arrays.asList(db2, "fluss"));
 
         // drop a not exist database without ignore if not exists, should throw exception
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .dropDatabase(newDropDatabaseRequest(db1, false, true))
-                                        .get())
+        assertThatThrownBy(() -> adminGateway
+                        .dropDatabase(newDropDatabaseRequest(db1, false, true))
+                        .get())
                 .cause()
                 .isInstanceOf(DatabaseNotExistException.class)
                 .hasMessageContaining("Database db1 does not exist.");
@@ -263,7 +241,9 @@ class TableManagerITCase {
                 .isFalse();
 
         // drop a not exist table without ignore if not exists should throw exception
-        assertThatThrownBy(() -> adminGateway.dropTable(newDropTableRequest(db1, tb1, false)).get())
+        assertThatThrownBy(() -> adminGateway
+                        .dropTable(newDropTableRequest(db1, tb1, false))
+                        .get())
                 .cause()
                 .isInstanceOf(TableNotExistException.class)
                 .hasMessageContaining(String.format("Table %s does not exist.", tablePath));
@@ -273,10 +253,13 @@ class TableManagerITCase {
 
         // then create a table
         TableDescriptor tableDescriptor = newTable();
-        adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
+        adminGateway
+                .createTable(newCreateTableRequest(tablePath, tableDescriptor, false))
+                .get();
 
         // the table should exist then
-        assertThat(gateway.tableExists(newTableExistsRequest(tablePath)).get().isExists()).isTrue();
+        assertThat(gateway.tableExists(newTableExistsRequest(tablePath)).get().isExists())
+                .isTrue();
 
         // get the table and check it
         GetTableInfoResponse response =
@@ -296,49 +279,45 @@ class TableManagerITCase {
                 .setTablePath()
                 .setDatabaseName(db1)
                 .setTableName(tb1);
-        Schema gottenSchema =
-                Schema.fromJsonBytes(
-                        gateway.getTableSchema(getSchemaRequest).get().getSchemaJson());
+        Schema gottenSchema = Schema.fromJsonBytes(
+                gateway.getTableSchema(getSchemaRequest).get().getSchemaJson());
         assertThat(gottenSchema).isEqualTo(tableDescriptor.getSchema());
 
         // then create the table with same name again, should throw exception
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .createTable(
-                                                newCreateTableRequest(
-                                                        tablePath, tableDescriptor, false))
-                                        .get())
+        assertThatThrownBy(() -> adminGateway
+                        .createTable(newCreateTableRequest(tablePath, tableDescriptor, false))
+                        .get())
                 .cause()
                 .isInstanceOf(TableAlreadyExistException.class)
                 .hasMessageContaining(String.format("Table %s already exists.", tablePath));
 
         // create the table with same name again with ignoreIfExists = true,
         // should success
-        adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, true)).get();
+        adminGateway
+                .createTable(newCreateTableRequest(tablePath, tableDescriptor, true))
+                .get();
 
         // create another table without setting distribution
         String tb2 = "tb2";
         TableDescriptor tableDescriptor1 = newTableWithoutSettingDistribution();
         adminGateway
-                .createTable(
-                        newCreateTableRequest(new TablePath(db1, tb2), tableDescriptor1, false))
+                .createTable(newCreateTableRequest(new TablePath(db1, tb2), tableDescriptor1, false))
                 .get();
 
         // check assignment, just check bucket number, it should be equal to the default bucket
         // number
         // configured in cluster-level
-        response = gateway.getTableInfo(newGetTableInfoRequest(new TablePath(db1, tb2))).get();
-        TableAssignment tableAssignment = zkClient.getTableAssignment(response.getTableId()).get();
+        response = gateway.getTableInfo(newGetTableInfoRequest(new TablePath(db1, tb2)))
+                .get();
+        TableAssignment tableAssignment =
+                zkClient.getTableAssignment(response.getTableId()).get();
         assertThat(tableAssignment.getBucketAssignments().size())
                 .isEqualTo(clientConf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER));
 
         // check drop database with should fail
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .dropDatabase(newDropDatabaseRequest(db1, false, false))
-                                        .get())
+        assertThatThrownBy(() -> adminGateway
+                        .dropDatabase(newDropDatabaseRequest(db1, false, false))
+                        .get())
                 .cause()
                 .isInstanceOf(DatabaseNotEmptyException.class)
                 .hasMessageContaining(String.format("Database %s is not empty.", db1));
@@ -350,10 +329,8 @@ class TableManagerITCase {
         assertThatThrownBy(() -> gateway.getTableSchema(getSchemaRequest).get())
                 .cause()
                 .isInstanceOf(SchemaNotExistException.class)
-                .hasMessageContaining(
-                        String.format(
-                                "Schema for table %s with schema id %s does not exist.",
-                                tablePath, response.getSchemaId()));
+                .hasMessageContaining(String.format(
+                        "Schema for table %s with schema id %s does not exist.", tablePath, response.getSchemaId()));
     }
 
     @ParameterizedTest
@@ -373,22 +350,22 @@ class TableManagerITCase {
         options.put(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), timeUnit.name());
         options.put(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key(), "1");
         TableDescriptor tableDescriptor = newPartitionedTable().withProperties(options);
-        adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
+        adminGateway
+                .createTable(newCreateTableRequest(tablePath, tableDescriptor, false))
+                .get();
 
         // wait until partition is created
-        Map<String, Long> partitions =
-                waitValue(
-                        () -> {
-                            Map<String, Long> gotPartitions =
-                                    zkClient.getPartitionNameAndIds(tablePath);
-                            if (!gotPartitions.isEmpty()) {
-                                return Optional.of(gotPartitions);
-                            } else {
-                                return Optional.empty();
-                            }
-                        },
-                        Duration.ofMinutes(1),
-                        "partition is not created");
+        Map<String, Long> partitions = waitValue(
+                () -> {
+                    Map<String, Long> gotPartitions = zkClient.getPartitionNameAndIds(tablePath);
+                    if (!gotPartitions.isEmpty()) {
+                        return Optional.of(gotPartitions);
+                    } else {
+                        return Optional.empty();
+                    }
+                },
+                Duration.ofMinutes(1),
+                "partition is not created");
         // check the created partitions
         List<String> expectAddedPartitions =
                 getExpectAddedPartitions(Collections.singletonList("dt"), now, timeUnit, 1);
@@ -401,17 +378,13 @@ class TableManagerITCase {
         // create a non-auto-partitioned table
         adminGateway
                 .createTable(
-                        newCreateTableRequest(
-                                tablePath,
-                                newPartitionedTable().withProperties(new HashMap<>()),
-                                false))
+                        newCreateTableRequest(tablePath, newPartitionedTable().withProperties(new HashMap<>()), false))
                 .get();
 
         // verify the partition assignment is deleted
         for (Long partitionId : partitions.values()) {
-            retry(
-                    Duration.ofMinutes(1),
-                    () -> assertThat(zkClient.getPartitionAssignment(partitionId)).isEmpty());
+            retry(Duration.ofMinutes(1), () -> assertThat(zkClient.getPartitionAssignment(partitionId))
+                    .isEmpty());
         }
 
         // make sure the auto partition manager won't create partitions for the new table
@@ -429,13 +402,9 @@ class TableManagerITCase {
 
         TableDescriptor tableWithIntPartKey =
                 newPartitionedTableBuilder(null).partitionedBy("id").build();
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .createTable(
-                                                newCreateTableRequest(
-                                                        tablePath, tableWithIntPartKey, false))
-                                        .get())
+        assertThatThrownBy(() -> adminGateway
+                        .createTable(newCreateTableRequest(tablePath, tableWithIntPartKey, false))
+                        .get())
                 .cause()
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessageContaining(
@@ -454,21 +423,24 @@ class TableManagerITCase {
         // first create a database
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
         TableDescriptor tableDescriptor = newTable();
-        adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
+        adminGateway
+                .createTable(newCreateTableRequest(tablePath, tableDescriptor, false))
+                .get();
         GetTableInfoResponse response =
                 gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
         long tableId = response.getTableId();
 
         // retry until all replica ready.
-        int expectBucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
+        int expectBucketCount =
+                tableDescriptor.getTableDistribution().get().getBucketCount().get();
         for (int i = 0; i < expectBucketCount; i++) {
             FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(new TableBucket(tableId, i));
         }
 
         // retry to check metadata.
         FLUSS_CLUSTER_EXTENSION.waitUntilAllGatewayHasSameMetadata();
-        MetadataResponse metadataResponse =
-                gateway.metadata(newMetadataRequest(Collections.singletonList(tablePath))).get();
+        MetadataResponse metadataResponse = gateway.metadata(newMetadataRequest(Collections.singletonList(tablePath)))
+                .get();
         // should be no tablet server as we only create tablet service.
         assertThat(metadataResponse.getTabletServersCount()).isEqualTo(3);
 
@@ -490,64 +462,49 @@ class TableManagerITCase {
         // we should get the same response
         if (!isCoordinatorServer) {
             ((TabletServerGateway) gateway)
-                    .updateMetadata(
-                            makeUpdateMetadataRequest(
-                                    coordinatorServerInfo,
-                                    new HashSet<>(tabletServerInfos),
-                                    Collections.emptyList(),
-                                    Collections.emptyList()))
+                    .updateMetadata(makeUpdateMetadataRequest(
+                            coordinatorServerInfo,
+                            new HashSet<>(tabletServerInfos),
+                            Collections.emptyList(),
+                            Collections.emptyList()))
                     .get();
         }
 
         // test lookup metadata from internal view
 
-        metadataResponse =
-                gateway.metadata(newMetadataRequest(Collections.singletonList(tablePath))).get();
+        metadataResponse = gateway.metadata(newMetadataRequest(Collections.singletonList(tablePath)))
+                .get();
         // check coordinator server
         assertThat(toServerNode(metadataResponse.getCoordinatorServer(), ServerType.COORDINATOR))
                 .isEqualTo(coordinatorServerInfo.node(DEFAULT_LISTENER_NAME));
         assertThat(metadataResponse.getTabletServersCount()).isEqualTo(3);
-        List<ServerNode> tsNodes =
-                metadataResponse.getTabletServersList().stream()
-                        .map(n -> toServerNode(n, ServerType.TABLET_SERVER))
-                        .collect(Collectors.toList());
-        assertThat(tsNodes)
-                .containsExactlyInAnyOrderElementsOf(
-                        FLUSS_CLUSTER_EXTENSION.getTabletServerNodes());
+        List<ServerNode> tsNodes = metadataResponse.getTabletServersList().stream()
+                .map(n -> toServerNode(n, ServerType.TABLET_SERVER))
+                .collect(Collectors.toList());
+        assertThat(tsNodes).containsExactlyInAnyOrderElementsOf(FLUSS_CLUSTER_EXTENSION.getTabletServerNodes());
 
         // test lookup metadata from client view with another client(because same uid will reuse
         // same connection)
         Configuration configuration = new Configuration();
-        try (RpcClient rpcClient =
-                RpcClient.create(
-                        configuration,
-                        new ClientMetricGroup(
-                                MetricRegistry.create(configuration, null),
-                                "fluss-cluster-extension"),
-                        false)) {
-            ServerNode serverNode =
-                    FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode(CLIENT_LISTENER);
+        try (RpcClient rpcClient = RpcClient.create(
+                configuration,
+                new ClientMetricGroup(MetricRegistry.create(configuration, null), "fluss-cluster-extension"),
+                false)) {
+            ServerNode serverNode = FLUSS_CLUSTER_EXTENSION.getCoordinatorServerNode(CLIENT_LISTENER);
             AdminGateway adminGatewayForClient =
-                    GatewayClientProxy.createGatewayProxy(
-                            () -> serverNode, rpcClient, CoordinatorGateway.class);
-            metadataResponse =
-                    adminGatewayForClient
-                            .metadata(newMetadataRequest(Collections.singletonList(tablePath)))
-                            .get();
+                    GatewayClientProxy.createGatewayProxy(() -> serverNode, rpcClient, CoordinatorGateway.class);
+            metadataResponse = adminGatewayForClient
+                    .metadata(newMetadataRequest(Collections.singletonList(tablePath)))
+                    .get();
             // check coordinator server
-            assertThat(
-                            toServerNode(
-                                    metadataResponse.getCoordinatorServer(),
-                                    ServerType.COORDINATOR))
+            assertThat(toServerNode(metadataResponse.getCoordinatorServer(), ServerType.COORDINATOR))
                     .isEqualTo(coordinatorServerInfo.node(CLIENT_LISTENER));
             assertThat(metadataResponse.getTabletServersCount()).isEqualTo(3);
-            tsNodes =
-                    metadataResponse.getTabletServersList().stream()
-                            .map(n -> toServerNode(n, ServerType.TABLET_SERVER))
-                            .collect(Collectors.toList());
+            tsNodes = metadataResponse.getTabletServersList().stream()
+                    .map(n -> toServerNode(n, ServerType.TABLET_SERVER))
+                    .collect(Collectors.toList());
             assertThat(tsNodes)
-                    .containsExactlyInAnyOrderElementsOf(
-                            FLUSS_CLUSTER_EXTENSION.getTabletServerNodes(CLIENT_LISTENER));
+                    .containsExactlyInAnyOrderElementsOf(FLUSS_CLUSTER_EXTENSION.getTabletServerNodes(CLIENT_LISTENER));
         }
     }
 
@@ -564,19 +521,22 @@ class TableManagerITCase {
         TableDescriptor tableDescriptor = newPartitionedTable();
         // first create a database
         adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
-        adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
+        adminGateway
+                .createTable(newCreateTableRequest(tablePath, tableDescriptor, false))
+                .get();
 
-        long tableId =
-                adminGateway.getTableInfo(newGetTableInfoRequest(tablePath)).get().getTableId();
-        int expectBucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
+        long tableId = adminGateway
+                .getTableInfo(newGetTableInfoRequest(tablePath))
+                .get()
+                .getTableId();
+        int expectBucketCount =
+                tableDescriptor.getTableDistribution().get().getBucketCount().get();
 
-        Map<String, Long> partitionById =
-                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsCreated(tablePath, 1);
+        Map<String, Long> partitionById = FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsCreated(tablePath, 1);
 
         for (long partitionId : partitionById.values()) {
             for (int i = 0; i < expectBucketCount; i++) {
-                FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(
-                        new TableBucket(tableId, partitionId, i));
+                FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(new TableBucket(tableId, partitionId, i));
             }
         }
 
@@ -595,26 +555,23 @@ class TableManagerITCase {
 
         for (PbPartitionMetadata partition : partitionMetadata) {
             assertThat(partition.getPartitionName()).isIn(partitionById.keySet());
-            assertThat(partition.getPartitionId())
-                    .isEqualTo(partitionById.get(partition.getPartitionName()));
+            assertThat(partition.getPartitionId()).isEqualTo(partitionById.get(partition.getPartitionName()));
             assertThat(partition.getTableId()).isEqualTo(tableId);
             checkBucketMetadata(expectBucketCount, partition.getBucketMetadatasList());
         }
 
-        assertThatThrownBy(
-                        () -> {
-                            MetadataRequest partitionMetadataRequest = new MetadataRequest();
-                            partitionMetadataRequest
-                                    .addPartitionsPath()
-                                    .setDatabaseName(db1)
-                                    .setTableName("partitioned_tb")
-                                    .setPartitionName("not_exist_partition");
-                            gateway.metadata(partitionMetadataRequest).get();
-                        })
+        assertThatThrownBy(() -> {
+                    MetadataRequest partitionMetadataRequest = new MetadataRequest();
+                    partitionMetadataRequest
+                            .addPartitionsPath()
+                            .setDatabaseName(db1)
+                            .setTableName("partitioned_tb")
+                            .setPartitionName("not_exist_partition");
+                    gateway.metadata(partitionMetadataRequest).get();
+                })
                 .cause()
                 .isInstanceOf(PartitionNotExistException.class)
-                .hasMessage(
-                        "Table partition 'db1.partitioned_tb(p=not_exist_partition)' does not exist.");
+                .hasMessage("Table partition 'db1.partitioned_tb(p=not_exist_partition)' does not exist.");
     }
 
     @ParameterizedTest
@@ -629,35 +586,30 @@ class TableManagerITCase {
         // we should get the same response
         if (!isCoordinatorServer) {
             ((TabletServerGateway) gateway)
-                    .updateMetadata(
-                            makeLegacyUpdateMetadataRequest(
-                                    Optional.of(coordinatorServerInfo),
-                                    new HashSet<>(tabletServerInfos)))
+                    .updateMetadata(makeLegacyUpdateMetadataRequest(
+                            Optional.of(coordinatorServerInfo), new HashSet<>(tabletServerInfos)))
                     .get();
         }
 
         // test lookup metadata
         AdminGateway adminGatewayForClient = getAdminGateway();
-        MetadataResponse metadataResponse =
-                adminGatewayForClient.metadata(newMetadataRequest(Collections.emptyList())).get();
+        MetadataResponse metadataResponse = adminGatewayForClient
+                .metadata(newMetadataRequest(Collections.emptyList()))
+                .get();
         // check coordinator server
         assertThat(toServerNode(metadataResponse.getCoordinatorServer(), ServerType.COORDINATOR))
                 .isEqualTo(coordinatorServerInfo.node(DEFAULT_LISTENER_NAME));
         assertThat(metadataResponse.getTabletServersCount()).isEqualTo(3);
-        List<ServerNode> tsNodes =
-                metadataResponse.getTabletServersList().stream()
-                        .map(n -> toServerNode(n, ServerType.TABLET_SERVER))
-                        .collect(Collectors.toList());
-        assertThat(tsNodes)
-                .containsExactlyInAnyOrderElementsOf(
-                        FLUSS_CLUSTER_EXTENSION.getTabletServerNodes());
+        List<ServerNode> tsNodes = metadataResponse.getTabletServersList().stream()
+                .map(n -> toServerNode(n, ServerType.TABLET_SERVER))
+                .collect(Collectors.toList());
+        assertThat(tsNodes).containsExactlyInAnyOrderElementsOf(FLUSS_CLUSTER_EXTENSION.getTabletServerNodes());
     }
 
     private void checkBucketMetadata(int expectBucketCount, List<PbBucketMetadata> bucketMetadata) {
-        Set<Integer> liveServers =
-                FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().stream()
-                        .map(ServerNode::id)
-                        .collect(Collectors.toSet());
+        Set<Integer> liveServers = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes().stream()
+                .map(ServerNode::id)
+                .collect(Collectors.toSet());
         for (int i = 0; i < expectBucketCount; i++) {
             PbBucketMetadata tableBucketMetadata = bucketMetadata.get(i);
             assertThat(tableBucketMetadata.getBucketId()).isEqualTo(i);
@@ -665,14 +617,11 @@ class TableManagerITCase {
 
             // assert replicas
             Set<Integer> allReplicas = new HashSet<>();
-            for (int replicaIdx = 0;
-                    replicaIdx < tableBucketMetadata.getReplicaIdsCount();
-                    replicaIdx++) {
+            for (int replicaIdx = 0; replicaIdx < tableBucketMetadata.getReplicaIdsCount(); replicaIdx++) {
                 allReplicas.add(tableBucketMetadata.getReplicaIdAt(replicaIdx));
             }
             // assert replica count
-            assertThat(allReplicas.size())
-                    .isEqualTo(clientConf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR));
+            assertThat(allReplicas.size()).isEqualTo(clientConf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR));
             // assert replica is in the live servers
             for (int replica : allReplicas) {
                 assertThat(liveServers.contains(replica)).isTrue();
@@ -693,44 +642,41 @@ class TableManagerITCase {
     }
 
     public static List<String> getExpectAddedPartitions(
-            List<String> partitionKeys,
-            Instant addInstant,
-            AutoPartitionTimeUnit timeUnit,
-            int newPartitions) {
+            List<String> partitionKeys, Instant addInstant, AutoPartitionTimeUnit timeUnit, int newPartitions) {
         ZonedDateTime addDateTime = ZonedDateTime.ofInstant(addInstant, ZoneId.systemDefault());
         List<String> partitions = new ArrayList<>();
         for (int i = 0; i < newPartitions; i++) {
-            partitions.add(
-                    generateAutoPartition(partitionKeys, addDateTime, i, timeUnit)
-                            .getPartitionName());
+            partitions.add(generateAutoPartition(partitionKeys, addDateTime, i, timeUnit)
+                    .getPartitionName());
         }
         return partitions;
     }
 
-    private static void checkAssignmentWithReplicaFactor(
-            TableAssignment tableAssignment, int expectedReplicaFactor) {
-        for (BucketAssignment bucketAssignment : tableAssignment.getBucketAssignments().values()) {
+    private static void checkAssignmentWithReplicaFactor(TableAssignment tableAssignment, int expectedReplicaFactor) {
+        for (BucketAssignment bucketAssignment :
+                tableAssignment.getBucketAssignments().values()) {
             assertThat(bucketAssignment.getReplicas().size()).isEqualTo(expectedReplicaFactor);
         }
     }
 
     private static TableDescriptor newTableWithoutSettingDistribution() {
-        return TableDescriptor.builder().schema(newSchema()).comment("first table").build();
+        return TableDescriptor.builder()
+                .schema(newSchema())
+                .comment("first table")
+                .build();
     }
 
     private static TableDescriptor newPartitionedTable() {
         return newPartitionedTableBuilder(null).build();
     }
 
-    private static TableDescriptor.Builder newPartitionedTableBuilder(
-            @Nullable Schema.Column extraColumn) {
-        Schema.Builder builder =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .withComment("id comment")
-                        .column("dt", DataTypes.STRING())
-                        .column("a", DataTypes.BIGINT())
-                        .column("ts", DataTypes.TIMESTAMP());
+    private static TableDescriptor.Builder newPartitionedTableBuilder(@Nullable Schema.Column extraColumn) {
+        Schema.Builder builder = Schema.newBuilder()
+                .column("id", DataTypes.INT())
+                .withComment("id comment")
+                .column("dt", DataTypes.STRING())
+                .column("a", DataTypes.BIGINT())
+                .column("ts", DataTypes.TIMESTAMP());
         if (extraColumn != null) {
             builder.column(extraColumn.getName(), extraColumn.getDataType());
             builder.primaryKey("id", "dt", extraColumn.getName());
@@ -743,9 +689,7 @@ class TableManagerITCase {
                 .distributedBy(3)
                 .partitionedBy("dt")
                 .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true")
-                .property(
-                        ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(),
-                        AutoPartitionTimeUnit.DAY.name())
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), AutoPartitionTimeUnit.DAY.name())
                 .property(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE, 1);
     }
 
@@ -774,11 +718,10 @@ class TableManagerITCase {
         for (ServerInfo serverInfo : aliveTableServers) {
             // Legacy only support one endpoint
             Endpoint endpoint = serverInfo.endpoints().get(0);
-            PbServerNode pbServerNode =
-                    new PbServerNode()
-                            .setNodeId(serverInfo.id())
-                            .setHost(endpoint.getHost())
-                            .setPort(endpoint.getPort());
+            PbServerNode pbServerNode = new PbServerNode()
+                    .setNodeId(serverInfo.id())
+                    .setHost(endpoint.getHost())
+                    .setPort(endpoint.getPort());
             if (serverInfo.rack() != null) {
                 pbServerNode.setRack(serverInfo.rack());
             }
@@ -786,16 +729,15 @@ class TableManagerITCase {
         }
         updateMetadataRequest.addAllTabletServers(aliveTableServerNodes);
         // Legacy only support one endpoint
-        coordinatorServer.map(
-                node -> {
-                    Endpoint endpoint = node.endpoints().get(0);
-                    updateMetadataRequest
-                            .setCoordinatorServer()
-                            .setNodeId(node.id())
-                            .setHost(endpoint.getHost())
-                            .setPort(endpoint.getPort());
-                    return null;
-                });
+        coordinatorServer.map(node -> {
+            Endpoint endpoint = node.endpoints().get(0);
+            updateMetadataRequest
+                    .setCoordinatorServer()
+                    .setNodeId(node.id())
+                    .setHost(endpoint.getHost())
+                    .setPort(endpoint.getPort());
+            return null;
+        });
         return updateMetadataRequest;
     }
 }

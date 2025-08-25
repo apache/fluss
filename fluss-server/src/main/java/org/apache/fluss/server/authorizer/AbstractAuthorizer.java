@@ -38,8 +38,7 @@ public abstract class AbstractAuthorizer implements Authorizer {
 
     @Override
     public boolean isAuthorized(Session session, OperationType operationType, Resource resource) {
-        return session.isInternal()
-                || authorizeAction(session, new Action(resource, operationType));
+        return session.isInternal() || authorizeAction(session, new Action(resource, operationType));
     }
 
     @Override
@@ -52,21 +51,18 @@ public abstract class AbstractAuthorizer implements Authorizer {
                     session.getPrincipal(),
                     operationType,
                     resource);
-            throw new AuthorizationException(
-                    String.format(
-                            "Principal %s have no authorization to operate %s on resource %s ",
-                            session.getPrincipal(), operationType, resource));
+            throw new AuthorizationException(String.format(
+                    "Principal %s have no authorization to operate %s on resource %s ",
+                    session.getPrincipal(), operationType, resource));
         }
     }
 
     @Override
-    public Collection<Resource> filterByAuthorized(
-            Session session, OperationType operation, List<Resource> resources) {
+    public Collection<Resource> filterByAuthorized(Session session, OperationType operation, List<Resource> resources) {
 
-        List<Action> actions =
-                resources.stream()
-                        .map(resource -> new Action(resource, operation))
-                        .collect(Collectors.toList());
+        List<Action> actions = resources.stream()
+                .map(resource -> new Action(resource, operation))
+                .collect(Collectors.toList());
 
         List<Boolean> results = authorizeActions(session, actions);
 
@@ -87,8 +83,6 @@ public abstract class AbstractAuthorizer implements Authorizer {
     abstract boolean authorizeAction(Session session, Action action);
 
     public List<Boolean> authorizeActions(Session session, List<Action> actions) {
-        return actions.stream()
-                .map(action -> authorizeAction(session, action))
-                .collect(Collectors.toList());
+        return actions.stream().map(action -> authorizeAction(session, action)).collect(Collectors.toList());
     }
 }

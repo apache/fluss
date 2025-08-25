@@ -67,8 +67,7 @@ public class HadoopFsPlugin implements FileSystemPlugin {
         try {
             // -- (1) get the Hadoop config
 
-            final org.apache.hadoop.conf.Configuration hadoopConfig =
-                    HadoopUtils.getHadoopConfiguration(flussConfig);
+            final org.apache.hadoop.conf.Configuration hadoopConfig = HadoopUtils.getHadoopConfiguration(flussConfig);
 
             // -- (2) get the Hadoop file system class for that scheme
 
@@ -87,10 +86,7 @@ public class HadoopFsPlugin implements FileSystemPlugin {
 
             // -- (3) instantiate the Hadoop file system
 
-            LOG.debug(
-                    "Instantiating for file system scheme {} Hadoop File System {}",
-                    scheme,
-                    fsClass.getName());
+            LOG.debug("Instantiating for file system scheme {} Hadoop File System {}", scheme, fsClass.getName());
 
             final org.apache.hadoop.fs.FileSystem hadoopFs = fsClass.newInstance();
 
@@ -125,18 +121,16 @@ public class HadoopFsPlugin implements FileSystemPlugin {
                     try {
                         initUri = URI.create(configEntry);
                     } catch (IllegalArgumentException e) {
-                        throw new IOException(
-                                getMissingAuthorityErrorPrefix(fsUri)
-                                        + "The configuration contains an invalid file system default name "
-                                        + "('fs.default.name' or 'fs.defaultFS'): "
-                                        + configEntry);
+                        throw new IOException(getMissingAuthorityErrorPrefix(fsUri)
+                                + "The configuration contains an invalid file system default name "
+                                + "('fs.default.name' or 'fs.defaultFS'): "
+                                + configEntry);
                     }
 
                     if (initUri.getAuthority() == null) {
-                        throw new IOException(
-                                getMissingAuthorityErrorPrefix(fsUri)
-                                        + "Hadoop configuration for default file system ('fs.default.name' or 'fs.defaultFS') "
-                                        + "contains no valid authority component (like hdfs namenode, S3 host, etc)");
+                        throw new IOException(getMissingAuthorityErrorPrefix(fsUri)
+                                + "Hadoop configuration for default file system ('fs.default.name' or 'fs.defaultFS') "
+                                + "contains no valid authority component (like hdfs namenode, S3 host, etc)");
                     }
                 }
             }
@@ -146,10 +140,9 @@ public class HadoopFsPlugin implements FileSystemPlugin {
             try {
                 hadoopFs.initialize(initUri, hadoopConfig);
             } catch (UnknownHostException e) {
-                String message =
-                        "The Hadoop file system's authority ("
-                                + initUri.getAuthority()
-                                + "), specified by either the file URI or the configuration, cannot be resolved.";
+                String message = "The Hadoop file system's authority ("
+                        + initUri.getAuthority()
+                        + "), specified by either the file URI or the configuration, cannot be resolved.";
 
                 throw new IOException(message, e);
             }

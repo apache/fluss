@@ -125,8 +125,7 @@ public class FlussSourceBuilder<OUT> {
      * @param scanPartitionDiscoveryIntervalMs interval in milliseconds
      * @return this builder
      */
-    public FlussSourceBuilder<OUT> setScanPartitionDiscoveryIntervalMs(
-            long scanPartitionDiscoveryIntervalMs) {
+    public FlussSourceBuilder<OUT> setScanPartitionDiscoveryIntervalMs(long scanPartitionDiscoveryIntervalMs) {
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         return this;
     }
@@ -152,8 +151,7 @@ public class FlussSourceBuilder<OUT> {
      * @param deserializationSchema the deserialization schema to use
      * @return this builder
      */
-    public FlussSourceBuilder<OUT> setDeserializationSchema(
-            FlussDeserializationSchema<OUT> deserializationSchema) {
+    public FlussSourceBuilder<OUT> setDeserializationSchema(FlussDeserializationSchema<OUT> deserializationSchema) {
         this.deserializationSchema = deserializationSchema;
         return this;
     }
@@ -219,10 +217,9 @@ public class FlussSourceBuilder<OUT> {
 
         // if null use the default value:
         if (scanPartitionDiscoveryIntervalMs == null) {
-            scanPartitionDiscoveryIntervalMs =
-                    FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL
-                            .defaultValue()
-                            .toMillis();
+            scanPartitionDiscoveryIntervalMs = FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL
+                    .defaultValue()
+                    .toMillis();
         }
 
         if (this.flussConf == null) {
@@ -243,8 +240,7 @@ public class FlussSourceBuilder<OUT> {
                 throw new RuntimeException("Failed to get table info", e);
             }
         } catch (Exception e) {
-            throw new RuntimeException(
-                    "Failed to initialize FlussSource admin connection: " + e.getMessage(), e);
+            throw new RuntimeException("Failed to initialize FlussSource admin connection: " + e.getMessage(), e);
         }
 
         if (this.projectedFieldNames != null && this.projectedFieldNames.length > 0) {
@@ -263,12 +259,11 @@ public class FlussSourceBuilder<OUT> {
                 Integer index = fieldNameToIndex.get(fieldName);
 
                 if (index == null) {
-                    throw new IllegalArgumentException(
-                            "Field name '"
-                                    + fieldName
-                                    + "' not found in table schema. "
-                                    + "Available fields: "
-                                    + String.join(", ", allFieldNames));
+                    throw new IllegalArgumentException("Field name '"
+                            + fieldName
+                            + "' not found in table schema. "
+                            + "Available fields: "
+                            + String.join(", ", allFieldNames));
                 }
 
                 indices[i] = index;
@@ -284,9 +279,7 @@ public class FlussSourceBuilder<OUT> {
         boolean hasPrimaryKey = !tableInfo.getPrimaryKeys().isEmpty();
 
         RowType sourceOutputType =
-                projectedFields != null
-                        ? tableInfo.getRowType().project(projectedFields)
-                        : tableInfo.getRowType();
+                projectedFields != null ? tableInfo.getRowType().project(projectedFields) : tableInfo.getRowType();
 
         LOG.info("Creating Fluss Source with Configuration: {}", flussConf);
 

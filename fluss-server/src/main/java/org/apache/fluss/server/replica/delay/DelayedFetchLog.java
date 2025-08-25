@@ -80,8 +80,7 @@ public class DelayedFetchLog extends DelayedOperation {
         Map<TableBucket, FetchLogResultForBucket> result = new HashMap<>();
 
         Map<TableBucket, FetchReqInfo> reFetchBuckets = new HashMap<>();
-        for (Map.Entry<TableBucket, FetchBucketStatus> fetchBucketStatusEntry :
-                fetchBucketStatusMap.entrySet()) {
+        for (Map.Entry<TableBucket, FetchBucketStatus> fetchBucketStatusEntry : fetchBucketStatusMap.entrySet()) {
             FetchBucketStatus fetchBucketStatus = fetchBucketStatusEntry.getValue();
             TableBucket tb = fetchBucketStatusEntry.getKey();
             if (fetchBucketStatus.previousFetchLogResultForBucket.fetchFromRemote()) {
@@ -92,8 +91,7 @@ public class DelayedFetchLog extends DelayedOperation {
         }
 
         // re-fetch data.
-        Map<TableBucket, LogReadResult> reReadResult =
-                replicaManager.readFromLog(params, reFetchBuckets);
+        Map<TableBucket, LogReadResult> reReadResult = replicaManager.readFromLog(params, reFetchBuckets);
         reReadResult.forEach((key, value) -> result.put(key, value.getFetchLogResultForBucket()));
         responseCallback.accept(result);
     }
@@ -123,8 +121,7 @@ public class DelayedFetchLog extends DelayedOperation {
                 if (!fetchBucketStatus.previousFetchLogResultForBucket.fetchFromRemote()
                         && fetchOffset != LogOffsetMetadata.UNKNOWN_OFFSET_METADATA) {
                     Replica replica = replicaManager.getReplicaOrException(tb);
-                    LogOffsetSnapshot logOffsetSnapshot =
-                            replica.fetchOffsetSnapshot(params.fetchOnlyLeader());
+                    LogOffsetSnapshot logOffsetSnapshot = replica.fetchOffsetSnapshot(params.fetchOnlyLeader());
                     LogOffsetMetadata endOffset;
                     if (params.isolation() == FetchIsolation.LOG_END) {
                         endOffset = logOffsetSnapshot.logEndOffset;
@@ -156,10 +153,8 @@ public class DelayedFetchLog extends DelayedOperation {
                         } else if (fetchOffset.getMessageOffset() < endOffset.getMessageOffset()) {
                             // We take the bucket fetch size as upper bound when accumulating the
                             // bytes.
-                            int bytesAvailable =
-                                    Math.min(
-                                            endOffset.positionDiff(fetchOffset),
-                                            fetchBucketStatus.fetchReqInfo.getMaxBytes());
+                            int bytesAvailable = Math.min(
+                                    endOffset.positionDiff(fetchOffset), fetchBucketStatus.fetchReqInfo.getMaxBytes());
                             accumulatedSize += bytesAvailable;
                         }
                     }
@@ -172,9 +167,7 @@ public class DelayedFetchLog extends DelayedOperation {
                 return forceComplete();
             } catch (UnknownTableOrBucketException e) {
                 // case C
-                LOG.debug(
-                        "TabletServer os mp longer knows of table-bucket {}, satisfy delayFetchLog immediately.",
-                        tb);
+                LOG.debug("TabletServer os mp longer knows of table-bucket {}, satisfy delayFetchLog immediately.", tb);
                 return forceComplete();
             } catch (IOException e) {
                 LOG.debug(
@@ -204,12 +197,7 @@ public class DelayedFetchLog extends DelayedOperation {
 
     @Override
     public String toString() {
-        return "DelayedFetchLog{"
-                + "params="
-                + params
-                + ", numBuckets="
-                + fetchBucketStatusMap.size()
-                + '}';
+        return "DelayedFetchLog{" + "params=" + params + ", numBuckets=" + fetchBucketStatusMap.size() + '}';
     }
 
     /** The status of a bucket in a delayed log fetch operation. */

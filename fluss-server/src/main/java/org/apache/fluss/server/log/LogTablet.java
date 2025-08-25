@@ -136,25 +136,23 @@ public final class LogTablet {
             Clock clock) {
         this.physicalPath = physicalPath;
         this.localLog = localLog;
-        this.maxSegmentFileSize = (int) conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes();
+        this.maxSegmentFileSize =
+                (int) conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes();
         this.logFlushIntervalMessages = conf.get(ConfigOptions.LOG_FLUSH_INTERVAL_MESSAGES);
-        int writerExpirationCheckIntervalMs =
-                (int) conf.get(ConfigOptions.WRITER_ID_EXPIRATION_CHECK_INTERVAL).toMillis();
+        int writerExpirationCheckIntervalMs = (int)
+                conf.get(ConfigOptions.WRITER_ID_EXPIRATION_CHECK_INTERVAL).toMillis();
         this.writerStateManager = writerStateManager;
         this.highWatermarkMetadata = new LogOffsetMetadata(0L);
 
         this.scheduler = scheduler;
         // scheduler the writer expiration interval check.
-        writerExpireCheck =
-                scheduler.schedule(
-                        "PeriodicWriterIdExpirationCheck",
-                        () -> removeExpiredWriter(System.currentTimeMillis()),
-                        writerExpirationCheckIntervalMs,
-                        writerExpirationCheckIntervalMs);
+        writerExpireCheck = scheduler.schedule(
+                "PeriodicWriterIdExpirationCheck",
+                () -> removeExpiredWriter(System.currentTimeMillis()),
+                writerExpirationCheckIntervalMs,
+                writerExpirationCheckIntervalMs);
         this.logFormat = logFormat;
-        checkArgument(
-                tieredLogLocalSegments > 0,
-                "log segments to retain in local must be greater than 0");
+        checkArgument(tieredLogLocalSegments > 0, "log segments to retain in local must be greater than 0");
         this.tieredLogLocalSegments = tieredLogLocalSegments;
 
         this.clock = clock;
@@ -292,32 +290,15 @@ public final class LogTablet {
         LogSegments segments = new LogSegments(tableBucket);
 
         // writerStateManager to store and manager the writer id.
-        WriterStateManager writerStateManager =
-                new WriterStateManager(
-                        tableBucket,
-                        tabletDir,
-                        (int) conf.get(ConfigOptions.WRITER_ID_EXPIRATION_TIME).toMillis());
+        WriterStateManager writerStateManager = new WriterStateManager(tableBucket, tabletDir, (int)
+                conf.get(ConfigOptions.WRITER_ID_EXPIRATION_TIME).toMillis());
 
-        LoadedLogOffsets offsets =
-                new LogLoader(
-                                tabletDir,
-                                conf,
-                                segments,
-                                recoveryPoint,
-                                logFormat,
-                                writerStateManager,
-                                isCleanShutdown)
-                        .load();
+        LoadedLogOffsets offsets = new LogLoader(
+                        tabletDir, conf, segments, recoveryPoint, logFormat, writerStateManager, isCleanShutdown)
+                .load();
 
-        LocalLog log =
-                new LocalLog(
-                        tabletDir,
-                        conf,
-                        segments,
-                        recoveryPoint,
-                        offsets.getNextOffsetMetadata(),
-                        tableBucket,
-                        logFormat);
+        LocalLog log = new LocalLog(
+                tabletDir, conf, segments, recoveryPoint, offsets.getNextOffsetMetadata(), tableBucket, logFormat);
 
         return new LogTablet(
                 tablePath,
@@ -341,8 +322,7 @@ public final class LogTablet {
 
         // about flush
         metricGroup.meter(MetricNames.LOG_FLUSH_RATE, new MeterView(localLog.getFlushCount()));
-        metricGroup.histogram(
-                MetricNames.LOG_FLUSH_LATENCY_MS, localLog.getFlushLatencyHistogram());
+        metricGroup.histogram(MetricNames.LOG_FLUSH_LATENCY_MS, localLog.getFlushLatencyHistogram());
     }
 
     public void updateLeaderEndOffsetSnapshot() {
@@ -430,13 +410,12 @@ public final class LogTablet {
      * <p>This method is intended to be used by the leader to update the highWatermark after
      * follower fetch offsets have been updated.
      */
-    public Optional<LogOffsetMetadata> maybeIncrementHighWatermark(
-            LogOffsetMetadata newHighWatermark) throws IOException {
+    public Optional<LogOffsetMetadata> maybeIncrementHighWatermark(LogOffsetMetadata newHighWatermark)
+            throws IOException {
         if (newHighWatermark.getMessageOffset() > localLogEndOffset()) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "HighWatermark %s update exceeds current log end offset %s",
-                            newHighWatermark, localLog.getLocalLogEndOffsetMetadata()));
+            throw new IllegalArgumentException(String.format(
+                    "HighWatermark %s update exceeds current log end offset %s",
+                    newHighWatermark, localLog.getLocalLogEndOffsetMetadata()));
         }
         synchronized (lock) {
             LogOffsetMetadata oldHighWatermark = fetchHighWatermarkMetadata();
@@ -457,11 +436,10 @@ public final class LogTablet {
     public long lookupOffsetForTimestamp(long startTimestamp) throws IOException {
         long findOffset = localLog.lookupOffsetForTimestamp(startTimestamp);
         if (findOffset == -1L) {
-            throw new InvalidTimestampException(
-                    String.format(
-                            "Lookup offset error for table bucket %s, "
-                                    + "the fetch timestamp %s is larger than the max timestamp %s",
-                            getTableBucket(), startTimestamp, localLog.getLocalMaxTimestamp()));
+            throw new InvalidTimestampException(String.format(
+                    "Lookup offset error for table bucket %s, "
+                            + "the fetch timestamp %s is larger than the max timestamp %s",
+                    getTableBucket(), startTimestamp, localLog.getLocalMaxTimestamp()));
         }
         return findOffset;
     }
@@ -529,10 +507,7 @@ public final class LogTablet {
     public LogOffsetSnapshot fetchOffsetSnapshot() throws IOException {
         LogOffsetMetadata highWatermark = fetchHighWatermarkMetadata();
         return new LogOffsetSnapshot(
-                logStartOffset(),
-                localLogStartOffset(),
-                localLog.getLocalLogEndOffsetMetadata(),
-                highWatermark);
+                logStartOffset(), localLogStartOffset(), localLog.getLocalLogEndOffsetMetadata(), highWatermark);
     }
 
     private void deleteSegments(long cleanUpToOffset) {
@@ -604,8 +579,7 @@ public final class LogTablet {
      * if the appendAsLeader=false flag is passed we will only check that the existing offsets are
      * valid.
      */
-    private LogAppendInfo append(MemoryLogRecords records, boolean appendAsLeader)
-            throws Exception {
+    private LogAppendInfo append(MemoryLogRecords records, boolean appendAsLeader) throws Exception {
         LogAppendInfo appendInfo = analyzeAndValidateRecords(records);
 
         // return if we have no valid records.
@@ -623,11 +597,8 @@ public final class LogTablet {
                 // assign offsets to the message set.
                 appendInfo.setFirstOffset(offset);
 
-                AssignResult result =
-                        assignOffsetAndTimestamp(
-                                validRecords,
-                                offset,
-                                Math.max(localLog.getLocalMaxTimestamp(), clock.milliseconds()));
+                AssignResult result = assignOffsetAndTimestamp(
+                        validRecords, offset, Math.max(localLog.getLocalMaxTimestamp(), clock.milliseconds()));
                 appendInfo.setLastOffset(result.lastOffset);
                 appendInfo.setMaxTimestamp(result.maxTimestamp);
                 appendInfo.setStartOffsetOfMaxTimestamp(result.startOffsetOfMaxTimestampMs);
@@ -656,14 +627,13 @@ public final class LogTablet {
                     appendInfo.setStartOffsetOfMaxTimestamp(startOffset);
                     appendInfo.setDuplicated(true);
                 } else {
-                    String errorMsg =
-                            String.format(
-                                    "Found duplicated batch for table bucket %s, duplicated offset is %s, "
-                                            + "writer id is %s and batch sequence is: %s",
-                                    getTableBucket(),
-                                    duplicatedBatch.lastOffset,
-                                    duplicatedBatch.writerId,
-                                    duplicatedBatch.batchSequence);
+                    String errorMsg = String.format(
+                            "Found duplicated batch for table bucket %s, duplicated offset is %s, "
+                                    + "writer id is %s and batch sequence is: %s",
+                            getTableBucket(),
+                            duplicatedBatch.lastOffset,
+                            duplicatedBatch.writerId,
+                            duplicatedBatch.batchSequence);
                     LOG.error(errorMsg);
                     throw new DuplicateSequenceException(errorMsg);
                 }
@@ -712,8 +682,7 @@ public final class LogTablet {
         }
     }
 
-    private AssignResult assignOffsetAndTimestamp(
-            MemoryLogRecords records, long baseLogOffset, long commitTimestamp) {
+    private AssignResult assignOffsetAndTimestamp(MemoryLogRecords records, long baseLogOffset, long commitTimestamp) {
         long initialOffset = baseLogOffset;
         for (LogRecordBatch batch : records.batches()) {
             if (batch instanceof DefaultLogRecordBatch) {
@@ -721,8 +690,7 @@ public final class LogTablet {
                 defaultLogRecordBatch.setBaseLogOffset(initialOffset);
                 defaultLogRecordBatch.setCommitTimestamp(commitTimestamp);
             } else {
-                throw new FlussRuntimeException(
-                        "Currently, we only support DefaultLogRecordBatch.");
+                throw new FlussRuntimeException("Currently, we only support DefaultLogRecordBatch.");
             }
 
             initialOffset = batch.nextLogOffset();
@@ -779,8 +747,7 @@ public final class LogTablet {
         synchronized (lock) {
             LogSegment segment = localLog.getSegments().activeSegment();
 
-            if (segment.shouldRoll(
-                    new RollParams(maxSegmentFileSize, appendInfo.lastOffset(), messageSize))) {
+            if (segment.shouldRoll(new RollParams(maxSegmentFileSize, appendInfo.lastOffset(), messageSize))) {
                 if (LOG.isDebugEnabled()) {
                     LOG.debug(
                             "Rolling new log segment (log_size = {}/{}), offset_index_size = {}/{}, time_index_size = {}/{}",
@@ -817,11 +784,9 @@ public final class LogTablet {
             writerStateManager.takeSnapshot();
             updateHighWatermarkWithLogEndOffset();
 
-            scheduler.scheduleOnce(
-                    "flush-log",
-                    () -> {
-                        flushUptoOffsetExclusive(segment.getBaseOffset());
-                    });
+            scheduler.scheduleOnce("flush-log", () -> {
+                flushUptoOffsetExclusive(segment.getBaseOffset());
+            });
         }
     }
 
@@ -829,9 +794,7 @@ public final class LogTablet {
     boolean truncateTo(long targetOffset) throws LogStorageException {
         if (targetOffset < 0) {
             throw new IllegalArgumentException(
-                    String.format(
-                            "Cannot truncate bucket %s to a negative offset %s",
-                            getTableBucket(), targetOffset));
+                    String.format("Cannot truncate bucket %s to a negative offset %s", getTableBucket(), targetOffset));
         }
 
         if (targetOffset >= localLog.getLocalLogEndOffset()) {
@@ -885,8 +848,7 @@ public final class LogTablet {
             } catch (IOException e) {
                 throw new LogStorageException(
                         String.format(
-                                "Error while truncating log for bucket %s to offset %s.",
-                                getTableBucket(), newOffset),
+                                "Error while truncating log for bucket %s to offset %s.", getTableBucket(), newOffset),
                         e);
             }
         }
@@ -939,11 +901,10 @@ public final class LogTablet {
     private MemoryLogRecords trimInvalidBytes(MemoryLogRecords records, LogAppendInfo info) {
         int validBytes = info.validBytes();
         if (validBytes < 0) {
-            throw new CorruptRecordException(
-                    String.format(
-                            "Cannot append record batch with illegal length %s to log "
-                                    + "for %s. A possible cause is a corrupted produce request.",
-                            validBytes, localLog.getTableBucket()));
+            throw new CorruptRecordException(String.format(
+                    "Cannot append record batch with illegal length %s to log "
+                            + "for %s. A possible cause is a corrupted produce request.",
+                    validBytes, localLog.getTableBucket()));
         }
 
         if (validBytes == records.sizeInBytes()) {
@@ -978,10 +939,9 @@ public final class LogTablet {
 
             int batchSize = batch.sizeInBytes();
             if (!batch.isValid()) {
-                throw new CorruptRecordException(
-                        String.format(
-                                "Record is corrupt (stored crc = %s) in table bucket %s",
-                                batch.checksum(), localLog.getTableBucket()));
+                throw new CorruptRecordException(String.format(
+                        "Record is corrupt (stored crc = %s) in table bucket %s",
+                        batch.checksum(), localLog.getTableBucket()));
             }
 
             long batchAppendTimestamp = batch.commitTimestamp();
@@ -1005,8 +965,8 @@ public final class LogTablet {
     }
 
     /** Returns either the duplicated batch metadata (left) or the updated writers (right). */
-    private Either<WriterStateEntry.BatchMetadata, Collection<WriterAppendInfo>>
-            analyzeAndValidateWriterState(MemoryLogRecords records) {
+    private Either<WriterStateEntry.BatchMetadata, Collection<WriterAppendInfo>> analyzeAndValidateWriterState(
+            MemoryLogRecords records) {
         Map<Long, WriterAppendInfo> updatedWriters = new HashMap<>();
 
         for (LogRecordBatch batch : records.batches()) {
@@ -1014,8 +974,7 @@ public final class LogTablet {
                 // if this is a write request, there will be up to 5 batches which could
                 // have been duplicated. If we find a duplicate, we return the metadata of the
                 // appended batch to the writer.
-                Optional<WriterStateEntry> maybeLastEntry =
-                        writerStateManager.lastEntry(batch.writerId());
+                Optional<WriterStateEntry> maybeLastEntry = writerStateManager.lastEntry(batch.writerId());
                 Optional<WriterStateEntry.BatchMetadata> duplicateBatch =
                         maybeLastEntry.flatMap(entry -> entry.findDuplicateBatch(batch));
                 if (duplicateBatch.isPresent()) {
@@ -1040,8 +999,7 @@ public final class LogTablet {
      * Rebuild writer state until lastOffset. This method may be called from the recovery code path,
      * and thus must be free of all side effects, i.e. it must not update any log-specific state.
      */
-    private void rebuildWriterState(long lastOffset, WriterStateManager writerStateManager)
-            throws IOException {
+    private void rebuildWriterState(long lastOffset, WriterStateManager writerStateManager) throws IOException {
         synchronized (lock) {
             localLog.checkIfMemoryMappedBufferClosed();
             // TODO, Here, we use 0 as the logStartOffset passed into rebuildWriterState. The reason
@@ -1069,8 +1027,7 @@ public final class LogTablet {
         }
     }
 
-    private void deleteOldSegments(long endOffset, SegmentDeletionReason reason)
-            throws IOException {
+    private void deleteOldSegments(long endOffset, SegmentDeletionReason reason) throws IOException {
         synchronized (lock) {
             List<LogSegment> deletableSegments = deletableSegments(endOffset);
             if (!deletableSegments.isEmpty()) {
@@ -1100,24 +1057,19 @@ public final class LogTablet {
         return deletableSegments;
     }
 
-    private void deleteSegments(List<LogSegment> deletableSegments, SegmentDeletionReason reason)
-            throws IOException {
+    private void deleteSegments(List<LogSegment> deletableSegments, SegmentDeletionReason reason) throws IOException {
         localLog.checkIfMemoryMappedBufferClosed();
         localLog.removeAndDeleteSegments(deletableSegments, reason);
         deleteWriterSnapshots(deletableSegments, writerStateManager);
     }
 
     private static void updateWriterAppendInfo(
-            WriterStateManager writerStateManager,
-            LogRecordBatch batch,
-            Map<Long, WriterAppendInfo> writers) {
+            WriterStateManager writerStateManager, LogRecordBatch batch, Map<Long, WriterAppendInfo> writers) {
         long writerId = batch.writerId();
         // update writers.
         WriterAppendInfo appendInfo =
                 writers.computeIfAbsent(writerId, id -> writerStateManager.prepareUpdate(writerId));
-        appendInfo.append(
-                batch,
-                writerStateManager.isWriterInBatchExpired(System.currentTimeMillis(), batch));
+        appendInfo.append(batch, writerStateManager.isWriterInBatchExpired(System.currentTimeMillis(), batch));
     }
 
     static void rebuildWriterState(
@@ -1163,14 +1115,11 @@ public final class LogTablet {
                 }
             }
         } else {
-            LOG.info(
-                    "Reloading from writer snapshot and rebuilding writer state from offset {}",
-                    lastOffset);
+            LOG.info("Reloading from writer snapshot and rebuilding writer state from offset {}", lastOffset);
             boolean isEmptyBeforeTruncation =
                     writerStateManager.isEmpty() && writerStateManager.mapEndOffset() >= lastOffset;
             long writerStateLoadStart = System.currentTimeMillis();
-            writerStateManager.truncateAndReload(
-                    logStartOffset, lastOffset, System.currentTimeMillis());
+            writerStateManager.truncateAndReload(logStartOffset, lastOffset, System.currentTimeMillis());
             long segmentRecoveryStart = System.currentTimeMillis();
 
             // Only do the potentially expensive reloading if the last snapshot offset is lower than
@@ -1183,15 +1132,10 @@ public final class LogTablet {
             if (lastOffset > writerStateManager.mapEndOffset() && !isEmptyBeforeTruncation) {
                 Optional<LogSegment> segmentOfLastOffset = segments.floorSegment(lastOffset);
 
-                List<LogSegment> segmentsList =
-                        segments.values(writerStateManager.mapEndOffset(), lastOffset);
+                List<LogSegment> segmentsList = segments.values(writerStateManager.mapEndOffset(), lastOffset);
                 for (LogSegment segment : segmentsList) {
-                    long startOffset =
-                            Math.max(
-                                    Math.max(
-                                            segment.getBaseOffset(),
-                                            writerStateManager.mapEndOffset()),
-                                    logStartOffset);
+                    long startOffset = Math.max(
+                            Math.max(segment.getBaseOffset(), writerStateManager.mapEndOffset()), logStartOffset);
                     writerStateManager.updateMapEndOffset(startOffset);
 
                     if (offsetsToSnapshot.contains(Optional.of(segment.getBaseOffset()))) {
@@ -1200,15 +1144,13 @@ public final class LogTablet {
 
                     int maxPosition = segment.getSizeInBytes();
                     if (segmentOfLastOffset.isPresent() && segmentOfLastOffset.get() == segment) {
-                        FileLogRecords.LogOffsetPosition logOffsetPosition =
-                                segment.translateOffset(lastOffset);
+                        FileLogRecords.LogOffsetPosition logOffsetPosition = segment.translateOffset(lastOffset);
                         if (logOffsetPosition != null) {
                             maxPosition = logOffsetPosition.position;
                         }
                     }
 
-                    FetchDataInfo fetchDataInfo =
-                            segment.read(startOffset, Integer.MAX_VALUE, maxPosition, false);
+                    FetchDataInfo fetchDataInfo = segment.read(startOffset, Integer.MAX_VALUE, maxPosition, false);
                     if (fetchDataInfo != null) {
                         loadWritersFromRecords(writerStateManager, fetchDataInfo.getRecords());
                     }
@@ -1225,8 +1167,7 @@ public final class LogTablet {
         }
     }
 
-    private static void loadWritersFromRecords(
-            WriterStateManager writerStateManager, LogRecords records) {
+    private static void loadWritersFromRecords(WriterStateManager writerStateManager, LogRecords records) {
         Map<Long, WriterAppendInfo> loadedWriters = new HashMap<>();
         for (LogRecordBatch batch : records.batches()) {
             if (batch.hasWriterId()) {
@@ -1236,8 +1177,8 @@ public final class LogTablet {
         loadedWriters.values().forEach(writerStateManager::update);
     }
 
-    private static void deleteWriterSnapshots(
-            List<LogSegment> segments, WriterStateManager writerStateManager) throws IOException {
+    private static void deleteWriterSnapshots(List<LogSegment> segments, WriterStateManager writerStateManager)
+            throws IOException {
         for (LogSegment segment : segments) {
             writerStateManager.removeAndDeleteSnapshot(segment.getBaseOffset());
         }

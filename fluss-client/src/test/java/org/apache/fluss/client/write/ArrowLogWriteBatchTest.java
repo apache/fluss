@@ -78,14 +78,12 @@ public class ArrowLogWriteBatchTest {
         ArrowLogWriteBatch arrowLogWriteBatch =
                 createArrowLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), maxSizeInBytes);
         int count = 0;
-        while (arrowLogWriteBatch.tryAppend(
-                createWriteRecord(row(count, "a" + count)), newWriteCallback())) {
+        while (arrowLogWriteBatch.tryAppend(createWriteRecord(row(count, "a" + count)), newWriteCallback())) {
             count++;
         }
 
         // batch full.
-        boolean appendResult =
-                arrowLogWriteBatch.tryAppend(createWriteRecord(row(1, "a")), newWriteCallback());
+        boolean appendResult = arrowLogWriteBatch.tryAppend(createWriteRecord(row(1, "a")), newWriteCallback());
         assertThat(appendResult).isFalse();
 
         // close this batch.
@@ -94,8 +92,7 @@ public class ArrowLogWriteBatchTest {
         MemoryLogRecords records = MemoryLogRecords.pointToBytesView(bytesView);
         LogRecordBatch batch = records.batches().iterator().next();
         assertThat(batch.getRecordCount()).isEqualTo(count);
-        try (LogRecordReadContext readContext =
-                        createArrowReadContext(DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId());
+        try (LogRecordReadContext readContext = createArrowReadContext(DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId());
                 CloseableIterator<LogRecord> recordsIter = batch.records(readContext)) {
             int readCount = 0;
             while (recordsIter.hasNext()) {
@@ -120,30 +117,27 @@ public class ArrowLogWriteBatchTest {
         }
 
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, bucketId);
-        ArrowLogWriteBatch arrowLogWriteBatch =
-                new ArrowLogWriteBatch(
-                        tb.getBucket(),
-                        DATA1_PHYSICAL_TABLE_PATH,
+        ArrowLogWriteBatch arrowLogWriteBatch = new ArrowLogWriteBatch(
+                tb.getBucket(),
+                DATA1_PHYSICAL_TABLE_PATH,
+                DATA1_TABLE_INFO.getSchemaId(),
+                writerProvider.getOrCreateWriter(
+                        tb.getTableId(),
                         DATA1_TABLE_INFO.getSchemaId(),
-                        writerProvider.getOrCreateWriter(
-                                tb.getTableId(),
-                                DATA1_TABLE_INFO.getSchemaId(),
-                                maxSizeInBytes,
-                                DATA1_ROW_TYPE,
-                                DEFAULT_COMPRESSION),
-                        new PreAllocatedPagedOutputView(memorySegmentList),
-                        System.currentTimeMillis());
+                        maxSizeInBytes,
+                        DATA1_ROW_TYPE,
+                        DEFAULT_COMPRESSION),
+                new PreAllocatedPagedOutputView(memorySegmentList),
+                System.currentTimeMillis());
         assertThat(arrowLogWriteBatch.pooledMemorySegments()).isEqualTo(memorySegmentList);
 
         int count = 0;
-        while (arrowLogWriteBatch.tryAppend(
-                createWriteRecord(row(count, "a" + count)), newWriteCallback())) {
+        while (arrowLogWriteBatch.tryAppend(createWriteRecord(row(count, "a" + count)), newWriteCallback())) {
             count++;
         }
 
         // batch full.
-        boolean appendResult =
-                arrowLogWriteBatch.tryAppend(createWriteRecord(row(1, "a")), newWriteCallback());
+        boolean appendResult = arrowLogWriteBatch.tryAppend(createWriteRecord(row(1, "a")), newWriteCallback());
         assertThat(appendResult).isFalse();
 
         // close this batch.
@@ -152,8 +146,7 @@ public class ArrowLogWriteBatchTest {
         MemoryLogRecords records = MemoryLogRecords.pointToBytesView(bytesView);
         LogRecordBatch batch = records.batches().iterator().next();
         assertThat(batch.getRecordCount()).isEqualTo(count);
-        try (LogRecordReadContext readContext =
-                        createArrowReadContext(DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId());
+        try (LogRecordReadContext readContext = createArrowReadContext(DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId());
                 CloseableIterator<LogRecord> recordsIter = batch.records(readContext)) {
             int readCount = 0;
             while (recordsIter.hasNext()) {
@@ -188,34 +181,29 @@ public class ArrowLogWriteBatchTest {
         int lastBytesInSize = 0;
         // exit the loop until compression ratio is converged
         while (previousRatio != currentRatio) {
-            ArrowWriter arrowWriter =
-                    writerProvider.getOrCreateWriter(
-                            tb.getTableId(),
-                            DATA1_TABLE_INFO.getSchemaId(),
-                            maxSizeInBytes,
-                            DATA1_ROW_TYPE,
-                            DEFAULT_COMPRESSION);
+            ArrowWriter arrowWriter = writerProvider.getOrCreateWriter(
+                    tb.getTableId(),
+                    DATA1_TABLE_INFO.getSchemaId(),
+                    maxSizeInBytes,
+                    DATA1_ROW_TYPE,
+                    DEFAULT_COMPRESSION);
 
-            ArrowLogWriteBatch arrowLogWriteBatch =
-                    new ArrowLogWriteBatch(
-                            tb.getBucket(),
-                            DATA1_PHYSICAL_TABLE_PATH,
-                            DATA1_TABLE_INFO.getSchemaId(),
-                            arrowWriter,
-                            new PreAllocatedPagedOutputView(memorySegmentList),
-                            System.currentTimeMillis());
+            ArrowLogWriteBatch arrowLogWriteBatch = new ArrowLogWriteBatch(
+                    tb.getBucket(),
+                    DATA1_PHYSICAL_TABLE_PATH,
+                    DATA1_TABLE_INFO.getSchemaId(),
+                    arrowWriter,
+                    new PreAllocatedPagedOutputView(memorySegmentList),
+                    System.currentTimeMillis());
 
             int recordCount = 0;
             while (arrowLogWriteBatch.tryAppend(
-                    createWriteRecord(row(recordCount, RandomStringUtils.random(100))),
-                    newWriteCallback())) {
+                    createWriteRecord(row(recordCount, RandomStringUtils.random(100))), newWriteCallback())) {
                 recordCount++;
             }
 
             // batch full.
-            boolean appendResult =
-                    arrowLogWriteBatch.tryAppend(
-                            createWriteRecord(row(1, "a")), newWriteCallback());
+            boolean appendResult = arrowLogWriteBatch.tryAppend(createWriteRecord(row(1, "a")), newWriteCallback());
             assertThat(appendResult).isFalse();
 
             // close this batch and recycle the writer.
@@ -244,15 +232,13 @@ public class ArrowLogWriteBatchTest {
         List<CompletableFuture<Void>> futures = new ArrayList<>();
         for (int i = 0; i < recordCount; i++) {
             CompletableFuture<Void> future = new CompletableFuture<>();
-            arrowLogWriteBatch.tryAppend(
-                    createWriteRecord(row(i, "a" + i)),
-                    exception -> {
-                        if (exception != null) {
-                            future.completeExceptionally(exception);
-                        } else {
-                            future.complete(null);
-                        }
-                    });
+            arrowLogWriteBatch.tryAppend(createWriteRecord(row(i, "a" + i)), exception -> {
+                if (exception != null) {
+                    future.completeExceptionally(exception);
+                } else {
+                    future.complete(null);
+                }
+            });
             futures.add(future);
         }
 
@@ -261,10 +247,7 @@ public class ArrowLogWriteBatchTest {
         arrowLogWriteBatch.abort(new RuntimeException("close with record batch abort"));
 
         // first try to append.
-        assertThatThrownBy(
-                        () ->
-                                arrowLogWriteBatch.tryAppend(
-                                        createWriteRecord(row(1, "a")), newWriteCallback()))
+        assertThatThrownBy(() -> arrowLogWriteBatch.tryAppend(createWriteRecord(row(1, "a")), newWriteCallback()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(
                         "Tried to append a record, but MemoryLogRecordsArrowBuilder has already been aborted");

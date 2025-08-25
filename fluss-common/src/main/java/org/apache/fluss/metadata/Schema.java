@@ -66,14 +66,9 @@ public final class Schema implements Serializable {
         this.columns = normalizeColumns(columns, primaryKey);
         this.primaryKey = primaryKey;
         // pre-create the row type as it is the most frequently used part of the schema
-        this.rowType =
-                new RowType(
-                        this.columns.stream()
-                                .map(
-                                        column ->
-                                                new DataField(
-                                                        column.getName(), column.getDataType()))
-                                .collect(Collectors.toList()));
+        this.rowType = new RowType(this.columns.stream()
+                .map(column -> new DataField(column.getName(), column.getDataType()))
+                .collect(Collectors.toList()));
     }
 
     public List<Column> getColumns() {
@@ -149,9 +144,7 @@ public final class Schema implements Serializable {
         if (primaryKey != null) {
             components.add(primaryKey);
         }
-        return components.stream()
-                .map(Objects::toString)
-                .collect(Collectors.joining(",", "(", ")"));
+        return components.stream().map(Objects::toString).collect(Collectors.joining(",", "(", ")"));
     }
 
     @Override
@@ -163,8 +156,7 @@ public final class Schema implements Serializable {
             return false;
         }
         Schema schema = (Schema) o;
-        return Objects.equals(columns, schema.columns)
-                && Objects.equals(primaryKey, schema.primaryKey);
+        return Objects.equals(columns, schema.columns) && Objects.equals(primaryKey, schema.primaryKey);
     }
 
     @Override
@@ -207,21 +199,18 @@ public final class Schema implements Serializable {
             checkNotNull(rowType, "rowType must not be null.");
             final List<DataType> fieldDataTypes = rowType.getChildren();
             final List<String> fieldNames = rowType.getFieldNames();
-            IntStream.range(0, fieldDataTypes.size())
-                    .forEach(i -> column(fieldNames.get(i), fieldDataTypes.get(i)));
+            IntStream.range(0, fieldDataTypes.size()).forEach(i -> column(fieldNames.get(i), fieldDataTypes.get(i)));
             return this;
         }
 
         /** Adopts the given field names and field data types as physical columns of the schema. */
-        public Builder fromFields(
-                List<String> fieldNames, List<? extends DataType> fieldDataTypes) {
+        public Builder fromFields(List<String> fieldNames, List<? extends DataType> fieldDataTypes) {
             checkNotNull(fieldNames, "Field names must not be null.");
             checkNotNull(fieldDataTypes, "Field data types must not be null.");
             checkArgument(
                     fieldNames.size() == fieldDataTypes.size(),
                     "Field names and field data types must have the same length.");
-            IntStream.range(0, fieldNames.size())
-                    .forEach(i -> column(fieldNames.get(i), fieldDataTypes.get(i)));
+            IntStream.range(0, fieldNames.size()).forEach(i -> column(fieldNames.get(i), fieldDataTypes.get(i)));
             return this;
         }
 
@@ -251,8 +240,7 @@ public final class Schema implements Serializable {
         /** Apply comment to the previous column. */
         public Builder withComment(@Nullable String comment) {
             if (!columns.isEmpty()) {
-                columns.set(
-                        columns.size() - 1, columns.get(columns.size() - 1).withComment(comment));
+                columns.set(columns.size() - 1, columns.get(columns.size() - 1).withComment(comment));
             } else {
                 throw new IllegalArgumentException(
                         "Method 'withComment(...)' must be called after a column definition, "
@@ -288,8 +276,7 @@ public final class Schema implements Serializable {
          */
         public Builder primaryKey(List<String> columnNames) {
             checkNotNull(columnNames, "Primary key column names must not be null.");
-            final String generatedConstraintName =
-                    columnNames.stream().collect(Collectors.joining("_", "PK_", ""));
+            final String generatedConstraintName = columnNames.stream().collect(Collectors.joining("_", "PK_", ""));
             return primaryKeyNamed(generatedConstraintName, columnNames);
         }
 
@@ -366,13 +353,11 @@ public final class Schema implements Serializable {
         public String toString() {
             final StringBuilder sb = new StringBuilder();
             sb.append(columnName).append(" ").append(dataType.toString());
-            getComment()
-                    .ifPresent(
-                            c -> {
-                                sb.append(" COMMENT '");
-                                sb.append(EncodingUtils.escapeSingleQuotes(c));
-                                sb.append("'");
-                            });
+            getComment().ifPresent(c -> {
+                sb.append(" COMMENT '");
+                sb.append(EncodingUtils.escapeSingleQuotes(c));
+                sb.append("'");
+            });
             return sb.toString();
         }
 
@@ -424,9 +409,7 @@ public final class Schema implements Serializable {
 
         @Override
         public String toString() {
-            return String.format(
-                    "CONSTRAINT %s PRIMARY KEY (%s)",
-                    constraintName, String.join(", ", columnNames));
+            return String.format("CONSTRAINT %s PRIMARY KEY (%s)", constraintName, String.join(", ", columnNames));
         }
 
         @Override
@@ -452,11 +435,9 @@ public final class Schema implements Serializable {
     // ----------------------------------------------------------------------------------------
 
     /** Normalize columns and primary key. */
-    private static List<Column> normalizeColumns(
-            List<Column> columns, @Nullable PrimaryKey primaryKey) {
+    private static List<Column> normalizeColumns(List<Column> columns, @Nullable PrimaryKey primaryKey) {
 
-        List<String> columnNames =
-                columns.stream().map(Column::getName).collect(Collectors.toList());
+        List<String> columnNames = columns.stream().map(Column::getName).collect(Collectors.toList());
 
         Set<String> duplicateColumns = duplicate(columnNames);
         checkState(
@@ -488,13 +469,10 @@ public final class Schema implements Serializable {
         List<Column> newColumns = new ArrayList<>();
         for (Column column : columns) {
             if (pkSet.contains(column.getName()) && column.getDataType().isNullable()) {
-                newColumns.add(
-                        new Column(
-                                column.getName(),
-                                column.getDataType().copy(false),
-                                column.getComment().isPresent()
-                                        ? column.getComment().get()
-                                        : null));
+                newColumns.add(new Column(
+                        column.getName(),
+                        column.getDataType().copy(false),
+                        column.getComment().isPresent() ? column.getComment().get() : null));
             } else {
                 newColumns.add(column);
             }

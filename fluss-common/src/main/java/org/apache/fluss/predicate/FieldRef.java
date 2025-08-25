@@ -62,9 +62,7 @@ public class FieldRef implements Serializable {
             return false;
         }
         FieldRef fieldRef = (FieldRef) o;
-        return index == fieldRef.index
-                && Objects.equals(name, fieldRef.name)
-                && Objects.equals(type, fieldRef.type);
+        return index == fieldRef.index && Objects.equals(name, fieldRef.name) && Objects.equals(type, fieldRef.type);
     }
 
     @Override

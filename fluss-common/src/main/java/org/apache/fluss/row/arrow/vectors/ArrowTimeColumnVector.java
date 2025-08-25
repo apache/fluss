@@ -37,11 +37,10 @@ public class ArrowTimeColumnVector implements IntColumnVector {
 
     public ArrowTimeColumnVector(ValueVector valueVector) {
         this.valueVector = checkNotNull(valueVector);
-        checkState(
-                valueVector instanceof TimeSecVector
-                        || valueVector instanceof TimeMilliVector
-                        || valueVector instanceof TimeMicroVector
-                        || valueVector instanceof TimeNanoVector);
+        checkState(valueVector instanceof TimeSecVector
+                || valueVector instanceof TimeMilliVector
+                || valueVector instanceof TimeMicroVector
+                || valueVector instanceof TimeNanoVector);
     }
 
     @Override

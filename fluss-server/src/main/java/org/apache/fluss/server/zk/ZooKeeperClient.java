@@ -110,8 +110,7 @@ public class ZooKeeperClient implements AutoCloseable {
         this.curatorFrameworkWrapper = curatorFrameworkWrapper;
         this.zkClient = curatorFrameworkWrapper.asCuratorFramework();
         this.tableIdCounter = new ZkSequenceIDCounter(zkClient, TableSequenceIdZNode.path());
-        this.partitionIdCounter =
-                new ZkSequenceIDCounter(zkClient, PartitionSequenceIdZNode.path());
+        this.partitionIdCounter = new ZkSequenceIDCounter(zkClient, PartitionSequenceIdZNode.path());
         this.writerIdCounter = new ZkSequenceIDCounter(zkClient, WriterIdZNode.path());
     }
 
@@ -148,8 +147,7 @@ public class ZooKeeperClient implements AutoCloseable {
     // --------------------------------------------------------------------------------------------
 
     /** Register a tablet server to ZK. */
-    public void registerTabletServer(
-            int tabletServerId, TabletServerRegistration tabletServerRegistration)
+    public void registerTabletServer(int tabletServerId, TabletServerRegistration tabletServerRegistration)
             throws Exception {
         String path = ServerIdZNode.path(tabletServerId);
         zkClient.create()
@@ -180,8 +178,7 @@ public class ZooKeeperClient implements AutoCloseable {
     // --------------------------------------------------------------------------------------------
 
     /** Register table assignment to ZK. */
-    public void registerTableAssignment(long tableId, TableAssignment tableAssignment)
-            throws Exception {
+    public void registerTableAssignment(long tableId, TableAssignment tableAssignment) throws Exception {
         String path = TableIdZNode.path(tableId);
         zkClient.create()
                 .creatingParentsIfNeeded()
@@ -193,12 +190,11 @@ public class ZooKeeperClient implements AutoCloseable {
     /** Get the table assignment in ZK. */
     public Optional<TableAssignment> getTableAssignment(long tableId) throws Exception {
         Optional<byte[]> bytes = getOrEmpty(TableIdZNode.path(tableId));
-        return bytes.map(
-                data ->
-                        // we'll put a laketable node under TableIdZNode,
-                        // so it won't be Optional#empty
-                        // but will with a zero-length array
-                        data.length == 0 ? null : TableIdZNode.decode(data));
+        return bytes.map(data ->
+                // we'll put a laketable node under TableIdZNode,
+                // so it won't be Optional#empty
+                // but will with a zero-length array
+                data.length == 0 ? null : TableIdZNode.decode(data));
     }
 
     /** Get the partition assignment in ZK. */
@@ -207,8 +203,7 @@ public class ZooKeeperClient implements AutoCloseable {
         return bytes.map(PartitionIdZNode::decode);
     }
 
-    public void updateTableAssignment(long tableId, TableAssignment tableAssignment)
-            throws Exception {
+    public void updateTableAssignment(long tableId, TableAssignment tableAssignment) throws Exception {
         String path = TableIdZNode.path(tableId);
         zkClient.setData().forPath(path, TableIdZNode.encode(tableAssignment));
         LOG.info("Updated table assignment {} for table id {}.", tableAssignment, tableId);
@@ -231,8 +226,7 @@ public class ZooKeeperClient implements AutoCloseable {
     // --------------------------------------------------------------------------------------------
 
     /** Register bucket LeaderAndIsr to ZK. */
-    public void registerLeaderAndIsr(TableBucket tableBucket, LeaderAndIsr leaderAndIsr)
-            throws Exception {
+    public void registerLeaderAndIsr(TableBucket tableBucket, LeaderAndIsr leaderAndIsr) throws Exception {
         String path = LeaderAndIsrZNode.path(tableBucket);
         zkClient.create()
                 .creatingParentsIfNeeded()
@@ -241,8 +235,8 @@ public class ZooKeeperClient implements AutoCloseable {
         LOG.info("Registered {} for bucket {} in Zookeeper.", leaderAndIsr, tableBucket);
     }
 
-    public void batchRegisterLeaderAndIsrForTablePartition(
-            List<RegisterTableBucketLeadAndIsrInfo> registerList) throws Exception {
+    public void batchRegisterLeaderAndIsrForTablePartition(List<RegisterTableBucketLeadAndIsrInfo> registerList)
+            throws Exception {
         if (registerList.isEmpty()) {
             return;
         }
@@ -260,17 +254,15 @@ public class ZooKeeperClient implements AutoCloseable {
         for (RegisterTableBucketLeadAndIsrInfo info : registerList) {
             byte[] data = LeaderAndIsrZNode.encode(info.getLeaderAndIsr());
             // create direct parent node
-            CuratorOp parentNodeCreate =
-                    zkClient.transactionOp()
-                            .create()
-                            .withMode(CreateMode.PERSISTENT)
-                            .forPath(ZkData.BucketIdZNode.path(info.getTableBucket()));
+            CuratorOp parentNodeCreate = zkClient.transactionOp()
+                    .create()
+                    .withMode(CreateMode.PERSISTENT)
+                    .forPath(ZkData.BucketIdZNode.path(info.getTableBucket()));
             // create current node
-            CuratorOp currentNodeCreate =
-                    zkClient.transactionOp()
-                            .create()
-                            .withMode(CreateMode.PERSISTENT)
-                            .forPath(LeaderAndIsrZNode.path(info.getTableBucket()), data);
+            CuratorOp currentNodeCreate = zkClient.transactionOp()
+                    .create()
+                    .withMode(CreateMode.PERSISTENT)
+                    .forPath(LeaderAndIsrZNode.path(info.getTableBucket()), data);
             ops.add(parentNodeCreate);
             ops.add(currentNodeCreate);
             if (ops.size() == MAX_BATCH_SIZE) {
@@ -294,15 +286,13 @@ public class ZooKeeperClient implements AutoCloseable {
         return bytes.map(LeaderAndIsrZNode::decode);
     }
 
-    public void updateLeaderAndIsr(TableBucket tableBucket, LeaderAndIsr leaderAndIsr)
-            throws Exception {
+    public void updateLeaderAndIsr(TableBucket tableBucket, LeaderAndIsr leaderAndIsr) throws Exception {
         String path = LeaderAndIsrZNode.path(tableBucket);
         zkClient.setData().forPath(path, LeaderAndIsrZNode.encode(leaderAndIsr));
         LOG.info("Updated {} for bucket {} in Zookeeper.", leaderAndIsr, tableBucket);
     }
 
-    public void batchUpdateLeaderAndIsr(Map<TableBucket, LeaderAndIsr> leaderAndIsrList)
-            throws Exception {
+    public void batchUpdateLeaderAndIsr(Map<TableBucket, LeaderAndIsr> leaderAndIsrList) throws Exception {
         if (leaderAndIsrList.isEmpty()) {
             return;
         }
@@ -335,8 +325,7 @@ public class ZooKeeperClient implements AutoCloseable {
     // --------------------------------------------------------------------------------------------
     // Database
     // --------------------------------------------------------------------------------------------
-    public void registerDatabase(String database, DatabaseRegistration databaseRegistration)
-            throws Exception {
+    public void registerDatabase(String database, DatabaseRegistration databaseRegistration) throws Exception {
         String path = DatabaseZNode.path(database);
         zkClient.create()
                 .creatingParentsIfNeeded()
@@ -384,8 +373,7 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /** Register table to ZK metadata. */
-    public void registerTable(TablePath tablePath, TableRegistration tableRegistration)
-            throws Exception {
+    public void registerTable(TablePath tablePath, TableRegistration tableRegistration) throws Exception {
         registerTable(tablePath, tableRegistration, true);
     }
 
@@ -397,8 +385,7 @@ public class ZooKeeperClient implements AutoCloseable {
      *     path of the path to store the table, then register the table, we won't need to create the
      *     node again.
      */
-    public void registerTable(
-            TablePath tablePath, TableRegistration tableRegistration, boolean needCreateNode)
+    public void registerTable(TablePath tablePath, TableRegistration tableRegistration, boolean needCreateNode)
             throws Exception {
         String path = TableZNode.path(tablePath);
         byte[] tableBytes = TableZNode.encode(tableRegistration);
@@ -410,10 +397,7 @@ public class ZooKeeperClient implements AutoCloseable {
         } else {
             zkClient.setData().forPath(path, tableBytes);
         }
-        LOG.info(
-                "Registered table {} for database {}",
-                tablePath.getTableName(),
-                tablePath.getDatabaseName());
+        LOG.info("Registered table {} for database {}", tablePath.getTableName(), tablePath.getDatabaseName());
     }
 
     /** Get the table in ZK. */
@@ -423,14 +407,10 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /** Update the table in ZK. */
-    public void updateTable(TablePath tablePath, TableRegistration tableRegistration)
-            throws Exception {
+    public void updateTable(TablePath tablePath, TableRegistration tableRegistration) throws Exception {
         String path = TableZNode.path(tablePath);
         zkClient.setData().forPath(path, TableZNode.encode(tableRegistration));
-        LOG.info(
-                "Updated table {} for database {}",
-                tablePath.getTableName(),
-                tablePath.getDatabaseName());
+        LOG.info("Updated table {} for database {}", tablePath.getTableName(), tablePath.getDatabaseName());
     }
 
     /** Delete the table in ZK. */
@@ -460,28 +440,23 @@ public class ZooKeeperClient implements AutoCloseable {
         Map<String, Long> partitions = new HashMap<>();
         for (String partitionName : getPartitions(tablePath)) {
             Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
-            optPartition.ifPresent(
-                    partition -> partitions.put(partitionName, partition.getPartitionId()));
+            optPartition.ifPresent(partition -> partitions.put(partitionName, partition.getPartitionId()));
         }
         return partitions;
     }
 
     /** Get the partition and the id for the partitions of a table in ZK by partition spec. */
     public Map<String, Long> getPartitionNameAndIds(
-            TablePath tablePath,
-            List<String> partitionKeys,
-            ResolvedPartitionSpec partialPartitionSpec)
+            TablePath tablePath, List<String> partitionKeys, ResolvedPartitionSpec partialPartitionSpec)
             throws Exception {
         Map<String, Long> partitions = new HashMap<>();
 
         for (String partitionName : getPartitions(tablePath)) {
-            ResolvedPartitionSpec resolvedPartitionSpec =
-                    fromPartitionName(partitionKeys, partitionName);
+            ResolvedPartitionSpec resolvedPartitionSpec = fromPartitionName(partitionKeys, partitionName);
             boolean contains = resolvedPartitionSpec.contains(partialPartitionSpec);
             if (contains) {
                 Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
-                optPartition.ifPresent(
-                        partition -> partitions.put(partitionName, partition.getPartitionId()));
+                optPartition.ifPresent(partition -> partitions.put(partitionName, partition.getPartitionId()));
             }
         }
 
@@ -493,16 +468,13 @@ public class ZooKeeperClient implements AutoCloseable {
         Map<Long, String> partitionIdAndNames = new HashMap<>();
         for (String partitionName : getPartitions(tablePath)) {
             Optional<TablePartition> optPartition = getPartition(tablePath, partitionName);
-            optPartition.ifPresent(
-                    partition ->
-                            partitionIdAndNames.put(partition.getPartitionId(), partitionName));
+            optPartition.ifPresent(partition -> partitionIdAndNames.put(partition.getPartitionId(), partitionName));
         }
         return partitionIdAndNames;
     }
 
     /** Get a partition of a table in ZK. */
-    public Optional<TablePartition> getPartition(TablePath tablePath, String partitionName)
-            throws Exception {
+    public Optional<TablePartition> getPartition(TablePath tablePath, String partitionName) throws Exception {
         String path = PartitionZNode.path(tablePath, partitionName);
         return getOrEmpty(path).map(PartitionZNode::decode);
     }
@@ -558,22 +530,16 @@ public class ZooKeeperClient implements AutoCloseable {
 
         List<CuratorOp> ops = new ArrayList<>(2);
         String tabletServerPartitionPath = PartitionIdZNode.path(partitionId);
-        CuratorOp tabletServerPartitionNode =
-                zkClient.transactionOp()
-                        .create()
-                        .withMode(CreateMode.PERSISTENT)
-                        .forPath(
-                                tabletServerPartitionPath,
-                                PartitionIdZNode.encode(partitionAssignment));
+        CuratorOp tabletServerPartitionNode = zkClient.transactionOp()
+                .create()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(tabletServerPartitionPath, PartitionIdZNode.encode(partitionAssignment));
 
         String metadataPath = PartitionZNode.path(tablePath, partitionName);
-        CuratorOp metadataPartitionNode =
-                zkClient.transactionOp()
-                        .create()
-                        .withMode(CreateMode.PERSISTENT)
-                        .forPath(
-                                metadataPath,
-                                PartitionZNode.encode(new TablePartition(tableId, partitionId)));
+        CuratorOp metadataPartitionNode = zkClient.transactionOp()
+                .create()
+                .withMode(CreateMode.PERSISTENT)
+                .forPath(metadataPath, PartitionZNode.encode(new TablePartition(tableId, partitionId)));
 
         ops.add(tabletServerPartitionNode);
         ops.add(metadataPartitionNode);
@@ -605,26 +571,21 @@ public class ZooKeeperClient implements AutoCloseable {
 
     /** Gets the current schema id of the given table in ZK metadata. */
     public int getCurrentSchemaId(TablePath tablePath) throws Exception {
-        Optional<Integer> currentSchemaId =
-                getChildren(SchemasZNode.path(tablePath)).stream()
-                        .map(Integer::parseInt)
-                        .reduce(Math::max);
+        Optional<Integer> currentSchemaId = getChildren(SchemasZNode.path(tablePath)).stream()
+                .map(Integer::parseInt)
+                .reduce(Math::max);
         return currentSchemaId.orElse(0);
     }
 
     // --------------------------------------------------------------------------------------------
     // Table Bucket snapshot
     // --------------------------------------------------------------------------------------------
-    public void registerTableBucketSnapshot(TableBucket tableBucket, BucketSnapshot snapshot)
-            throws Exception {
+    public void registerTableBucketSnapshot(TableBucket tableBucket, BucketSnapshot snapshot) throws Exception {
         String path = BucketSnapshotIdZNode.path(tableBucket, snapshot.getSnapshotId());
-        zkClient.create()
-                .creatingParentsIfNeeded()
-                .forPath(path, BucketSnapshotIdZNode.encode(snapshot));
+        zkClient.create().creatingParentsIfNeeded().forPath(path, BucketSnapshotIdZNode.encode(snapshot));
     }
 
-    public void deleteTableBucketSnapshot(TableBucket tableBucket, long snapshotId)
-            throws Exception {
+    public void deleteTableBucketSnapshot(TableBucket tableBucket, long snapshotId) throws Exception {
         String path = BucketSnapshotIdZNode.path(tableBucket, snapshotId);
         zkClient.delete().forPath(path);
     }
@@ -634,15 +595,13 @@ public class ZooKeeperClient implements AutoCloseable {
         return getChildren(path).stream().mapToLong(Long::parseLong).max();
     }
 
-    public Optional<BucketSnapshot> getTableBucketSnapshot(TableBucket tableBucket, long snapshotId)
-            throws Exception {
+    public Optional<BucketSnapshot> getTableBucketSnapshot(TableBucket tableBucket, long snapshotId) throws Exception {
         String path = BucketSnapshotIdZNode.path(tableBucket, snapshotId);
         return getOrEmpty(path).map(BucketSnapshotIdZNode::decode);
     }
 
     /** Get the latest snapshot of the table bucket. */
-    public Optional<BucketSnapshot> getTableBucketLatestSnapshot(TableBucket tableBucket)
-            throws Exception {
+    public Optional<BucketSnapshot> getTableBucketLatestSnapshot(TableBucket tableBucket) throws Exception {
         OptionalLong latestSnapshotId = getTableBucketLatestSnapshotId(tableBucket);
         if (latestSnapshotId.isPresent()) {
             return getTableBucketSnapshot(tableBucket, latestSnapshotId.getAsLong());
@@ -651,16 +610,14 @@ public class ZooKeeperClient implements AutoCloseable {
         }
     }
 
-    public List<Tuple2<BucketSnapshot, Long>> getTableBucketAllSnapshotAndIds(
-            TableBucket tableBucket) throws Exception {
+    public List<Tuple2<BucketSnapshot, Long>> getTableBucketAllSnapshotAndIds(TableBucket tableBucket)
+            throws Exception {
         String path = BucketSnapshotsZNode.path(tableBucket);
         List<Tuple2<BucketSnapshot, Long>> snapshotAndIds = new ArrayList<>();
         for (String snapshotId : getChildren(path)) {
             long snapshotIdLong = Long.parseLong(snapshotId);
-            Optional<BucketSnapshot> optionalTableBucketSnapshot =
-                    getTableBucketSnapshot(tableBucket, snapshotIdLong);
-            optionalTableBucketSnapshot.ifPresent(
-                    snapshot -> snapshotAndIds.add(Tuple2.of(snapshot, snapshotIdLong)));
+            Optional<BucketSnapshot> optionalTableBucketSnapshot = getTableBucketSnapshot(tableBucket, snapshotIdLong);
+            optionalTableBucketSnapshot.ifPresent(snapshot -> snapshotAndIds.add(Tuple2.of(snapshot, snapshotIdLong)));
         }
         return snapshotAndIds;
     }
@@ -670,8 +627,7 @@ public class ZooKeeperClient implements AutoCloseable {
      * table in zk, return empty. The key of the map is the bucket id, the value is the optional
      * latest snapshot, empty if there is no snapshot for the kv bucket.
      */
-    public Map<Integer, Optional<BucketSnapshot>> getTableLatestBucketSnapshot(long tableId)
-            throws Exception {
+    public Map<Integer, Optional<BucketSnapshot>> getTableLatestBucketSnapshot(long tableId) throws Exception {
         Optional<TableAssignment> optTableAssignment = getTableAssignment(tableId);
         if (!optTableAssignment.isPresent()) {
             return Collections.emptyMap();
@@ -681,22 +637,18 @@ public class ZooKeeperClient implements AutoCloseable {
         }
     }
 
-    public Map<Integer, Optional<BucketSnapshot>> getPartitionLatestBucketSnapshot(long partitionId)
-            throws Exception {
+    public Map<Integer, Optional<BucketSnapshot>> getPartitionLatestBucketSnapshot(long partitionId) throws Exception {
         Optional<PartitionAssignment> optPartitionAssignment = getPartitionAssignment(partitionId);
         if (!optPartitionAssignment.isPresent()) {
             return Collections.emptyMap();
         } else {
             return getBucketSnapshots(
-                    optPartitionAssignment.get().getTableId(),
-                    partitionId,
-                    optPartitionAssignment.get());
+                    optPartitionAssignment.get().getTableId(), partitionId, optPartitionAssignment.get());
         }
     }
 
     private Map<Integer, Optional<BucketSnapshot>> getBucketSnapshots(
-            long tableId, @Nullable Long partitionId, TableAssignment tableAssignment)
-            throws Exception {
+            long tableId, @Nullable Long partitionId, TableAssignment tableAssignment) throws Exception {
         Map<Integer, Optional<BucketSnapshot>> snapshots = new HashMap<>();
         // first, put as empty for all buckets
         for (Integer bucket : tableAssignment.getBuckets()) {
@@ -705,9 +657,7 @@ public class ZooKeeperClient implements AutoCloseable {
 
         // get the bucket ids
         String bucketIdsPath =
-                partitionId == null
-                        ? BucketIdsZNode.pathOfTable(tableId)
-                        : BucketIdsZNode.pathOfPartition(partitionId);
+                partitionId == null ? BucketIdsZNode.pathOfTable(tableId) : BucketIdsZNode.pathOfPartition(partitionId);
         // iterate all buckets
         for (String bucketIdStr : getChildren(bucketIdsPath)) {
             // get the bucket id
@@ -722,8 +672,7 @@ public class ZooKeeperClient implements AutoCloseable {
                     bucketSnapshots.stream().map(Long::parseLong).reduce(Math::max);
             Optional<BucketSnapshot> optTableBucketSnapshot = Optional.empty();
             if (optLatestSnapshotId.isPresent()) {
-                optTableBucketSnapshot =
-                        getTableBucketSnapshot(tableBucket, optLatestSnapshotId.get());
+                optTableBucketSnapshot = getTableBucketSnapshot(tableBucket, optLatestSnapshotId.get());
             }
             snapshots.put(bucketId, optTableBucketSnapshot);
         }
@@ -749,8 +698,7 @@ public class ZooKeeperClient implements AutoCloseable {
      * <p>Note: If there is already a remote log manifest for the given table bucket, it will be
      * overwritten.
      */
-    public void upsertRemoteLogManifestHandle(
-            TableBucket tableBucket, RemoteLogManifestHandle remoteLogManifestHandle)
+    public void upsertRemoteLogManifestHandle(TableBucket tableBucket, RemoteLogManifestHandle remoteLogManifestHandle)
             throws Exception {
         String path = BucketRemoteLogsZNode.path(tableBucket);
         if (getRemoteLogManifestHandle(tableBucket).isPresent()) {
@@ -762,14 +710,12 @@ public class ZooKeeperClient implements AutoCloseable {
         }
     }
 
-    public Optional<RemoteLogManifestHandle> getRemoteLogManifestHandle(TableBucket tableBucket)
-            throws Exception {
+    public Optional<RemoteLogManifestHandle> getRemoteLogManifestHandle(TableBucket tableBucket) throws Exception {
         String path = BucketRemoteLogsZNode.path(tableBucket);
         return getOrEmpty(path).map(BucketRemoteLogsZNode::decode);
     }
 
-    public void upsertLakeTableSnapshot(long tableId, LakeTableSnapshot lakeTableSnapshot)
-            throws Exception {
+    public void upsertLakeTableSnapshot(long tableId, LakeTableSnapshot lakeTableSnapshot) throws Exception {
         String path = LakeTableZNode.path(tableId);
         Optional<LakeTableSnapshot> optLakeTableSnapshot = getLakeTableSnapshot(tableId);
         if (optLakeTableSnapshot.isPresent()) {
@@ -780,31 +726,25 @@ public class ZooKeeperClient implements AutoCloseable {
             LakeTableSnapshot previous = optLakeTableSnapshot.get();
 
             // merge log startup offset, current will override the previous
-            Map<TableBucket, Long> bucketLogStartOffset =
-                    new HashMap<>(previous.getBucketLogStartOffset());
+            Map<TableBucket, Long> bucketLogStartOffset = new HashMap<>(previous.getBucketLogStartOffset());
             bucketLogStartOffset.putAll(lakeTableSnapshot.getBucketLogStartOffset());
 
             // merge log end offsets, current will override the previous
-            Map<TableBucket, Long> bucketLogEndOffset =
-                    new HashMap<>(previous.getBucketLogEndOffset());
+            Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>(previous.getBucketLogEndOffset());
             bucketLogEndOffset.putAll(lakeTableSnapshot.getBucketLogEndOffset());
 
-            Map<Long, String> partitionNameById =
-                    new HashMap<>(previous.getPartitionNameIdByPartitionId());
+            Map<Long, String> partitionNameById = new HashMap<>(previous.getPartitionNameIdByPartitionId());
             partitionNameById.putAll(lakeTableSnapshot.getPartitionNameIdByPartitionId());
 
-            lakeTableSnapshot =
-                    new LakeTableSnapshot(
-                            lakeTableSnapshot.getSnapshotId(),
-                            lakeTableSnapshot.getTableId(),
-                            bucketLogStartOffset,
-                            bucketLogEndOffset,
-                            partitionNameById);
+            lakeTableSnapshot = new LakeTableSnapshot(
+                    lakeTableSnapshot.getSnapshotId(),
+                    lakeTableSnapshot.getTableId(),
+                    bucketLogStartOffset,
+                    bucketLogEndOffset,
+                    partitionNameById);
             zkClient.setData().forPath(path, LakeTableZNode.encode(lakeTableSnapshot));
         } else {
-            zkClient.create()
-                    .creatingParentsIfNeeded()
-                    .forPath(path, LakeTableZNode.encode(lakeTableSnapshot));
+            zkClient.create().creatingParentsIfNeeded().forPath(path, LakeTableZNode.encode(lakeTableSnapshot));
         }
     }
 
@@ -822,8 +762,7 @@ public class ZooKeeperClient implements AutoCloseable {
      *
      * @return the version of the acl node after upsert.
      */
-    public int updateResourceAcl(
-            Resource resource, Set<AccessControlEntry> accessControlEntries, int expectedVersion)
+    public int updateResourceAcl(Resource resource, Set<AccessControlEntry> accessControlEntries, int expectedVersion)
             throws Exception {
         String path = ResourceAclNode.path(resource);
         LOG.info("update acl node {} with value {}", resource, accessControlEntries);
@@ -833,8 +772,7 @@ public class ZooKeeperClient implements AutoCloseable {
                 .getVersion();
     }
 
-    public void createResourceAcl(Resource resource, Set<AccessControlEntry> accessControlEntries)
-            throws Exception {
+    public void createResourceAcl(Resource resource, Set<AccessControlEntry> accessControlEntries) throws Exception {
         String path = ResourceAclNode.path(resource);
         LOG.info("insert acl node {} with value {}", resource, accessControlEntries);
         zkClient.create()
@@ -856,14 +794,10 @@ public class ZooKeeperClient implements AutoCloseable {
             Stat stat = new Stat();
             byte[] bytes = zkClient.getData().storingStatIn(stat).forPath(path);
             int zkVersion = stat.getVersion();
-            Optional<ResourceAcl> resourceAcl =
-                    Optional.ofNullable(bytes).map(ResourceAclNode::decode);
+            Optional<ResourceAcl> resourceAcl = Optional.ofNullable(bytes).map(ResourceAclNode::decode);
 
             return new VersionedAcls(
-                    zkVersion,
-                    resourceAcl.isPresent()
-                            ? resourceAcl.get().getEntries()
-                            : Collections.emptySet());
+                    zkVersion, resourceAcl.isPresent() ? resourceAcl.get().getEntries() : Collections.emptySet());
         } catch (KeeperException.NoNodeException e) {
             return new VersionedAcls(UNKNOWN_VERSION, Collections.emptySet());
         }
@@ -896,9 +830,7 @@ public class ZooKeeperClient implements AutoCloseable {
         zkClient.create()
                 .creatingParentsIfNeeded()
                 .withMode(CreateMode.PERSISTENT_SEQUENTIAL)
-                .forPath(
-                        AclChangeNotificationNode.pathPrefix(),
-                        AclChangeNotificationNode.encode(resource));
+                .forPath(AclChangeNotificationNode.pathPrefix(), AclChangeNotificationNode.encode(resource));
         LOG.info("add acl change notification for resource {}  ", resource);
     }
 

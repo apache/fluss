@@ -51,13 +51,7 @@ public final class KvFileHandleAndLocalPath {
 
     @Override
     public String toString() {
-        return "KvFileHandleAndLocalPath{"
-                + "kvFileHandle="
-                + kvFileHandle
-                + ", localPath='"
-                + localPath
-                + '\''
-                + '}';
+        return "KvFileHandleAndLocalPath{" + "kvFileHandle=" + kvFileHandle + ", localPath='" + localPath + '\'' + '}';
     }
 
     @Override
@@ -69,8 +63,7 @@ public final class KvFileHandleAndLocalPath {
             return false;
         }
         KvFileHandleAndLocalPath that = (KvFileHandleAndLocalPath) o;
-        return Objects.equals(kvFileHandle, that.kvFileHandle)
-                && Objects.equals(localPath, that.localPath);
+        return Objects.equals(kvFileHandle, that.kvFileHandle) && Objects.equals(localPath, that.localPath);
     }
 
     @Override

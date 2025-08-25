@@ -53,8 +53,7 @@ public final class LookupResult {
         } else if (rowList.size() == 1) {
             return rowList.get(0);
         } else {
-            throw new IllegalStateException(
-                    "Expecting exactly one row, but got: " + rowList.size());
+            throw new IllegalStateException("Expecting exactly one row, but got: " + rowList.size());
         }
     }
 

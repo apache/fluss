@@ -43,10 +43,8 @@ public class TimeUtilsTest {
         assertThat(TimeUtils.parseDuration("565731µs").getNano()).isEqualTo(565731 * 1000L);
         assertThat(TimeUtils.parseDuration("565731micro").getNano()).isEqualTo(565731 * 1000L);
         assertThat(TimeUtils.parseDuration("565731micros").getNano()).isEqualTo(565731 * 1000L);
-        assertThat(TimeUtils.parseDuration("565731microsecond").getNano())
-                .isEqualTo(565731 * 1000L);
-        assertThat(TimeUtils.parseDuration("565731microseconds").getNano())
-                .isEqualTo(565731 * 1000L);
+        assertThat(TimeUtils.parseDuration("565731microsecond").getNano()).isEqualTo(565731 * 1000L);
+        assertThat(TimeUtils.parseDuration("565731microseconds").getNano()).isEqualTo(565731 * 1000L);
         assertThat(TimeUtils.parseDuration("565731 µs").getNano()).isEqualTo(565731 * 1000L);
     }
 
@@ -121,16 +119,13 @@ public class TimeUtilsTest {
                 .isInstanceOf(IllegalArgumentException.class);
 
         // null
-        assertThatThrownBy(() -> TimeUtils.parseDuration(null))
-                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> TimeUtils.parseDuration(null)).isInstanceOf(NullPointerException.class);
 
         // empty
-        assertThatThrownBy(() -> TimeUtils.parseDuration(""))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> TimeUtils.parseDuration("")).isInstanceOf(IllegalArgumentException.class);
 
         // blank
-        assertThatThrownBy(() -> TimeUtils.parseDuration("     "))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> TimeUtils.parseDuration("     ")).isInstanceOf(IllegalArgumentException.class);
 
         // no number
         assertThatThrownBy(() -> TimeUtils.parseDuration("foobar or fubar or foo bazz"))
@@ -139,16 +134,13 @@ public class TimeUtilsTest {
         // wrong unit
         assertThatThrownBy(() -> TimeUtils.parseDuration("16 gjah"))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "Time interval unit label 'gjah' does not match any of the recognized units");
+                .hasMessageContaining("Time interval unit label 'gjah' does not match any of the recognized units");
 
         // multiple numbers
-        assertThatThrownBy(() -> TimeUtils.parseDuration("16 16 17 18ms"))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> TimeUtils.parseDuration("16 16 17 18ms")).isInstanceOf(IllegalArgumentException.class);
 
         // negative number
-        assertThatThrownBy(() -> TimeUtils.parseDuration("-100ms"))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> TimeUtils.parseDuration("-100ms")).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test

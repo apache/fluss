@@ -70,14 +70,12 @@ public interface Authorizer extends Closeable {
      * @param resource the resource on which the operation is being performed
      * @throws AuthorizationException if the session is not authorized to perform the operation
      */
-    void authorize(Session session, OperationType operationType, Resource resource)
-            throws AuthorizationException;
+    void authorize(Session session, OperationType operationType, Resource resource) throws AuthorizationException;
 
     /**
      * Filters a collection of resource names based on the provided session, operation, resources.
      */
-    Collection<Resource> filterByAuthorized(
-            Session session, OperationType operation, List<Resource> resources);
+    Collection<Resource> filterByAuthorized(Session session, OperationType operation, List<Resource> resources);
 
     /**
      * Adds multiple ACL bindings to the system after verifying that the session has the required

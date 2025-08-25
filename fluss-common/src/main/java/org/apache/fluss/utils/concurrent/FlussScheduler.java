@@ -77,8 +77,7 @@ public class FlussScheduler implements Scheduler {
             executor.setExecuteExistingDelayedTasksAfterShutdownPolicy(false);
             executor.setRemoveOnCancelPolicy(true);
             executor.setThreadFactory(
-                    new ExecutorThreadFactory(
-                            threadNamePrefix + schedulerThreadId.getAndIncrement()));
+                    new ExecutorThreadFactory(threadNamePrefix + schedulerThreadId.getAndIncrement()));
             this.executor = executor;
         }
     }
@@ -103,27 +102,21 @@ public class FlussScheduler implements Scheduler {
 
     @Override
     public ScheduledFuture<?> schedule(String name, Runnable task, long delayMs, long periodMs) {
-        LOG.debug(
-                "Scheduling task {} with initial delay {} ms and period {} ms.",
-                name,
-                delayMs,
-                periodMs);
+        LOG.debug("Scheduling task {} with initial delay {} ms and period {} ms.", name, delayMs, periodMs);
         synchronized (this) {
             if (isStarted()) {
-                Runnable runnable =
-                        () -> {
-                            try {
-                                LOG.trace("Beginning execution of scheduled task '{}'.", name);
-                                task.run();
-                            } catch (Throwable t) {
-                                LOG.error("Uncaught exception in scheduled task '{}'", name, t);
-                            } finally {
-                                LOG.trace("Completed execution of scheduled task '{}'.", name);
-                            }
-                        };
+                Runnable runnable = () -> {
+                    try {
+                        LOG.trace("Beginning execution of scheduled task '{}'.", name);
+                        task.run();
+                    } catch (Throwable t) {
+                        LOG.error("Uncaught exception in scheduled task '{}'", name, t);
+                    } finally {
+                        LOG.trace("Completed execution of scheduled task '{}'.", name);
+                    }
+                };
                 if (periodMs > 0) {
-                    return executor.scheduleAtFixedRate(
-                            runnable, delayMs, periodMs, TimeUnit.MILLISECONDS);
+                    return executor.scheduleAtFixedRate(runnable, delayMs, periodMs, TimeUnit.MILLISECONDS);
                 } else {
                     return executor.schedule(runnable, delayMs, TimeUnit.MILLISECONDS);
                 }

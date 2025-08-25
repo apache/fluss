@@ -112,11 +112,8 @@ public class MultiBytesView implements BytesView {
                     && lastFileRegionView.position + lastFileRegionView.size == position) {
                 // merge file region with previous one if they are continuous to improve
                 // file read performance.
-                lastFileRegionView =
-                        new FileRegionBytesView(
-                                lastFileRegionView.fileChannel,
-                                lastFileRegionView.position,
-                                lastFileRegionView.size + size);
+                lastFileRegionView = new FileRegionBytesView(
+                        lastFileRegionView.fileChannel, lastFileRegionView.position, lastFileRegionView.size + size);
                 views.set(views.size() - 1, lastFileRegionView);
             } else {
                 lastFileRegionView = new FileRegionBytesView(fileChannel, position, size);

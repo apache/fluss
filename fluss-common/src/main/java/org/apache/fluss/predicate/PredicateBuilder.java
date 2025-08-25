@@ -128,15 +128,13 @@ public class PredicateBuilder {
     public Predicate leaf(NullFalseLeafBinaryFunction function, int idx, Object literal) {
         validateIndex(idx);
         DataField field = rowType.getFields().get(idx);
-        return new LeafPredicate(
-                function, field.getType(), idx, field.getName(), singletonList(literal));
+        return new LeafPredicate(function, field.getType(), idx, field.getName(), singletonList(literal));
     }
 
     public Predicate leaf(LeafUnaryFunction function, int idx) {
         validateIndex(idx);
         DataField field = rowType.getFields().get(idx);
-        return new LeafPredicate(
-                function, field.getType(), idx, field.getName(), Collections.emptyList());
+        return new LeafPredicate(function, field.getType(), idx, field.getName(), Collections.emptyList());
     }
 
     public Predicate in(int idx, List<Object> literals) {
@@ -162,9 +160,7 @@ public class PredicateBuilder {
     public Predicate between(int idx, Object includedLowerBound, Object includedUpperBound) {
         return new CompoundPredicate(
                 And.INSTANCE,
-                Arrays.asList(
-                        greaterOrEqual(idx, includedLowerBound),
-                        lessOrEqual(idx, includedUpperBound)));
+                Arrays.asList(greaterOrEqual(idx, includedLowerBound), lessOrEqual(idx, includedUpperBound)));
     }
 
     public static Predicate and(Predicate... predicates) {
@@ -172,9 +168,7 @@ public class PredicateBuilder {
     }
 
     public static Predicate and(List<Predicate> predicates) {
-        checkArgument(
-                !predicates.isEmpty(),
-                "There must be at least 1 inner predicate to construct an AND predicate");
+        checkArgument(!predicates.isEmpty(), "There must be at least 1 inner predicate to construct an AND predicate");
         if (predicates.size() == 1) {
             return predicates.get(0);
         }
@@ -203,9 +197,7 @@ public class PredicateBuilder {
     }
 
     public static Predicate or(List<Predicate> predicates) {
-        checkArgument(
-                !predicates.isEmpty(),
-                "There must be at least 1 inner predicate to construct an OR predicate");
+        checkArgument(!predicates.isEmpty(), "There must be at least 1 inner predicate to construct an OR predicate");
         if (predicates.size() == 1) {
             return predicates.get(0);
         }
@@ -308,11 +300,10 @@ public class PredicateBuilder {
                 return Decimal.fromBigDecimal((BigDecimal) o, precision, scale);
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 if (o instanceof java.sql.Timestamp) {
-                    LocalDateTime localDateTime =
-                            ((Timestamp) o)
-                                    .toInstant()
-                                    .atZone(ZoneId.systemDefault())
-                                    .toLocalDateTime();
+                    LocalDateTime localDateTime = ((Timestamp) o)
+                            .toInstant()
+                            .atZone(ZoneId.systemDefault())
+                            .toLocalDateTime();
                     return TimestampNtz.fromLocalDateTime(localDateTime);
                 } else if (o instanceof Instant) {
                     Instant o1 = (Instant) o;
@@ -322,9 +313,7 @@ public class PredicateBuilder {
                     return TimestampNtz.fromLocalDateTime((LocalDateTime) o);
                 } else {
                     throw new UnsupportedOperationException(
-                            String.format(
-                                    "Unsupported class %s for timestamp without timezone ",
-                                    o.getClass()));
+                            String.format("Unsupported class %s for timestamp without timezone ", o.getClass()));
                 }
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 if (o instanceof java.sql.Timestamp) {
@@ -334,13 +323,11 @@ public class PredicateBuilder {
                     return TimestampLtz.fromInstant((Instant) o);
                 } else {
                     throw new UnsupportedOperationException(
-                            String.format(
-                                    "Unsupported class %s for timestamp with local time zone ",
-                                    o.getClass()));
+                            String.format("Unsupported class %s for timestamp with local time zone ", o.getClass()));
                 }
             default:
-                throw new UnsupportedOperationException(
-                        "Unsupported predicate leaf type " + literalType.getTypeRoot().name());
+                throw new UnsupportedOperationException("Unsupported predicate leaf type "
+                        + literalType.getTypeRoot().name());
         }
     }
 
@@ -350,8 +337,7 @@ public class PredicateBuilder {
                 predicates, inputFields.stream().mapToInt(pickedFields::indexOf).toArray());
     }
 
-    public static List<Predicate> pickTransformFieldMapping(
-            List<Predicate> predicates, int[] fieldIdxMapping) {
+    public static List<Predicate> pickTransformFieldMapping(List<Predicate> predicates, int[] fieldIdxMapping) {
         List<Predicate> pick = new ArrayList<>();
         for (Predicate p : predicates) {
             Optional<Predicate> mapped = transformFieldMapping(p, fieldIdxMapping);
@@ -360,8 +346,7 @@ public class PredicateBuilder {
         return pick;
     }
 
-    public static Optional<Predicate> transformFieldMapping(
-            Predicate predicate, int[] fieldIdxMapping) {
+    public static Optional<Predicate> transformFieldMapping(Predicate predicate, int[] fieldIdxMapping) {
         if (predicate instanceof CompoundPredicate) {
             CompoundPredicate compoundPredicate = (CompoundPredicate) predicate;
             List<Predicate> children = new ArrayList<>();
@@ -378,13 +363,12 @@ public class PredicateBuilder {
             LeafPredicate leafPredicate = (LeafPredicate) predicate;
             int mapped = fieldIdxMapping[leafPredicate.index()];
             if (mapped >= 0) {
-                return Optional.of(
-                        new LeafPredicate(
-                                leafPredicate.function(),
-                                leafPredicate.type(),
-                                mapped,
-                                leafPredicate.fieldName(),
-                                leafPredicate.literals()));
+                return Optional.of(new LeafPredicate(
+                        leafPredicate.function(),
+                        leafPredicate.type(),
+                        mapped,
+                        leafPredicate.fieldName(),
+                        leafPredicate.literals()));
             } else {
                 return Optional.empty();
             }
@@ -405,14 +389,11 @@ public class PredicateBuilder {
         }
     }
 
-    public static List<Predicate> excludePredicateWithFields(
-            @Nullable List<Predicate> predicates, Set<String> fields) {
+    public static List<Predicate> excludePredicateWithFields(@Nullable List<Predicate> predicates, Set<String> fields) {
         if (predicates == null || predicates.isEmpty() || fields.isEmpty()) {
             return predicates;
         }
-        return predicates.stream()
-                .filter(f -> !containsFields(f, fields))
-                .collect(Collectors.toList());
+        return predicates.stream().filter(f -> !containsFields(f, fields)).collect(Collectors.toList());
     }
 
     /**
@@ -435,8 +416,7 @@ public class PredicateBuilder {
         for (Map.Entry<String, Object> entry : internalValues.entrySet()) {
             int idx = fieldNames.indexOf(entry.getKey());
             Object literal = internalValues.get(entry.getKey());
-            Predicate predicateTemp =
-                    literal == null ? builder.isNull(idx) : builder.equal(idx, literal);
+            Predicate predicateTemp = literal == null ? builder.isNull(idx) : builder.equal(idx, literal);
             if (predicate == null) {
                 predicate = predicateTemp;
             } else {
@@ -447,14 +427,12 @@ public class PredicateBuilder {
     }
 
     public static Predicate partitions(List<Map<String, String>> partitions, RowType rowType) {
-        return PredicateBuilder.or(
-                partitions.stream()
-                        .map(p -> PredicateBuilder.partition(p, rowType))
-                        .toArray(Predicate[]::new));
+        return PredicateBuilder.or(partitions.stream()
+                .map(p -> PredicateBuilder.partition(p, rowType))
+                .toArray(Predicate[]::new));
     }
 
-    public static Map<String, Object> convertSpecToInternal(
-            Map<String, String> spec, RowType partType) {
+    public static Map<String, Object> convertSpecToInternal(Map<String, String> spec, RowType partType) {
         Map<String, Object> partValues = new LinkedHashMap<>();
         for (Map.Entry<String, String> entry : spec.entrySet()) {
             partValues.put(

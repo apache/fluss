@@ -60,13 +60,9 @@ public class InternalRowAssert extends AbstractAssert<InternalRowAssert, Interna
             throw new IllegalStateException(
                     "InternalRowAssert#isEqualTo(InternalRow) must be invoked after #withSchema(RowType).");
         }
-        assertThat(actual.getFieldCount())
-                .as("InternalRow#getFieldCount()")
-                .isEqualTo(expected.getFieldCount());
+        assertThat(actual.getFieldCount()).as("InternalRow#getFieldCount()").isEqualTo(expected.getFieldCount());
         for (int i = 0; i < actual.getFieldCount(); i++) {
-            assertThat(actual.isNullAt(i))
-                    .as("InternalRow#isNullAt(" + i + ")")
-                    .isEqualTo(expected.isNullAt(i));
+            assertThat(actual.isNullAt(i)).as("InternalRow#isNullAt(" + i + ")").isEqualTo(expected.isNullAt(i));
             if (!actual.isNullAt(i)) {
                 assertThat(fieldGetters[i].getFieldOrNull(actual))
                         .as("InternalRow#get" + rowType.getTypeAt(i).getTypeRoot() + "(" + i + ")")

@@ -26,8 +26,7 @@ import org.apache.fluss.memory.MemoryUtils;
 /** Utility class for working with unsafe operations. */
 public class UnsafeUtils {
 
-    public static final long BYTE_ARRAY_BASE_OFFSET =
-            MemoryUtils.UNSAFE.arrayBaseOffset(byte[].class);
+    public static final long BYTE_ARRAY_BASE_OFFSET = MemoryUtils.UNSAFE.arrayBaseOffset(byte[].class);
     private static final int ADDRESS_BITS_PER_WORD = 3;
     private static final int BIT_BYTE_INDEX_MASK = 7;
 

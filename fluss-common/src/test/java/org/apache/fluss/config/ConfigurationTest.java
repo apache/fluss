@@ -46,9 +46,7 @@ public class ConfigurationTest {
     private static final ConfigOption<Boolean> BOOLEAN_OPTION =
             ConfigBuilder.key("test-boolean-key").booleanType().defaultValue(true);
     private static final ConfigOption<MemorySize> MEMORY_OPTION =
-            ConfigBuilder.key("test-memory-key")
-                    .memoryType()
-                    .defaultValue(MemorySize.parse("64 kb"));
+            ConfigBuilder.key("test-memory-key").memoryType().defaultValue(MemorySize.parse("64 kb"));
     private static final ConfigOption<List<String>> LIST_STRING_OPTION =
             ConfigBuilder.key("test-list-key").stringType().asList().noDefaultValue();
     private static final ConfigOption<Map<String, String>> MAP_OPTION =
@@ -113,11 +111,8 @@ public class ConfigurationTest {
         assertThat(conf.getBytes("test-bytes-key", new byte[0]).length).isEqualTo(5);
 
         conf.setClass("test-class-key", this.getClass());
-        assertThat(
-                        conf.getClass(
-                                "test-class-key",
-                                this.getClass(),
-                                this.getClass().getClassLoader()))
+        assertThat(conf.getClass(
+                        "test-class-key", this.getClass(), this.getClass().getClassLoader()))
                 .isEqualTo(this.getClass());
 
         // test getter with default value.
@@ -215,7 +210,8 @@ public class ConfigurationTest {
         assertThat(conf.getValue(presentStringOption)).isEqualTo("abc");
 
         // test getting default when no value is present.
-        ConfigOption<String> stringOption = ConfigBuilder.key("test").stringType().noDefaultValue();
+        ConfigOption<String> stringOption =
+                ConfigBuilder.key("test").stringType().noDefaultValue();
         assertThat(conf.getString(stringOption)).isNull();
         assertThat(conf.getValue(stringOption)).isNull();
 
@@ -245,28 +241,20 @@ public class ConfigurationTest {
         conf.setInt("older-key", 13);
 
         ConfigOption<Integer> matchesFirst =
-                ConfigBuilder.key("the-key")
-                        .intType()
-                        .defaultValue(-1)
-                        .withDeprecatedKeys("old-key", "older-key");
+                ConfigBuilder.key("the-key").intType().defaultValue(-1).withDeprecatedKeys("old-key", "older-key");
 
-        ConfigOption<Integer> matchesSecond =
-                ConfigBuilder.key("does-not-exist")
-                        .intType()
-                        .defaultValue(-1)
-                        .withDeprecatedKeys("old-key", "older-key");
+        ConfigOption<Integer> matchesSecond = ConfigBuilder.key("does-not-exist")
+                .intType()
+                .defaultValue(-1)
+                .withDeprecatedKeys("old-key", "older-key");
 
         ConfigOption<Integer> matchesThird =
-                ConfigBuilder.key("does-not-exist")
-                        .intType()
-                        .defaultValue(-1)
-                        .withDeprecatedKeys("foo", "older-key");
+                ConfigBuilder.key("does-not-exist").intType().defaultValue(-1).withDeprecatedKeys("foo", "older-key");
 
-        ConfigOption<Integer> notContained =
-                ConfigBuilder.key("does-not-exist")
-                        .intType()
-                        .defaultValue(-1)
-                        .withDeprecatedKeys("not-there", "also-not-there");
+        ConfigOption<Integer> notContained = ConfigBuilder.key("does-not-exist")
+                .intType()
+                .defaultValue(-1)
+                .withDeprecatedKeys("not-there", "also-not-there");
 
         assertThat(conf.getInt(matchesFirst)).isEqualTo(11);
         assertThat(conf.getInt(matchesSecond)).isEqualTo(12);
@@ -282,28 +270,18 @@ public class ConfigurationTest {
         conf.setInt("older-key", 13);
 
         ConfigOption<Integer> matchesFirst =
-                ConfigBuilder.key("the-key")
-                        .intType()
-                        .defaultValue(-1)
-                        .withFallbackKeys("old-key", "older-key");
+                ConfigBuilder.key("the-key").intType().defaultValue(-1).withFallbackKeys("old-key", "older-key");
 
         ConfigOption<Integer> matchesSecond =
-                ConfigBuilder.key("does-not-exist")
-                        .intType()
-                        .defaultValue(-1)
-                        .withFallbackKeys("old-key", "older-key");
+                ConfigBuilder.key("does-not-exist").intType().defaultValue(-1).withFallbackKeys("old-key", "older-key");
 
         ConfigOption<Integer> matchesThird =
-                ConfigBuilder.key("does-not-exist")
-                        .intType()
-                        .defaultValue(-1)
-                        .withFallbackKeys("foo", "older-key");
+                ConfigBuilder.key("does-not-exist").intType().defaultValue(-1).withFallbackKeys("foo", "older-key");
 
-        ConfigOption<Integer> notContained =
-                ConfigBuilder.key("does-not-exist")
-                        .intType()
-                        .defaultValue(-1)
-                        .withFallbackKeys("not-there", "also-not-there");
+        ConfigOption<Integer> notContained = ConfigBuilder.key("does-not-exist")
+                .intType()
+                .defaultValue(-1)
+                .withFallbackKeys("not-there", "also-not-there");
 
         assertThat(conf.getInt(matchesFirst)).isEqualTo(11);
         assertThat(conf.getInt(matchesSecond)).isEqualTo(12);
@@ -318,12 +296,11 @@ public class ConfigurationTest {
         final ConfigOption<Integer> deprecated =
                 ConfigBuilder.key("deprecated").intType().defaultValue(-1);
 
-        final ConfigOption<Integer> mainOption =
-                ConfigBuilder.key("main")
-                        .intType()
-                        .defaultValue(-1)
-                        .withFallbackKeys(fallback.key())
-                        .withDeprecatedKeys(deprecated.key());
+        final ConfigOption<Integer> mainOption = ConfigBuilder.key("main")
+                .intType()
+                .defaultValue(-1)
+                .withFallbackKeys(fallback.key())
+                .withDeprecatedKeys(deprecated.key());
 
         final Configuration fallbackConf = new Configuration();
         fallbackConf.setInt(fallback, 1);

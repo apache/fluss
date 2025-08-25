@@ -41,8 +41,7 @@ public class HadoopConfSerde {
             hadoopConf.readFields(in);
             return hadoopConf;
         } catch (IOException e) {
-            throw new IOException(
-                    "Failed to deserialize Hadoop Configuration: " + e.getMessage(), e);
+            throw new IOException("Failed to deserialize Hadoop Configuration: " + e.getMessage(), e);
         }
     }
 }

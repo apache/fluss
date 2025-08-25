@@ -28,8 +28,7 @@ public final class Java {
 
     private Java() {}
 
-    private static final Version VERSION =
-            parseVersion(System.getProperty("java.specification.version"));
+    private static final Version VERSION = parseVersion(System.getProperty("java.specification.version"));
 
     // Package private for testing
     static Version parseVersion(String versionString) {

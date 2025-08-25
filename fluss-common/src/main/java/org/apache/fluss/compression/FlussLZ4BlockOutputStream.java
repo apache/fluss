@@ -67,8 +67,7 @@ public class FlussLZ4BlockOutputStream extends OutputStream {
      * @param blockChecksum Default: false. When true, a XXHash32 checksum is computed and appended
      *     to the stream for every block of data
      */
-    public FlussLZ4BlockOutputStream(OutputStream out, int blockSize, boolean blockChecksum)
-            throws IOException {
+    public FlussLZ4BlockOutputStream(OutputStream out, int blockSize, boolean blockChecksum) throws IOException {
         this.out = out;
         compressor = LZ4Factory.fastestInstance().fastCompressor();
         checksum = XXHashFactory.fastestInstance().hash32();
@@ -282,23 +281,16 @@ public class FlussLZ4BlockOutputStream extends OutputStream {
             int blockIndependence = (flg >>> 5) & 1;
             int version = (flg >>> 6) & 3;
 
-            return new FLG(
-                    reserved,
-                    contentChecksum,
-                    contentSize,
-                    blockChecksum,
-                    blockIndependence,
-                    version);
+            return new FLG(reserved, contentChecksum, contentSize, blockChecksum, blockIndependence, version);
         }
 
         public byte toByte() {
-            return (byte)
-                    (((reserved & 3))
-                            | ((contentChecksum & 1) << 2)
-                            | ((contentSize & 1) << 3)
-                            | ((blockChecksum & 1) << 4)
-                            | ((blockIndependence & 1) << 5)
-                            | ((version & 3) << 6));
+            return (byte) (((reserved & 3))
+                    | ((contentChecksum & 1) << 2)
+                    | ((contentSize & 1) << 3)
+                    | ((blockChecksum & 1) << 4)
+                    | ((blockIndependence & 1) << 5)
+                    | ((version & 3) << 6));
         }
 
         private void validate() {
@@ -382,8 +374,7 @@ public class FlussLZ4BlockOutputStream extends OutputStream {
         }
 
         public byte toByte() {
-            return (byte)
-                    (((reserved2 & 15)) | ((blockSizeValue & 7) << 4) | ((reserved3 & 1) << 7));
+            return (byte) (((reserved2 & 15)) | ((blockSizeValue & 7) << 4) | ((reserved3 & 1) << 7));
         }
     }
 }

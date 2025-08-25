@@ -52,8 +52,7 @@ final class LogRecordsTest extends LogTestBase {
         super.before();
         file = new File(tempDir, "test.log");
         file.createNewFile();
-        fileChannel =
-                FileChannel.open(file.toPath(), StandardOpenOption.READ, StandardOpenOption.WRITE);
+        fileChannel = FileChannel.open(file.toPath(), StandardOpenOption.READ, StandardOpenOption.WRITE);
     }
 
     @Test
@@ -61,8 +60,7 @@ final class LogRecordsTest extends LogTestBase {
         Object[] objects1 = new Object[] {1, "1"};
         Object[] objects2 = new Object[] {2, "2"};
 
-        List<IndexedRow> rows1 =
-                Arrays.asList(indexedRow(baseRowType, objects1), indexedRow(baseRowType, objects2));
+        List<IndexedRow> rows1 = Arrays.asList(indexedRow(baseRowType, objects1), indexedRow(baseRowType, objects2));
         MemoryLogRecords memoryLogRecords1 = DataTestUtils.genIndexedMemoryLogRecords(rows1);
 
         // Create FileLogRecords.
@@ -75,8 +73,7 @@ final class LogRecordsTest extends LogTestBase {
 
         assertThat(iterator.hasNext()).isTrue();
         assertThat(memoryIterator.hasNext()).isTrue();
-        assertIndexedLogRecordBatchAndRowEquals(
-                iterator.next(), memoryIterator.next(), baseRowType, rows1);
+        assertIndexedLogRecordBatchAndRowEquals(iterator.next(), memoryIterator.next(), baseRowType, rows1);
 
         assertThat(iterator.hasNext()).isFalse();
         assertThat(memoryIterator.hasNext()).isFalse();
@@ -98,8 +95,7 @@ final class LogRecordsTest extends LogTestBase {
 
         assertThat(iterator.hasNext()).isTrue();
         assertThat(memoryIterator.hasNext()).isTrue();
-        assertIndexedLogRecordBatchAndRowEquals(
-                iterator.next(), memoryIterator.next(), allRowType, rows1);
+        assertIndexedLogRecordBatchAndRowEquals(iterator.next(), memoryIterator.next(), allRowType, rows1);
 
         assertThat(iterator.hasNext()).isFalse();
         assertThat(memoryIterator.hasNext()).isFalse();

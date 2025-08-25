@@ -73,17 +73,14 @@ public class RpcGatewayManager<T extends RpcGateway> implements AutoCloseable {
         int serverId = serverNode.id();
         if (serverRpcGateways.containsKey(serverId)) {
             // close the already existing server
-            removeServer(serverId)
-                    .exceptionally(
-                            throwable -> {
-                                LOG.warn("Failed to close the server {}.", serverId, throwable);
-                                return null;
-                            });
+            removeServer(serverId).exceptionally(throwable -> {
+                LOG.warn("Failed to close the server {}.", serverId, throwable);
+                return null;
+            });
         }
 
         // create a new gateway for the server
-        T gateway =
-                GatewayClientProxy.createGatewayProxy(() -> serverNode, rpcClient, gatewayClass);
+        T gateway = GatewayClientProxy.createGatewayProxy(() -> serverNode, rpcClient, gatewayClass);
         // put the gateway for the server
         serverRpcGateways.put(serverNode.id(), new ServerRpcGateway(serverNode.uid(), gateway));
     }

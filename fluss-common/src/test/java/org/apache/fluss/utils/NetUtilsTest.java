@@ -32,8 +32,7 @@ class NetUtilsTest {
     @Test
     public void testFreePortRangeUtility() {
         // inspired by Hadoop's example for "yarn.app.mapreduce.am.job.client.port-range"
-        String rangeDefinition =
-                "50000-50050, 50100-50200,51234 "; // this also contains some whitespaces
+        String rangeDefinition = "50000-50050, 50100-50200,51234 "; // this also contains some whitespaces
         Iterator<Integer> portsIter = NetUtils.getPortRangeFromString(rangeDefinition);
         Set<Integer> ports = new HashSet<>();
         while (portsIter.hasNext()) {

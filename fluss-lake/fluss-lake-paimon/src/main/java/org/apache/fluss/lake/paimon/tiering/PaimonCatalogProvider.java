@@ -38,7 +38,6 @@ public class PaimonCatalogProvider implements Serializable {
     }
 
     public Catalog get() {
-        return CatalogFactory.createCatalog(
-                CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
+        return CatalogFactory.createCatalog(CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
     }
 }

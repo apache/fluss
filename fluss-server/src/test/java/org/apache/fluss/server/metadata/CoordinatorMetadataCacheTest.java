@@ -41,45 +41,37 @@ public class CoordinatorMetadataCacheTest {
     public void setup() {
         serverMetadataCache = new CoordinatorMetadataCache();
 
-        coordinatorServer =
+        coordinatorServer = new ServerInfo(
+                0,
+                null,
+                Endpoint.fromListenersString("CLIENT://localhost:99,INTERNAL://localhost:100"),
+                ServerType.COORDINATOR);
+
+        aliveTableServers = new HashSet<>(Arrays.asList(
                 new ServerInfo(
                         0,
-                        null,
-                        Endpoint.fromListenersString(
-                                "CLIENT://localhost:99,INTERNAL://localhost:100"),
-                        ServerType.COORDINATOR);
-
-        aliveTableServers =
-                new HashSet<>(
-                        Arrays.asList(
-                                new ServerInfo(
-                                        0,
-                                        "rack0",
-                                        Endpoint.fromListenersString(
-                                                "CLIENT://localhost:101, INTERNAL://localhost:102"),
-                                        ServerType.TABLET_SERVER),
-                                new ServerInfo(
-                                        1,
-                                        "rack1",
-                                        Endpoint.fromListenersString("INTERNAL://localhost:103"),
-                                        ServerType.TABLET_SERVER),
-                                new ServerInfo(
-                                        2,
-                                        "rack2",
-                                        Endpoint.fromListenersString("INTERNAL://localhost:104"),
-                                        ServerType.TABLET_SERVER)));
+                        "rack0",
+                        Endpoint.fromListenersString("CLIENT://localhost:101, INTERNAL://localhost:102"),
+                        ServerType.TABLET_SERVER),
+                new ServerInfo(
+                        1, "rack1", Endpoint.fromListenersString("INTERNAL://localhost:103"), ServerType.TABLET_SERVER),
+                new ServerInfo(
+                        2,
+                        "rack2",
+                        Endpoint.fromListenersString("INTERNAL://localhost:104"),
+                        ServerType.TABLET_SERVER)));
     }
 
     @Test
     void testCoordinatorServerMetadataCache() {
         serverMetadataCache.updateMetadata(coordinatorServer, aliveTableServers);
-        assertThat(serverMetadataCache.getCoordinatorServer("CLIENT"))
-                .isEqualTo(coordinatorServer.node("CLIENT"));
-        assertThat(serverMetadataCache.getCoordinatorServer("INTERNAL"))
-                .isEqualTo(coordinatorServer.node("INTERNAL"));
+        assertThat(serverMetadataCache.getCoordinatorServer("CLIENT")).isEqualTo(coordinatorServer.node("CLIENT"));
+        assertThat(serverMetadataCache.getCoordinatorServer("INTERNAL")).isEqualTo(coordinatorServer.node("INTERNAL"));
         assertThat(serverMetadataCache.isAliveTabletServer(0)).isTrue();
-        assertThat(serverMetadataCache.getAllAliveTabletServers("CLIENT").size()).isEqualTo(1);
-        assertThat(serverMetadataCache.getAllAliveTabletServers("INTERNAL").size()).isEqualTo(3);
+        assertThat(serverMetadataCache.getAllAliveTabletServers("CLIENT").size())
+                .isEqualTo(1);
+        assertThat(serverMetadataCache.getAllAliveTabletServers("INTERNAL").size())
+                .isEqualTo(3);
         assertThat(serverMetadataCache.getAliveTabletServerInfos())
                 .containsExactlyInAnyOrder(
                         new TabletServerInfo(0, "rack0"),

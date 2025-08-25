@@ -65,7 +65,8 @@ public class EnumsTest {
             parsed.parseFrom(bb1, bb1.readableBytes());
             fail("Should have failed");
         } catch (IllegalStateException e) {
-            assertThat(e.getMessage().contains("Some required fields are missing")).isTrue();
+            assertThat(e.getMessage().contains("Some required fields are missing"))
+                    .isTrue();
         }
     }
 
@@ -101,13 +102,12 @@ public class EnumsTest {
 
         assertThat(lpet2.getEsCount()).isEqualTo(4);
 
-        Enums.EnumTest2Repeated pbet2 =
-                Enums.EnumTest2Repeated.newBuilder()
-                        .addE(Enums.E2.A2)
-                        .addE(Enums.E2.B2)
-                        .addE(Enums.E2.C2)
-                        .addE(Enums.E2.D2)
-                        .build();
+        Enums.EnumTest2Repeated pbet2 = Enums.EnumTest2Repeated.newBuilder()
+                .addE(Enums.E2.A2)
+                .addE(Enums.E2.B2)
+                .addE(Enums.E2.C2)
+                .addE(Enums.E2.D2)
+                .build();
 
         assertThat(lpet2.totalSize()).isEqualTo(pbet2.getSerializedSize());
 
@@ -136,13 +136,12 @@ public class EnumsTest {
 
         assertThat(lpet2.getEsCount()).isEqualTo(4);
 
-        Enums.EnumTest2Packed pbet2 =
-                Enums.EnumTest2Packed.newBuilder()
-                        .addE(Enums.E2.A2)
-                        .addE(Enums.E2.B2)
-                        .addE(Enums.E2.C2)
-                        .addE(Enums.E2.D2)
-                        .build();
+        Enums.EnumTest2Packed pbet2 = Enums.EnumTest2Packed.newBuilder()
+                .addE(Enums.E2.A2)
+                .addE(Enums.E2.B2)
+                .addE(Enums.E2.C2)
+                .addE(Enums.E2.D2)
+                .build();
 
         assertThat(lpet2.totalSize()).isEqualTo(pbet2.getSerializedSize());
 

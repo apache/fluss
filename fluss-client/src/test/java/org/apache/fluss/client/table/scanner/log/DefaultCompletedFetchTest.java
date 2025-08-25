@@ -84,10 +84,8 @@ public class DefaultCompletedFetchTest {
         int bucketId = 0; // records for 0-10.
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
         FetchLogResultForBucket resultForBucket0 =
-                new FetchLogResultForBucket(
-                        tb, createMemoryLogRecords(DATA2, LogFormat.ARROW), 10L);
-        DefaultCompletedFetch defaultCompletedFetch =
-                makeCompletedFetch(tb, resultForBucket0, fetchOffset);
+                new FetchLogResultForBucket(tb, createMemoryLogRecords(DATA2, LogFormat.ARROW), 10L);
+        DefaultCompletedFetch defaultCompletedFetch = makeCompletedFetch(tb, resultForBucket0, fetchOffset);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(8);
         assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
@@ -106,10 +104,8 @@ public class DefaultCompletedFetchTest {
         int bucketId = 0; // records for 0-10.
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
         FetchLogResultForBucket resultForBucket0 =
-                new FetchLogResultForBucket(
-                        tb, createMemoryLogRecords(DATA2, LogFormat.ARROW), 10L);
-        DefaultCompletedFetch defaultCompletedFetch =
-                makeCompletedFetch(tb, resultForBucket0, fetchOffset);
+                new FetchLogResultForBucket(tb, createMemoryLogRecords(DATA2, LogFormat.ARROW), 10L);
+        DefaultCompletedFetch defaultCompletedFetch = makeCompletedFetch(tb, resultForBucket0, fetchOffset);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(-10);
         assertThat(scanRecords.size()).isEqualTo(0);
     }
@@ -119,10 +115,8 @@ public class DefaultCompletedFetchTest {
         long fetchOffset = 0L;
         int bucketId = 0; // records for 0-10.
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
-        FetchLogResultForBucket resultForBucket0 =
-                new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L);
-        DefaultCompletedFetch defaultCompletedFetch =
-                makeCompletedFetch(tb, resultForBucket0, fetchOffset);
+        FetchLogResultForBucket resultForBucket0 = new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, 0L);
+        DefaultCompletedFetch defaultCompletedFetch = makeCompletedFetch(tb, resultForBucket0, fetchOffset);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(10);
         assertThat(scanRecords.size()).isEqualTo(0);
     }
@@ -131,27 +125,25 @@ public class DefaultCompletedFetchTest {
     @ValueSource(strings = {"INDEXED", "ARROW"})
     void testProjection(String format) throws Exception {
         LogFormat logFormat = LogFormat.fromString(format);
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .withComment("a is first column")
-                        .column("b", DataTypes.STRING())
-                        .withComment("b is second column")
-                        .column("c", DataTypes.STRING())
-                        .withComment("c is adding column")
-                        .build();
-        tableInfo =
-                TableInfo.of(
-                        DATA2_TABLE_PATH,
-                        DATA2_TABLE_ID,
-                        DEFAULT_SCHEMA_ID,
-                        TableDescriptor.builder()
-                                .schema(schema)
-                                .distributedBy(3)
-                                .logFormat(logFormat)
-                                .build(),
-                        System.currentTimeMillis(),
-                        System.currentTimeMillis());
+        Schema schema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .withComment("a is first column")
+                .column("b", DataTypes.STRING())
+                .withComment("b is second column")
+                .column("c", DataTypes.STRING())
+                .withComment("c is adding column")
+                .build();
+        tableInfo = TableInfo.of(
+                DATA2_TABLE_PATH,
+                DATA2_TABLE_ID,
+                DEFAULT_SCHEMA_ID,
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(3)
+                        .logFormat(logFormat)
+                        .build(),
+                System.currentTimeMillis(),
+                System.currentTimeMillis());
         long fetchOffset = 0L;
         int bucketId = 0; // records for 0-10.
         TableBucket tb = new TableBucket(DATA2_TABLE_ID, bucketId);
@@ -162,21 +154,18 @@ public class DefaultCompletedFetchTest {
         } else {
             memoryLogRecords = createMemoryLogRecords(DATA2, LogFormat.INDEXED);
         }
-        FetchLogResultForBucket resultForBucket0 =
-                new FetchLogResultForBucket(tb, memoryLogRecords, 10L);
-        DefaultCompletedFetch defaultCompletedFetch =
-                makeCompletedFetch(tb, resultForBucket0, fetchOffset, projection);
+        FetchLogResultForBucket resultForBucket0 = new FetchLogResultForBucket(tb, memoryLogRecords, 10L);
+        DefaultCompletedFetch defaultCompletedFetch = makeCompletedFetch(tb, resultForBucket0, fetchOffset, projection);
         List<ScanRecord> scanRecords = defaultCompletedFetch.fetchRecords(8);
-        List<Object[]> expectedObjects =
-                Arrays.asList(
-                        new Object[] {1, "hello"},
-                        new Object[] {2, "hi"},
-                        new Object[] {3, "nihao"},
-                        new Object[] {4, "hello world"},
-                        new Object[] {5, "hi world"},
-                        new Object[] {6, "nihao world"},
-                        new Object[] {7, "hello world2"},
-                        new Object[] {8, "hi world2"});
+        List<Object[]> expectedObjects = Arrays.asList(
+                new Object[] {1, "hello"},
+                new Object[] {2, "hi"},
+                new Object[] {3, "nihao"},
+                new Object[] {4, "hello world"},
+                new Object[] {5, "hi world"},
+                new Object[] {6, "nihao world"},
+                new Object[] {7, "hello world2"},
+                new Object[] {8, "hi world2"});
         assertThat(scanRecords.size()).isEqualTo(8);
         for (int i = 0; i < scanRecords.size(); i++) {
             Object[] expectObject = expectedObjects.get(i);
@@ -189,9 +178,7 @@ public class DefaultCompletedFetchTest {
         }
 
         // test projection reorder.
-        defaultCompletedFetch =
-                makeCompletedFetch(
-                        tb, resultForBucket0, fetchOffset, Projection.of(new int[] {2, 0}));
+        defaultCompletedFetch = makeCompletedFetch(tb, resultForBucket0, fetchOffset, Projection.of(new int[] {2, 0}));
         scanRecords = defaultCompletedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(8);
         for (int i = 0; i < scanRecords.size(); i++) {
@@ -211,10 +198,7 @@ public class DefaultCompletedFetchTest {
     }
 
     private DefaultCompletedFetch makeCompletedFetch(
-            TableBucket tableBucket,
-            FetchLogResultForBucket resultForBucket,
-            long offset,
-            Projection projection) {
+            TableBucket tableBucket, FetchLogResultForBucket resultForBucket, long offset, Projection projection) {
         return new DefaultCompletedFetch(
                 tableBucket,
                 resultForBucket,
@@ -224,34 +208,24 @@ public class DefaultCompletedFetchTest {
                 offset);
     }
 
-    private MemoryLogRecords createMemoryLogRecords(List<Object[]> objects, LogFormat logFormat)
-            throws Exception {
-        return createRecordsWithoutBaseLogOffset(
-                rowType, DEFAULT_SCHEMA_ID, 0L, 1000L, objects, logFormat);
+    private MemoryLogRecords createMemoryLogRecords(List<Object[]> objects, LogFormat logFormat) throws Exception {
+        return createRecordsWithoutBaseLogOffset(rowType, DEFAULT_SCHEMA_ID, 0L, 1000L, objects, logFormat);
     }
 
-    private MemoryLogRecords genRecordsWithProjection(List<Object[]> objects, Projection projection)
-            throws Exception {
+    private MemoryLogRecords genRecordsWithProjection(List<Object[]> objects, Projection projection) throws Exception {
         File logFile = FlussPaths.logFile(tempDir, 0L);
         FileLogRecords fileLogRecords = FileLogRecords.open(logFile, false, 1024 * 1024, false);
         fileLogRecords.append(
-                createRecordsWithoutBaseLogOffset(
-                        rowType, DEFAULT_SCHEMA_ID, 0L, 1000L, objects, LogFormat.ARROW));
+                createRecordsWithoutBaseLogOffset(rowType, DEFAULT_SCHEMA_ID, 0L, 1000L, objects, LogFormat.ARROW));
         fileLogRecords.flush();
 
         FileLogProjection fileLogProjection = new FileLogProjection();
         fileLogProjection.setCurrentProjection(
                 DATA2_TABLE_ID, rowType, DEFAULT_COMPRESSION, projection.getProjectionInOrder());
-        ByteBuffer buffer =
-                toByteBuffer(
-                        fileLogProjection
-                                .project(
-                                        fileLogRecords.channel(),
-                                        0,
-                                        fileLogRecords.sizeInBytes(),
-                                        Integer.MAX_VALUE)
-                                .getBytesView()
-                                .getByteBuf());
+        ByteBuffer buffer = toByteBuffer(fileLogProjection
+                .project(fileLogRecords.channel(), 0, fileLogRecords.sizeInBytes(), Integer.MAX_VALUE)
+                .getBytesView()
+                .getByteBuf());
         return MemoryLogRecords.pointToByteBuffer(buffer);
     }
 }

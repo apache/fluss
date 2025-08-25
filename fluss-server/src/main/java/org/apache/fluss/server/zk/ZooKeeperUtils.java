@@ -61,23 +61,20 @@ public class ZooKeeperUtils {
         String zkQuorum = configuration.getValue(ConfigOptions.ZOOKEEPER_ADDRESS);
 
         if (zkQuorum == null || StringUtils.isBlank(zkQuorum)) {
-            throw new RuntimeException(
-                    "No valid ZooKeeper quorum has been specified. "
-                            + "You can specify the quorum via the configuration key '"
-                            + ConfigOptions.ZOOKEEPER_ADDRESS.key()
-                            + "'.");
+            throw new RuntimeException("No valid ZooKeeper quorum has been specified. "
+                    + "You can specify the quorum via the configuration key '"
+                    + ConfigOptions.ZOOKEEPER_ADDRESS.key()
+                    + "'.");
         }
 
-        int sessionTimeout =
-                Math.toIntExact(
-                        configuration.get(ConfigOptions.ZOOKEEPER_SESSION_TIMEOUT).toMillis());
+        int sessionTimeout = Math.toIntExact(
+                configuration.get(ConfigOptions.ZOOKEEPER_SESSION_TIMEOUT).toMillis());
 
-        int connectionTimeout =
-                Math.toIntExact(
-                        configuration.get(ConfigOptions.ZOOKEEPER_CONNECTION_TIMEOUT).toMillis());
+        int connectionTimeout = Math.toIntExact(
+                configuration.get(ConfigOptions.ZOOKEEPER_CONNECTION_TIMEOUT).toMillis());
 
-        int retryWait =
-                Math.toIntExact(configuration.get(ConfigOptions.ZOOKEEPER_RETRY_WAIT).toMillis());
+        int retryWait = Math.toIntExact(
+                configuration.get(ConfigOptions.ZOOKEEPER_RETRY_WAIT).toMillis());
 
         int maxRetryAttempts = configuration.getInt(ConfigOptions.ZOOKEEPER_MAX_RETRY_ATTEMPTS);
 
@@ -85,27 +82,23 @@ public class ZooKeeperUtils {
 
         LOG.info("Using '{}' as Zookeeper root path to stores its entries.", root);
 
-        boolean ensembleTracking =
-                configuration.getBoolean(ConfigOptions.ZOOKEEPER_ENSEMBLE_TRACKING);
+        boolean ensembleTracking = configuration.getBoolean(ConfigOptions.ZOOKEEPER_ENSEMBLE_TRACKING);
 
-        final CuratorFrameworkFactory.Builder curatorFrameworkBuilder =
-                CuratorFrameworkFactory.builder()
-                        .connectString(zkQuorum)
-                        .sessionTimeoutMs(sessionTimeout)
-                        .connectionTimeoutMs(connectionTimeout)
-                        .retryPolicy(new ExponentialBackoffRetry(retryWait, maxRetryAttempts))
-                        // Curator prepends a '/' manually and throws an Exception if the
-                        // namespace starts with a '/'.
-                        .namespace(trimStartingSlash(root))
-                        .ensembleTracker(ensembleTracking);
+        final CuratorFrameworkFactory.Builder curatorFrameworkBuilder = CuratorFrameworkFactory.builder()
+                .connectString(zkQuorum)
+                .sessionTimeoutMs(sessionTimeout)
+                .connectionTimeoutMs(connectionTimeout)
+                .retryPolicy(new ExponentialBackoffRetry(retryWait, maxRetryAttempts))
+                // Curator prepends a '/' manually and throws an Exception if the
+                // namespace starts with a '/'.
+                .namespace(trimStartingSlash(root))
+                .ensembleTracker(ensembleTracking);
 
         if (configuration.get(ConfigOptions.ZOOKEEPER_TOLERATE_SUSPENDED_CONNECTIONS)) {
-            curatorFrameworkBuilder.connectionStateErrorPolicy(
-                    new SessionConnectionStateErrorPolicy());
+            curatorFrameworkBuilder.connectionStateErrorPolicy(new SessionConnectionStateErrorPolicy());
         }
 
-        Optional<String> configPath =
-                configuration.getOptional(ConfigOptions.ZOOKEEPER_CONFIG_PATH);
+        Optional<String> configPath = configuration.getOptional(ConfigOptions.ZOOKEEPER_CONFIG_PATH);
         if (configPath.isPresent()) {
             try {
                 ZKClientConfig zkClientConfig = new ZKClientConfig(configPath.get());
@@ -113,14 +106,10 @@ public class ZooKeeperUtils {
             } catch (QuorumPeerConfig.ConfigException e) {
                 LOG.warn("Fail to load zookeeper client config from path {}", configPath.get(), e);
                 throw new RuntimeException(
-                        String.format(
-                                "Fail to load zookeeper client config from path %s",
-                                configPath.get()),
-                        e);
+                        String.format("Fail to load zookeeper client config from path %s", configPath.get()), e);
             }
         }
-        return new ZooKeeperClient(
-                startZookeeperClient(curatorFrameworkBuilder, fatalErrorHandler));
+        return new ZooKeeperClient(startZookeeperClient(curatorFrameworkBuilder, fatalErrorHandler));
     }
 
     /**
@@ -136,17 +125,13 @@ public class ZooKeeperUtils {
     public static CuratorFrameworkWithUnhandledErrorListener startZookeeperClient(
             CuratorFrameworkFactory.Builder builder, FatalErrorHandler fatalErrorHandler) {
         CuratorFramework cf = builder.build();
-        UnhandledErrorListener unhandledErrorListener =
-                (message, throwable) -> {
-                    LOG.error(
-                            "Unhandled error in curator framework, error message: {}",
-                            message,
-                            throwable);
-                    // The exception thrown in UnhandledErrorListener will be caught by
-                    // CuratorFramework. So we mostly trigger exit process or interact with main
-                    // thread to inform the failure in FatalErrorHandler.
-                    fatalErrorHandler.onFatalError(throwable);
-                };
+        UnhandledErrorListener unhandledErrorListener = (message, throwable) -> {
+            LOG.error("Unhandled error in curator framework, error message: {}", message, throwable);
+            // The exception thrown in UnhandledErrorListener will be caught by
+            // CuratorFramework. So we mostly trigger exit process or interact with main
+            // thread to inform the failure in FatalErrorHandler.
+            fatalErrorHandler.onFatalError(throwable);
+        };
         cf.getUnhandledErrorListenable().addListener(unhandledErrorListener);
         cf.start();
         return new CuratorFrameworkWithUnhandledErrorListener(cf, unhandledErrorListener);
@@ -159,9 +144,7 @@ public class ZooKeeperUtils {
         zooKeeperClient
                 .getCuratorClient()
                 .getConnectionStateListenable()
-                .addListener(
-                        new ZookeeperClientSessionReInitListener(
-                                reInitSessionCallback, fatalErrorHandler));
+                .addListener(new ZookeeperClientSessionReInitListener(reInitSessionCallback, fatalErrorHandler));
     }
 
     private static class ZookeeperClientSessionReInitListener implements ConnectionStateListener {
@@ -170,14 +153,12 @@ public class ZooKeeperUtils {
         private volatile boolean sessionExpired = false;
 
         public ZookeeperClientSessionReInitListener(
-                ThrowingRunnable<Exception> reInitSessionCallback,
-                FatalErrorHandler fatalErrorHandler) {
+                ThrowingRunnable<Exception> reInitSessionCallback, FatalErrorHandler fatalErrorHandler) {
             this.reInitSessionCallback = reInitSessionCallback;
             this.fatalErrorHandler = fatalErrorHandler;
         }
 
-        public void stateChanged(
-                CuratorFramework curatorFramework, ConnectionState connectionState) {
+        public void stateChanged(CuratorFramework curatorFramework, ConnectionState connectionState) {
             switch (connectionState) {
                 case LOST:
                     sessionExpired = true;

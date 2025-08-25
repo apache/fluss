@@ -57,10 +57,7 @@ public class CommonTestUtils {
      *     condition was not met before timeout.
      */
     public static void waitUntil(
-            ThrowingSupplier<Boolean> condition,
-            Duration timeout,
-            Duration pause,
-            String errorMsg) {
+            ThrowingSupplier<Boolean> condition, Duration timeout, Duration pause, String errorMsg) {
         long timeoutMs = timeout.toMillis();
         if (timeoutMs <= 0) {
             throw new IllegalArgumentException("The timeout must be positive.");
@@ -94,8 +91,7 @@ public class CommonTestUtils {
      * @param errorMsg the error message to include in the <code>TimeoutException</code> if the
      *     condition was not met before timeout.
      */
-    public static void waitUntil(
-            ThrowingSupplier<Boolean> condition, Duration timeout, String errorMsg) {
+    public static void waitUntil(ThrowingSupplier<Boolean> condition, Duration timeout, String errorMsg) {
         waitUntil(condition, timeout, Duration.ofMillis(1), errorMsg);
     }
 
@@ -107,8 +103,7 @@ public class CommonTestUtils {
      * @param errorMsg Error message in the case that the value never appears
      * @return The unwrapped value returned by the function
      */
-    public static <T> T waitValue(
-            ThrowingSupplier<Optional<T>> supplier, Duration timeout, String errorMsg) {
+    public static <T> T waitValue(ThrowingSupplier<Optional<T>> supplier, Duration timeout, String errorMsg) {
         AtomicReference<T> result = new AtomicReference<>();
         waitUntil(
                 () -> {
@@ -186,8 +181,7 @@ public class CommonTestUtils {
                 Field theCaseInsensitiveEnvironmentField =
                         processEnvironmentClass.getDeclaredField("theCaseInsensitiveEnvironment");
                 theCaseInsensitiveEnvironmentField.setAccessible(true);
-                Map<String, String> cienv =
-                        (Map<String, String>) theCaseInsensitiveEnvironmentField.get(null);
+                Map<String, String> cienv = (Map<String, String>) theCaseInsensitiveEnvironmentField.get(null);
                 if (clearExisting) {
                     cienv.clear();
                 }
@@ -251,8 +245,7 @@ public class CommonTestUtils {
             writer.println("appender.console.type = CONSOLE");
             writer.println("appender.console.target = SYSTEM_OUT");
             writer.println("appender.console.layout.type = PatternLayout");
-            writer.println(
-                    "appender.console.layout.pattern = %d{HH:mm:ss,SSS} %-4r [%t] %-5p %c %x - %m%n");
+            writer.println("appender.console.layout.pattern = %d{HH:mm:ss,SSS} %-4r [%t] %-5p %c %x - %m%n");
             writer.println("logger.jetty.name = org.eclipse.jetty.util.log");
             writer.println("logger.jetty.level = OFF");
             writer.println("logger.zookeeper.name = org.apache.zookeeper");

@@ -35,28 +35,24 @@ class ProjectionTest {
         Projection projection = Projection.of(new int[] {2, 0, 3});
         assertThat(projection.getProjectionInOrder()).isEqualTo(new int[] {0, 2, 3});
 
-        RowType rowType =
-                projection.projectInOrder(
-                        DataTypes.ROW(
-                                DataTypes.FIELD("f0", DataTypes.INT()),
-                                DataTypes.FIELD("f1", DataTypes.BIGINT()),
-                                DataTypes.FIELD("f2", DataTypes.STRING()),
-                                DataTypes.FIELD("f3", DataTypes.DOUBLE())));
+        RowType rowType = projection.projectInOrder(DataTypes.ROW(
+                DataTypes.FIELD("f0", DataTypes.INT()),
+                DataTypes.FIELD("f1", DataTypes.BIGINT()),
+                DataTypes.FIELD("f2", DataTypes.STRING()),
+                DataTypes.FIELD("f3", DataTypes.DOUBLE())));
         assertThat(rowType)
-                .isEqualTo(
-                        DataTypes.ROW(
-                                DataTypes.FIELD("f0", DataTypes.INT()),
-                                DataTypes.FIELD("f2", DataTypes.STRING()),
-                                DataTypes.FIELD("f3", DataTypes.DOUBLE())));
+                .isEqualTo(DataTypes.ROW(
+                        DataTypes.FIELD("f0", DataTypes.INT()),
+                        DataTypes.FIELD("f2", DataTypes.STRING()),
+                        DataTypes.FIELD("f3", DataTypes.DOUBLE())));
 
         assertThat(projection.isReorderingNeeded()).isTrue();
         assertThat(projection.getReorderingIndexes()).isEqualTo(new int[] {1, 0, 2});
         assertThat(rowType.project(projection.getReorderingIndexes()))
-                .isEqualTo(
-                        DataTypes.ROW(
-                                DataTypes.FIELD("f2", DataTypes.STRING()),
-                                DataTypes.FIELD("f0", DataTypes.INT()),
-                                DataTypes.FIELD("f3", DataTypes.DOUBLE())));
+                .isEqualTo(DataTypes.ROW(
+                        DataTypes.FIELD("f2", DataTypes.STRING()),
+                        DataTypes.FIELD("f0", DataTypes.INT()),
+                        DataTypes.FIELD("f3", DataTypes.DOUBLE())));
 
         GenericRow row = GenericRow.of(0, 1L, BinaryString.fromString("2"), 3.0d);
         ProjectedRow p1 = ProjectedRow.from(projection.getProjectionInOrder());

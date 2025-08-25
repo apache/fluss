@@ -39,9 +39,7 @@ class ServerBaseConfigurationParserFactoryTest {
         final String value = "value";
         final String arg1 = "arg1";
         final String arg2 = "arg2";
-        final String[] args = {
-            "--configDir", configDir, String.format("-D%s=%s", key, value), arg1, arg2
-        };
+        final String[] args = {"--configDir", configDir, String.format("-D%s=%s", key, value), arg1, arg2};
 
         final ServerConfiguration serverConfiguration = commandLineParser.parse(args);
 
@@ -67,7 +65,6 @@ class ServerBaseConfigurationParserFactoryTest {
     void testMissingRequiredArgument() {
         final String[] args = {};
 
-        assertThatThrownBy(() -> commandLineParser.parse(args))
-                .isInstanceOf(FlussParseException.class);
+        assertThatThrownBy(() -> commandLineParser.parse(args)).isInstanceOf(FlussParseException.class);
     }
 }

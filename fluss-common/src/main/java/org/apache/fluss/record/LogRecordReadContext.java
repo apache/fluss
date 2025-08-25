@@ -48,9 +48,11 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
     // the static schemaId of the table, should support dynamic schema evolution in the future
     private final int schemaId;
     // the Arrow vector schema root of the table, should be null if not ARROW log format
-    @Nullable private final VectorSchemaRoot vectorSchemaRoot;
+    @Nullable
+    private final VectorSchemaRoot vectorSchemaRoot;
     // the Arrow memory buffer allocator for the table, should be null if not ARROW log format
-    @Nullable private final BufferAllocator bufferAllocator;
+    @Nullable
+    private final BufferAllocator bufferAllocator;
     // the final selected fields of the read data
     private final FieldGetter[] selectedFieldGetters;
     // whether the projection is push downed to the server side and the returned data is pruned.
@@ -68,7 +70,8 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         int schemaId = tableInfo.getSchemaId();
         if (projection == null) {
             // set a default dummy projection to simplify code
-            projection = Projection.of(IntStream.range(0, rowType.getFieldCount()).toArray());
+            projection =
+                    Projection.of(IntStream.range(0, rowType.getFieldCount()).toArray());
         }
 
         if (logFormat == LogFormat.ARROW) {
@@ -82,8 +85,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
                 RowType projectedRowType = projection.projectInOrder(rowType);
                 // need to reorder the fields for final output
                 int[] selectedFields = projection.getReorderingIndexes();
-                return createArrowReadContext(
-                        projectedRowType, schemaId, selectedFields, projectionPushDowned);
+                return createArrowReadContext(projectedRowType, schemaId, selectedFields, projectionPushDowned);
             }
         } else if (logFormat == LogFormat.INDEXED) {
             int[] selectedFields = projection.getProjection();
@@ -97,17 +99,10 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
             RowType dataRowType, int schemaId, int[] selectedFields, boolean projectionPushDowned) {
         // TODO: use a more reasonable memory limit
         BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-        VectorSchemaRoot vectorRoot =
-                VectorSchemaRoot.create(ArrowUtils.toArrowSchema(dataRowType), allocator);
+        VectorSchemaRoot vectorRoot = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(dataRowType), allocator);
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(dataRowType, selectedFields);
         return new LogRecordReadContext(
-                LogFormat.ARROW,
-                dataRowType,
-                schemaId,
-                vectorRoot,
-                allocator,
-                fieldGetters,
-                projectionPushDowned);
+                LogFormat.ARROW, dataRowType, schemaId, vectorRoot, allocator, fieldGetters, projectionPushDowned);
     }
 
     /**
@@ -141,12 +136,10 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
      * @param schemaId the schemaId of the table
      * @param selectedFields the final selected fields of the read data
      */
-    public static LogRecordReadContext createIndexedReadContext(
-            RowType rowType, int schemaId, int[] selectedFields) {
+    public static LogRecordReadContext createIndexedReadContext(RowType rowType, int schemaId, int[] selectedFields) {
         FieldGetter[] fieldGetters = buildProjectedFieldGetters(rowType, selectedFields);
         // for INDEXED log format, the projection is NEVER push downed to the server side
-        return new LogRecordReadContext(
-                LogFormat.INDEXED, rowType, schemaId, null, null, fieldGetters, false);
+        return new LogRecordReadContext(LogFormat.INDEXED, rowType, schemaId, null, null, fieldGetters, false);
     }
 
     private LogRecordReadContext(
@@ -199,8 +192,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
                 schemaId,
                 this.schemaId);
         if (logFormat != LogFormat.ARROW) {
-            throw new IllegalArgumentException(
-                    "Only Arrow log format provides vector schema root.");
+            throw new IllegalArgumentException("Only Arrow log format provides vector schema root.");
         }
         checkNotNull(vectorSchemaRoot, "The vector schema root is not available.");
         return vectorSchemaRoot;
@@ -228,9 +220,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
         List<DataType> dataTypeList = rowType.getChildren();
         FieldGetter[] fieldGetters = new FieldGetter[selectedFields.length];
         for (int i = 0; i < fieldGetters.length; i++) {
-            fieldGetters[i] =
-                    InternalRow.createFieldGetter(
-                            dataTypeList.get(selectedFields[i]), selectedFields[i]);
+            fieldGetters[i] = InternalRow.createFieldGetter(dataTypeList.get(selectedFields[i]), selectedFields[i]);
         }
         return fieldGetters;
     }

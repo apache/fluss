@@ -47,8 +47,7 @@ public class StructuredOptionsSplitterEscapeTest {
     @MethodSource("parameters")
     void testEscapeWithSingleQuote(TestSpec testSpec) {
         String encoded =
-                StructuredOptionsSplitter.escapeWithSingleQuote(
-                        testSpec.getString(), testSpec.getEscapeChars());
+                StructuredOptionsSplitter.escapeWithSingleQuote(testSpec.getString(), testSpec.getEscapeChars());
         assertThat(encoded).isEqualTo(testSpec.getEncodedString());
     }
 

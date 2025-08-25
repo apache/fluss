@@ -44,8 +44,7 @@ public class S3FileSystem extends HadoopFileSystem {
      *
      * @param hadoopS3FileSystem The Hadoop FileSystem that will be used under the hood.
      */
-    public S3FileSystem(
-            String scheme, org.apache.hadoop.fs.FileSystem hadoopS3FileSystem, Configuration conf) {
+    public S3FileSystem(String scheme, org.apache.hadoop.fs.FileSystem hadoopS3FileSystem, Configuration conf) {
         super(hadoopS3FileSystem);
         this.scheme = scheme;
         this.conf = conf;

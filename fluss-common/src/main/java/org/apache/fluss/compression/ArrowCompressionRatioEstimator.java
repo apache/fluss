@@ -54,11 +54,9 @@ public class ArrowCompressionRatioEstimator {
         // it is possible it can't guarantee atomic and isolation update,
         // but it's fine as it's just an estimation
         if (observedRatio > currentEstimation) {
-            compressionRatio =
-                    Math.max(currentEstimation + COMPRESSION_RATIO_DETERIORATE_STEP, observedRatio);
+            compressionRatio = Math.max(currentEstimation + COMPRESSION_RATIO_DETERIORATE_STEP, observedRatio);
         } else if (observedRatio < currentEstimation) {
-            compressionRatio =
-                    Math.max(currentEstimation - COMPRESSION_RATIO_IMPROVING_STEP, observedRatio);
+            compressionRatio = Math.max(currentEstimation - COMPRESSION_RATIO_IMPROVING_STEP, observedRatio);
         }
     }
 

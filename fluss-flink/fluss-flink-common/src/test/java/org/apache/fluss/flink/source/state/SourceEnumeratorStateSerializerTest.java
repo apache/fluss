@@ -36,8 +36,7 @@ class SourceEnumeratorStateSerializerTest {
 
     @Test
     void testPendingSplitsCheckpointSerde() throws Exception {
-        FlussSourceEnumeratorStateSerializer serializer =
-                FlussSourceEnumeratorStateSerializer.INSTANCE;
+        FlussSourceEnumeratorStateSerializer serializer = FlussSourceEnumeratorStateSerializer.INSTANCE;
 
         Set<TableBucket> assignedBuckets =
                 new HashSet<>(Arrays.asList(new TableBucket(1, 0), new TableBucket(1, 4L, 1)));
@@ -45,8 +44,7 @@ class SourceEnumeratorStateSerializerTest {
         assignedPartitions.put(1L, "partition1");
         assignedPartitions.put(2L, "partition2");
 
-        SourceEnumeratorState sourceEnumeratorState =
-                new SourceEnumeratorState(assignedBuckets, assignedPartitions);
+        SourceEnumeratorState sourceEnumeratorState = new SourceEnumeratorState(assignedBuckets, assignedPartitions);
 
         // serialize assigned buckets
         byte[] serialized = serializer.serialize(sourceEnumeratorState);

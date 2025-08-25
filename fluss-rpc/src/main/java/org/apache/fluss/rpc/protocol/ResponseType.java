@@ -34,8 +34,7 @@ public enum ResponseType {
     SERVER_FAILURE(2);
 
     private static final Map<Integer, ResponseType> ID_TO_TYPE =
-            Arrays.stream(ResponseType.values())
-                    .collect(Collectors.toMap(type -> (int) type.id, Function.identity()));
+            Arrays.stream(ResponseType.values()).collect(Collectors.toMap(type -> (int) type.id, Function.identity()));
 
     public final byte id;
 

@@ -85,29 +85,25 @@ public class CoordinatorRequestBatch {
             TableDescriptor.builder().schema(EMPTY_SCHEMA).distributedBy(0).build();
 
     // a map from tablet server to notify the leader and isr for each bucket.
-    private final Map<Integer, Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>>
-            notifyLeaderAndIsrRequestMap = new HashMap<>();
-    // a map from tablet server to stop replica for each bucket.
-    private final Map<Integer, Map<TableBucket, PbStopReplicaReqForBucket>> stopReplicaRequestMap =
+    private final Map<Integer, Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>> notifyLeaderAndIsrRequestMap =
             new HashMap<>();
+    // a map from tablet server to stop replica for each bucket.
+    private final Map<Integer, Map<TableBucket, PbStopReplicaReqForBucket>> stopReplicaRequestMap = new HashMap<>();
 
     // a set of tabletServers to send update metadata request.
     private final Set<Integer> updateMetadataRequestTabletServerSet = new HashSet<>();
     // a map from tableId to bucket metadata to update.
     private final Map<Long, List<BucketMetadata>> updateMetadataRequestBucketMap = new HashMap<>();
     // a map from tableId to (a map from partitionId to bucket metadata) to update.
-    private final Map<Long, Map<Long, List<BucketMetadata>>> updateMetadataRequestPartitionMap =
-            new HashMap<>();
+    private final Map<Long, Map<Long, List<BucketMetadata>>> updateMetadataRequestPartitionMap = new HashMap<>();
 
     // a map from tablet server to notify remote log offsets request.
-    private final Map<Integer, NotifyRemoteLogOffsetsRequest> notifyRemoteLogOffsetsRequestMap =
-            new HashMap<>();
+    private final Map<Integer, NotifyRemoteLogOffsetsRequest> notifyRemoteLogOffsetsRequestMap = new HashMap<>();
     // a map from tablet server to notify kv snapshot offset request.
-    private final Map<Integer, NotifyKvSnapshotOffsetRequest> notifyKvSnapshotOffsetRequestMap =
-            new HashMap<>();
+    private final Map<Integer, NotifyKvSnapshotOffsetRequest> notifyKvSnapshotOffsetRequestMap = new HashMap<>();
 
-    private final Map<Integer, Map<TableBucket, PbNotifyLakeTableOffsetReqForBucket>>
-            notifyLakeTableOffsetRequestMap = new HashMap<>();
+    private final Map<Integer, Map<TableBucket, PbNotifyLakeTableOffsetReqForBucket>> notifyLakeTableOffsetRequestMap =
+            new HashMap<>();
 
     private final CoordinatorChannelManager coordinatorChannelManager;
     private final EventManager eventManager;
@@ -124,41 +120,36 @@ public class CoordinatorRequestBatch {
 
     public void newBatch() {
         if (!notifyLeaderAndIsrRequestMap.isEmpty()) {
-            throw new IllegalStateException(
-                    String.format(
-                            "The NotifyLeaderAndIsr batch request from coordinator to tablet server is not empty while creating "
-                                    + "a new one. Some NotifyLeaderAndIsr request in %s might be lost.",
-                            notifyLeaderAndIsrRequestMap));
+            throw new IllegalStateException(String.format(
+                    "The NotifyLeaderAndIsr batch request from coordinator to tablet server is not empty while creating "
+                            + "a new one. Some NotifyLeaderAndIsr request in %s might be lost.",
+                    notifyLeaderAndIsrRequestMap));
         }
         if (!stopReplicaRequestMap.isEmpty()) {
-            throw new IllegalStateException(
-                    String.format(
-                            "The StopReplica batch request from coordinator to tablet server is not empty while creating "
-                                    + "a new one. Some StopReplica request in %s might be lost.",
-                            stopReplicaRequestMap));
+            throw new IllegalStateException(String.format(
+                    "The StopReplica batch request from coordinator to tablet server is not empty while creating "
+                            + "a new one. Some StopReplica request in %s might be lost.",
+                    stopReplicaRequestMap));
         }
         if (!updateMetadataRequestTabletServerSet.isEmpty()) {
-            throw new IllegalStateException(
-                    String.format(
-                            "The UpdateMetadata request from coordinator to tablet server is not empty while creating "
-                                    + "a new one. Some UpdateMetadata request in %s might be lost.",
-                            updateMetadataRequestTabletServerSet));
+            throw new IllegalStateException(String.format(
+                    "The UpdateMetadata request from coordinator to tablet server is not empty while creating "
+                            + "a new one. Some UpdateMetadata request in %s might be lost.",
+                    updateMetadataRequestTabletServerSet));
         }
 
         if (!notifyRemoteLogOffsetsRequestMap.isEmpty()) {
-            throw new IllegalStateException(
-                    String.format(
-                            "The DeleteLogSegments request from coordinator to tablet server is not empty while creating "
-                                    + "a new one. Some DeleteLogSegments request in %s might be lost.",
-                            notifyRemoteLogOffsetsRequestMap));
+            throw new IllegalStateException(String.format(
+                    "The DeleteLogSegments request from coordinator to tablet server is not empty while creating "
+                            + "a new one. Some DeleteLogSegments request in %s might be lost.",
+                    notifyRemoteLogOffsetsRequestMap));
         }
 
         if (!notifyLakeTableOffsetRequestMap.isEmpty()) {
-            throw new IllegalStateException(
-                    String.format(
-                            "The NotifyLakeTableOffset request from coordinator to tablet server is not empty while creating "
-                                    + "a new one. Some NotifyLakeTableOffset request in %s might be lost.",
-                            notifyLakeTableOffsetRequestMap));
+            throw new IllegalStateException(String.format(
+                    "The NotifyLakeTableOffset request from coordinator to tablet server is not empty while creating "
+                            + "a new one. Some NotifyLakeTableOffset request in %s might be lost.",
+                    notifyLakeTableOffsetRequestMap));
         }
     }
 
@@ -210,54 +201,33 @@ public class CoordinatorRequestBatch {
             TableBucket tableBucket,
             List<Integer> bucketReplicas,
             LeaderAndIsr leaderAndIsr) {
-        tabletServers.stream()
-                .filter(s -> s >= 0)
-                .forEach(
-                        id -> {
-                            Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>
-                                    notifyBucketLeaderAndIsr =
-                                            notifyLeaderAndIsrRequestMap.computeIfAbsent(
-                                                    id, k -> new HashMap<>());
-                            PbNotifyLeaderAndIsrReqForBucket notifyLeaderAndIsrForBucket =
-                                    makeNotifyBucketLeaderAndIsr(
-                                            new NotifyLeaderAndIsrData(
-                                                    tablePath,
-                                                    tableBucket,
-                                                    bucketReplicas,
-                                                    leaderAndIsr));
-                            notifyBucketLeaderAndIsr.put(tableBucket, notifyLeaderAndIsrForBucket);
-                        });
+        tabletServers.stream().filter(s -> s >= 0).forEach(id -> {
+            Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket> notifyBucketLeaderAndIsr =
+                    notifyLeaderAndIsrRequestMap.computeIfAbsent(id, k -> new HashMap<>());
+            PbNotifyLeaderAndIsrReqForBucket notifyLeaderAndIsrForBucket = makeNotifyBucketLeaderAndIsr(
+                    new NotifyLeaderAndIsrData(tablePath, tableBucket, bucketReplicas, leaderAndIsr));
+            notifyBucketLeaderAndIsr.put(tableBucket, notifyLeaderAndIsrForBucket);
+        });
 
         // TODO for these cases, we can send NotifyLeaderAndIsrRequest instead of another
         // updateMetadata request, trace by: https://github.com/apache/fluss/issues/983
         addUpdateMetadataRequestForTabletServers(
-                coordinatorContext.getLiveTabletServers().keySet(),
-                null,
-                null,
-                Collections.singleton(tableBucket));
+                coordinatorContext.getLiveTabletServers().keySet(), null, null, Collections.singleton(tableBucket));
     }
 
     public void addStopReplicaRequestForTabletServers(
-            Set<Integer> tabletServers,
-            TableBucket tableBucket,
-            boolean isDelete,
-            int leaderEpoch) {
-        tabletServers.stream()
-                .filter(s -> s >= 0)
-                .forEach(
-                        id -> {
-                            Map<TableBucket, PbStopReplicaReqForBucket> stopBucketReplica =
-                                    stopReplicaRequestMap.computeIfAbsent(id, k -> new HashMap<>());
-                            // reduce delete flag, if it has been marked as deleted,
-                            // we will set it as delete replica
-                            boolean alreadyDelete =
-                                    stopBucketReplica.get(tableBucket) != null
-                                            && stopBucketReplica.get(tableBucket).isDelete();
-                            PbStopReplicaReqForBucket protoStopReplicaForBucket =
-                                    makeStopBucketReplica(
-                                            tableBucket, alreadyDelete || isDelete, leaderEpoch);
-                            stopBucketReplica.put(tableBucket, protoStopReplicaForBucket);
-                        });
+            Set<Integer> tabletServers, TableBucket tableBucket, boolean isDelete, int leaderEpoch) {
+        tabletServers.stream().filter(s -> s >= 0).forEach(id -> {
+            Map<TableBucket, PbStopReplicaReqForBucket> stopBucketReplica =
+                    stopReplicaRequestMap.computeIfAbsent(id, k -> new HashMap<>());
+            // reduce delete flag, if it has been marked as deleted,
+            // we will set it as delete replica
+            boolean alreadyDelete = stopBucketReplica.get(tableBucket) != null
+                    && stopBucketReplica.get(tableBucket).isDelete();
+            PbStopReplicaReqForBucket protoStopReplicaForBucket =
+                    makeStopBucketReplica(tableBucket, alreadyDelete || isDelete, leaderEpoch);
+            stopBucketReplica.put(tableBucket, protoStopReplicaForBucket);
+        });
     }
 
     /**
@@ -287,9 +257,7 @@ public class CoordinatorRequestBatch {
             @Nullable Long partitionId,
             Set<TableBucket> tableBuckets) {
         // case9:
-        tabletServers.stream()
-                .filter(s -> s >= 0)
-                .forEach(updateMetadataRequestTabletServerSet::add);
+        tabletServers.stream().filter(s -> s >= 0).forEach(updateMetadataRequestTabletServerSet::add);
 
         if (tableId != null) {
             if (partitionId != null) {
@@ -306,34 +274,26 @@ public class CoordinatorRequestBatch {
             for (TableBucket tableBucket : tableBuckets) {
                 long currentTableId = tableBucket.getTableId();
                 Long currentPartitionId = tableBucket.getPartitionId();
-                Optional<LeaderAndIsr> bucketLeaderAndIsr =
-                        coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+                Optional<LeaderAndIsr> bucketLeaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket);
                 Integer leaderEpoch =
                         bucketLeaderAndIsr.map(LeaderAndIsr::leaderEpoch).orElse(null);
                 Integer leader = bucketLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
                 if (currentPartitionId == null) {
-                    Map<Integer, List<Integer>> tableAssignment =
-                            coordinatorContext.getTableAssignment(currentTableId);
-                    BucketMetadata bucketMetadata =
-                            new BucketMetadata(
-                                    tableBucket.getBucket(),
-                                    leader,
-                                    leaderEpoch,
-                                    tableAssignment.get(tableBucket.getBucket()));
+                    Map<Integer, List<Integer>> tableAssignment = coordinatorContext.getTableAssignment(currentTableId);
+                    BucketMetadata bucketMetadata = new BucketMetadata(
+                            tableBucket.getBucket(), leader, leaderEpoch, tableAssignment.get(tableBucket.getBucket()));
                     updateMetadataRequestBucketMap
                             .computeIfAbsent(currentTableId, k -> new ArrayList<>())
                             .add(bucketMetadata);
                 } else {
-                    TablePartition tablePartition =
-                            new TablePartition(currentTableId, currentPartitionId);
+                    TablePartition tablePartition = new TablePartition(currentTableId, currentPartitionId);
                     Map<Integer, List<Integer>> partitionAssignment =
                             coordinatorContext.getPartitionAssignment(tablePartition);
-                    BucketMetadata bucketMetadata =
-                            new BucketMetadata(
-                                    tableBucket.getBucket(),
-                                    leader,
-                                    leaderEpoch,
-                                    partitionAssignment.get(tableBucket.getBucket()));
+                    BucketMetadata bucketMetadata = new BucketMetadata(
+                            tableBucket.getBucket(),
+                            leader,
+                            leaderEpoch,
+                            partitionAssignment.get(tableBucket.getBucket()));
                     updateMetadataRequestPartitionMap
                             .computeIfAbsent(currentTableId, k -> new HashMap<>())
                             .computeIfAbsent(tableBucket.getPartitionId(), k -> new ArrayList<>())
@@ -344,66 +304,41 @@ public class CoordinatorRequestBatch {
     }
 
     public void addNotifyRemoteLogOffsetsRequestForTabletServers(
-            List<Integer> tabletServers,
-            TableBucket tableBucket,
-            long remoteLogStartOffset,
-            long remoteLogEndOffset) {
+            List<Integer> tabletServers, TableBucket tableBucket, long remoteLogStartOffset, long remoteLogEndOffset) {
         tabletServers.stream()
                 .filter(s -> s >= 0)
-                .forEach(
-                        id ->
-                                notifyRemoteLogOffsetsRequestMap.put(
-                                        id,
-                                        makeNotifyRemoteLogOffsetsRequest(
-                                                tableBucket,
-                                                remoteLogStartOffset,
-                                                remoteLogEndOffset)));
+                .forEach(id -> notifyRemoteLogOffsetsRequestMap.put(
+                        id, makeNotifyRemoteLogOffsetsRequest(tableBucket, remoteLogStartOffset, remoteLogEndOffset)));
     }
 
     public void addNotifyKvSnapshotOffsetRequestForTabletServers(
             List<Integer> tabletServers, TableBucket tableBucket, long minRetainOffset) {
         tabletServers.stream()
                 .filter(s -> s >= 0)
-                .forEach(
-                        id ->
-                                notifyKvSnapshotOffsetRequestMap.put(
-                                        id,
-                                        makeNotifyKvSnapshotOffsetRequest(
-                                                tableBucket, minRetainOffset)));
+                .forEach(id -> notifyKvSnapshotOffsetRequestMap.put(
+                        id, makeNotifyKvSnapshotOffsetRequest(tableBucket, minRetainOffset)));
     }
 
     public void addNotifyLakeTableOffsetRequestForTableServers(
-            List<Integer> tabletServers,
-            TableBucket tableBucket,
-            LakeTableSnapshot lakeTableSnapshot) {
-        tabletServers.stream()
-                .filter(s -> s >= 0)
-                .forEach(
-                        id -> {
-                            Map<TableBucket, PbNotifyLakeTableOffsetReqForBucket>
-                                    notifyLakeTableOffsetReqForBucketMap =
-                                            notifyLakeTableOffsetRequestMap.computeIfAbsent(
-                                                    id, k -> new HashMap<>());
-                            notifyLakeTableOffsetReqForBucketMap.put(
-                                    tableBucket,
-                                    makeNotifyLakeTableOffsetForBucket(
-                                            tableBucket, lakeTableSnapshot));
-                        });
+            List<Integer> tabletServers, TableBucket tableBucket, LakeTableSnapshot lakeTableSnapshot) {
+        tabletServers.stream().filter(s -> s >= 0).forEach(id -> {
+            Map<TableBucket, PbNotifyLakeTableOffsetReqForBucket> notifyLakeTableOffsetReqForBucketMap =
+                    notifyLakeTableOffsetRequestMap.computeIfAbsent(id, k -> new HashMap<>());
+            notifyLakeTableOffsetReqForBucketMap.put(
+                    tableBucket, makeNotifyLakeTableOffsetForBucket(tableBucket, lakeTableSnapshot));
+        });
     }
 
     private void sendNotifyLeaderAndIsrRequest(int coordinatorEpoch) {
-        for (Map.Entry<Integer, Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>>
-                notifyRequestEntry : notifyLeaderAndIsrRequestMap.entrySet()) {
+        for (Map.Entry<Integer, Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>> notifyRequestEntry :
+                notifyLeaderAndIsrRequestMap.entrySet()) {
             // send request for each tablet server
             Integer serverId = notifyRequestEntry.getKey();
-            NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest =
-                    makeNotifyLeaderAndIsrRequest(
-                            coordinatorEpoch, notifyRequestEntry.getValue().values());
+            NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest = makeNotifyLeaderAndIsrRequest(
+                    coordinatorEpoch, notifyRequestEntry.getValue().values());
 
             coordinatorChannelManager.sendBucketLeaderAndIsrRequest(
-                    serverId,
-                    notifyLeaderAndIsrRequest,
-                    (response, throwable) -> {
+                    serverId, notifyLeaderAndIsrRequest, (response, throwable) -> {
                         if (throwable != null) {
                             LOG.warn(
                                     "Failed to send notify leader and isr request to tablet server {}.",
@@ -418,9 +353,8 @@ public class CoordinatorRequestBatch {
                             return;
                         }
                         // put the response receive event into the event manager
-                        eventManager.put(
-                                new NotifyLeaderAndIsrResponseReceivedEvent(
-                                        getNotifyLeaderAndIsrResponseData(response), serverId));
+                        eventManager.put(new NotifyLeaderAndIsrResponseReceivedEvent(
+                                getNotifyLeaderAndIsrResponseData(response), serverId));
                     });
         }
         notifyLeaderAndIsrRequestMap.clear();
@@ -435,42 +369,30 @@ public class CoordinatorRequestBatch {
             // construct the stop replica request
             Map<TableBucket, PbStopReplicaReqForBucket> stopReplicas = stopReplciaEntry.getValue();
             StopReplicaRequest stopReplicaRequest = new StopReplicaRequest();
-            stopReplicaRequest
-                    .setCoordinatorEpoch(coordinatorEpoch)
-                    .addAllStopReplicasReqs(stopReplicas.values());
+            stopReplicaRequest.setCoordinatorEpoch(coordinatorEpoch).addAllStopReplicasReqs(stopReplicas.values());
 
             // we collect the buckets whose replica is to be deleted
-            Set<TableBucket> deletedReplicaBuckets =
-                    stopReplicas.values().stream()
-                            .filter(PbStopReplicaReqForBucket::isDelete)
-                            .map(t -> toTableBucket(t.getTableBucket()))
-                            .collect(Collectors.toSet());
+            Set<TableBucket> deletedReplicaBuckets = stopReplicas.values().stream()
+                    .filter(PbStopReplicaReqForBucket::isDelete)
+                    .map(t -> toTableBucket(t.getTableBucket()))
+                    .collect(Collectors.toSet());
 
             coordinatorChannelManager.sendStopBucketReplicaRequest(
-                    serverId,
-                    stopReplicaRequest,
-                    (response, throwable) -> {
+                    serverId, stopReplicaRequest, (response, throwable) -> {
                         if (throwable != null) {
                             // todo: in FLUSS-55886145, we will introduce a sender thread to send
                             // the request.
                             // in here, we just ignore the error.
-                            LOG.warn(
-                                    "Failed to send stop replica request to tablet server {}.",
-                                    serverId,
-                                    throwable);
+                            LOG.warn("Failed to send stop replica request to tablet server {}.", serverId, throwable);
                             return;
                         }
                         // handle the response
-                        List<DeleteReplicaResultForBucket> deleteReplicaResultForBuckets =
-                                new ArrayList<>();
-                        List<PbStopReplicaRespForBucket> stopReplicasResps =
-                                response.getStopReplicasRespsList();
+                        List<DeleteReplicaResultForBucket> deleteReplicaResultForBuckets = new ArrayList<>();
+                        List<PbStopReplicaRespForBucket> stopReplicasResps = response.getStopReplicasRespsList();
                         // construct the result for stop replica
                         // for each replica
-                        for (PbStopReplicaRespForBucket stopReplicaRespForBucket :
-                                stopReplicasResps) {
-                            TableBucket tableBucket =
-                                    toTableBucket(stopReplicaRespForBucket.getTableBucket());
+                        for (PbStopReplicaRespForBucket stopReplicaRespForBucket : stopReplicasResps) {
+                            TableBucket tableBucket = toTableBucket(stopReplicaRespForBucket.getTableBucket());
 
                             // now, for stop replica(delete=false), it's best effort without any
                             // error handling.
@@ -493,16 +415,13 @@ public class CoordinatorRequestBatch {
                             // filter out the  error response for replica deletion.
                             if (deletedReplicaBuckets.contains(tableBucket)) {
                                 DeleteReplicaResultForBucket deleteReplicaResultForBucket;
-                                TableBucketReplica tableBucketReplica =
-                                        new TableBucketReplica(tableBucket, serverId);
+                                TableBucketReplica tableBucketReplica = new TableBucketReplica(tableBucket, serverId);
                                 // if fail;
                                 if (stopReplicaRespForBucket.hasErrorCode()) {
-                                    deleteReplicaResultForBucket =
-                                            new DeleteReplicaResultForBucket(
-                                                    tableBucketReplica.getTableBucket(),
-                                                    serverId,
-                                                    ApiError.fromErrorMessage(
-                                                            stopReplicaRespForBucket));
+                                    deleteReplicaResultForBucket = new DeleteReplicaResultForBucket(
+                                            tableBucketReplica.getTableBucket(),
+                                            serverId,
+                                            ApiError.fromErrorMessage(stopReplicaRespForBucket));
                                 } else {
                                     deleteReplicaResultForBucket =
                                             new DeleteReplicaResultForBucket(tableBucket, serverId);
@@ -514,8 +433,7 @@ public class CoordinatorRequestBatch {
                         // the DeleteReplicaResponseReceivedEvent and put into event manager
                         if (!deleteReplicaResultForBuckets.isEmpty()) {
                             DeleteReplicaResponseReceivedEvent deleteReplicaResponseReceivedEvent =
-                                    new DeleteReplicaResponseReceivedEvent(
-                                            deleteReplicaResultForBuckets);
+                                    new DeleteReplicaResponseReceivedEvent(deleteReplicaResultForBuckets);
                             eventManager.put(deleteReplicaResponseReceivedEvent);
                         }
                     });
@@ -528,9 +446,7 @@ public class CoordinatorRequestBatch {
         UpdateMetadataRequest updateMetadataRequest = buildUpdateMetadataRequest();
         for (Integer serverId : updateMetadataRequestTabletServerSet) {
             coordinatorChannelManager.sendUpdateMetadataRequest(
-                    serverId,
-                    updateMetadataRequest,
-                    (response, throwable) -> {
+                    serverId, updateMetadataRequest, (response, throwable) -> {
                         if (throwable != null) {
                             LOG.debug("Failed to send update metadata request.", throwable);
                         } else {
@@ -547,16 +463,12 @@ public class CoordinatorRequestBatch {
         for (Map.Entry<Integer, NotifyRemoteLogOffsetsRequest> notifyRemoteLogOffsetsRequestEntry :
                 notifyRemoteLogOffsetsRequestMap.entrySet()) {
             Integer serverId = notifyRemoteLogOffsetsRequestEntry.getKey();
-            NotifyRemoteLogOffsetsRequest notifyRemoteLogOffsetsRequest =
-                    notifyRemoteLogOffsetsRequestEntry.getValue();
+            NotifyRemoteLogOffsetsRequest notifyRemoteLogOffsetsRequest = notifyRemoteLogOffsetsRequestEntry.getValue();
             notifyRemoteLogOffsetsRequest.setCoordinatorEpoch(coordinatorEpoch);
             coordinatorChannelManager.sendNotifyRemoteLogOffsetsRequest(
-                    serverId,
-                    notifyRemoteLogOffsetsRequest,
-                    (response, throwable) -> {
+                    serverId, notifyRemoteLogOffsetsRequest, (response, throwable) -> {
                         if (throwable != null) {
-                            LOG.warn(
-                                    "Failed to send notify remote log offsets request.", throwable);
+                            LOG.warn("Failed to send notify remote log offsets request.", throwable);
                         } else {
                             LOG.debug("Notify remote log offsets for server {} success.", serverId);
                         }
@@ -569,13 +481,10 @@ public class CoordinatorRequestBatch {
         for (Map.Entry<Integer, NotifyKvSnapshotOffsetRequest> notifySnapshotOffsetRequestEntry :
                 notifyKvSnapshotOffsetRequestMap.entrySet()) {
             Integer serverId = notifySnapshotOffsetRequestEntry.getKey();
-            NotifyKvSnapshotOffsetRequest notifySnapshotOffsetRequest =
-                    notifySnapshotOffsetRequestEntry.getValue();
+            NotifyKvSnapshotOffsetRequest notifySnapshotOffsetRequest = notifySnapshotOffsetRequestEntry.getValue();
             notifySnapshotOffsetRequest.setCoordinatorEpoch(coordinatorEpoch);
             coordinatorChannelManager.sendNotifyKvSnapshotOffsetRequest(
-                    serverId,
-                    notifySnapshotOffsetRequest,
-                    (response, throwable) -> {
+                    serverId, notifySnapshotOffsetRequest, (response, throwable) -> {
                         if (throwable != null) {
                             LOG.warn("Failed to send notify snapshot offset request.", throwable);
                         } else {
@@ -587,21 +496,18 @@ public class CoordinatorRequestBatch {
     }
 
     public void sendNotifyLakeTableOffsetRequest(int coordinatorEpoch) {
-        for (Map.Entry<Integer, Map<TableBucket, PbNotifyLakeTableOffsetReqForBucket>>
-                notifyLakeTableOffsetEntry : notifyLakeTableOffsetRequestMap.entrySet()) {
+        for (Map.Entry<Integer, Map<TableBucket, PbNotifyLakeTableOffsetReqForBucket>> notifyLakeTableOffsetEntry :
+                notifyLakeTableOffsetRequestMap.entrySet()) {
             Integer serverId = notifyLakeTableOffsetEntry.getKey();
             Map<TableBucket, PbNotifyLakeTableOffsetReqForBucket> notifyLogOffsets =
                     notifyLakeTableOffsetEntry.getValue();
 
-            NotifyLakeTableOffsetRequest notifyLakeTableOffsetRequest =
-                    new NotifyLakeTableOffsetRequest()
-                            .setCoordinatorEpoch(coordinatorEpoch)
-                            .addAllNotifyBucketsReqs(notifyLogOffsets.values());
+            NotifyLakeTableOffsetRequest notifyLakeTableOffsetRequest = new NotifyLakeTableOffsetRequest()
+                    .setCoordinatorEpoch(coordinatorEpoch)
+                    .addAllNotifyBucketsReqs(notifyLogOffsets.values());
 
             coordinatorChannelManager.sendNotifyLakeTableOffsetRequest(
-                    serverId,
-                    notifyLakeTableOffsetRequest,
-                    (response, throwable) -> {
+                    serverId, notifyLakeTableOffsetRequest, (response, throwable) -> {
                         if (throwable != null) {
                             LOG.warn("Failed to send notify lake table offset.", throwable);
                         } else {
@@ -614,57 +520,44 @@ public class CoordinatorRequestBatch {
 
     private UpdateMetadataRequest buildUpdateMetadataRequest() {
         List<TableMetadata> tableMetadataList = new ArrayList<>();
-        updateMetadataRequestBucketMap.forEach(
-                (tableId, bucketMetadataList) -> {
-                    TableInfo tableInfo = getTableInfo(tableId);
-                    if (tableInfo != null) {
-                        tableMetadataList.add(new TableMetadata(tableInfo, bucketMetadataList));
-                    }
-                });
+        updateMetadataRequestBucketMap.forEach((tableId, bucketMetadataList) -> {
+            TableInfo tableInfo = getTableInfo(tableId);
+            if (tableInfo != null) {
+                tableMetadataList.add(new TableMetadata(tableInfo, bucketMetadataList));
+            }
+        });
 
         List<PartitionMetadata> partitionMetadataList = new ArrayList<>();
-        updateMetadataRequestPartitionMap.forEach(
-                (tableId, partitionIdToBucketMetadataMap) -> {
-                    for (Map.Entry<Long, List<BucketMetadata>> kvEntry :
-                            partitionIdToBucketMetadataMap.entrySet()) {
-                        Long partitionId = kvEntry.getKey();
-                        boolean partitionQueuedForDeletion =
-                                coordinatorContext.isPartitionQueuedForDeletion(
-                                        new TablePartition(tableId, partitionId));
-                        String partitionName = coordinatorContext.getPartitionName(partitionId);
-                        PartitionMetadata partitionMetadata;
-                        if (partitionName == null) {
-                            if (partitionQueuedForDeletion) {
-                                partitionMetadata =
-                                        new PartitionMetadata(
-                                                tableId,
-                                                DELETED_PARTITION_NAME,
-                                                partitionId,
-                                                kvEntry.getValue());
-                            } else {
-                                throw new IllegalStateException(
-                                        "Partition name is null for partition " + partitionId);
-                            }
-                        } else {
-                            partitionMetadata =
-                                    new PartitionMetadata(
-                                            tableId,
-                                            partitionName,
-                                            partitionQueuedForDeletion
-                                                    ? DELETED_PARTITION_ID
-                                                    : partitionId,
-                                            kvEntry.getValue());
-                        }
-                        // table
-                        partitionMetadataList.add(partitionMetadata);
+        updateMetadataRequestPartitionMap.forEach((tableId, partitionIdToBucketMetadataMap) -> {
+            for (Map.Entry<Long, List<BucketMetadata>> kvEntry : partitionIdToBucketMetadataMap.entrySet()) {
+                Long partitionId = kvEntry.getKey();
+                boolean partitionQueuedForDeletion =
+                        coordinatorContext.isPartitionQueuedForDeletion(new TablePartition(tableId, partitionId));
+                String partitionName = coordinatorContext.getPartitionName(partitionId);
+                PartitionMetadata partitionMetadata;
+                if (partitionName == null) {
+                    if (partitionQueuedForDeletion) {
+                        partitionMetadata =
+                                new PartitionMetadata(tableId, DELETED_PARTITION_NAME, partitionId, kvEntry.getValue());
+                    } else {
+                        throw new IllegalStateException("Partition name is null for partition " + partitionId);
                     }
-                    // no bucket metadata, use empty metadata list
-                    TableInfo tableInfo = getTableInfo(tableId);
-                    if (tableInfo != null) {
-                        tableMetadataList.add(
-                                new TableMetadata(getTableInfo(tableId), Collections.emptyList()));
-                    }
-                });
+                } else {
+                    partitionMetadata = new PartitionMetadata(
+                            tableId,
+                            partitionName,
+                            partitionQueuedForDeletion ? DELETED_PARTITION_ID : partitionId,
+                            kvEntry.getValue());
+                }
+                // table
+                partitionMetadataList.add(partitionMetadata);
+            }
+            // no bucket metadata, use empty metadata list
+            TableInfo tableInfo = getTableInfo(tableId);
+            if (tableInfo != null) {
+                tableMetadataList.add(new TableMetadata(getTableInfo(tableId), Collections.emptyList()));
+            }
+        });
 
         // TODO Todo Distinguish which tablet servers need to be updated instead of sending all live
         // tablet servers.
@@ -681,8 +574,7 @@ public class CoordinatorRequestBatch {
         boolean tableQueuedForDeletion = coordinatorContext.isTableQueuedForDeletion(tableId);
         if (tableInfo == null) {
             if (tableQueuedForDeletion) {
-                return TableInfo.of(
-                        DELETED_TABLE_PATH, tableId, 0, EMPTY_TABLE_DESCRIPTOR, -1L, -1L);
+                return TableInfo.of(DELETED_TABLE_PATH, tableId, 0, EMPTY_TABLE_DESCRIPTOR, -1L, -1L);
             } else {
                 // it may happen that the table is dropped, but the partition still exists
                 // when coordinator restarts, it won't consider it as deleted table,
@@ -693,13 +585,7 @@ public class CoordinatorRequestBatch {
             }
         } else {
             return tableQueuedForDeletion
-                    ? TableInfo.of(
-                            tableInfo.getTablePath(),
-                            DELETED_TABLE_ID,
-                            0,
-                            EMPTY_TABLE_DESCRIPTOR,
-                            -1L,
-                            -1L)
+                    ? TableInfo.of(tableInfo.getTablePath(), DELETED_TABLE_ID, 0, EMPTY_TABLE_DESCRIPTOR, -1L, -1L)
                     : tableInfo;
         }
     }

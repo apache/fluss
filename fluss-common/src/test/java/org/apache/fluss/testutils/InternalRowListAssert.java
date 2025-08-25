@@ -28,8 +28,7 @@ import static org.apache.fluss.testutils.InternalRowAssert.assertThatRow;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Extend assertj assertions to easily assert List of {@link InternalRow}. */
-public class InternalRowListAssert
-        extends AbstractAssert<InternalRowListAssert, List<? extends InternalRow>> {
+public class InternalRowListAssert extends AbstractAssert<InternalRowListAssert, List<? extends InternalRow>> {
 
     private RowType rowType;
 

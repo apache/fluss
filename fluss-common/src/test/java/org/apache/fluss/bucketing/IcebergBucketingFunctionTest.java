@@ -101,8 +101,7 @@ class IcebergBucketingFunctionTest {
         RowType rowType = RowType.of(new DataType[] {DataTypes.STRING()}, new String[] {"name"});
 
         GenericRow row = GenericRow.of(BinaryString.fromString(testValue));
-        IcebergKeyEncoder encoder =
-                new IcebergKeyEncoder(rowType, Collections.singletonList("name"));
+        IcebergKeyEncoder encoder = new IcebergKeyEncoder(rowType, Collections.singletonList("name"));
 
         // Encode with our implementation
         byte[] ourEncodedKey = encoder.encodeKey(row);
@@ -125,12 +124,10 @@ class IcebergBucketingFunctionTest {
         Decimal decimal = Decimal.fromBigDecimal(testValue, 10, 2);
         int bucketNum = 10;
 
-        RowType rowType =
-                RowType.of(new DataType[] {DataTypes.DECIMAL(10, 2)}, new String[] {"amount"});
+        RowType rowType = RowType.of(new DataType[] {DataTypes.DECIMAL(10, 2)}, new String[] {"amount"});
 
         GenericRow row = GenericRow.of(decimal);
-        IcebergKeyEncoder encoder =
-                new IcebergKeyEncoder(rowType, Collections.singletonList("amount"));
+        IcebergKeyEncoder encoder = new IcebergKeyEncoder(rowType, Collections.singletonList("amount"));
 
         // Encode with our implementation
         byte[] ourEncodedKey = encoder.encodeKey(row);
@@ -156,12 +153,10 @@ class IcebergBucketingFunctionTest {
         TimestampNtz testValue = TimestampNtz.fromMillis(millis, nanos);
         int bucketNum = 10;
 
-        RowType rowType =
-                RowType.of(new DataType[] {DataTypes.TIMESTAMP(6)}, new String[] {"event_time"});
+        RowType rowType = RowType.of(new DataType[] {DataTypes.TIMESTAMP(6)}, new String[] {"event_time"});
 
         GenericRow row = GenericRow.of(testValue);
-        IcebergKeyEncoder encoder =
-                new IcebergKeyEncoder(rowType, Collections.singletonList("event_time"));
+        IcebergKeyEncoder encoder = new IcebergKeyEncoder(rowType, Collections.singletonList("event_time"));
 
         // Encode with our implementation
         byte[] ourEncodedKey = encoder.encodeKey(row);
@@ -185,8 +180,7 @@ class IcebergBucketingFunctionTest {
 
         RowType rowType = RowType.of(new DataType[] {DataTypes.DATE()}, new String[] {"date"});
         GenericRow row = GenericRow.of(dateValue);
-        IcebergKeyEncoder encoder =
-                new IcebergKeyEncoder(rowType, Collections.singletonList("date"));
+        IcebergKeyEncoder encoder = new IcebergKeyEncoder(rowType, Collections.singletonList("date"));
 
         // Encode with our implementation
         byte[] ourEncodedKey = encoder.encodeKey(row);
@@ -213,8 +207,7 @@ class IcebergBucketingFunctionTest {
         RowType rowType = RowType.of(new DataType[] {DataTypes.TIME()}, new String[] {"time"});
 
         GenericRow row = GenericRow.of(timeMillis);
-        IcebergKeyEncoder encoder =
-                new IcebergKeyEncoder(rowType, Collections.singletonList("time"));
+        IcebergKeyEncoder encoder = new IcebergKeyEncoder(rowType, Collections.singletonList("time"));
 
         // Encode with our implementation
         byte[] ourEncodedKey = encoder.encodeKey(row);
@@ -238,8 +231,7 @@ class IcebergBucketingFunctionTest {
         RowType rowType = RowType.of(new DataType[] {DataTypes.BYTES()}, new String[] {"data"});
 
         GenericRow row = GenericRow.of(testValue);
-        IcebergKeyEncoder encoder =
-                new IcebergKeyEncoder(rowType, Collections.singletonList("data"));
+        IcebergKeyEncoder encoder = new IcebergKeyEncoder(rowType, Collections.singletonList("data"));
 
         // Encode with our implementation
         byte[] ourEncodedKey = encoder.encodeKey(row);
@@ -256,6 +248,9 @@ class IcebergBucketingFunctionTest {
     }
 
     private byte[] toBytes(long value) {
-        return ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array();
+        return ByteBuffer.allocate(8)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .putLong(value)
+                .array();
     }
 }

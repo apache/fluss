@@ -92,8 +92,7 @@ public final class OneShotLatch {
      * @throws InterruptedException Thrown if the thread is interrupted while waiting.
      * @throws TimeoutException Thrown, if the latch is not triggered within the timeout time.
      */
-    public void await(long timeout, TimeUnit timeUnit)
-            throws InterruptedException, TimeoutException {
+    public void await(long timeout, TimeUnit timeUnit) throws InterruptedException, TimeoutException {
         if (timeout < 0) {
             throw new IllegalArgumentException("time may not be negative");
         }
@@ -108,8 +107,7 @@ public final class OneShotLatch {
             long millisToWait;
 
             synchronized (lock) {
-                while (!triggered
-                        && (millisToWait = (deadline - System.nanoTime()) / 1_000_000) > 0) {
+                while (!triggered && (millisToWait = (deadline - System.nanoTime()) / 1_000_000) > 0) {
                     lock.wait(millisToWait);
                 }
 

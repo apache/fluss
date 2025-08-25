@@ -72,12 +72,8 @@ public class AddAclProcedure extends AbstractAclProcedure {
             throw new IllegalArgumentException(
                     "Wildcard 'ANY' can only be used for filtering, not for adding ACL entries.");
         }
-        admin.createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        resource,
-                                        new AccessControlEntry(
-                                                flussPrincipal, host, operationType, permission))))
+        admin.createAcls(Collections.singletonList(new AclBinding(
+                        resource, new AccessControlEntry(flussPrincipal, host, operationType, permission))))
                 .all()
                 .get();
         return new String[] {"success"};

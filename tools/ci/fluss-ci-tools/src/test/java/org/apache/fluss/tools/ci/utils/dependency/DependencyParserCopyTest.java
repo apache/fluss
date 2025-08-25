@@ -59,63 +59,50 @@ class DependencyParserCopyTest {
 
     @Test
     void testCopyLineParsingGroupId() {
-        assertThat(
-                        DependencyParser.parseCopyDependency(
-                                "[INFO] Configured Artifact: external:dependency1:1.0:jar"))
+        assertThat(DependencyParser.parseCopyDependency("[INFO] Configured Artifact: external:dependency1:1.0:jar"))
                 .hasValueSatisfying(
                         dependency -> assertThat(dependency.getGroupId()).isEqualTo("external"));
     }
 
     @Test
     void testCopyLineParsingArtifactId() {
-        assertThat(
-                        DependencyParser.parseCopyDependency(
-                                "[INFO] Configured Artifact: external:dependency1:1.0:jar"))
+        assertThat(DependencyParser.parseCopyDependency("[INFO] Configured Artifact: external:dependency1:1.0:jar"))
                 .hasValueSatisfying(
-                        dependency ->
-                                assertThat(dependency.getArtifactId()).isEqualTo("dependency1"));
+                        dependency -> assertThat(dependency.getArtifactId()).isEqualTo("dependency1"));
     }
 
     @Test
     void testCopyLineParsingVersion() {
-        assertThat(
-                        DependencyParser.parseCopyDependency(
-                                "[INFO] Configured Artifact: external:dependency1:1.0:jar"))
+        assertThat(DependencyParser.parseCopyDependency("[INFO] Configured Artifact: external:dependency1:1.0:jar"))
                 .hasValueSatisfying(
                         dependency -> assertThat(dependency.getVersion()).isEqualTo("1.0"));
     }
 
     @Test
     void testCopyLineParsingScope() {
-        assertThat(
-                        DependencyParser.parseCopyDependency(
-                                "[INFO] Configured Artifact: external:dependency1:1.0:jar"))
-                .hasValueSatisfying(dependency -> assertThat(dependency.getScope()).isEmpty());
+        assertThat(DependencyParser.parseCopyDependency("[INFO] Configured Artifact: external:dependency1:1.0:jar"))
+                .hasValueSatisfying(
+                        dependency -> assertThat(dependency.getScope()).isEmpty());
     }
 
     @Test
     void testCopyLineParsingOptional() {
-        assertThat(
-                        DependencyParser.parseCopyDependency(
-                                "[INFO] Configured Artifact: external:dependency1:1.0:jar"))
-                .hasValueSatisfying(dependency -> assertThat(dependency.isOptional()).isEmpty());
+        assertThat(DependencyParser.parseCopyDependency("[INFO] Configured Artifact: external:dependency1:1.0:jar"))
+                .hasValueSatisfying(
+                        dependency -> assertThat(dependency.isOptional()).isEmpty());
     }
 
     @Test
     void testCopyLineParsingWithNonJarType() {
-        assertThat(
-                        DependencyParser.parseCopyDependency(
-                                "[INFO] Configured Artifact: external:dependency1:1.0:pom"))
+        assertThat(DependencyParser.parseCopyDependency("[INFO] Configured Artifact: external:dependency1:1.0:pom"))
                 .hasValue(Dependency.create("external", "dependency1", "1.0", null));
     }
 
     @Test
     void testCopyLineParsingClassifier() {
-        assertThat(
-                        DependencyParser.parseCopyDependency(
-                                "[INFO] Configured Artifact: external:dependency1:some_classifier:1.0:jar"))
+        assertThat(DependencyParser.parseCopyDependency(
+                        "[INFO] Configured Artifact: external:dependency1:some_classifier:1.0:jar"))
                 .hasValueSatisfying(
-                        dependency ->
-                                assertThat(dependency.getClassifier()).hasValue("some_classifier"));
+                        dependency -> assertThat(dependency.getClassifier()).hasValue("some_classifier"));
     }
 }

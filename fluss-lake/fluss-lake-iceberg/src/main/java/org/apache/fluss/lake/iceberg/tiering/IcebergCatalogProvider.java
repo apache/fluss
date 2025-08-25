@@ -43,6 +43,8 @@ public class IcebergCatalogProvider implements Serializable {
         String catalogName = icebergProps.getOrDefault("name", ICEBERG_CATALOG_DEFAULT_NAME);
 
         return buildIcebergCatalog(
-                catalogName, icebergProps, IcebergConfiguration.from(icebergConfig).get());
+                catalogName,
+                icebergProps,
+                IcebergConfiguration.from(icebergConfig).get());
     }
 }

@@ -22,8 +22,7 @@ import io.protostuff.parser.Field;
 import java.io.PrintWriter;
 
 /** Abstract class for repeated fields. */
-public abstract class ProtobufAbstractRepeated<FieldType extends Field<?>>
-        extends ProtobufField<FieldType> {
+public abstract class ProtobufAbstractRepeated<FieldType extends Field<?>> extends ProtobufField<FieldType> {
 
     protected final String pluralName;
     protected final String singularName;
@@ -37,9 +36,7 @@ public abstract class ProtobufAbstractRepeated<FieldType extends Field<?>>
     public void has(PrintWriter w) {}
 
     public void fieldClear(PrintWriter w, String enclosingType) {
-        w.format(
-                "        public %s %s() {\n",
-                enclosingType, ProtoGenUtil.camelCase("clear", field.getName()));
+        w.format("        public %s %s() {\n", enclosingType, ProtoGenUtil.camelCase("clear", field.getName()));
         clear(w);
         w.format("            return this;\n");
         w.format("        }\n");

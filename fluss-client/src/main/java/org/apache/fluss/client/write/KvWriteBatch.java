@@ -62,8 +62,7 @@ public class KvWriteBatch extends WriteBatch {
             long createdMs) {
         super(bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
-        this.recordsBuilder =
-                KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat);
+        this.recordsBuilder = KvRecordBatchBuilder.builder(schemaId, writeLimit, outputView, kvFormat);
         this.targetColumns = targetColumns;
     }
 
@@ -73,11 +72,9 @@ public class KvWriteBatch extends WriteBatch {
         // not the same as the current target columns in the batch.
         // this should be quite fast as they should be the same objects.
         if (!Arrays.equals(targetColumns, writeRecord.getTargetColumns())) {
-            throw new IllegalStateException(
-                    String.format(
-                            "target columns %s of the write record to append are not the same as the current target columns %s in the batch.",
-                            Arrays.toString(writeRecord.getTargetColumns()),
-                            Arrays.toString(targetColumns)));
+            throw new IllegalStateException(String.format(
+                    "target columns %s of the write record to append are not the same as the current target columns %s in the batch.",
+                    Arrays.toString(writeRecord.getTargetColumns()), Arrays.toString(targetColumns)));
         }
 
         byte[] key = writeRecord.getKey();

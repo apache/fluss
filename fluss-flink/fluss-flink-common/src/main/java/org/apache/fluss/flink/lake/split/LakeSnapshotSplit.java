@@ -32,16 +32,12 @@ public class LakeSnapshotSplit extends SourceSplitBase {
 
     private final long recordsToSplit;
 
-    public LakeSnapshotSplit(
-            TableBucket tableBucket, @Nullable String partitionName, LakeSplit lakeSplit) {
+    public LakeSnapshotSplit(TableBucket tableBucket, @Nullable String partitionName, LakeSplit lakeSplit) {
         this(tableBucket, partitionName, lakeSplit, 0);
     }
 
     public LakeSnapshotSplit(
-            TableBucket tableBucket,
-            @Nullable String partitionName,
-            LakeSplit lakeSplit,
-            long recordsToSplit) {
+            TableBucket tableBucket, @Nullable String partitionName, LakeSplit lakeSplit, long recordsToSplit) {
         super(tableBucket, partitionName);
         this.lakeSplit = lakeSplit;
         this.recordsToSplit = recordsToSplit;
@@ -59,10 +55,7 @@ public class LakeSnapshotSplit extends SourceSplitBase {
     public String splitId() {
         return toSplitId(
                 "lake-snapshot-",
-                new TableBucket(
-                        tableBucket.getTableId(),
-                        tableBucket.getPartitionId(),
-                        lakeSplit.bucket()));
+                new TableBucket(tableBucket.getTableId(), tableBucket.getPartitionId(), lakeSplit.bucket()));
     }
 
     @Override

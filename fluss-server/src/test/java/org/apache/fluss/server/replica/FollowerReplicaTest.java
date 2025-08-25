@@ -107,15 +107,11 @@ final class FollowerReplicaTest {
     }
 
     private void assertFollowerReplicaState(
-            long logEndOffset,
-            long lastCaughtUpTimeMs,
-            long lastFetchLeaderLogEndOffset,
-            long lastFetchTimeMs) {
+            long logEndOffset, long lastCaughtUpTimeMs, long lastFetchLeaderLogEndOffset, long lastFetchTimeMs) {
         FollowerReplica.FollowerReplicaState followerReplicaState = followerReplica.stateSnapshot();
         assertThat(followerReplicaState.getLogEndOffset()).isEqualTo(logEndOffset);
         assertThat(followerReplicaState.getLastCaughtUpTimeMs()).isEqualTo(lastCaughtUpTimeMs);
-        assertThat(followerReplicaState.getLastFetchLeaderLogEndOffset())
-                .isEqualTo(lastFetchLeaderLogEndOffset);
+        assertThat(followerReplicaState.getLastFetchLeaderLogEndOffset()).isEqualTo(lastFetchLeaderLogEndOffset);
         assertThat(followerReplicaState.getLastFetchTimeMs()).isEqualTo(lastFetchTimeMs);
     }
 
@@ -126,23 +122,17 @@ final class FollowerReplicaTest {
         return currentTimeMillis;
     }
 
-    private void updateFetchState(
-            long currentTimeMs, long followerFetchOffset, long leaderEndOffset) {
-        followerReplica.updateFetchState(
-                new LogOffsetMetadata(followerFetchOffset), currentTimeMs, leaderEndOffset);
+    private void updateFetchState(long currentTimeMs, long followerFetchOffset, long leaderEndOffset) {
+        followerReplica.updateFetchState(new LogOffsetMetadata(followerFetchOffset), currentTimeMs, leaderEndOffset);
     }
 
-    private long resetReplicaState(
-            long leaderEndOffset, boolean isNewLeader, boolean isFollowerInSync) {
+    private long resetReplicaState(long leaderEndOffset, boolean isNewLeader, boolean isFollowerInSync) {
         long currentTimeMillis = System.currentTimeMillis();
-        followerReplica.resetFollowerReplicaState(
-                currentTimeMillis, leaderEndOffset, isNewLeader, isFollowerInSync);
+        followerReplica.resetFollowerReplicaState(currentTimeMillis, leaderEndOffset, isNewLeader, isFollowerInSync);
         return currentTimeMillis;
     }
 
     private boolean isCaughtUp(long leaderEndOffset, long nowTimeMs, long replicaMaxLagTime) {
-        return followerReplica
-                .stateSnapshot()
-                .isCaughtUp(leaderEndOffset, nowTimeMs, replicaMaxLagTime);
+        return followerReplica.stateSnapshot().isCaughtUp(leaderEndOffset, nowTimeMs, replicaMaxLagTime);
     }
 }

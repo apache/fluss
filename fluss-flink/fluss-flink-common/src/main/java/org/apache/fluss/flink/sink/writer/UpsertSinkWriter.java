@@ -47,13 +47,7 @@ public class UpsertSinkWriter<InputT> extends FlinkSinkWriter<InputT> {
             @Nullable int[] targetColumnIndexes,
             MailboxExecutor mailboxExecutor,
             FlussSerializationSchema<InputT> flussSerializationSchema) {
-        super(
-                tablePath,
-                flussConfig,
-                tableRowType,
-                targetColumnIndexes,
-                mailboxExecutor,
-                flussSerializationSchema);
+        super(tablePath, flussConfig, tableRowType, targetColumnIndexes, mailboxExecutor, flussSerializationSchema);
     }
 
     @Override

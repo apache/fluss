@@ -42,10 +42,7 @@ public final class FatalExitExceptionHandler implements Thread.UncaughtException
     @Override
     public void uncaughtException(Thread t, Throwable e) {
         try {
-            LOG.error(
-                    "FATAL: Thread '{}' produced an uncaught exception. Stopping the process...",
-                    t.getName(),
-                    e);
+            LOG.error("FATAL: Thread '{}' produced an uncaught exception. Stopping the process...", t.getName(), e);
             ThreadUtils.errorLogThreadDump(LOG);
         } finally {
             // todo: use FlussSecurityManager to exit like Flink

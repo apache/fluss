@@ -42,8 +42,7 @@ class MetricRegistryImplTest {
 
     @Test
     void testIsShutdown() throws Exception {
-        MetricRegistryImpl metricRegistry =
-                new MetricRegistryImpl(Collections.singletonList(new TestReporter("test")));
+        MetricRegistryImpl metricRegistry = new MetricRegistryImpl(Collections.singletonList(new TestReporter("test")));
 
         assertThat(metricRegistry.isShutdown()).isFalse();
 
@@ -87,11 +86,18 @@ class MetricRegistryImplTest {
      */
     private static class NotificationCapturingReporter extends TestReporter {
         private static final String NAME = "notificationReporter";
-        @Nullable private Metric addedMetric;
-        @Nullable private String addedMetricName;
 
-        @Nullable private Metric removedMetric;
-        @Nullable private String removedMetricName;
+        @Nullable
+        private Metric addedMetric;
+
+        @Nullable
+        private String addedMetricName;
+
+        @Nullable
+        private Metric removedMetric;
+
+        @Nullable
+        private String removedMetricName;
 
         public NotificationCapturingReporter() {
             super(NAME);
@@ -130,8 +136,7 @@ class MetricRegistryImplTest {
     void testExceptionIsolation() throws Exception {
         final NotificationCapturingReporter reporter1 = new NotificationCapturingReporter();
 
-        MetricRegistryImpl registry =
-                new MetricRegistryImpl(Arrays.asList(new FailingReporter(), reporter1));
+        MetricRegistryImpl registry = new MetricRegistryImpl(Arrays.asList(new FailingReporter(), reporter1));
 
         Counter metric = new SimpleCounter();
 
@@ -161,8 +166,7 @@ class MetricRegistryImplTest {
                 new ManuallyTriggeredScheduledExecutorService();
 
         try (MetricRegistryImpl registry =
-                new MetricRegistryImpl(
-                        Collections.singletonList(reporter), scheduledReportExecutorService)) {
+                new MetricRegistryImpl(Collections.singletonList(reporter), scheduledReportExecutorService)) {
 
             // only start counting from now on
             reporter.resetCount();
@@ -195,8 +199,7 @@ class MetricRegistryImplTest {
     }
 
     /** Reporter that exposes how often report() was called. */
-    private static class ReportCountingReporter extends TestReporter
-            implements ScheduledMetricReporter {
+    private static class ReportCountingReporter extends TestReporter implements ScheduledMetricReporter {
 
         private static final String NAME = "reportCountingReporter";
 

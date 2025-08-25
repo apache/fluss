@@ -110,8 +110,7 @@ public interface LakeSource<Split extends LakeSplit> extends Serializable {
         private final List<Predicate> acceptedPredicates;
         private final List<Predicate> remainingPredicates;
 
-        private FilterPushDownResult(
-                List<Predicate> acceptedPredicates, List<Predicate> remainingPredicates) {
+        private FilterPushDownResult(List<Predicate> acceptedPredicates, List<Predicate> remainingPredicates) {
             this.acceptedPredicates = acceptedPredicates;
             this.remainingPredicates = remainingPredicates;
         }
@@ -123,8 +122,7 @@ public interface LakeSource<Split extends LakeSplit> extends Serializable {
          * @param remainingPredicates The remaining predicates
          * @return A new FilterPushDownResult instance
          */
-        public static FilterPushDownResult of(
-                List<Predicate> acceptedPredicates, List<Predicate> remainingPredicates) {
+        public static FilterPushDownResult of(List<Predicate> acceptedPredicates, List<Predicate> remainingPredicates) {
             return new FilterPushDownResult(acceptedPredicates, remainingPredicates);
         }
 

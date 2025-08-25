@@ -32,7 +32,10 @@ import java.util.Objects;
  */
 public class BatchRegisterLeadAndIsr {
     private final long tableId;
-    @Nullable private final Long partitionId;
+
+    @Nullable
+    private final Long partitionId;
+
     private final List<RegisterTableBucketLeadAndIsrInfo> registerList;
 
     public BatchRegisterLeadAndIsr(long tableId, @Nullable Long partitionId) {
@@ -48,11 +51,9 @@ public class BatchRegisterLeadAndIsr {
             List<Integer> liveReplicas) {
         // check the tableBucket has the same tableId and partitionId.
         // add it to registerList.
-        if (tableBucket.getTableId() == tableId
-                && Objects.equals(partitionId, tableBucket.getPartitionId())) {
+        if (tableBucket.getTableId() == tableId && Objects.equals(partitionId, tableBucket.getPartitionId())) {
             registerList.add(
-                    new RegisterTableBucketLeadAndIsrInfo(
-                            tableBucket, leaderAndIsr, partitionName, liveReplicas));
+                    new RegisterTableBucketLeadAndIsrInfo(tableBucket, leaderAndIsr, partitionName, liveReplicas));
         } else {
             throw new IllegalArgumentException(
                     "Try to add a bucket with different tableId or partitionId in collection when try to batch register to Zookeeper."

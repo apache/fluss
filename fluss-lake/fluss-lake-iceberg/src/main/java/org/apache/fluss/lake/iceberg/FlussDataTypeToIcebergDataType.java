@@ -44,8 +44,7 @@ import org.apache.iceberg.types.Types;
 /** Convert from Fluss's data type to Iceberg's data type. */
 public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
 
-    public static final FlussDataTypeToIcebergDataType INSTANCE =
-            new FlussDataTypeToIcebergDataType();
+    public static final FlussDataTypeToIcebergDataType INSTANCE = new FlussDataTypeToIcebergDataType();
 
     @Override
     public Type visit(CharType charType) {

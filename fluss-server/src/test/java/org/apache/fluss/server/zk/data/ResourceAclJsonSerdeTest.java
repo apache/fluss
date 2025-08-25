@@ -37,27 +37,21 @@ public class ResourceAclJsonSerdeTest extends JsonSerdeTestBase<ResourceAcl> {
     @Override
     protected ResourceAcl[] createObjects() {
         return new ResourceAcl[] {
-            new ResourceAcl(
-                    Collections.singleton(
-                            new AccessControlEntry(
-                                    new FlussPrincipal("Mike", "USER"),
-                                    "*",
-                                    OperationType.ALL,
-                                    PermissionType.ALLOW))),
+            new ResourceAcl(Collections.singleton(new AccessControlEntry(
+                    new FlussPrincipal("Mike", "USER"), "*", OperationType.ALL, PermissionType.ALLOW))),
             new ResourceAcl(
                     // use LinkedHashSet to ensure the order of the acls is preserved
-                    new LinkedHashSet<>(
-                            Arrays.asList(
-                                    new AccessControlEntry(
-                                            new FlussPrincipal("John", "ROLE"),
-                                            "127.0.0.1",
-                                            OperationType.ALTER,
-                                            PermissionType.ALLOW),
-                                    new AccessControlEntry(
-                                            new FlussPrincipal("Mike1233", "ROLE"),
-                                            "1*",
-                                            OperationType.READ,
-                                            PermissionType.ALLOW)))),
+                    new LinkedHashSet<>(Arrays.asList(
+                            new AccessControlEntry(
+                                    new FlussPrincipal("John", "ROLE"),
+                                    "127.0.0.1",
+                                    OperationType.ALTER,
+                                    PermissionType.ALLOW),
+                            new AccessControlEntry(
+                                    new FlussPrincipal("Mike1233", "ROLE"),
+                                    "1*",
+                                    OperationType.READ,
+                                    PermissionType.ALLOW)))),
         };
     }
 

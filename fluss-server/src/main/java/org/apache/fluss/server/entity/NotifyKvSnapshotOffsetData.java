@@ -26,8 +26,7 @@ public class NotifyKvSnapshotOffsetData {
     private final long minRetainOffset;
     private final int coordinatorEpoch;
 
-    public NotifyKvSnapshotOffsetData(
-            TableBucket tableBucket, long minRetainOffset, int coordinatorEpoch) {
+    public NotifyKvSnapshotOffsetData(TableBucket tableBucket, long minRetainOffset, int coordinatorEpoch) {
         this.tableBucket = tableBucket;
         this.minRetainOffset = minRetainOffset;
         this.coordinatorEpoch = coordinatorEpoch;

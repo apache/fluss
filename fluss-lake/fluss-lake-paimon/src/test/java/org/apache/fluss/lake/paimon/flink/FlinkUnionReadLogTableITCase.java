@@ -67,9 +67,8 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
 
         // now, start to read the log table, which will read paimon
         // may read fluss or not, depends on the log offset of paimon snapshot
-        List<Row> actual =
-                CollectionUtil.iteratorToList(
-                        batchTEnv.executeSql("select * from " + tableName).collect());
+        List<Row> actual = CollectionUtil.iteratorToList(
+                batchTEnv.executeSql("select * from " + tableName).collect());
 
         assertThat(actual).containsExactlyInAnyOrderElementsOf(writtenRows);
 
@@ -81,49 +80,39 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
 
         // query the log table again and check the data
         // it should read both paimon snapshot and fluss log
-        actual =
-                CollectionUtil.iteratorToList(
-                        batchTEnv.executeSql("select * from " + tableName).collect());
+        actual = CollectionUtil.iteratorToList(
+                batchTEnv.executeSql("select * from " + tableName).collect());
         assertThat(actual).containsExactlyInAnyOrderElementsOf(writtenRows);
 
         // test project push down
-        actual =
-                CollectionUtil.iteratorToList(
-                        batchTEnv.executeSql("select f_byte from " + tableName).collect());
+        actual = CollectionUtil.iteratorToList(
+                batchTEnv.executeSql("select f_byte from " + tableName).collect());
         List<Row> expected =
-                writtenRows.stream()
-                        .map(row -> Row.of(row.getField(1)))
-                        .collect(Collectors.toList());
+                writtenRows.stream().map(row -> Row.of(row.getField(1))).collect(Collectors.toList());
         assertThat(actual).containsExactlyInAnyOrderElementsOf(expected);
 
         if (isPartitioned) {
             // get first partition
             String partition = waitUntilPartitions(t1).values().iterator().next();
-            String sqlWithPartitionFilter =
-                    "select * FROM " + tableName + " WHERE p = '" + partition + "'";
+            String sqlWithPartitionFilter = "select * FROM " + tableName + " WHERE p = '" + partition + "'";
 
             String plan = batchTEnv.explainSql(sqlWithPartitionFilter);
 
             // check if the plan contains partition filter
-            assertThat(plan)
-                    .contains("TableSourceScan(")
-                    .contains("filter=[=(p, _UTF-16LE'" + partition + "'");
+            assertThat(plan).contains("TableSourceScan(").contains("filter=[=(p, _UTF-16LE'" + partition + "'");
 
-            List<Row> expectedFiltered =
-                    writtenRows.stream()
-                            .filter(r -> partition.equals(r.getField(15)))
-                            .collect(Collectors.toList());
+            List<Row> expectedFiltered = writtenRows.stream()
+                    .filter(r -> partition.equals(r.getField(15)))
+                    .collect(Collectors.toList());
 
-            List<Row> actualFiltered =
-                    CollectionUtil.iteratorToList(
-                            batchTEnv.executeSql(sqlWithPartitionFilter).collect());
+            List<Row> actualFiltered = CollectionUtil.iteratorToList(
+                    batchTEnv.executeSql(sqlWithPartitionFilter).collect());
 
             assertThat(actualFiltered).containsExactlyInAnyOrderElementsOf(expectedFiltered);
         }
     }
 
-    private long prepareLogTable(
-            TablePath tablePath, int bucketNum, boolean isPartitioned, List<Row> flinkRows)
+    private long prepareLogTable(TablePath tablePath, int bucketNum, boolean isPartitioned, List<Row> flinkRows)
             throws Exception {
         // createFullTypeLogTable creates a datalake-enabled table with a partition column.
         long t1Id = createFullTypeLogTable(tablePath, bucketNum, isPartitioned);
@@ -142,101 +131,90 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         return t1Id;
     }
 
-    private List<Row> writeFullTypeRows(
-            TablePath tablePath, int rowCount, @Nullable String partition) throws Exception {
+    private List<Row> writeFullTypeRows(TablePath tablePath, int rowCount, @Nullable String partition)
+            throws Exception {
         List<InternalRow> rows = new ArrayList<>();
         List<Row> flinkRows = new ArrayList<>();
         for (int i = 0; i < rowCount; i++) {
             if (partition == null) {
-                rows.add(
-                        row(
-                                true,
-                                (byte) 100,
-                                (short) 200,
-                                30,
-                                400L,
-                                500.1f,
-                                600.0d,
-                                "another_string_" + i,
-                                Decimal.fromUnscaledLong(900, 5, 2),
-                                Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
-                                TimestampLtz.fromEpochMillis(1698235273400L),
-                                TimestampLtz.fromEpochMillis(1698235273400L, 7000),
-                                TimestampNtz.fromMillis(1698235273501L),
-                                TimestampNtz.fromMillis(1698235273501L, 8000),
-                                new byte[] {5, 6, 7, 8}));
+                rows.add(row(
+                        true,
+                        (byte) 100,
+                        (short) 200,
+                        30,
+                        400L,
+                        500.1f,
+                        600.0d,
+                        "another_string_" + i,
+                        Decimal.fromUnscaledLong(900, 5, 2),
+                        Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                        TimestampLtz.fromEpochMillis(1698235273400L),
+                        TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                        TimestampNtz.fromMillis(1698235273501L),
+                        TimestampNtz.fromMillis(1698235273501L, 8000),
+                        new byte[] {5, 6, 7, 8}));
 
-                flinkRows.add(
-                        Row.of(
-                                true,
-                                (byte) 100,
-                                (short) 200,
-                                30,
-                                400L,
-                                500.1f,
-                                600.0d,
-                                "another_string_" + i,
-                                new java.math.BigDecimal("9.00"),
-                                new java.math.BigDecimal("1000"),
-                                Instant.ofEpochMilli(1698235273400L),
-                                Instant.ofEpochMilli(1698235273400L).plusNanos(7000),
-                                LocalDateTime.ofInstant(
-                                        Instant.ofEpochMilli(1698235273501L), ZoneId.of("UTC")),
-                                LocalDateTime.ofInstant(
-                                                Instant.ofEpochMilli(1698235273501L),
-                                                ZoneId.of("UTC"))
-                                        .plusNanos(8000),
-                                new byte[] {5, 6, 7, 8}));
+                flinkRows.add(Row.of(
+                        true,
+                        (byte) 100,
+                        (short) 200,
+                        30,
+                        400L,
+                        500.1f,
+                        600.0d,
+                        "another_string_" + i,
+                        new java.math.BigDecimal("9.00"),
+                        new java.math.BigDecimal("1000"),
+                        Instant.ofEpochMilli(1698235273400L),
+                        Instant.ofEpochMilli(1698235273400L).plusNanos(7000),
+                        LocalDateTime.ofInstant(Instant.ofEpochMilli(1698235273501L), ZoneId.of("UTC")),
+                        LocalDateTime.ofInstant(Instant.ofEpochMilli(1698235273501L), ZoneId.of("UTC"))
+                                .plusNanos(8000),
+                        new byte[] {5, 6, 7, 8}));
             } else {
-                rows.add(
-                        row(
-                                true,
-                                (byte) 100,
-                                (short) 200,
-                                30,
-                                400L,
-                                500.1f,
-                                600.0d,
-                                "another_string_" + i,
-                                Decimal.fromUnscaledLong(900, 5, 2),
-                                Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
-                                TimestampLtz.fromEpochMillis(1698235273400L),
-                                TimestampLtz.fromEpochMillis(1698235273400L, 7000),
-                                TimestampNtz.fromMillis(1698235273501L),
-                                TimestampNtz.fromMillis(1698235273501L, 8000),
-                                new byte[] {5, 6, 7, 8},
-                                partition));
+                rows.add(row(
+                        true,
+                        (byte) 100,
+                        (short) 200,
+                        30,
+                        400L,
+                        500.1f,
+                        600.0d,
+                        "another_string_" + i,
+                        Decimal.fromUnscaledLong(900, 5, 2),
+                        Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                        TimestampLtz.fromEpochMillis(1698235273400L),
+                        TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                        TimestampNtz.fromMillis(1698235273501L),
+                        TimestampNtz.fromMillis(1698235273501L, 8000),
+                        new byte[] {5, 6, 7, 8},
+                        partition));
 
-                flinkRows.add(
-                        Row.of(
-                                true,
-                                (byte) 100,
-                                (short) 200,
-                                30,
-                                400L,
-                                500.1f,
-                                600.0d,
-                                "another_string_" + i,
-                                new java.math.BigDecimal("9.00"),
-                                new java.math.BigDecimal("1000"),
-                                Instant.ofEpochMilli(1698235273400L),
-                                Instant.ofEpochMilli(1698235273400L).plusNanos(7000),
-                                LocalDateTime.ofInstant(
-                                        Instant.ofEpochMilli(1698235273501L), ZoneId.of("UTC")),
-                                LocalDateTime.ofInstant(
-                                                Instant.ofEpochMilli(1698235273501L),
-                                                ZoneId.of("UTC"))
-                                        .plusNanos(8000),
-                                new byte[] {5, 6, 7, 8},
-                                partition));
+                flinkRows.add(Row.of(
+                        true,
+                        (byte) 100,
+                        (short) 200,
+                        30,
+                        400L,
+                        500.1f,
+                        600.0d,
+                        "another_string_" + i,
+                        new java.math.BigDecimal("9.00"),
+                        new java.math.BigDecimal("1000"),
+                        Instant.ofEpochMilli(1698235273400L),
+                        Instant.ofEpochMilli(1698235273400L).plusNanos(7000),
+                        LocalDateTime.ofInstant(Instant.ofEpochMilli(1698235273501L), ZoneId.of("UTC")),
+                        LocalDateTime.ofInstant(Instant.ofEpochMilli(1698235273501L), ZoneId.of("UTC"))
+                                .plusNanos(8000),
+                        new byte[] {5, 6, 7, 8},
+                        partition));
             }
         }
         writeRows(tablePath, rows, true);
         return flinkRows;
     }
 
-    private List<Row> writeRows(TablePath tablePath, int rowCount, boolean isPartitioned)
-            throws Exception {
+    private List<Row> writeRows(TablePath tablePath, int rowCount, boolean isPartitioned) throws Exception {
         if (isPartitioned) {
             List<Row> rows = new ArrayList<>();
             for (String partition : waitUntilPartitions(tablePath).values()) {

@@ -118,7 +118,7 @@
         <roaster.version>2.22.2.Final</roaster.version>
         <jmh.version>1.27</jmh.version>
 
-        <spotless.version>2.27.1</spotless.version>
+        <spotless.version>2.46.1</spotless.version>
         <spotless.scalafmt.version>3.4.3</spotless.scalafmt.version>
         <spotless.delimiter>package</spotless.delimiter>
         <spotless.license.header>
@@ -450,6 +450,8 @@
             <properties>
                 <target.java.version>1.8</target.java.version>
                 <skip.on.java8>true</skip.on.java8>
+                <!-- The spotless version that is compatible with Java8 -->
+                <spotless.version>2.27.1</spotless.version>
             </properties>
             <build>
                 <plugins>
@@ -1005,10 +1007,10 @@
                     <configuration>
                         <skip>${skip.on.java8}</skip>
                         <java>
-                            <googleJavaFormat>
-                                <version>1.15.0</version>
-                                <style>AOSP</style>
-                            </googleJavaFormat>
+                            <palantirJavaFormat>
+                                <version>2.39.0</version>
+                                <style>PALANTIR</style>
+                            </palantirJavaFormat>
 
                             <!-- \# refers to the static imports -->
                             <importOrder>

@@ -45,10 +45,7 @@ class IcebergKeyEncoderTest {
 
     @Test
     void testSingleKeyFieldRequirement() {
-        RowType rowType =
-                RowType.of(
-                        new DataType[] {DataTypes.INT(), DataTypes.STRING()},
-                        new String[] {"id", "name"});
+        RowType rowType = RowType.of(new DataType[] {DataTypes.INT(), DataTypes.STRING()}, new String[] {"id", "name"});
 
         // Should succeed with single key
         IcebergKeyEncoder encoder = new IcebergKeyEncoder(rowType, Collections.singletonList("id"));
@@ -104,8 +101,7 @@ class IcebergKeyEncoderTest {
 
         String testValue = "Hello Iceberg, Fluss this side!";
         GenericRow row = GenericRow.of(BinaryString.fromString(testValue));
-        IcebergKeyEncoder encoder =
-                new IcebergKeyEncoder(rowType, Collections.singletonList("name"));
+        IcebergKeyEncoder encoder = new IcebergKeyEncoder(rowType, Collections.singletonList("name"));
 
         // Encode with our implementation
         byte[] ourEncoded = encoder.encodeKey(row);
@@ -117,14 +113,12 @@ class IcebergKeyEncoderTest {
 
     @Test
     void testDecimalEncoding() throws IOException {
-        RowType rowType =
-                RowType.of(new DataType[] {DataTypes.DECIMAL(10, 2)}, new String[] {"amount"});
+        RowType rowType = RowType.of(new DataType[] {DataTypes.DECIMAL(10, 2)}, new String[] {"amount"});
 
         BigDecimal testValue = new BigDecimal("123.45");
         Decimal decimal = Decimal.fromBigDecimal(testValue, 10, 2);
         GenericRow row = GenericRow.of(decimal);
-        IcebergKeyEncoder encoder =
-                new IcebergKeyEncoder(rowType, Collections.singletonList("amount"));
+        IcebergKeyEncoder encoder = new IcebergKeyEncoder(rowType, Collections.singletonList("amount"));
 
         // Encode with our implementation
         byte[] ourEncoded = encoder.encodeKey(row);
@@ -136,8 +130,7 @@ class IcebergKeyEncoderTest {
 
     @Test
     void testTimestampEncoding() throws IOException {
-        RowType rowType =
-                RowType.of(new DataType[] {DataTypes.TIMESTAMP(6)}, new String[] {"event_time"});
+        RowType rowType = RowType.of(new DataType[] {DataTypes.TIMESTAMP(6)}, new String[] {"event_time"});
 
         // Iceberg expects microseconds for TIMESTAMP type
         long millis = 1698235273182L;
@@ -146,8 +139,7 @@ class IcebergKeyEncoderTest {
 
         TimestampNtz testValue = TimestampNtz.fromMillis(millis, nanos);
         GenericRow row = GenericRow.of(testValue);
-        IcebergKeyEncoder encoder =
-                new IcebergKeyEncoder(rowType, Collections.singletonList("event_time"));
+        IcebergKeyEncoder encoder = new IcebergKeyEncoder(rowType, Collections.singletonList("event_time"));
 
         // Encode with our implementation
         byte[] ourEncoded = encoder.encodeKey(row);
@@ -163,8 +155,7 @@ class IcebergKeyEncoderTest {
         // Date value as days since epoch
         int dateValue = 19655; // 2023-10-25
         GenericRow row = GenericRow.of(dateValue);
-        IcebergKeyEncoder encoder =
-                new IcebergKeyEncoder(rowType, Collections.singletonList("date"));
+        IcebergKeyEncoder encoder = new IcebergKeyEncoder(rowType, Collections.singletonList("date"));
 
         // Encode with our implementation
         byte[] ourEncoded = encoder.encodeKey(row);
@@ -184,8 +175,7 @@ class IcebergKeyEncoderTest {
 
         GenericRow row = GenericRow.of(timeMillis);
 
-        IcebergKeyEncoder encoder =
-                new IcebergKeyEncoder(rowType, Collections.singletonList("time"));
+        IcebergKeyEncoder encoder = new IcebergKeyEncoder(rowType, Collections.singletonList("time"));
 
         // Encode with our implementation
         byte[] ourEncoded = encoder.encodeKey(row);
@@ -199,8 +189,7 @@ class IcebergKeyEncoderTest {
 
         byte[] testValue = "Hello i only understand binary data".getBytes();
         GenericRow row = GenericRow.of(testValue);
-        IcebergKeyEncoder encoder =
-                new IcebergKeyEncoder(rowType, Collections.singletonList("data"));
+        IcebergKeyEncoder encoder = new IcebergKeyEncoder(rowType, Collections.singletonList("data"));
 
         // Encode with our implementation
         byte[] ourEncoded = encoder.encodeKey(row);
@@ -215,6 +204,9 @@ class IcebergKeyEncoderTest {
     }
 
     private byte[] toBytes(long value) {
-        return ByteBuffer.allocate(8).order(ByteOrder.LITTLE_ENDIAN).putLong(value).array();
+        return ByteBuffer.allocate(8)
+                .order(ByteOrder.LITTLE_ENDIAN)
+                .putLong(value)
+                .array();
     }
 }

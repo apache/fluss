@@ -41,8 +41,7 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
     private final Lock metadataLock = new ReentrantLock();
 
     @GuardedBy("metadataLock")
-    private volatile NodeMetadataSnapshot metadataSnapshot =
-            new NodeMetadataSnapshot(null, Collections.emptyMap());
+    private volatile NodeMetadataSnapshot metadataSnapshot = new NodeMetadataSnapshot(null, Collections.emptyMap());
 
     public CoordinatorMetadataCache() {}
 
@@ -84,25 +83,19 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
         Set<TabletServerInfo> tabletServerInfos = new HashSet<>();
         aliveTabletServers
                 .values()
-                .forEach(
-                        serverInfo ->
-                                tabletServerInfos.add(
-                                        new TabletServerInfo(serverInfo.id(), serverInfo.rack())));
+                .forEach(serverInfo -> tabletServerInfos.add(new TabletServerInfo(serverInfo.id(), serverInfo.rack())));
         return Collections.unmodifiableSet(tabletServerInfos);
     }
 
     public void updateMetadata(ServerInfo coordinatorServer, Set<ServerInfo> serverInfoSet) {
-        inLock(
-                metadataLock,
-                () -> {
-                    Map<Integer, ServerInfo> newAliveTableServers = new HashMap<>();
-                    for (ServerInfo tabletServer : serverInfoSet) {
-                        newAliveTableServers.put(tabletServer.id(), tabletServer);
-                    }
+        inLock(metadataLock, () -> {
+            Map<Integer, ServerInfo> newAliveTableServers = new HashMap<>();
+            for (ServerInfo tabletServer : serverInfoSet) {
+                newAliveTableServers.put(tabletServer.id(), tabletServer);
+            }
 
-                    this.metadataSnapshot =
-                            new NodeMetadataSnapshot(coordinatorServer, newAliveTableServers);
-                });
+            this.metadataSnapshot = new NodeMetadataSnapshot(coordinatorServer, newAliveTableServers);
+        });
     }
 
     private static class NodeMetadataSnapshot {
@@ -110,8 +103,7 @@ public class CoordinatorMetadataCache implements ServerMetadataCache {
         final Map<Integer, ServerInfo> aliveTabletServers;
 
         private NodeMetadataSnapshot(
-                @Nullable ServerInfo coordinatorServer,
-                Map<Integer, ServerInfo> aliveTabletServers) {
+                @Nullable ServerInfo coordinatorServer, Map<Integer, ServerInfo> aliveTabletServers) {
             this.coordinatorServer = coordinatorServer;
             this.aliveTabletServers = aliveTabletServers;
         }

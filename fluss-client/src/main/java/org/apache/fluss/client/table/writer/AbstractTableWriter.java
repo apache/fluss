@@ -39,15 +39,13 @@ public abstract class AbstractTableWriter implements TableWriter {
     protected final int fieldCount;
     private final @Nullable PartitionGetter partitionFieldGetter;
 
-    protected AbstractTableWriter(
-            TablePath tablePath, TableInfo tableInfo, WriterClient writerClient) {
+    protected AbstractTableWriter(TablePath tablePath, TableInfo tableInfo, WriterClient writerClient) {
         this.tablePath = tablePath;
         this.writerClient = writerClient;
         this.fieldCount = tableInfo.getRowType().getFieldCount();
-        this.partitionFieldGetter =
-                tableInfo.isPartitioned()
-                        ? new PartitionGetter(tableInfo.getRowType(), tableInfo.getPartitionKeys())
-                        : null;
+        this.partitionFieldGetter = tableInfo.isPartitioned()
+                ? new PartitionGetter(tableInfo.getRowType(), tableInfo.getPartitionKeys())
+                : null;
     }
 
     /**
@@ -63,15 +61,13 @@ public abstract class AbstractTableWriter implements TableWriter {
 
     protected CompletableFuture<Void> send(WriteRecord record) {
         CompletableFuture<Void> future = new CompletableFuture<>();
-        writerClient.send(
-                record,
-                (exception) -> {
-                    if (exception == null) {
-                        future.complete(null);
-                    } else {
-                        future.completeExceptionally(exception);
-                    }
-                });
+        writerClient.send(record, (exception) -> {
+            if (exception == null) {
+                future.complete(null);
+            } else {
+                future.completeExceptionally(exception);
+            }
+        });
         return future;
     }
 
@@ -88,12 +84,11 @@ public abstract class AbstractTableWriter implements TableWriter {
 
     protected void checkFieldCount(InternalRow row) {
         if (row.getFieldCount() != fieldCount) {
-            throw new IllegalArgumentException(
-                    "The field count of the row does not match the table schema. "
-                            + "Expected: "
-                            + fieldCount
-                            + ", Actual: "
-                            + row.getFieldCount());
+            throw new IllegalArgumentException("The field count of the row does not match the table schema. "
+                    + "Expected: "
+                    + fieldCount
+                    + ", Actual: "
+                    + row.getFieldCount());
         }
     }
 }

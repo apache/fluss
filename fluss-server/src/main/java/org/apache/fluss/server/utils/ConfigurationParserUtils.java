@@ -60,7 +60,6 @@ public class ConfigurationParserUtils {
 
         final Configuration dynamicProperties =
                 ConfigurationUtils.createConfiguration(serverConfiguration.getDynamicProperties());
-        return GlobalConfiguration.loadConfiguration(
-                serverConfiguration.getConfigDir(), dynamicProperties);
+        return GlobalConfiguration.loadConfiguration(serverConfiguration.getConfigDir(), dynamicProperties);
     }
 }

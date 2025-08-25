@@ -37,8 +37,7 @@ public interface LakeCatalog extends AutoCloseable {
      * @param tableDescriptor The descriptor of the table to be created
      * @throws TableAlreadyExistException if the table already exists
      */
-    void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
-            throws TableAlreadyExistException;
+    void createTable(TablePath tablePath, TableDescriptor tableDescriptor) throws TableAlreadyExistException;
 
     @Override
     default void close() throws Exception {

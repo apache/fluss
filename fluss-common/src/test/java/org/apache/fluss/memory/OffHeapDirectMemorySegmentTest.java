@@ -64,7 +64,6 @@ public class OffHeapDirectMemorySegmentTest extends MemorySegmentTestBase {
 
     @TestTemplate
     public void testGetAddress() {
-        assertThat(segment.getAddress())
-                .isEqualTo(getByteBufferAddress(segment.getOffHeapBuffer()));
+        assertThat(segment.getAddress()).isEqualTo(getByteBufferAddress(segment.getOffHeapBuffer()));
     }
 }

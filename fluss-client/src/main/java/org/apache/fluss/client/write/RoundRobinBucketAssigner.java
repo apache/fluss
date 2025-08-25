@@ -40,15 +40,13 @@ public class RoundRobinBucketAssigner extends DynamicBucketAssigner {
     @Override
     public int assignBucket(Cluster cluster) {
         int nextValue = counter.getAndIncrement();
-        List<BucketLocation> bucketsForTable =
-                cluster.getAvailableBucketsForPhysicalTablePath(physicalTablePath);
+        List<BucketLocation> bucketsForTable = cluster.getAvailableBucketsForPhysicalTablePath(physicalTablePath);
         if (!bucketsForTable.isEmpty()) {
             int bucket = MathUtils.toPositive(nextValue) % bucketsForTable.size();
             return bucketsForTable.get(bucket).getBucketId();
         } else {
             // no buckets are available, give a non-available bucket.
-            return MathUtils.toPositive(nextValue)
-                    % cluster.getBucketCount(physicalTablePath.getTablePath());
+            return MathUtils.toPositive(nextValue) % cluster.getBucketCount(physicalTablePath.getTablePath());
         }
     }
 

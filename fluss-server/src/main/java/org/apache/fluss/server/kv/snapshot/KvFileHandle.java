@@ -90,11 +90,7 @@ public class KvFileHandle implements Serializable {
         if (!success || actualException != null) {
             if (fs.exists(fsPath)) {
                 throw Optional.ofNullable(actualException)
-                        .orElse(
-                                new IOException(
-                                        "Unknown error caused the file '"
-                                                + fsPath
-                                                + "' to not be deleted."));
+                        .orElse(new IOException("Unknown error caused the file '" + fsPath + "' to not be deleted."));
             }
         }
     }

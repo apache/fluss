@@ -53,8 +53,7 @@ public class FlussConfigUtils {
                     options.put(configOption.key(), configOption);
                 }
             } catch (IllegalAccessException e) {
-                throw new RuntimeException(
-                        "Unable to extract ConfigOption fields from ConfigOptions class.", e);
+                throw new RuntimeException("Unable to extract ConfigOption fields from ConfigOptions class.", e);
             }
         }
         return options;

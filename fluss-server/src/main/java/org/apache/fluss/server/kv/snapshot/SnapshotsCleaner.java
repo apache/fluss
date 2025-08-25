@@ -63,14 +63,12 @@ public class SnapshotsCleaner {
      * @param postCleanAction post action after cleaning.
      * @param executor is used to perform the cleanup logic.
      */
-    public void cleanSubsumedSnapshots(
-            long upTo, Set<Long> stillInUse, Runnable postCleanAction, Executor executor) {
+    public void cleanSubsumedSnapshots(long upTo, Set<Long> stillInUse, Runnable postCleanAction, Executor executor) {
         synchronized (lock) {
             Iterator<CompletedSnapshot> iterator = subsumedSnapshots.iterator();
             while (iterator.hasNext()) {
                 CompletedSnapshot snapshot = iterator.next();
-                if (snapshot.getSnapshotID() < upTo
-                        && !stillInUse.contains(snapshot.getSnapshotID())) {
+                if (snapshot.getSnapshotID() < upTo && !stillInUse.contains(snapshot.getSnapshotID())) {
                     try {
                         LOG.debug("Try to discard snapshot {}.", snapshot.getSnapshotID());
                         cleanSnapshot(snapshot, postCleanAction, executor);
@@ -83,20 +81,15 @@ public class SnapshotsCleaner {
         }
     }
 
-    public void cleanSnapshot(
-            CompletedSnapshot snapshot, Runnable postCleanAction, Executor executor) {
+    public void cleanSnapshot(CompletedSnapshot snapshot, Runnable postCleanAction, Executor executor) {
         LOG.debug("Clean snapshot {}.", snapshot.getSnapshotID());
         CompletableFuture<Void> discardFuture = snapshot.discardAsync(executor);
-        discardFuture.handle(
-                (Object outerIgnored, Throwable outerThrowable) -> {
-                    if (outerThrowable != null) {
-                        LOG.warn(
-                                "Could not properly discard completed Snapshot {}.",
-                                snapshot.getSnapshotID(),
-                                outerThrowable);
-                    }
-                    postCleanAction.run();
-                    return null;
-                });
+        discardFuture.handle((Object outerIgnored, Throwable outerThrowable) -> {
+            if (outerThrowable != null) {
+                LOG.warn("Could not properly discard completed Snapshot {}.", snapshot.getSnapshotID(), outerThrowable);
+            }
+            postCleanAction.run();
+            return null;
+        });
     }
 }

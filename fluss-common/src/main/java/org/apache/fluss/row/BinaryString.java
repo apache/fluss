@@ -40,8 +40,7 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  * @since 0.1
  */
 @PublicStable
-public final class BinaryString extends BinarySection
-        implements Comparable<BinaryString>, MemoryAwareGetters {
+public final class BinaryString extends BinarySection implements Comparable<BinaryString>, MemoryAwareGetters {
 
     private static final long serialVersionUID = 1L;
 
@@ -350,9 +349,7 @@ public final class BinaryString extends BinarySection
         if (s.sizeInBytes == 0) {
             return true;
         }
-        int find =
-                BinarySegmentUtils.find(
-                        segments, offset, sizeInBytes, s.segments, s.offset, s.sizeInBytes);
+        int find = BinarySegmentUtils.find(segments, offset, sizeInBytes, s.segments, s.offset, s.sizeInBytes);
         return find != -1;
     }
 
@@ -462,8 +459,7 @@ public final class BinaryString extends BinarySection
                 if (byteIdx + str.sizeInBytes > sizeInBytes) {
                     return -1;
                 }
-                if (BinarySegmentUtils.equals(
-                        segments, offset + byteIdx, str.segments, str.offset, str.sizeInBytes)) {
+                if (BinarySegmentUtils.equals(segments, offset + byteIdx, str.segments, str.offset, str.sizeInBytes)) {
                     return charIdx;
                 }
                 byteIdx += numBytesForFirstByte(getByteOneSegment(byteIdx));
@@ -493,8 +489,7 @@ public final class BinaryString extends BinarySection
             if (byteIdx + str.sizeInBytes > sizeInBytes) {
                 return -1;
             }
-            if (BinarySegmentUtils.equals(
-                    segments, offset + byteIdx, str.segments, str.offset, str.sizeInBytes)) {
+            if (BinarySegmentUtils.equals(segments, offset + byteIdx, str.segments, str.offset, str.sizeInBytes)) {
                 return charIdx;
             }
             int charBytes = numBytesForFirstByte(index.segment.get(index.offset));
@@ -587,9 +582,7 @@ public final class BinaryString extends BinarySection
     }
 
     private boolean matchAt(final BinaryString s, int pos) {
-        return (inFirstSegment() && s.inFirstSegment())
-                ? matchAtOneSeg(s, pos)
-                : matchAtVarSeg(s, pos);
+        return (inFirstSegment() && s.inFirstSegment()) ? matchAtOneSeg(s, pos) : matchAtVarSeg(s, pos);
     }
 
     private boolean matchAtOneSeg(final BinaryString s, int pos) {
@@ -601,8 +594,7 @@ public final class BinaryString extends BinarySection
     private boolean matchAtVarSeg(final BinaryString s, int pos) {
         return s.sizeInBytes + pos <= sizeInBytes
                 && pos >= 0
-                && BinarySegmentUtils.equals(
-                        segments, offset + pos, s.segments, s.offset, s.sizeInBytes);
+                && BinarySegmentUtils.equals(segments, offset + pos, s.segments, s.offset, s.sizeInBytes);
     }
 
     BinaryString copyBinaryStringInOneSeg(int start, int len) {
@@ -630,9 +622,7 @@ public final class BinaryString extends BinarySection
     }
 
     private BinaryString.SegmentAndOffset startSegmentAndOffset(int segSize) {
-        return inFirstSegment()
-                ? new BinaryString.SegmentAndOffset(0, offset)
-                : firstSegmentAndOffset(segSize);
+        return inFirstSegment() ? new BinaryString.SegmentAndOffset(0, offset) : firstSegmentAndOffset(segSize);
     }
 
     /** CurrentSegment and positionInSegment. */
@@ -859,14 +849,9 @@ public final class BinaryString extends BinarySection
                             || (b3 & 0xc0) != 0x80) { // isMalformed3(b1, b2, b3)
                         return -1;
                     } else {
-                        char c =
-                                (char)
-                                        ((b1 << 12)
-                                                ^ (b2 << 6)
-                                                ^ (b3
-                                                        ^ (((byte) 0xE0 << 12)
-                                                                ^ ((byte) 0x80 << 6)
-                                                                ^ ((byte) 0x80))));
+                        char c = (char) ((b1 << 12)
+                                ^ (b2 << 6)
+                                ^ (b3 ^ (((byte) 0xE0 << 12) ^ ((byte) 0x80 << 6) ^ ((byte) 0x80))));
                         if (Character.isSurrogate(c)) {
                             return -1;
                         } else {
@@ -882,15 +867,10 @@ public final class BinaryString extends BinarySection
                     int b2 = sa[sp++];
                     int b3 = sa[sp++];
                     int b4 = sa[sp++];
-                    int uc =
-                            ((b1 << 18)
-                                    ^ (b2 << 12)
-                                    ^ (b3 << 6)
-                                    ^ (b4
-                                            ^ (((byte) 0xF0 << 18)
-                                                    ^ ((byte) 0x80 << 12)
-                                                    ^ ((byte) 0x80 << 6)
-                                                    ^ ((byte) 0x80))));
+                    int uc = ((b1 << 18)
+                            ^ (b2 << 12)
+                            ^ (b3 << 6)
+                            ^ (b4 ^ (((byte) 0xF0 << 18) ^ ((byte) 0x80 << 12) ^ ((byte) 0x80 << 6) ^ ((byte) 0x80))));
                     // isMalformed4 and shortest form check
                     if (((b2 & 0xc0) != 0x80 || (b3 & 0xc0) != 0x80 || (b4 & 0xc0) != 0x80)
                             || !Character.isSupplementaryCodePoint(uc)) {
@@ -957,14 +937,9 @@ public final class BinaryString extends BinarySection
                             || (b3 & 0xc0) != 0x80) { // isMalformed3(b1, b2, b3)
                         return -1;
                     } else {
-                        char c =
-                                (char)
-                                        ((b1 << 12)
-                                                ^ (b2 << 6)
-                                                ^ (b3
-                                                        ^ (((byte) 0xE0 << 12)
-                                                                ^ ((byte) 0x80 << 6)
-                                                                ^ ((byte) 0x80))));
+                        char c = (char) ((b1 << 12)
+                                ^ (b2 << 6)
+                                ^ (b3 ^ (((byte) 0xE0 << 12) ^ ((byte) 0x80 << 6) ^ ((byte) 0x80))));
                         if (Character.isSurrogate(c)) {
                             return -1;
                         } else {
@@ -980,15 +955,10 @@ public final class BinaryString extends BinarySection
                     int b2 = segment.get(sp++);
                     int b3 = segment.get(sp++);
                     int b4 = segment.get(sp++);
-                    int uc =
-                            ((b1 << 18)
-                                    ^ (b2 << 12)
-                                    ^ (b3 << 6)
-                                    ^ (b4
-                                            ^ (((byte) 0xF0 << 18)
-                                                    ^ ((byte) 0x80 << 12)
-                                                    ^ ((byte) 0x80 << 6)
-                                                    ^ ((byte) 0x80))));
+                    int uc = ((b1 << 18)
+                            ^ (b2 << 12)
+                            ^ (b3 << 6)
+                            ^ (b4 ^ (((byte) 0xF0 << 18) ^ ((byte) 0x80 << 12) ^ ((byte) 0x80 << 6) ^ ((byte) 0x80))));
                     // isMalformed4 and shortest form check
                     if (((b2 & 0xc0) != 0x80 || (b3 & 0xc0) != 0x80 || (b4 & 0xc0) != 0x80)
                             || !Character.isSupplementaryCodePoint(uc)) {

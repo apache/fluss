@@ -101,27 +101,16 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
 
     @VisibleForTesting
     public static MemoryLogRecordsArrowBuilder builder(
-            long baseLogOffset,
-            int schemaId,
-            ArrowWriter arrowWriter,
-            AbstractPagedOutputView outputView) {
+            long baseLogOffset, int schemaId, ArrowWriter arrowWriter, AbstractPagedOutputView outputView) {
         return new MemoryLogRecordsArrowBuilder(
                 baseLogOffset, schemaId, CURRENT_LOG_MAGIC_VALUE, arrowWriter, outputView, false);
     }
 
     /** Builder with limited write size and the memory segment used to serialize records. */
     public static MemoryLogRecordsArrowBuilder builder(
-            int schemaId,
-            ArrowWriter arrowWriter,
-            AbstractPagedOutputView outputView,
-            boolean appendOnly) {
+            int schemaId, ArrowWriter arrowWriter, AbstractPagedOutputView outputView, boolean appendOnly) {
         return new MemoryLogRecordsArrowBuilder(
-                BUILDER_DEFAULT_OFFSET,
-                schemaId,
-                CURRENT_LOG_MAGIC_VALUE,
-                arrowWriter,
-                outputView,
-                appendOnly);
+                BUILDER_DEFAULT_OFFSET, schemaId, CURRENT_LOG_MAGIC_VALUE, arrowWriter, outputView, appendOnly);
     }
 
     public MultiBytesView build() throws IOException {
@@ -138,13 +127,11 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         }
 
         // serialize the arrow batch to dynamically allocated memory segments
-        arrowWriter.serializeToOutputView(
-                pagedOutputView, ARROW_CHANGETYPE_OFFSET + changeTypeWriter.sizeInBytes());
+        arrowWriter.serializeToOutputView(pagedOutputView, ARROW_CHANGETYPE_OFFSET + changeTypeWriter.sizeInBytes());
         recordCount = arrowWriter.getRecordsCount();
-        bytesView =
-                MultiBytesView.builder()
-                        .addMemorySegmentByteViewList(pagedOutputView.getWrittenSegments())
-                        .build();
+        bytesView = MultiBytesView.builder()
+                .addMemorySegmentByteViewList(pagedOutputView.getWrittenSegments())
+                .build();
         arrowWriter.recycle(writerEpoch);
 
         writeBatchHeader();
@@ -172,8 +159,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         }
         if (appendOnly && changeType != ChangeType.APPEND_ONLY) {
             throw new IllegalArgumentException(
-                    "Only append-only change type is allowed for append-only arrow log builder, but got "
-                            + changeType);
+                    "Only append-only change type is allowed for append-only arrow log builder, but got " + changeType);
         }
 
         arrowWriter.writeRow(row);
@@ -210,8 +196,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     @Override
     public void close() throws Exception {
         if (aborted) {
-            throw new IllegalStateException(
-                    "Cannot close MemoryLogRecordsArrowBuilder as it has already been aborted");
+            throw new IllegalStateException("Cannot close MemoryLogRecordsArrowBuilder as it has already been aborted");
         }
 
         if (isClosed) {
@@ -237,9 +222,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         if (reCalculateSizeInBytes) {
             // make size in bytes up-to-date
             estimatedSizeInBytes =
-                    ARROW_CHANGETYPE_OFFSET
-                            + changeTypeWriter.sizeInBytes()
-                            + arrowWriter.estimatedSizeInBytes();
+                    ARROW_CHANGETYPE_OFFSET + changeTypeWriter.sizeInBytes() + arrowWriter.estimatedSizeInBytes();
         }
 
         reCalculateSizeInBytes = false;

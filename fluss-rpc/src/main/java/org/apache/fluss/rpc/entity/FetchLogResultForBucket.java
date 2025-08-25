@@ -36,22 +36,15 @@ public class FetchLogResultForBucket extends ResultForBucket {
     private final @Nullable LogRecords records;
     private final long highWatermark;
 
-    public FetchLogResultForBucket(
-            TableBucket tableBucket, LogRecords records, long highWatermark) {
-        this(
-                tableBucket,
-                null,
-                checkNotNull(records, "records can not be null"),
-                highWatermark,
-                ApiError.NONE);
+    public FetchLogResultForBucket(TableBucket tableBucket, LogRecords records, long highWatermark) {
+        this(tableBucket, null, checkNotNull(records, "records can not be null"), highWatermark, ApiError.NONE);
     }
 
     public FetchLogResultForBucket(TableBucket tableBucket, ApiError error) {
         this(tableBucket, null, null, -1L, error);
     }
 
-    public FetchLogResultForBucket(
-            TableBucket tableBucket, RemoteLogFetchInfo remoteLogFetchInfo, long highWatermark) {
+    public FetchLogResultForBucket(TableBucket tableBucket, RemoteLogFetchInfo remoteLogFetchInfo, long highWatermark) {
         this(
                 tableBucket,
                 checkNotNull(remoteLogFetchInfo, "remote log fetch info can not be null"),

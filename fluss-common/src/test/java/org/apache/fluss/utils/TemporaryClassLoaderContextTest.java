@@ -31,13 +31,10 @@ public class TemporaryClassLoaderContextTest {
     void testTemporaryClassLoaderContext() {
         final ClassLoader contextClassLoader = Thread.currentThread().getContextClassLoader();
 
-        final URLClassLoader temporaryClassLoader =
-                new URLClassLoader(new URL[0], contextClassLoader);
+        final URLClassLoader temporaryClassLoader = new URLClassLoader(new URL[0], contextClassLoader);
 
-        try (TemporaryClassLoaderContext ignored =
-                TemporaryClassLoaderContext.of(temporaryClassLoader)) {
-            assertThat(Thread.currentThread().getContextClassLoader())
-                    .isEqualTo(temporaryClassLoader);
+        try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(temporaryClassLoader)) {
+            assertThat(Thread.currentThread().getContextClassLoader()).isEqualTo(temporaryClassLoader);
         }
 
         assertThat(Thread.currentThread().getContextClassLoader()).isEqualTo(contextClassLoader);

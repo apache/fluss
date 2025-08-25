@@ -35,12 +35,10 @@ public class TableBucketWriteResultSerializer<WriteResult>
 
     private static final int CURRENT_VERSION = 1;
 
-    private final org.apache.fluss.lake.serializer.SimpleVersionedSerializer<WriteResult>
-            writeResultSerializer;
+    private final org.apache.fluss.lake.serializer.SimpleVersionedSerializer<WriteResult> writeResultSerializer;
 
     public TableBucketWriteResultSerializer(
-            org.apache.fluss.lake.serializer.SimpleVersionedSerializer<WriteResult>
-                    writeResultSerializer) {
+            org.apache.fluss.lake.serializer.SimpleVersionedSerializer<WriteResult> writeResultSerializer) {
         this.writeResultSerializer = writeResultSerializer;
     }
 
@@ -50,8 +48,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
     }
 
     @Override
-    public byte[] serialize(TableBucketWriteResult<WriteResult> tableBucketWriteResult)
-            throws IOException {
+    public byte[] serialize(TableBucketWriteResult<WriteResult> tableBucketWriteResult) throws IOException {
         final DataOutputSerializer out = SERIALIZER_CACHE.get();
         // serialize table path
         TablePath tablePath = tableBucketWriteResult.tablePath();
@@ -94,8 +91,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
     }
 
     @Override
-    public TableBucketWriteResult<WriteResult> deserialize(int version, byte[] serialized)
-            throws IOException {
+    public TableBucketWriteResult<WriteResult> deserialize(int version, byte[] serialized) throws IOException {
         if (version != CURRENT_VERSION) {
             throw new IOException("Unknown version " + version);
         }
@@ -132,11 +128,6 @@ public class TableBucketWriteResultSerializer<WriteResult>
         // deserialize number of write results
         int numberOfWriteResults = in.readInt();
         return new TableBucketWriteResult<>(
-                tablePath,
-                tableBucket,
-                partitionName,
-                writeResult,
-                logEndOffset,
-                numberOfWriteResults);
+                tablePath, tableBucket, partitionName, writeResult, logEndOffset, numberOfWriteResults);
     }
 }

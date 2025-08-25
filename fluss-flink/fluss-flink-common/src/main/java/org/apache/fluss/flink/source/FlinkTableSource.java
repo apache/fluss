@@ -116,22 +116,29 @@ public class FlinkTableSource
     // options for lookup source
     private final int lookupMaxRetryTimes;
     private final boolean lookupAsync;
-    @Nullable private final LookupCache cache;
+
+    @Nullable
+    private final LookupCache cache;
 
     private final long scanPartitionDiscoveryIntervalMs;
     private final boolean isDataLakeEnabled;
-    @Nullable private final MergeEngineType mergeEngineType;
+
+    @Nullable
+    private final MergeEngineType mergeEngineType;
 
     // output type after projection pushdown
     private LogicalType producedDataType;
 
     // projection push down
-    @Nullable private int[] projectedFields;
+    @Nullable
+    private int[] projectedFields;
 
-    @Nullable private GenericRowData singleRowFilter;
+    @Nullable
+    private GenericRowData singleRowFilter;
 
     // whether the scan is for row-level modification
-    @Nullable private RowLevelModificationType modificationScanType;
+    @Nullable
+    private RowLevelModificationType modificationScanType;
 
     // count(*) push down
     protected boolean selectRowCount = false;
@@ -142,7 +149,8 @@ public class FlinkTableSource
 
     private final Map<String, String> tableOptions;
 
-    @Nullable private LakeSource<LakeSplit> lakeSource;
+    @Nullable
+    private LakeSource<LakeSplit> lakeSource;
 
     public FlinkTableSource(
             TablePath tablePath,
@@ -216,28 +224,21 @@ public class FlinkTableSource
         if (singleRowFilter != null || limit > 0 || selectRowCount) {
             Collection<RowData> results;
             if (singleRowFilter != null) {
-                results =
-                        PushdownUtils.querySingleRow(
-                                singleRowFilter,
-                                tablePath,
-                                flussConfig,
-                                tableOutputType,
-                                primaryKeyIndexes,
-                                lookupMaxRetryTimes,
-                                projectedFields);
+                results = PushdownUtils.querySingleRow(
+                        singleRowFilter,
+                        tablePath,
+                        flussConfig,
+                        tableOutputType,
+                        primaryKeyIndexes,
+                        lookupMaxRetryTimes,
+                        projectedFields);
             } else if (limit > 0) {
-                results =
-                        PushdownUtils.limitScan(
-                                tablePath, flussConfig, tableOutputType, projectedFields, limit);
+                results = PushdownUtils.limitScan(tablePath, flussConfig, tableOutputType, projectedFields, limit);
             } else {
-                results =
-                        Collections.singleton(
-                                GenericRowData.of(
-                                        PushdownUtils.countLogTable(tablePath, flussConfig)));
+                results = Collections.singleton(GenericRowData.of(PushdownUtils.countLogTable(tablePath, flussConfig)));
             }
 
-            TypeInformation<RowData> resultTypeInfo =
-                    scanContext.createTypeInformation(producedDataType);
+            TypeInformation<RowData> resultTypeInfo = scanContext.createTypeInformation(producedDataType);
             return new DataStreamScanProvider() {
                 @Override
                 public DataStream<RowData> produceDataStream(
@@ -269,28 +270,25 @@ public class FlinkTableSource
                 offsetsInitializer = OffsetsInitializer.full();
                 break;
             case TIMESTAMP:
-                offsetsInitializer =
-                        OffsetsInitializer.timestamp(startupOptions.startupTimestampMs);
+                offsetsInitializer = OffsetsInitializer.timestamp(startupOptions.startupTimestampMs);
                 break;
             default:
-                throw new IllegalArgumentException(
-                        "Unsupported startup mode: " + startupOptions.startupMode);
+                throw new IllegalArgumentException("Unsupported startup mode: " + startupOptions.startupMode);
         }
 
-        FlinkSource<RowData> source =
-                new FlinkSource<>(
-                        flussConfig,
-                        tablePath,
-                        hasPrimaryKey(),
-                        isPartitioned(),
-                        flussRowType,
-                        projectedFields,
-                        offsetsInitializer,
-                        scanPartitionDiscoveryIntervalMs,
-                        new RowDataDeserializationSchema(),
-                        streaming,
-                        partitionFilters,
-                        lakeSource);
+        FlinkSource<RowData> source = new FlinkSource<>(
+                flussConfig,
+                tablePath,
+                hasPrimaryKey(),
+                isPartitioned(),
+                flussRowType,
+                projectedFields,
+                offsetsInitializer,
+                scanPartitionDiscoveryIntervalMs,
+                new RowDataDeserializationSchema(),
+                streaming,
+                partitionFilters,
+                lakeSource);
 
         if (!streaming) {
             // return a bounded source provide to make planner happy,
@@ -304,10 +302,9 @@ public class FlinkTableSource
                 @Override
                 public Source<RowData, ?, ?> createSource() {
                     if (modificationScanType != null) {
-                        throw new UnsupportedOperationException(
-                                "Currently, Fluss table only supports "
-                                        + modificationScanType
-                                        + " statement with conditions on primary key.");
+                        throw new UnsupportedOperationException("Currently, Fluss table only supports "
+                                + modificationScanType
+                                + " statement with conditions on primary key.");
                     }
                     if (!isDataLakeEnabled) {
                         throw new UnsupportedOperationException(
@@ -323,37 +320,24 @@ public class FlinkTableSource
 
     @Override
     public LookupRuntimeProvider getLookupRuntimeProvider(LookupContext context) {
-        LookupNormalizer lookupNormalizer =
-                LookupNormalizer.validateAndCreateLookupNormalizer(
-                        context.getKeys(),
-                        primaryKeyIndexes,
-                        bucketKeyIndexes,
-                        partitionKeyIndexes,
-                        tableOutputType,
-                        projectedFields);
+        LookupNormalizer lookupNormalizer = LookupNormalizer.validateAndCreateLookupNormalizer(
+                context.getKeys(),
+                primaryKeyIndexes,
+                bucketKeyIndexes,
+                partitionKeyIndexes,
+                tableOutputType,
+                projectedFields);
         if (lookupAsync) {
-            AsyncLookupFunction asyncLookupFunction =
-                    new FlinkAsyncLookupFunction(
-                            flussConfig,
-                            tablePath,
-                            tableOutputType,
-                            lookupMaxRetryTimes,
-                            lookupNormalizer,
-                            projectedFields);
+            AsyncLookupFunction asyncLookupFunction = new FlinkAsyncLookupFunction(
+                    flussConfig, tablePath, tableOutputType, lookupMaxRetryTimes, lookupNormalizer, projectedFields);
             if (cache != null) {
                 return PartialCachingAsyncLookupProvider.of(asyncLookupFunction, cache);
             } else {
                 return AsyncLookupFunctionProvider.of(asyncLookupFunction);
             }
         } else {
-            LookupFunction lookupFunction =
-                    new FlinkLookupFunction(
-                            flussConfig,
-                            tablePath,
-                            tableOutputType,
-                            lookupMaxRetryTimes,
-                            lookupNormalizer,
-                            projectedFields);
+            LookupFunction lookupFunction = new FlinkLookupFunction(
+                    flussConfig, tablePath, tableOutputType, lookupMaxRetryTimes, lookupNormalizer, projectedFields);
             if (cache != null) {
                 return PartialCachingLookupProvider.of(lookupFunction, cache);
             } else {
@@ -364,23 +348,22 @@ public class FlinkTableSource
 
     @Override
     public DynamicTableSource copy() {
-        FlinkTableSource source =
-                new FlinkTableSource(
-                        tablePath,
-                        flussConfig,
-                        tableOutputType,
-                        primaryKeyIndexes,
-                        bucketKeyIndexes,
-                        partitionKeyIndexes,
-                        streaming,
-                        startupOptions,
-                        lookupMaxRetryTimes,
-                        lookupAsync,
-                        cache,
-                        scanPartitionDiscoveryIntervalMs,
-                        isDataLakeEnabled,
-                        mergeEngineType,
-                        tableOptions);
+        FlinkTableSource source = new FlinkTableSource(
+                tablePath,
+                flussConfig,
+                tableOutputType,
+                primaryKeyIndexes,
+                bucketKeyIndexes,
+                partitionKeyIndexes,
+                streaming,
+                startupOptions,
+                lookupMaxRetryTimes,
+                lookupAsync,
+                cache,
+                scanPartitionDiscoveryIntervalMs,
+                isDataLakeEnabled,
+                mergeEngineType,
+                tableOptions);
         source.producedDataType = producedDataType;
         source.projectedFields = projectedFields;
         source.singleRowFilter = singleRowFilter;
@@ -402,7 +385,8 @@ public class FlinkTableSource
 
     @Override
     public void applyProjection(int[][] projectedFields, DataType producedDataType) {
-        this.projectedFields = Arrays.stream(projectedFields).mapToInt(value -> value[0]).toArray();
+        this.projectedFields =
+                Arrays.stream(projectedFields).mapToInt(value -> value[0]).toArray();
         this.producedDataType = producedDataType.getLogicalType();
         if (lakeSource != null) {
             lakeSource.withProject(projectedFields);
@@ -425,13 +409,8 @@ public class FlinkTableSource
                 && hasPrimaryKey()
                 && filters.size() == primaryKeyIndexes.length) {
             Map<Integer, LogicalType> primaryKeyTypes = getPrimaryKeyTypes();
-            List<FieldEqual> fieldEquals =
-                    extractFieldEquals(
-                            filters,
-                            primaryKeyTypes,
-                            acceptedFilters,
-                            remainingFilters,
-                            FLINK_INTERNAL_VALUE);
+            List<FieldEqual> fieldEquals = extractFieldEquals(
+                    filters, primaryKeyTypes, acceptedFilters, remainingFilters, FLINK_INTERNAL_VALUE);
             int[] keyRowProjection = getKeyRowProjection();
             HashSet<Integer> visitedPkFields = new HashSet<>();
             GenericRowData lookupRow = new GenericRowData(primaryKeyIndexes.length);
@@ -447,13 +426,8 @@ public class FlinkTableSource
             return Result.of(acceptedFilters, remainingFilters);
         } else if (isPartitioned()) {
             // dynamic partition pushdown
-            List<FieldEqual> fieldEquals =
-                    extractFieldEquals(
-                            filters,
-                            getPartitionKeyTypes(),
-                            acceptedFilters,
-                            remainingFilters,
-                            FLUSS_INTERNAL_VALUE);
+            List<FieldEqual> fieldEquals = extractFieldEquals(
+                    filters, getPartitionKeyTypes(), acceptedFilters, remainingFilters, FLUSS_INTERNAL_VALUE);
 
             // partitions are filtered by string representations, convert the equals to string first
             partitionFilters = stringifyFieldEquals(fieldEquals);
@@ -469,16 +443,13 @@ public class FlinkTableSource
                     PredicateBuilder predicateBuilder = new PredicateBuilder(flussRowType);
 
                     for (FieldEqual fieldEqual : fieldEquals) {
-                        lakePredicates.add(
-                                predicateBuilder.equal(
-                                        fieldEqual.fieldIndex, fieldEqual.equalValue));
+                        lakePredicates.add(predicateBuilder.equal(fieldEqual.fieldIndex, fieldEqual.equalValue));
                     }
 
                     if (!lakePredicates.isEmpty()) {
                         final LakeSource.FilterPushDownResult filterPushDownResult =
                                 lakeSource.withFilters(lakePredicates);
-                        if (filterPushDownResult.acceptedPredicates().size()
-                                != lakePredicates.size()) {
+                        if (filterPushDownResult.acceptedPredicates().size() != lakePredicates.size()) {
                             LOG.info(
                                     "LakeSource rejected some partition filters. Falling back to Flink-side filtering.");
                             // Flink will apply all filters to preserve correctness
@@ -508,9 +479,7 @@ public class FlinkTableSource
 
     @Override
     public boolean applyAggregates(
-            List<int[]> groupingSets,
-            List<AggregateExpression> aggregateExpressions,
-            DataType dataType) {
+            List<int[]> groupingSets, List<AggregateExpression> aggregateExpressions, DataType dataType) {
         // Only supports 'select count(*)/count(1) from source' for log table now.
         if (streaming
                 || aggregateExpressions.size() != 1
@@ -524,13 +493,11 @@ public class FlinkTableSource
         if (!(functionDefinition
                         .getClass()
                         .getCanonicalName()
-                        .equals(
-                                "org.apache.flink.table.planner.functions.aggfunctions.CountAggFunction")
+                        .equals("org.apache.flink.table.planner.functions.aggfunctions.CountAggFunction")
                 || functionDefinition
                         .getClass()
                         .getCanonicalName()
-                        .equals(
-                                "org.apache.flink.table.planner.functions.aggfunctions.Count1AggFunction"))) {
+                        .equals("org.apache.flink.table.planner.functions.aggfunctions.Count1AggFunction"))) {
             return false;
         }
         selectRowCount = true;
@@ -558,8 +525,7 @@ public class FlinkTableSource
         List<FieldEqual> serialize = new ArrayList<>();
         for (FieldEqual fieldEqual : fieldEquals) {
             // revisit this again when we support more data types for partition key
-            serialize.add(
-                    new FieldEqual(fieldEqual.fieldIndex, (fieldEqual.equalValue).toString()));
+            serialize.add(new FieldEqual(fieldEqual.fieldIndex, (fieldEqual.equalValue).toString()));
         }
         return serialize;
     }

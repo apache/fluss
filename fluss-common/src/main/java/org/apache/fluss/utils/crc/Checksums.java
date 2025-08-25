@@ -45,12 +45,8 @@ public final class Checksums {
         if (Java.IS_JAVA9_COMPATIBLE) {
             try {
                 //noinspection JavaLangInvokeHandleSignature
-                byteBufferUpdate =
-                        MethodHandles.publicLookup()
-                                .findVirtual(
-                                        Checksum.class,
-                                        "update",
-                                        MethodType.methodType(void.class, ByteBuffer.class));
+                byteBufferUpdate = MethodHandles.publicLookup()
+                        .findVirtual(Checksum.class, "update", MethodType.methodType(void.class, ByteBuffer.class));
             } catch (Throwable t) {
                 handleUpdateThrowable(t);
             }
@@ -76,8 +72,7 @@ public final class Checksums {
      */
     public static void update(Checksum checksum, ByteBuffer buffer, int offset, int length) {
         if (buffer.hasArray()) {
-            checksum.update(
-                    buffer.array(), buffer.position() + buffer.arrayOffset() + offset, length);
+            checksum.update(buffer.array(), buffer.position() + buffer.arrayOffset() + offset, length);
         } else if (BYTE_BUFFER_UPDATE != null && buffer.isDirect()) {
             final int oldPosition = buffer.position();
             final int oldLimit = buffer.limit();

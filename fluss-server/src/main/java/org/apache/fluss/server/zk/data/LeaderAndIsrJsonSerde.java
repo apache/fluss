@@ -30,8 +30,7 @@ import java.util.List;
 
 /** Json serializer and deserializer for {@link LeaderAndIsr}. */
 @Internal
-public class LeaderAndIsrJsonSerde
-        implements JsonSerializer<LeaderAndIsr>, JsonDeserializer<LeaderAndIsr> {
+public class LeaderAndIsrJsonSerde implements JsonSerializer<LeaderAndIsr>, JsonDeserializer<LeaderAndIsr> {
 
     public static final LeaderAndIsrJsonSerde INSTANCE = new LeaderAndIsrJsonSerde();
     private static final String VERSION_KEY = "version";

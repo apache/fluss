@@ -26,8 +26,7 @@ public class DeleteReplicaResponseReceivedEvent implements CoordinatorEvent {
 
     private final List<DeleteReplicaResultForBucket> deleteReplicaResultForBuckets;
 
-    public DeleteReplicaResponseReceivedEvent(
-            List<DeleteReplicaResultForBucket> deleteReplicaResultForBuckets) {
+    public DeleteReplicaResponseReceivedEvent(List<DeleteReplicaResultForBucket> deleteReplicaResultForBuckets) {
         this.deleteReplicaResultForBuckets = deleteReplicaResultForBuckets;
     }
 

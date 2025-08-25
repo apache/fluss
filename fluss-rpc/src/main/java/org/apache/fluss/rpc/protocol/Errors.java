@@ -93,14 +93,10 @@ import java.util.function.Function;
  */
 public enum Errors {
     UNKNOWN_SERVER_ERROR(
-            -1,
-            "The server experienced an unexpected error when processing the request.",
-            UnknownServerException::new),
+            -1, "The server experienced an unexpected error when processing the request.", UnknownServerException::new),
     NONE(0, null, message -> null),
-    NETWORK_EXCEPTION(
-            1, "The server disconnected before a response was received.", NetworkException::new),
-    UNSUPPORTED_VERSION(
-            2, "The version of API is not supported.", UnsupportedVersionException::new),
+    NETWORK_EXCEPTION(1, "The server disconnected before a response was received.", NetworkException::new),
+    UNSUPPORTED_VERSION(2, "The version of API is not supported.", UnsupportedVersionException::new),
     CORRUPT_MESSAGE(
             3,
             "This message has failed its CRC checksum, exceeds the valid size, has a null key for a primary key table, or is otherwise corrupt.",
@@ -111,17 +107,13 @@ public enum Errors {
     TABLE_NOT_EXIST(7, "The table does not exist.", TableNotExistException::new),
     TABLE_ALREADY_EXIST(8, "The table already exists.", TableAlreadyExistException::new),
     SCHEMA_NOT_EXIST(9, "The schema does not exist.", SchemaNotExistException::new),
-    LOG_STORAGE_EXCEPTION(
-            10, "Exception occur while storage data for log in server.", LogStorageException::new),
-    KV_STORAGE_EXCEPTION(
-            11, "Exception occur while storage data for kv in server.", KvStorageException::new),
+    LOG_STORAGE_EXCEPTION(10, "Exception occur while storage data for log in server.", LogStorageException::new),
+    KV_STORAGE_EXCEPTION(11, "Exception occur while storage data for kv in server.", KvStorageException::new),
     NOT_LEADER_OR_FOLLOWER(12, "Not leader or follower.", NotLeaderOrFollowerException::new),
     RECORD_TOO_LARGE_EXCEPTION(13, "The record is too large.", RecordTooLargeException::new),
     CORRUPT_RECORD_EXCEPTION(14, "The record is corrupt.", CorruptRecordException::new),
     INVALID_TABLE_EXCEPTION(
-            15,
-            "The client has attempted to perform an operation on an invalid table.",
-            InvalidTableException::new),
+            15, "The client has attempted to perform an operation on an invalid table.", InvalidTableException::new),
     INVALID_DATABASE_EXCEPTION(
             16,
             "The client has attempted to perform an operation on an invalid database.",
@@ -131,27 +123,17 @@ public enum Errors {
             "The replication factor is larger then the number of available tablet servers.",
             InvalidReplicationFactorException::new),
     INVALID_REQUIRED_ACKS(
-            18,
-            "Produce request specified an invalid value for required acks.",
-            InvalidRequiredAcksException::new),
-    LOG_OFFSET_OUT_OF_RANGE_EXCEPTION(
-            19, "The log offset is out of range.", LogOffsetOutOfRangeException::new),
-    NON_PRIMARY_KEY_TABLE_EXCEPTION(
-            20, "The table is not primary key table.", NonPrimaryKeyTableException::new),
-    UNKNOWN_TABLE_OR_BUCKET_EXCEPTION(
-            21, "The table or bucket does not exist.", UnknownTableOrBucketException::new),
-    INVALID_UPDATE_VERSION_EXCEPTION(
-            22, "The update version is invalid.", InvalidUpdateVersionException::new),
-    INVALID_COORDINATOR_EXCEPTION(
-            23, "The coordinator is invalid.", InvalidCoordinatorException::new),
-    FENCED_LEADER_EPOCH_EXCEPTION(
-            24, "The leader epoch is invalid.", FencedLeaderEpochException::new),
+            18, "Produce request specified an invalid value for required acks.", InvalidRequiredAcksException::new),
+    LOG_OFFSET_OUT_OF_RANGE_EXCEPTION(19, "The log offset is out of range.", LogOffsetOutOfRangeException::new),
+    NON_PRIMARY_KEY_TABLE_EXCEPTION(20, "The table is not primary key table.", NonPrimaryKeyTableException::new),
+    UNKNOWN_TABLE_OR_BUCKET_EXCEPTION(21, "The table or bucket does not exist.", UnknownTableOrBucketException::new),
+    INVALID_UPDATE_VERSION_EXCEPTION(22, "The update version is invalid.", InvalidUpdateVersionException::new),
+    INVALID_COORDINATOR_EXCEPTION(23, "The coordinator is invalid.", InvalidCoordinatorException::new),
+    FENCED_LEADER_EPOCH_EXCEPTION(24, "The leader epoch is invalid.", FencedLeaderEpochException::new),
     REQUEST_TIME_OUT(25, "The request time out.", TimeoutException::new),
     STORAGE_EXCEPTION(26, "The general storage exception.", StorageException::new),
     OPERATION_NOT_ATTEMPTED_EXCEPTION(
-            27,
-            "The server did not attempt to execute this operation.",
-            OperationNotAttemptedException::new),
+            27, "The server did not attempt to execute this operation.", OperationNotAttemptedException::new),
     NOT_ENOUGH_REPLICAS_AFTER_APPEND_EXCEPTION(
             28,
             "Records are written to the server already, but to fewer in-sync replicas than required.",
@@ -160,61 +142,38 @@ public enum Errors {
             29,
             "Messages are rejected since there are fewer in-sync replicas than required.",
             NotEnoughReplicasException::new),
-    SECURITY_TOKEN_EXCEPTION(
-            30, "Get file access security token exception.", SecurityTokenException::new),
+    SECURITY_TOKEN_EXCEPTION(30, "Get file access security token exception.", SecurityTokenException::new),
     OUT_OF_ORDER_SEQUENCE_EXCEPTION(
-            31,
-            "The tablet server received an out of order sequence batch.",
-            OutOfOrderSequenceException::new),
+            31, "The tablet server received an out of order sequence batch.", OutOfOrderSequenceException::new),
     DUPLICATE_SEQUENCE_EXCEPTION(
-            32,
-            "The tablet server received a duplicate sequence batch.",
-            DuplicateSequenceException::new),
+            32, "The tablet server received a duplicate sequence batch.", DuplicateSequenceException::new),
     UNKNOWN_WRITER_ID_EXCEPTION(
             33,
             "This exception is raised by the tablet server if it could not locate the writer metadata.",
             UnknownWriterIdException::new),
-    INVALID_COLUMN_PROJECTION(
-            34,
-            "The requested column projection is invalid.",
-            InvalidColumnProjectionException::new),
-    INVALID_TARGET_COLUMN(
-            35,
-            "The requested target column to write is invalid.",
-            InvalidTargetColumnException::new),
+    INVALID_COLUMN_PROJECTION(34, "The requested column projection is invalid.", InvalidColumnProjectionException::new),
+    INVALID_TARGET_COLUMN(35, "The requested target column to write is invalid.", InvalidTargetColumnException::new),
     PARTITION_NOT_EXISTS(36, "The partition does not exist.", PartitionNotExistException::new),
-    TABLE_NOT_PARTITIONED_EXCEPTION(
-            37, "The table is not partitioned.", TableNotPartitionedException::new),
+    TABLE_NOT_PARTITIONED_EXCEPTION(37, "The table is not partitioned.", TableNotPartitionedException::new),
     INVALID_TIMESTAMP_EXCEPTION(38, "The timestamp is invalid.", InvalidTimestampException::new),
     INVALID_CONFIG_EXCEPTION(39, "The config is invalid.", InvalidConfigException::new),
     LAKE_STORAGE_NOT_CONFIGURED_EXCEPTION(
             40, "The lake storage is not configured.", LakeStorageNotConfiguredException::new),
     KV_SNAPSHOT_NOT_EXIST(41, "The kv snapshot is not exist.", KvSnapshotNotExistException::new),
-    PARTITION_ALREADY_EXISTS(
-            42, "The partition already exists.", PartitionAlreadyExistsException::new),
-    PARTITION_SPEC_INVALID_EXCEPTION(
-            43, "The partition spec is invalid.", InvalidPartitionException::new),
+    PARTITION_ALREADY_EXISTS(42, "The partition already exists.", PartitionAlreadyExistsException::new),
+    PARTITION_SPEC_INVALID_EXCEPTION(43, "The partition spec is invalid.", InvalidPartitionException::new),
     LEADER_NOT_AVAILABLE_EXCEPTION(
-            44,
-            "There is no currently available leader for the given partition.",
-            LeaderNotAvailableException::new),
-    PARTITION_MAX_NUM_EXCEPTION(
-            45, "Exceed the maximum number of partitions.", TooManyPartitionsException::new),
+            44, "There is no currently available leader for the given partition.", LeaderNotAvailableException::new),
+    PARTITION_MAX_NUM_EXCEPTION(45, "Exceed the maximum number of partitions.", TooManyPartitionsException::new),
     AUTHENTICATE_EXCEPTION(46, "Authentication failed.", AuthenticationException::new),
     SECURITY_DISABLED_EXCEPTION(47, "Security is disabled.", SecurityDisabledException::new),
     AUTHORIZATION_EXCEPTION(48, "Authorization failed", AuthorizationException::new),
-    BUCKET_MAX_NUM_EXCEPTION(
-            49, "Exceed the maximum number of buckets", TooManyBucketsException::new),
-    FENCED_TIERING_EPOCH_EXCEPTION(
-            50, "The tiering epoch is invalid.", FencedTieringEpochException::new),
+    BUCKET_MAX_NUM_EXCEPTION(49, "Exceed the maximum number of buckets", TooManyBucketsException::new),
+    FENCED_TIERING_EPOCH_EXCEPTION(50, "The tiering epoch is invalid.", FencedTieringEpochException::new),
     RETRIABLE_AUTHENTICATE_EXCEPTION(
-            51,
-            "Authentication failed with retriable exception. ",
-            RetriableAuthenticationException::new),
-    INVALID_SERVER_RACK_INFO_EXCEPTION(
-            52, "The server rack info is invalid.", InvalidServerRackInfoException::new),
-    LAKE_SNAPSHOT_NOT_EXIST(
-            53, "The lake snapshot is not exist.", LakeTableSnapshotNotExistException::new);
+            51, "Authentication failed with retriable exception. ", RetriableAuthenticationException::new),
+    INVALID_SERVER_RACK_INFO_EXCEPTION(52, "The server rack info is invalid.", InvalidServerRackInfoException::new),
+    LAKE_SNAPSHOT_NOT_EXIST(53, "The lake snapshot is not exist.", LakeTableSnapshotNotExistException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

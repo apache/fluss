@@ -92,21 +92,15 @@ public class LogTieringTask implements Runnable {
             runOnce();
         } catch (InterruptedException ex) {
             if (!isCancelled()) {
-                LOG.warn(
-                        "Current thread for table-bucket {} is interrupted. Reason: {}",
-                        tableBucket,
-                        ex.getMessage());
+                LOG.warn("Current thread for table-bucket {} is interrupted. Reason: {}", tableBucket, ex.getMessage());
             }
         } catch (RetriableException ex) {
             LOG.debug(
-                    "Encountered a retryable error while executing current task for table-bucket {}",
-                    tableBucket,
-                    ex);
+                    "Encountered a retryable error while executing current task for table-bucket {}", tableBucket, ex);
         } catch (Exception ex) {
             if (!isCancelled()) {
                 LOG.warn(
-                        "Current task for table-bucket {} received error but it will be scheduled. "
-                                + "Reason: {}",
+                        "Current task for table-bucket {} received error but it will be scheduled. " + "Reason: {}",
                         tableBucket,
                         ex.getMessage());
             }
@@ -126,24 +120,19 @@ public class LogTieringTask implements Runnable {
 
             // Get these candidate log segments to copy and these expired remote log segments to
             // clean up.
-            List<EnrichedLogSegment> candidateToCopySegments =
-                    candidateToCopyLogSegments(logTablet);
-            List<RemoteLogSegment> expiredRemoteLogSegments =
-                    remoteLog.expiredRemoteLogSegments(clock.milliseconds());
+            List<EnrichedLogSegment> candidateToCopySegments = candidateToCopyLogSegments(logTablet);
+            List<RemoteLogSegment> expiredRemoteLogSegments = remoteLog.expiredRemoteLogSegments(clock.milliseconds());
 
             // 1. For these candidateToCopySegments, we will first copy segment files to
             // remote before commit the remote log manifest.
             List<RemoteLogSegment> copiedSegments = new ArrayList<>();
             long endOffset =
-                    copyLogSegmentFilesToRemote(
-                            logTablet, candidateToCopySegments, copiedSegments, metricGroup);
+                    copyLogSegmentFilesToRemote(logTablet, candidateToCopySegments, copiedSegments, metricGroup);
 
             // 2. try to commit the remote log manifest snapshot to coordinator server and
             // update the local cache of remote log manifest.
             if (!copiedSegments.isEmpty() || !expiredRemoteLogSegments.isEmpty()) {
-                boolean success =
-                        tryToCommitRemoteLogManifest(
-                                remoteLog, expiredRemoteLogSegments, copiedSegments);
+                boolean success = tryToCommitRemoteLogManifest(remoteLog, expiredRemoteLogSegments, copiedSegments);
 
                 if (success) {
                     if (!expiredRemoteLogSegments.isEmpty()) {
@@ -179,8 +168,7 @@ public class LogTieringTask implements Runnable {
             throw ex;
         } catch (Exception ex) {
             if (!isCancelled()) {
-                LOG.error(
-                        "Error occurred while copying log segments of bucket: {}", tableBucket, ex);
+                LOG.error("Error occurred while copying log segments of bucket: {}", tableBucket, ex);
             }
         }
     }
@@ -190,10 +178,7 @@ public class LogTieringTask implements Runnable {
         // Get highWatermark.
         long highWatermark = log.getHighWatermark();
         if (highWatermark < 0) {
-            LOG.warn(
-                    "The highWatermark for bucket {} is {}, which should not be negative",
-                    tableBucket,
-                    highWatermark);
+            LOG.warn("The highWatermark for bucket {} is {}, which should not be negative", tableBucket, highWatermark);
         } else if (highWatermark > 0 && copiedOffset < highWatermark) {
             // local-log-start-offset can be ahead of the copied-offset, when enabling the
             // remote log for the first time
@@ -250,25 +235,23 @@ public class LogTieringTask implements Runnable {
 
             File writerIdSnapshotFile =
                     log.writerStateManager().fetchSnapshot(endOffset).orElse(null);
-            LogSegmentFiles logSegmentFiles =
-                    new LogSegmentFiles(
-                            logFile.toPath(),
-                            toPathIfExists(segment.offsetIndex().file()),
-                            toPathIfExists(segment.timeIndex().file()),
-                            writerIdSnapshotFile != null ? writerIdSnapshotFile.toPath() : null);
+            LogSegmentFiles logSegmentFiles = new LogSegmentFiles(
+                    logFile.toPath(),
+                    toPathIfExists(segment.offsetIndex().file()),
+                    toPathIfExists(segment.timeIndex().file()),
+                    writerIdSnapshotFile != null ? writerIdSnapshotFile.toPath() : null);
 
             UUID remoteLogSegmentId = UUID.randomUUID();
             int sizeInBytes = segment.getFileLogRecords().sizeInBytes();
-            RemoteLogSegment copyRemoteLogSegment =
-                    RemoteLogSegment.Builder.builder()
-                            .physicalTablePath(physicalTablePath)
-                            .tableBucket(tableBucket)
-                            .remoteLogSegmentId(remoteLogSegmentId)
-                            .remoteLogStartOffset(segment.getBaseOffset())
-                            .remoteLogEndOffset(endOffset)
-                            .maxTimestamp(segment.maxTimestampSoFar())
-                            .segmentSizeInBytes(sizeInBytes)
-                            .build();
+            RemoteLogSegment copyRemoteLogSegment = RemoteLogSegment.Builder.builder()
+                    .physicalTablePath(physicalTablePath)
+                    .tableBucket(tableBucket)
+                    .remoteLogSegmentId(remoteLogSegmentId)
+                    .remoteLogStartOffset(segment.getBaseOffset())
+                    .remoteLogEndOffset(endOffset)
+                    .maxTimestamp(segment.maxTimestampSoFar())
+                    .segmentSizeInBytes(sizeInBytes)
+                    .build();
             try {
                 remoteLogStorage.copyLogSegmentFiles(copyRemoteLogSegment, logSegmentFiles);
             } catch (RemoteStorageException e) {
@@ -311,8 +294,7 @@ public class LogTieringTask implements Runnable {
         FsPath remoteLogManifestPath;
         try {
             // 1. upload the remote log manifest file to remote storage.
-            remoteLogManifestPath =
-                    remoteLogStorage.writeRemoteLogManifestSnapshot(newRemoteLogManifest);
+            remoteLogManifestPath = remoteLogStorage.writeRemoteLogManifestSnapshot(newRemoteLogManifest);
         } catch (Exception e) {
             LOG.error("Write remote log manifest file to remote storage failed.", e);
             return false;
@@ -325,18 +307,16 @@ public class LogTieringTask implements Runnable {
         int retrySendCommitTimes = 1;
         while (retrySendCommitTimes <= 10) {
             try {
-                boolean success =
-                        commitRemoteLogManifest(
-                                new CommitRemoteLogManifestData(
-                                        tableBucket,
-                                        remoteLogManifestPath,
-                                        newRemoteLogStartOffset,
-                                        newRemoteLogEndOffset,
-                                        // TODO: manifest snapshot should include the epoch info,
-                                        //  and this should be moved into Replica under read lock of
-                                        //  leaderIsrUpdateLock, see FLUSS-56282058
-                                        replica.getCoordinatorEpoch(),
-                                        replica.getBucketEpoch()));
+                boolean success = commitRemoteLogManifest(new CommitRemoteLogManifestData(
+                        tableBucket,
+                        remoteLogManifestPath,
+                        newRemoteLogStartOffset,
+                        newRemoteLogEndOffset,
+                        // TODO: manifest snapshot should include the epoch info,
+                        //  and this should be moved into Replica under read lock of
+                        //  leaderIsrUpdateLock, see FLUSS-56282058
+                        replica.getCoordinatorEpoch(),
+                        replica.getBucketEpoch()));
                 if (!success) {
                     // the commit failed, it means the commit snapshot is invalid or register zk
                     // failed, we will revert this commit and delete the remote log manifest
@@ -361,10 +341,7 @@ public class LogTieringTask implements Runnable {
             } catch (Exception e) {
                 // the commit failed with unexpected exception, like network error, we will
                 // retry send.
-                LOG.error(
-                        "The {} time try to commit remote log manifest failed.",
-                        retrySendCommitTimes,
-                        e);
+                LOG.error("The {} time try to commit remote log manifest failed.", retrySendCommitTimes, e);
                 retrySendCommitTimes++;
             }
         }
@@ -429,8 +406,7 @@ public class LogTieringTask implements Runnable {
      * <p>2. Segment end-offset is less than the highWatermark as remote storage should contain only
      * committed/acked records.
      */
-    private List<EnrichedLogSegment> candidateLogSegments(
-            LogTablet log, long fromOffset, long highWatermark) {
+    private List<EnrichedLogSegment> candidateLogSegments(LogTablet log, long fromOffset, long highWatermark) {
         List<EnrichedLogSegment> candidateLogSegments = new ArrayList<>();
         List<LogSegment> segments = log.logSegments(fromOffset, Long.MAX_VALUE);
         if (!segments.isEmpty()) {
@@ -495,8 +471,7 @@ public class LogTieringTask implements Runnable {
                 return false;
             }
             EnrichedLogSegment that = (EnrichedLogSegment) o;
-            return nextSegmentOffset == that.nextSegmentOffset
-                    && Objects.equals(logSegment, that.logSegment);
+            return nextSegmentOffset == that.nextSegmentOffset && Objects.equals(logSegment, that.logSegment);
         }
 
         @Override

@@ -79,96 +79,76 @@ public class ClientRpcMessageUtils {
     public static ProduceLogRequest makeProduceLogRequest(
             long tableId, int acks, int maxRequestTimeoutMs, List<ReadyWriteBatch> readyBatches) {
         ProduceLogRequest request =
-                new ProduceLogRequest()
-                        .setTableId(tableId)
-                        .setAcks(acks)
-                        .setTimeoutMs(maxRequestTimeoutMs);
-        readyBatches.forEach(
-                readyBatch -> {
-                    TableBucket tableBucket = readyBatch.tableBucket();
-                    PbProduceLogReqForBucket pbProduceLogReqForBucket =
-                            request.addBucketsReq()
-                                    .setBucketId(tableBucket.getBucket())
-                                    .setRecordsBytesView(readyBatch.writeBatch().build());
-                    if (tableBucket.getPartitionId() != null) {
-                        pbProduceLogReqForBucket.setPartitionId(tableBucket.getPartitionId());
-                    }
-                });
+                new ProduceLogRequest().setTableId(tableId).setAcks(acks).setTimeoutMs(maxRequestTimeoutMs);
+        readyBatches.forEach(readyBatch -> {
+            TableBucket tableBucket = readyBatch.tableBucket();
+            PbProduceLogReqForBucket pbProduceLogReqForBucket = request.addBucketsReq()
+                    .setBucketId(tableBucket.getBucket())
+                    .setRecordsBytesView(readyBatch.writeBatch().build());
+            if (tableBucket.getPartitionId() != null) {
+                pbProduceLogReqForBucket.setPartitionId(tableBucket.getPartitionId());
+            }
+        });
         return request;
     }
 
     public static PutKvRequest makePutKvRequest(
-            long tableId,
-            int acks,
-            int maxRequestTimeoutMs,
-            List<ReadyWriteBatch> readyWriteBatches) {
+            long tableId, int acks, int maxRequestTimeoutMs, List<ReadyWriteBatch> readyWriteBatches) {
         PutKvRequest request =
-                new PutKvRequest()
-                        .setTableId(tableId)
-                        .setAcks(acks)
-                        .setTimeoutMs(maxRequestTimeoutMs);
+                new PutKvRequest().setTableId(tableId).setAcks(acks).setTimeoutMs(maxRequestTimeoutMs);
         // check the target columns in the batch list should be the same. If not same,
         // we throw exception directly currently.
-        int[] targetColumns =
-                ((KvWriteBatch) readyWriteBatches.get(0).writeBatch()).getTargetColumns();
+        int[] targetColumns = ((KvWriteBatch) readyWriteBatches.get(0).writeBatch()).getTargetColumns();
         for (int i = 1; i < readyWriteBatches.size(); i++) {
             int[] currentBatchTargetColumns =
                     ((KvWriteBatch) readyWriteBatches.get(i).writeBatch()).getTargetColumns();
             if (!Arrays.equals(targetColumns, currentBatchTargetColumns)) {
-                throw new IllegalStateException(
-                        String.format(
-                                "All the write batches to make put kv request should have the same target columns, "
-                                        + "but got %s and %s.",
-                                Arrays.toString(targetColumns),
-                                Arrays.toString(currentBatchTargetColumns)));
+                throw new IllegalStateException(String.format(
+                        "All the write batches to make put kv request should have the same target columns, "
+                                + "but got %s and %s.",
+                        Arrays.toString(targetColumns), Arrays.toString(currentBatchTargetColumns)));
             }
         }
         if (targetColumns != null) {
             request.setTargetColumns(targetColumns);
         }
-        readyWriteBatches.forEach(
-                readyBatch -> {
-                    TableBucket tableBucket = readyBatch.tableBucket();
-                    PbPutKvReqForBucket pbPutKvReqForBucket =
-                            request.addBucketsReq()
-                                    .setBucketId(tableBucket.getBucket())
-                                    .setRecordsBytesView(readyBatch.writeBatch().build());
-                    if (tableBucket.getPartitionId() != null) {
-                        pbPutKvReqForBucket.setPartitionId(tableBucket.getPartitionId());
-                    }
-                });
+        readyWriteBatches.forEach(readyBatch -> {
+            TableBucket tableBucket = readyBatch.tableBucket();
+            PbPutKvReqForBucket pbPutKvReqForBucket = request.addBucketsReq()
+                    .setBucketId(tableBucket.getBucket())
+                    .setRecordsBytesView(readyBatch.writeBatch().build());
+            if (tableBucket.getPartitionId() != null) {
+                pbPutKvReqForBucket.setPartitionId(tableBucket.getPartitionId());
+            }
+        });
         return request;
     }
 
-    public static LookupRequest makeLookupRequest(
-            long tableId, Collection<LookupBatch> lookupBatches) {
+    public static LookupRequest makeLookupRequest(long tableId, Collection<LookupBatch> lookupBatches) {
         LookupRequest request = new LookupRequest().setTableId(tableId);
-        lookupBatches.forEach(
-                (batch) -> {
-                    TableBucket tb = batch.tableBucket();
-                    PbLookupReqForBucket pbLookupReqForBucket =
-                            request.addBucketsReq().setBucketId(tb.getBucket());
-                    if (tb.getPartitionId() != null) {
-                        pbLookupReqForBucket.setPartitionId(tb.getPartitionId());
-                    }
-                    batch.lookups().forEach(get -> pbLookupReqForBucket.addKey(get.key()));
-                });
+        lookupBatches.forEach((batch) -> {
+            TableBucket tb = batch.tableBucket();
+            PbLookupReqForBucket pbLookupReqForBucket = request.addBucketsReq().setBucketId(tb.getBucket());
+            if (tb.getPartitionId() != null) {
+                pbLookupReqForBucket.setPartitionId(tb.getPartitionId());
+            }
+            batch.lookups().forEach(get -> pbLookupReqForBucket.addKey(get.key()));
+        });
         return request;
     }
 
     public static PrefixLookupRequest makePrefixLookupRequest(
             long tableId, Collection<PrefixLookupBatch> lookupBatches) {
         PrefixLookupRequest request = new PrefixLookupRequest().setTableId(tableId);
-        lookupBatches.forEach(
-                (batch) -> {
-                    TableBucket tb = batch.tableBucket();
-                    PbPrefixLookupReqForBucket pbPrefixLookupReqForBucket =
-                            request.addBucketsReq().setBucketId(tb.getBucket());
-                    if (tb.getPartitionId() != null) {
-                        pbPrefixLookupReqForBucket.setPartitionId(tb.getPartitionId());
-                    }
-                    batch.lookups().forEach(get -> pbPrefixLookupReqForBucket.addKey(get.key()));
-                });
+        lookupBatches.forEach((batch) -> {
+            TableBucket tb = batch.tableBucket();
+            PbPrefixLookupReqForBucket pbPrefixLookupReqForBucket =
+                    request.addBucketsReq().setBucketId(tb.getBucket());
+            if (tb.getPartitionId() != null) {
+                pbPrefixLookupReqForBucket.setPartitionId(tb.getPartitionId());
+            }
+            batch.lookups().forEach(get -> pbPrefixLookupReqForBucket.addKey(get.key()));
+        });
         return request;
     }
 
@@ -185,31 +165,24 @@ public class ClientRpcMessageUtils {
             logOffsets.put(bucketId, logOffset);
             boolean bothNull = snapshotId == null && logOffset == null;
             boolean bothNotNull = snapshotId != null && logOffset != null;
-            checkState(
-                    bothNull || bothNotNull,
-                    "snapshotId and logOffset should be both null or not null");
+            checkState(bothNull || bothNotNull, "snapshotId and logOffset should be both null or not null");
         }
         return new KvSnapshots(tableId, partitionId, snapshotIds, logOffsets);
     }
 
     public static KvSnapshotMetadata toKvSnapshotMetadata(GetKvSnapshotMetadataResponse response) {
-        return new KvSnapshotMetadata(
-                toFsPathAndFileName(response.getSnapshotFilesList()), response.getLogOffset());
+        return new KvSnapshotMetadata(toFsPathAndFileName(response.getSnapshotFilesList()), response.getLogOffset());
     }
 
     public static LakeSnapshot toLakeTableSnapshotInfo(GetLatestLakeSnapshotResponse response) {
         long tableId = response.getTableId();
         long snapshotId = response.getSnapshotId();
-        Map<TableBucket, Long> tableBucketsOffset =
-                new HashMap<>(response.getBucketSnapshotsCount());
+        Map<TableBucket, Long> tableBucketsOffset = new HashMap<>(response.getBucketSnapshotsCount());
         Map<Long, String> partitionNameById = new HashMap<>();
         for (PbLakeSnapshotForBucket pbLakeSnapshotForBucket : response.getBucketSnapshotsList()) {
             Long partitionId =
-                    pbLakeSnapshotForBucket.hasPartitionId()
-                            ? pbLakeSnapshotForBucket.getPartitionId()
-                            : null;
-            TableBucket tableBucket =
-                    new TableBucket(tableId, partitionId, pbLakeSnapshotForBucket.getBucketId());
+                    pbLakeSnapshotForBucket.hasPartitionId() ? pbLakeSnapshotForBucket.getPartitionId() : null;
+            TableBucket tableBucket = new TableBucket(tableId, partitionId, pbLakeSnapshotForBucket.getBucketId());
             if (partitionId != null && pbLakeSnapshotForBucket.hasPartitionName()) {
                 partitionNameById.put(partitionId, pbLakeSnapshotForBucket.getPartitionName());
             }
@@ -218,19 +191,14 @@ public class ClientRpcMessageUtils {
         return new LakeSnapshot(snapshotId, tableBucketsOffset, partitionNameById);
     }
 
-    public static List<FsPathAndFileName> toFsPathAndFileName(
-            List<PbRemotePathAndLocalFile> pbFileHandles) {
+    public static List<FsPathAndFileName> toFsPathAndFileName(List<PbRemotePathAndLocalFile> pbFileHandles) {
         return pbFileHandles.stream()
-                .map(
-                        pathAndName ->
-                                new FsPathAndFileName(
-                                        new FsPath(pathAndName.getRemotePath()),
-                                        pathAndName.getLocalFileName()))
+                .map(pathAndName ->
+                        new FsPathAndFileName(new FsPath(pathAndName.getRemotePath()), pathAndName.getLocalFileName()))
                 .collect(Collectors.toList());
     }
 
-    public static ObtainedSecurityToken toSecurityToken(
-            GetFileSystemSecurityTokenResponse response) {
+    public static ObtainedSecurityToken toSecurityToken(GetFileSystemSecurityTokenResponse response) {
         String scheme = response.getSchema();
         byte[] tokens = response.getToken();
         Long validUntil = response.hasExpirationTime() ? response.getExpirationTime() : null;
@@ -253,13 +221,11 @@ public class ClientRpcMessageUtils {
             }
         }
         if (tablePathPartitionNames != null) {
-            tablePathPartitionNames.forEach(
-                    tablePathPartitionName ->
-                            metadataRequest
-                                    .addPartitionsPath()
-                                    .setDatabaseName(tablePathPartitionName.getDatabaseName())
-                                    .setTableName(tablePathPartitionName.getTableName())
-                                    .setPartitionName(tablePathPartitionName.getPartitionName()));
+            tablePathPartitionNames.forEach(tablePathPartitionName -> metadataRequest
+                    .addPartitionsPath()
+                    .setDatabaseName(tablePathPartitionName.getDatabaseName())
+                    .setTableName(tablePathPartitionName.getTableName())
+                    .setPartitionName(tablePathPartitionName.getPartitionName()));
         }
 
         if (tablePathPartitionIds != null) {
@@ -270,10 +236,7 @@ public class ClientRpcMessageUtils {
     }
 
     public static ListOffsetsRequest makeListOffsetsRequest(
-            long tableId,
-            @Nullable Long partitionId,
-            List<Integer> bucketIdList,
-            OffsetSpec offsetSpec) {
+            long tableId, @Nullable Long partitionId, List<Integer> bucketIdList, OffsetSpec offsetSpec) {
         ListOffsetsRequest listOffsetsRequest = new ListOffsetsRequest();
         listOffsetsRequest
                 .setFollowerServerId(-1) // -1 indicate the request from client.
@@ -289,8 +252,7 @@ public class ClientRpcMessageUtils {
             listOffsetsRequest.setOffsetType(OffsetSpec.LIST_LATEST_OFFSET);
         } else if (offsetSpec instanceof OffsetSpec.TimestampSpec) {
             listOffsetsRequest.setOffsetType(OffsetSpec.LIST_OFFSET_FROM_TIMESTAMP);
-            listOffsetsRequest.setStartTimestamp(
-                    ((OffsetSpec.TimestampSpec) offsetSpec).getTimestamp());
+            listOffsetsRequest.setStartTimestamp(((OffsetSpec.TimestampSpec) offsetSpec).getTimestamp());
         } else {
             throw new IllegalArgumentException("Unsupported offset spec: " + offsetSpec);
         }
@@ -312,8 +274,7 @@ public class ClientRpcMessageUtils {
 
     public static DropPartitionRequest makeDropPartitionRequest(
             TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfNotExists) {
-        DropPartitionRequest dropPartitionRequest =
-                new DropPartitionRequest().setIgnoreIfNotExists(ignoreIfNotExists);
+        DropPartitionRequest dropPartitionRequest = new DropPartitionRequest().setIgnoreIfNotExists(ignoreIfNotExists);
         dropPartitionRequest
                 .setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
@@ -325,20 +286,14 @@ public class ClientRpcMessageUtils {
 
     public static List<PartitionInfo> toPartitionInfos(ListPartitionInfosResponse response) {
         return response.getPartitionsInfosList().stream()
-                .map(
-                        pbPartitionInfo ->
-                                new PartitionInfo(
-                                        pbPartitionInfo.getPartitionId(),
-                                        toResolvedPartitionSpec(
-                                                pbPartitionInfo.getPartitionSpec())))
+                .map(pbPartitionInfo -> new PartitionInfo(
+                        pbPartitionInfo.getPartitionId(), toResolvedPartitionSpec(pbPartitionInfo.getPartitionSpec())))
                 .collect(Collectors.toList());
     }
 
     public static Map<String, String> toKeyValueMap(List<PbKeyValue> pbKeyValues) {
         return pbKeyValues.stream()
-                .collect(
-                        java.util.stream.Collectors.toMap(
-                                PbKeyValue::getKey, PbKeyValue::getValue));
+                .collect(java.util.stream.Collectors.toMap(PbKeyValue::getKey, PbKeyValue::getValue));
     }
 
     public static PbPartitionSpec makePbPartitionSpec(PartitionSpec partitionSpec) {

@@ -41,9 +41,7 @@ class OSSWithCredentialsProviderFileSystemBehaviorITCase extends FileSystemBehav
 
         // use SystemPropertiesCredentialsProvider
         final Configuration conf = new Configuration();
-        conf.setString(
-                CREDENTIALS_PROVIDER_KEY,
-                SystemPropertiesCredentialsProvider.class.getCanonicalName());
+        conf.setString(CREDENTIALS_PROVIDER_KEY, SystemPropertiesCredentialsProvider.class.getCanonicalName());
         conf.setString("fs.oss.endpoint", OSSTestCredentials.getOSSEndpoint());
         conf.setString("fs.oss.region", OSSTestCredentials.getOSSRegion());
 

@@ -40,9 +40,6 @@ public class LakeSnapshotSplitState extends SourceSplitState {
     @Override
     public SourceSplitBase toSourceSplit() {
         return new LakeSnapshotSplit(
-                split.getTableBucket(),
-                split.getPartitionName(),
-                split.getLakeSplit(),
-                recordsToSplit);
+                split.getTableBucket(), split.getPartitionName(), split.getLakeSplit(), recordsToSplit);
     }
 }

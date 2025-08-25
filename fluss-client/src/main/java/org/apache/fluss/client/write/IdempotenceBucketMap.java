@@ -40,17 +40,15 @@ public class IdempotenceBucketMap {
     IdempotenceBucketEntry get(TableBucket tableBucket) {
         IdempotenceBucketEntry entry = tableBuckets.get(tableBucket);
         if (entry == null) {
-            throw new IllegalStateException(
-                    "Try to get idempotence entry for table bucket "
-                            + tableBucket
-                            + ", but it was never set for this bucket.");
+            throw new IllegalStateException("Try to get idempotence entry for table bucket "
+                    + tableBucket
+                    + ", but it was never set for this bucket.");
         }
         return entry;
     }
 
     IdempotenceBucketEntry getOrCreate(TableBucket tableBucket) {
-        return tableBuckets.computeIfAbsent(
-                tableBucket, k -> new IdempotenceBucketEntry(tableBucket));
+        return tableBuckets.computeIfAbsent(tableBucket, k -> new IdempotenceBucketEntry(tableBucket));
     }
 
     boolean contains(TableBucket tableBucket) {

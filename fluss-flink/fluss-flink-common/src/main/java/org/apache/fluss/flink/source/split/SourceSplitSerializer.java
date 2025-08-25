@@ -45,7 +45,8 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
 
     private static final int CURRENT_VERSION = VERSION_0;
 
-    @Nullable private final LakeSource<LakeSplit> lakeSource;
+    @Nullable
+    private final LakeSource<LakeSplit> lakeSource;
 
     public SourceSplitSerializer(LakeSource<LakeSplit> lakeSource) {
         this.lakeSource = lakeSource;
@@ -134,12 +135,7 @@ public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSp
             boolean isSnapshotFinished = in.readBoolean();
             long logStartingOffset = in.readLong();
             return new HybridSnapshotLogSplit(
-                    tableBucket,
-                    partitionName,
-                    snapshotId,
-                    recordsToSkip,
-                    isSnapshotFinished,
-                    logStartingOffset);
+                    tableBucket, partitionName, snapshotId, recordsToSkip, isSnapshotFinished, logStartingOffset);
         } else if (splitKind == LOG_SPLIT_FLAG) {
             long startingOffset = in.readLong();
             long stoppingOffset = in.readLong();

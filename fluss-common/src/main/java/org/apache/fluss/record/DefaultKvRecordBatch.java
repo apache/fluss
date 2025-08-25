@@ -104,20 +104,18 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
     public void ensureValid() {
         int sizeInBytes = sizeInBytes();
         if (sizeInBytes < RECORD_BATCH_HEADER_SIZE) {
-            throw new CorruptMessageException(
-                    "Record batch is corrupt (the size "
-                            + sizeInBytes
-                            + " is smaller than the minimum allowed overhead "
-                            + RECORD_BATCH_HEADER_SIZE
-                            + ")");
+            throw new CorruptMessageException("Record batch is corrupt (the size "
+                    + sizeInBytes
+                    + " is smaller than the minimum allowed overhead "
+                    + RECORD_BATCH_HEADER_SIZE
+                    + ")");
         }
         if (!isValid()) {
-            throw new CorruptMessageException(
-                    "Record batch is corrupt (stored crc = "
-                            + checksum()
-                            + ", computed crc = "
-                            + computeChecksum()
-                            + ")");
+            throw new CorruptMessageException("Record batch is corrupt (stored crc = "
+                    + checksum()
+                    + ", computed crc = "
+                    + computeChecksum()
+                    + ")");
         }
     }
 
@@ -181,8 +179,7 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
 
             @Override
             protected KvRecord readNext() {
-                KvRecord kvRecord =
-                        DefaultKvRecord.readFrom(segment, position, schemaId, readContext);
+                KvRecord kvRecord = DefaultKvRecord.readFrom(segment, position, schemaId, readContext);
                 iteratorNumber++;
                 position += kvRecord.getSizeInBytes();
                 return kvRecord;
@@ -215,8 +212,7 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
         }
         DefaultKvRecordBatch that = (DefaultKvRecordBatch) o;
         int sizeInBytes = sizeInBytes();
-        return sizeInBytes == that.sizeInBytes()
-                && segment.equalTo(that.segment, position, that.position, sizeInBytes);
+        return sizeInBytes == that.sizeInBytes() && segment.equalTo(that.segment, position, that.position, sizeInBytes);
     }
 
     abstract class KvRecordIterator implements CloseableIterator<KvRecord> {
@@ -227,11 +223,7 @@ public class DefaultKvRecordBatch implements KvRecordBatch {
             int numRecords = getRecordCount();
             if (numRecords < 0) {
                 throw new IllegalArgumentException(
-                        "Found invalid record count "
-                                + numRecords
-                                + " in magic v"
-                                + magic()
-                                + " batch");
+                        "Found invalid record count " + numRecords + " in magic v" + magic() + " batch");
             }
             this.numRecords = numRecords;
         }

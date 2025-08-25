@@ -34,10 +34,7 @@ public class BucketOffset implements Serializable {
     private final @Nullable String partitionQualifiedName;
 
     public BucketOffset(
-            long logOffset,
-            int bucket,
-            @Nullable Long partitionId,
-            @Nullable String partitionQualifiedName) {
+            long logOffset, int bucket, @Nullable Long partitionId, @Nullable String partitionQualifiedName) {
         this.logOffset = logOffset;
         this.bucket = bucket;
         this.partitionId = partitionId;

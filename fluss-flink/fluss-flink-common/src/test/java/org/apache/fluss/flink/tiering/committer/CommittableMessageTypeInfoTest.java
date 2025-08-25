@@ -20,15 +20,13 @@ package org.apache.fluss.flink.tiering.committer;
 import org.apache.flink.api.common.typeutils.TypeInformationTestBase;
 
 /** Test for {@link CommittableMessageTypeInfo}. */
-class CommittableMessageTypeInfoTest
-        extends TypeInformationTestBase<CommittableMessageTypeInfo<?>> {
+class CommittableMessageTypeInfoTest extends TypeInformationTestBase<CommittableMessageTypeInfo<?>> {
 
     @SuppressWarnings("rawtypes")
     @Override
     protected CommittableMessageTypeInfo<?>[] getTestData() {
         return new CommittableMessageTypeInfo[] {
-            (CommittableMessageTypeInfo)
-                    CommittableMessageTypeInfo.of(TestingCommittableSerializer::new)
+            (CommittableMessageTypeInfo) CommittableMessageTypeInfo.of(TestingCommittableSerializer::new)
         };
     }
 }

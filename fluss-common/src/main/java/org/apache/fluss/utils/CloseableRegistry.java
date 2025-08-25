@@ -41,8 +41,7 @@ import static org.apache.fluss.shaded.guava32.com.google.common.collect.Lists.re
  * <p>This class closes all registered {@link Closeable}s in the reverse registration order.
  */
 @Internal
-public class CloseableRegistry
-        extends AbstractAutoCloseableRegistry<Closeable, Closeable, Object, IOException>
+public class CloseableRegistry extends AbstractAutoCloseableRegistry<Closeable, Closeable, Object, IOException>
         implements Closeable {
 
     private static final Object DUMMY = new Object();
@@ -52,14 +51,12 @@ public class CloseableRegistry
     }
 
     @Override
-    protected void doRegister(
-            @Nonnull Closeable closeable, @Nonnull Map<Closeable, Object> closeableMap) {
+    protected void doRegister(@Nonnull Closeable closeable, @Nonnull Map<Closeable, Object> closeableMap) {
         closeableMap.put(closeable, DUMMY);
     }
 
     @Override
-    protected boolean doUnRegister(
-            @Nonnull Closeable closeable, @Nonnull Map<Closeable, Object> closeableMap) {
+    protected boolean doUnRegister(@Nonnull Closeable closeable, @Nonnull Map<Closeable, Object> closeableMap) {
         return closeableMap.remove(closeable) != null;
     }
 

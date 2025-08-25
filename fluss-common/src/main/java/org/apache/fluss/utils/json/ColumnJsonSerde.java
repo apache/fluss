@@ -27,8 +27,7 @@ import java.io.IOException;
 
 /** Json serializer and deserializer for {@link Schema.Column}. */
 @Internal
-public class ColumnJsonSerde
-        implements JsonSerializer<Schema.Column>, JsonDeserializer<Schema.Column> {
+public class ColumnJsonSerde implements JsonSerializer<Schema.Column>, JsonDeserializer<Schema.Column> {
 
     public static final ColumnJsonSerde INSTANCE = new ColumnJsonSerde();
     static final String NAME = "name";

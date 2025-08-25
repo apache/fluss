@@ -32,8 +32,7 @@ import java.util.Map;
 
 /** Json serializer and deserializer for {@link TableDescriptor}. */
 @Internal
-public class TableDescriptorJsonSerde
-        implements JsonSerializer<TableDescriptor>, JsonDeserializer<TableDescriptor> {
+public class TableDescriptorJsonSerde implements JsonSerializer<TableDescriptor>, JsonDeserializer<TableDescriptor> {
 
     public static final TableDescriptorJsonSerde INSTANCE = new TableDescriptorJsonSerde();
 
@@ -49,8 +48,7 @@ public class TableDescriptorJsonSerde
     private static final int VERSION = 1;
 
     @Override
-    public void serialize(TableDescriptor tableDescriptor, JsonGenerator generator)
-            throws IOException {
+    public void serialize(TableDescriptor tableDescriptor, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
 
         // serialize data version.
@@ -62,7 +60,8 @@ public class TableDescriptorJsonSerde
 
         // serialize comment.
         if (tableDescriptor.getComment().isPresent()) {
-            generator.writeStringField(COMMENT_NAME, tableDescriptor.getComment().get());
+            generator.writeStringField(
+                    COMMENT_NAME, tableDescriptor.getComment().get());
         }
 
         // serialize partition key.
@@ -82,7 +81,8 @@ public class TableDescriptorJsonSerde
             }
             generator.writeEndArray();
             if (distribution.getBucketCount().isPresent()) {
-                generator.writeNumberField(BUCKET_COUNT_NAME, distribution.getBucketCount().get());
+                generator.writeNumberField(
+                        BUCKET_COUNT_NAME, distribution.getBucketCount().get());
             }
         }
 
@@ -95,7 +95,8 @@ public class TableDescriptorJsonSerde
 
         // serialize custom properties.
         generator.writeObjectFieldStart(CUSTOM_PROPERTIES_NAME);
-        for (Map.Entry<String, String> entry : tableDescriptor.getCustomProperties().entrySet()) {
+        for (Map.Entry<String, String> entry :
+                tableDescriptor.getCustomProperties().entrySet()) {
             generator.writeObjectField(entry.getKey(), entry.getValue());
         }
         generator.writeEndObject();

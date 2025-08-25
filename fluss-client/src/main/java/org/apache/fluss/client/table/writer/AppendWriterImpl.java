@@ -53,7 +53,8 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
             this.bucketKeyEncoder = null;
         } else {
             RowType rowType = tableInfo.getSchema().getRowType();
-            DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
+            DataLakeFormat lakeFormat =
+                    tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
             this.bucketKeyEncoder = KeyEncoder.of(rowType, bucketKeys, lakeFormat);
         }
 

@@ -147,8 +147,7 @@ public class FlussLZ4BlockInputStream extends InputStream {
             }
             return;
         } else if (blockSize > maxBlockSize) {
-            throw new IOException(
-                    String.format("Block size %d exceeded max: %d", blockSize, maxBlockSize));
+            throw new IOException(String.format("Block size %d exceeded max: %d", blockSize, maxBlockSize));
         }
 
         if (in.remaining() < blockSize) {
@@ -158,8 +157,7 @@ public class FlussLZ4BlockInputStream extends InputStream {
         if (compressed) {
             try {
                 final int bufferSize =
-                        DECOMPRESSOR.decompress(
-                                in, in.position(), blockSize, decompressionBuffer, 0, maxBlockSize);
+                        DECOMPRESSOR.decompress(in, in.position(), blockSize, decompressionBuffer, 0, maxBlockSize);
                 decompressionBuffer.position(0);
                 decompressionBuffer.limit(bufferSize);
                 decompressedBuffer = decompressionBuffer;
@@ -268,30 +266,25 @@ public class FlussLZ4BlockInputStream extends InputStream {
         final LZ4Compressor compressor = LZ4Factory.fastestInstance().fastCompressor();
 
         final byte[] compressed = new byte[compressor.maxCompressedLength(source.length)];
-        final int compressedLength =
-                compressor.compress(source, 0, source.length, compressed, 0, compressed.length);
+        final int compressedLength = compressor.compress(source, 0, source.length, compressed, 0, compressed.length);
 
         // allocate an array-backed ByteBuffer with non-zero array-offset containing the compressed
         // data a buggy decompressor will read the data from the beginning of the underlying array
         // instead of the beginning of the ByteBuffer, failing to decompress the invalid data.
         final byte[] zeroes = {0, 0, 0, 0, 0};
-        ByteBuffer nonZeroOffsetBuffer =
-                ByteBuffer.allocate(
-                                zeroes.length
-                                        + compressed
-                                                .length) // allocates the backing array with extra
-                        // space to offset the data
-                        .put(zeroes) // prepend invalid bytes (zeros) before the compressed data
-                        // in the array
-                        .slice() // create a new ByteBuffer sharing the underlying array, offset to
-                        // start on the compressed data
-                        .put(compressed); // write the compressed data at the beginning of this
+        ByteBuffer nonZeroOffsetBuffer = ByteBuffer.allocate(
+                        zeroes.length + compressed.length) // allocates the backing array with extra
+                // space to offset the data
+                .put(zeroes) // prepend invalid bytes (zeros) before the compressed data
+                // in the array
+                .slice() // create a new ByteBuffer sharing the underlying array, offset to
+                // start on the compressed data
+                .put(compressed); // write the compressed data at the beginning of this
         // new buffer
 
         ByteBuffer dest = ByteBuffer.allocate(source.length);
         try {
-            DECOMPRESSOR.decompress(
-                    nonZeroOffsetBuffer, 0, compressedLength, dest, 0, source.length);
+            DECOMPRESSOR.decompress(nonZeroOffsetBuffer, 0, compressedLength, dest, 0, source.length);
         } catch (Exception e) {
             throw new RuntimeException(
                     "Fluss has detected detected a buggy lz4-java library (< 1.4.x) on the classpath."

@@ -26,9 +26,7 @@ import org.apache.flink.connector.base.source.reader.RecordEmitter;
 /** The emitter to emit {@link TableBucketWriteResult} to downstream {@link LakeCommitter}. */
 public class TableBucketWriteResultEmitter<WriteResult>
         implements RecordEmitter<
-                TableBucketWriteResult<WriteResult>,
-                TableBucketWriteResult<WriteResult>,
-                TieringSplitState> {
+                TableBucketWriteResult<WriteResult>, TableBucketWriteResult<WriteResult>, TieringSplitState> {
     @Override
     public void emitRecord(
             TableBucketWriteResult<WriteResult> writeResult,

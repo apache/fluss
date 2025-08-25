@@ -43,22 +43,21 @@ class FlinkAsFlussRowTest {
     @BeforeEach
     public void setUp() {
         // Create a sample RowData instance
-        RowData flinkRow =
-                GenericRowData.of(
-                        true,
-                        (byte) 1,
-                        (short) 10,
-                        100,
-                        1000L,
-                        10.5f,
-                        10.5,
-                        StringData.fromString("test"),
-                        StringData.fromString("test"),
-                        DecimalData.fromUnscaledLong(12345L, 10, 2),
-                        TimestampData.fromInstant(Instant.ofEpochMilli(1672531200000L)),
-                        TimestampData.fromEpochMillis(1672531200000L, 3),
-                        new byte[] {1, 2, 3},
-                        null);
+        RowData flinkRow = GenericRowData.of(
+                true,
+                (byte) 1,
+                (short) 10,
+                100,
+                1000L,
+                10.5f,
+                10.5,
+                StringData.fromString("test"),
+                StringData.fromString("test"),
+                DecimalData.fromUnscaledLong(12345L, 10, 2),
+                TimestampData.fromInstant(Instant.ofEpochMilli(1672531200000L)),
+                TimestampData.fromEpochMillis(1672531200000L, 3),
+                new byte[] {1, 2, 3},
+                null);
         row = new FlinkAsFlussRow().replace(flinkRow);
     }
 

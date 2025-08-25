@@ -42,8 +42,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotHandleStore {
 
-    private static final Logger LOG =
-            LoggerFactory.getLogger(ZooKeeperCompletedSnapshotHandleStore.class);
+    private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperCompletedSnapshotHandleStore.class);
 
     private final ZooKeeperClient client;
 
@@ -63,9 +62,7 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
      * @throws Exception If a ZooKeeper or snapshot handle operation fails
      */
     @Override
-    public void add(
-            TableBucket tableBucket, long snapshotId, CompletedSnapshotHandle snapshotHandle)
-            throws Exception {
+    public void add(TableBucket tableBucket, long snapshotId, CompletedSnapshotHandle snapshotHandle) throws Exception {
         checkNotNull(snapshotHandle, "completed snapshot handle");
 
         boolean success = false;
@@ -95,30 +92,23 @@ public class ZooKeeperCompletedSnapshotHandleStore implements CompletedSnapshotH
     }
 
     @Override
-    public Optional<CompletedSnapshotHandle> get(TableBucket tableBucket, long snapshotId)
-            throws Exception {
-        return client.getTableBucketSnapshot(tableBucket, snapshotId)
-                .map(BucketSnapshot::toCompletedSnapshotHandle);
+    public Optional<CompletedSnapshotHandle> get(TableBucket tableBucket, long snapshotId) throws Exception {
+        return client.getTableBucketSnapshot(tableBucket, snapshotId).map(BucketSnapshot::toCompletedSnapshotHandle);
     }
 
     @Override
-    public List<CompletedSnapshotHandle> getAllCompletedSnapshotHandles(TableBucket tableBucket)
-            throws Exception {
+    public List<CompletedSnapshotHandle> getAllCompletedSnapshotHandles(TableBucket tableBucket) throws Exception {
         return client.getTableBucketAllSnapshotAndIds(tableBucket).stream()
-                .map(
-                        bucketSnapshotAndSnapshotId ->
-                                Tuple2.of(
-                                        bucketSnapshotAndSnapshotId.f0.toCompletedSnapshotHandle(),
-                                        bucketSnapshotAndSnapshotId.f1))
+                .map(bucketSnapshotAndSnapshotId -> Tuple2.of(
+                        bucketSnapshotAndSnapshotId.f0.toCompletedSnapshotHandle(), bucketSnapshotAndSnapshotId.f1))
                 .sorted(Comparator.comparing(o -> o.f1))
                 .map(t -> t.f0)
                 .collect(Collectors.toList());
     }
 
     @Override
-    public Optional<CompletedSnapshotHandle> getLatestCompletedSnapshotHandle(
-            TableBucket tableBucket) throws Exception {
-        return client.getTableBucketLatestSnapshot(tableBucket)
-                .map(BucketSnapshot::toCompletedSnapshotHandle);
+    public Optional<CompletedSnapshotHandle> getLatestCompletedSnapshotHandle(TableBucket tableBucket)
+            throws Exception {
+        return client.getTableBucketLatestSnapshot(tableBucket).map(BucketSnapshot::toCompletedSnapshotHandle);
     }
 }

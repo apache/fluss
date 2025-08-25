@@ -41,7 +41,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Test for {@link DefaultPluginManager}. */
 public class DefaultPluginManagerTest extends PluginTestBase {
 
-    @TempDir private Path tmp;
+    @TempDir
+    private Path tmp;
 
     private Collection<PluginDescriptor> descriptors;
 
@@ -68,8 +69,7 @@ public class DefaultPluginManagerTest extends PluginTestBase {
         checkState(pluginBFolder.mkdirs());
         Files.copy(locateJarFile(PLUGIN_A).toPath(), Paths.get(pluginAFolder.toString(), PLUGIN_A));
         Files.copy(locateJarFile(PLUGIN_B).toPath(), Paths.get(pluginBFolder.toString(), PLUGIN_B));
-        final PluginFinder descriptorsFactory =
-                new DirectoryBasedPluginFinder(pluginRootFolderPath);
+        final PluginFinder descriptorsFactory = new DirectoryBasedPluginFinder(pluginRootFolderPath);
         descriptors = descriptorsFactory.findPlugins();
         checkState(descriptors.size() == 2);
     }
@@ -78,8 +78,7 @@ public class DefaultPluginManagerTest extends PluginTestBase {
     void testPluginLoading() {
 
         String[] parentPatterns = {TestSpi.class.getName(), OtherTestSpi.class.getName()};
-        final PluginManager pluginManager =
-                new DefaultPluginManager(descriptors, PARENT_CLASS_LOADER, parentPatterns);
+        final PluginManager pluginManager = new DefaultPluginManager(descriptors, PARENT_CLASS_LOADER, parentPatterns);
         final List<TestSpi> serviceImplList = Lists.newArrayList(pluginManager.load(TestSpi.class));
         assertThat(serviceImplList.size()).isEqualTo(2);
 
@@ -91,32 +90,29 @@ public class DefaultPluginManagerTest extends PluginTestBase {
             assertThat(classLoaders.add(testSpi.getClass().getClassLoader())).isTrue();
         }
 
-        final List<OtherTestSpi> otherServiceImplList =
-                Lists.newArrayList(pluginManager.load(OtherTestSpi.class));
+        final List<OtherTestSpi> otherServiceImplList = Lists.newArrayList(pluginManager.load(OtherTestSpi.class));
         assertThat(otherServiceImplList.size()).isEqualTo(1);
         for (OtherTestSpi otherTestSpi : otherServiceImplList) {
             assertThat(otherTestSpi.otherTestMethod()).isNotNull();
-            assertThat(classLoaders.add(otherTestSpi.getClass().getClassLoader())).isFalse();
+            assertThat(classLoaders.add(otherTestSpi.getClass().getClassLoader()))
+                    .isFalse();
         }
     }
 
     @Test
     void classLoaderMustBeTheSameInsideAPlugin() {
         String[] parentPatterns = {TestSpi.class.getName(), OtherTestSpi.class.getName()};
-        final PluginManager pluginManager =
-                new DefaultPluginManager(descriptors, PARENT_CLASS_LOADER, parentPatterns);
+        final PluginManager pluginManager = new DefaultPluginManager(descriptors, PARENT_CLASS_LOADER, parentPatterns);
         final List<TestSpi> serviceImplList = Lists.newArrayList(pluginManager.load(TestSpi.class));
         assertThat(serviceImplList.size()).isEqualTo(2);
 
-        final List<OtherTestSpi> otherServiceImplList =
-                Lists.newArrayList(pluginManager.load(OtherTestSpi.class));
+        final List<OtherTestSpi> otherServiceImplList = Lists.newArrayList(pluginManager.load(OtherTestSpi.class));
         assertThat(otherServiceImplList.size()).isEqualTo(1);
 
         // instanceof with multiple classloaders works only this way
-        final List<TestSpi> serviceBImplList =
-                serviceImplList.stream()
-                        .filter(s -> s.getClass().getName().equals(TestServiceB.class.getName()))
-                        .collect(Collectors.toList());
+        final List<TestSpi> serviceBImplList = serviceImplList.stream()
+                .filter(s -> s.getClass().getName().equals(TestServiceB.class.getName()))
+                .collect(Collectors.toList());
         assertThat(serviceBImplList.size()).isEqualTo(1);
         assertThat(serviceBImplList.get(0).getClass().getClassLoader())
                 .isEqualTo(otherServiceImplList.get(0).getClass().getClassLoader());

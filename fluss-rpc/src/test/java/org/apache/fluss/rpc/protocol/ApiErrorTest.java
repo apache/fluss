@@ -38,8 +38,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class ApiErrorTest {
     @ParameterizedTest
     @MethodSource("parameters")
-    public void fromThrowableShouldReturnCorrectError(
-            Throwable t, Errors expectedError, String expectedMsg) {
+    public void fromThrowableShouldReturnCorrectError(Throwable t, Errors expectedError, String expectedMsg) {
         ApiError apiError = ApiError.fromThrowable(t);
         assertThat(apiError.error()).isEqualTo(expectedError);
         assertThat(apiError.message()).isEqualTo(expectedMsg);
@@ -57,28 +56,24 @@ public class ApiErrorTest {
         List<Arguments> arguments = new ArrayList<>();
 
         String notEnoughReplicasErrorMsg = "Not enough replicas to write to partition.";
-        arguments.add(
-                Arguments.of(
-                        new NotEnoughReplicasException(notEnoughReplicasErrorMsg),
-                        Errors.NOT_ENOUGH_REPLICAS_EXCEPTION,
-                        notEnoughReplicasErrorMsg));
+        arguments.add(Arguments.of(
+                new NotEnoughReplicasException(notEnoughReplicasErrorMsg),
+                Errors.NOT_ENOUGH_REPLICAS_EXCEPTION,
+                notEnoughReplicasErrorMsg));
 
         // avoid populating the error message if it's a generic one
-        arguments.add(
-                Arguments.of(
-                        new UnknownTableOrBucketException(
-                                Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION.message()),
-                        Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION,
-                        null));
+        arguments.add(Arguments.of(
+                new UnknownTableOrBucketException(Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION.message()),
+                Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION,
+                null));
 
         String requestTimeoutErrorMsg = "request time out";
         // test the TimeoutException is wrapped in the ExecutionException,
         // should return correct error
-        arguments.add(
-                Arguments.of(
-                        new ExecutionException(new TimeoutException(requestTimeoutErrorMsg)),
-                        Errors.REQUEST_TIME_OUT,
-                        requestTimeoutErrorMsg));
+        arguments.add(Arguments.of(
+                new ExecutionException(new TimeoutException(requestTimeoutErrorMsg)),
+                Errors.REQUEST_TIME_OUT,
+                requestTimeoutErrorMsg));
 
         return arguments;
     }

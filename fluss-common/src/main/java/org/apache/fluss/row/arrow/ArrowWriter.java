@@ -119,9 +119,8 @@ public class ArrowWriter implements AutoCloseable {
         this.compressionRatioEstimator = compressionRatioEstimator;
         this.estimatedCompressionRatio = compressionRatioEstimator.estimation();
 
-        this.metadataLength =
-                ArrowUtils.estimateArrowMetadataLength(
-                        root.getSchema(), CompressionUtil.createBodyCompression(compressionCodec));
+        this.metadataLength = ArrowUtils.estimateArrowMetadataLength(
+                root.getSchema(), CompressionUtil.createBodyCompression(compressionCodec));
         this.writeLimitInBytes = (int) (bufferSizeInBytes * BUFFER_USAGE_RATIO);
         this.estimatedMaxRecordsCount = -1;
         this.recordsCount = 0;
@@ -153,11 +152,8 @@ public class ArrowWriter implements AutoCloseable {
                 return true;
             } else {
                 // update the estimated max records count
-                estimatedMaxRecordsCount =
-                        (int)
-                                Math.ceil(
-                                        (writeLimitInBytes - metadataLength)
-                                                / (estimatedBodyLength / (recordsCount * 1.0)));
+                estimatedMaxRecordsCount = (int)
+                        Math.ceil((writeLimitInBytes - metadataLength) / (estimatedBodyLength / (recordsCount * 1.0)));
                 return false;
             }
         } else {
@@ -235,8 +231,7 @@ public class ArrowWriter implements AutoCloseable {
     }
 
     /** Serializes the current row batch to Arrow format and returns the written size in bytes. */
-    public int serializeToOutputView(AbstractPagedOutputView outputView, int position)
-            throws IOException {
+    public int serializeToOutputView(AbstractPagedOutputView outputView, int position) throws IOException {
         // Whether there is any record to write, we need to advance the position to make sure the
         // batch header will be written in outputView.
         outputView.setPosition(position);
@@ -249,17 +244,12 @@ public class ArrowWriter implements AutoCloseable {
 
         // update the uncompressed body size.
         int uncompressedBodySizeInBytes = getBodyLength();
-        try (ArrowRecordBatch arrowBatch =
-                new VectorUnloader(root, true, compressionCodec, true).getRecordBatch()) {
-            PagedMemorySegmentWritableChannel channel =
-                    new PagedMemorySegmentWritableChannel(outputView);
+        try (ArrowRecordBatch arrowBatch = new VectorUnloader(root, true, compressionCodec, true).getRecordBatch()) {
+            PagedMemorySegmentWritableChannel channel = new PagedMemorySegmentWritableChannel(outputView);
             ArrowBlock block = MessageSerializer.serialize(new WriteChannel(channel), arrowBatch);
 
-            checkState(
-                    uncompressedBodySizeInBytes > 0,
-                    "uncompressedRecordsSizeInBytes is 0 or negative");
-            float actualCompressionRatio =
-                    (float) block.getBodyLength() / uncompressedBodySizeInBytes;
+            checkState(uncompressedBodySizeInBytes > 0, "uncompressedRecordsSizeInBytes is 0 or negative");
+            float actualCompressionRatio = (float) block.getBodyLength() / uncompressedBodySizeInBytes;
             compressionRatioEstimator.updateEstimation(actualCompressionRatio);
 
             return (int) (block.getMetadataLength() + block.getBodyLength());

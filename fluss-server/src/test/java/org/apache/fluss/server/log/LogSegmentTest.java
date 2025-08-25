@@ -66,19 +66,11 @@ final class LogSegmentTest extends LogTestBase {
 
     @ParameterizedTest
     @MethodSource("offsetParameters")
-    void testAppendForLogSegmentOffsetOverflowException(long baseOffset, long largestOffset)
-            throws Exception {
+    void testAppendForLogSegmentOffsetOverflowException(long baseOffset, long largestOffset) throws Exception {
         LogSegment segment = createSegment(baseOffset);
         MemoryLogRecords memoryRecords =
-                genMemoryLogRecordsWithBaseOffset(
-                        baseOffset, Collections.singletonList(new Object[] {1, "hello"}));
-        assertThatThrownBy(
-                        () ->
-                                segment.append(
-                                        largestOffset,
-                                        System.currentTimeMillis(),
-                                        baseOffset,
-                                        memoryRecords))
+                genMemoryLogRecordsWithBaseOffset(baseOffset, Collections.singletonList(new Object[] {1, "hello"}));
+        assertThatThrownBy(() -> segment.append(largestOffset, System.currentTimeMillis(), baseOffset, memoryRecords))
                 .isInstanceOf(LogSegmentOffsetOverflowException.class)
                 .hasMessageContaining("Detected offset overflow at offset");
     }
@@ -96,14 +88,12 @@ final class LogSegmentTest extends LogTestBase {
         // Reading from before the first offset in the segment should return messages beginning with
         // the first message in the segment.
         LogSegment segment = createSegment(40);
-        MemoryLogRecords memoryRecords =
-                genMemoryLogRecordsWithBaseOffset(
-                        50,
-                        Arrays.asList(
-                                new Object[] {1, "hello"},
-                                new Object[] {2, "there"},
-                                new Object[] {3, "little"},
-                                new Object[] {4, "bee"}));
+        MemoryLogRecords memoryRecords = genMemoryLogRecordsWithBaseOffset(
+                50,
+                Arrays.asList(
+                        new Object[] {1, "hello"}, new Object[] {2, "there"}, new Object[] {3, "little"}, new Object[] {
+                            4, "bee"
+                        }));
         segment.append(53, -1L, -1L, memoryRecords);
         FetchDataInfo read = segment.read(41, 300, segment.getSizeInBytes(), true);
         assertThat(read).isNotNull();
@@ -115,9 +105,8 @@ final class LogSegmentTest extends LogTestBase {
     void testAfterLast() throws Exception {
         // If we read from an offset beyond the last offset in the segment we should get null.
         LogSegment segment = createSegment(40);
-        MemoryLogRecords memoryRecords =
-                genMemoryLogRecordsWithBaseOffset(
-                        50, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "there"}));
+        MemoryLogRecords memoryRecords = genMemoryLogRecordsWithBaseOffset(
+                50, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "there"}));
         segment.append(51, -1L, -1L, memoryRecords);
         FetchDataInfo read = segment.read(52, 300, segment.getSizeInBytes(), true);
         assertThat(read).isNull();
@@ -128,13 +117,11 @@ final class LogSegmentTest extends LogTestBase {
         // If we read from an offset which doesn't exist we should get a message set beginning with
         // the least offset greater than the given startOffset.
         LogSegment segment = createSegment(40);
-        MemoryLogRecords memoryRecords =
-                genMemoryLogRecordsWithBaseOffset(
-                        50, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "there"}));
+        MemoryLogRecords memoryRecords = genMemoryLogRecordsWithBaseOffset(
+                50, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "there"}));
         segment.append(51, -1L, -1L, memoryRecords);
-        MemoryLogRecords memoryRecords2 =
-                genMemoryLogRecordsWithBaseOffset(
-                        60, Arrays.asList(new Object[] {1, "alpha"}, new Object[] {2, "beta"}));
+        MemoryLogRecords memoryRecords2 = genMemoryLogRecordsWithBaseOffset(
+                60, Arrays.asList(new Object[] {1, "alpha"}, new Object[] {2, "beta"}));
         segment.append(61, -1L, -1L, memoryRecords2);
         FetchDataInfo read = segment.read(55, 200, segment.getSizeInBytes(), true);
         assertThat(read).isNotNull();
@@ -149,18 +136,15 @@ final class LogSegmentTest extends LogTestBase {
         int offset = 40;
         for (int i = 0; i < 30; i++) {
             MemoryLogRecords memoryRecords1 =
-                    genMemoryLogRecordsWithBaseOffset(
-                            offset, Collections.singletonList(new Object[] {1, "hello"}));
+                    genMemoryLogRecordsWithBaseOffset(offset, Collections.singletonList(new Object[] {1, "hello"}));
             segment.append(offset, -1L, -1L, memoryRecords1);
             MemoryLogRecords memoryRecords2 =
-                    genMemoryLogRecordsWithBaseOffset(
-                            offset + 1, Collections.singletonList(new Object[] {1, "hello"}));
+                    genMemoryLogRecordsWithBaseOffset(offset + 1, Collections.singletonList(new Object[] {1, "hello"}));
             segment.append(offset + 1, -1L, -1L, memoryRecords2);
             // check that we can read back both messages
             FetchDataInfo read = segment.read(offset, 10000, segment.getSizeInBytes(), true);
             assertThat(read).isNotNull();
-            assertLogRecordsListEquals(
-                    Arrays.asList(memoryRecords1, memoryRecords2), read.getRecords());
+            assertLogRecordsListEquals(Arrays.asList(memoryRecords1, memoryRecords2), read.getRecords());
 
             // now truncate off the last message
             segment.truncateTo(offset + 1);
@@ -198,8 +182,7 @@ final class LogSegmentTest extends LogTestBase {
     void testReloadLargestTimestampAndNextOffsetAfterTruncation() throws Exception {
         int numMessages = 30;
         MemoryLogRecords records =
-                genLogRecordsWithBaseOffsetAndTimestamp(
-                        0, 0, Collections.singletonList(new Object[] {1, "hello"}));
+                genLogRecordsWithBaseOffsetAndTimestamp(0, 0, Collections.singletonList(new Object[] {1, "hello"}));
         LogSegment segment = createSegment(40, 2 * records.sizeInBytes() - 1);
         long offset = 40L;
         for (int i = 0; i < numMessages; i++) {
@@ -209,9 +192,7 @@ final class LogSegmentTest extends LogTestBase {
                     maxTimestamp,
                     offset,
                     genLogRecordsWithBaseOffsetAndTimestamp(
-                            offset,
-                            maxTimestamp,
-                            Collections.singletonList(new Object[] {1, "hello"})));
+                            offset, maxTimestamp, Collections.singletonList(new Object[] {1, "hello"})));
             offset += 1;
         }
         assertThat(segment.readNextOffset()).isEqualTo(offset);
@@ -251,10 +232,9 @@ final class LogSegmentTest extends LogTestBase {
 
     @Test
     void testFindOffsetByTimestamp() throws Exception {
-        int messageSize =
-                genLogRecordsWithBaseOffsetAndTimestamp(
-                                0, 0, Collections.singletonList(new Object[] {1, "hello"}))
-                        .sizeInBytes();
+        int messageSize = genLogRecordsWithBaseOffsetAndTimestamp(
+                        0, 0, Collections.singletonList(new Object[] {1, "hello"}))
+                .sizeInBytes();
         LogSegment segment = createSegment(40, messageSize * 2 - 1);
         for (int i = 40; i < 50; i++) {
             segment.append(
@@ -292,10 +272,7 @@ final class LogSegmentTest extends LogTestBase {
                 -1L,
                 genMemoryLogRecordsWithBaseOffset(
                         50,
-                        Arrays.asList(
-                                new Object[] {1, "hello"},
-                                new Object[] {2, "there"},
-                                new Object[] {2, "you"})));
+                        Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "there"}, new Object[] {2, "you"})));
         assertThat(segment.readNextOffset()).isEqualTo(53);
     }
 
@@ -329,12 +306,9 @@ final class LogSegmentTest extends LogTestBase {
         // segment, the entries should all be readable.
         LogSegment segment = createSegment(0);
         for (int i = 0; i < 100; i++) {
-            segment.append(
-                    i,
-                    -1L,
-                    i,
-                    genMemoryLogRecordsWithBaseOffset(
-                            i, Collections.singletonList(new Object[] {i + 1, String.valueOf(i)})));
+            segment.append(i, -1L, i, genMemoryLogRecordsWithBaseOffset(i, Collections.singletonList(new Object[] {
+                i + 1, String.valueOf(i)
+            })));
         }
         File indexFile = segment.getLazyOffsetIndex().file();
         LogTestUtils.writeNonsenseToFile(indexFile, 5, (int) indexFile.length());
@@ -364,16 +338,15 @@ final class LogSegmentTest extends LogTestBase {
                     i * 10,
                     i,
                     genLogRecordsWithBaseOffsetAndTimestamp(
-                            i,
-                            i * 10,
-                            Collections.singletonList(new Object[] {i + 1, String.valueOf(i)})));
+                            i, i * 10, Collections.singletonList(new Object[] {i + 1, String.valueOf(i)})));
         }
         File timeIndexFile = segment.timeIndexFile();
         LogTestUtils.writeNonsenseToFile(timeIndexFile, 5, (int) timeIndexFile.length());
         segment.recover();
 
         for (int i = 0; i < 100; i++) {
-            assertThat(segment.findOffsetByTimestamp(i * 10, 0L).get().getOffset()).isEqualTo(i);
+            assertThat(segment.findOffsetByTimestamp(i * 10, 0L).get().getOffset())
+                    .isEqualTo(i);
             if (i < 99) {
                 assertThat(segment.findOffsetByTimestamp(i * 10 + 1, 0L).get().getOffset())
                         .isEqualTo(i + 1);
@@ -385,13 +358,11 @@ final class LogSegmentTest extends LogTestBase {
     void testCreateWithInitFileSizeAppendMessage() throws Exception {
         conf.setBoolean(ConfigOptions.LOG_FILE_PREALLOCATE, true);
         LogSegment segment = createSegment(40, false, 1024 * 1024);
-        MemoryLogRecords memoryRecords1 =
-                genMemoryLogRecordsWithBaseOffset(
-                        50, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "there"}));
+        MemoryLogRecords memoryRecords1 = genMemoryLogRecordsWithBaseOffset(
+                50, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "there"}));
         segment.append(51, -1L, -1L, memoryRecords1);
-        MemoryLogRecords memoryRecords2 =
-                genMemoryLogRecordsWithBaseOffset(
-                        60, Arrays.asList(new Object[] {1, "alpha"}, new Object[] {2, "beta"}));
+        MemoryLogRecords memoryRecords2 = genMemoryLogRecordsWithBaseOffset(
+                60, Arrays.asList(new Object[] {1, "alpha"}, new Object[] {2, "beta"}));
         segment.append(61, -1L, -1L, memoryRecords2);
         FetchDataInfo read = segment.read(55, 200, segment.getSizeInBytes(), true);
         assertThat(read).isNotNull();
@@ -403,13 +374,11 @@ final class LogSegmentTest extends LogTestBase {
         conf.setBoolean(ConfigOptions.LOG_FILE_PREALLOCATE, true);
         // create a segment with pre allocate and clearly shut down.
         LogSegment segment = createSegment(40, false, 1024 * 1024);
-        MemoryLogRecords memoryRecords1 =
-                genMemoryLogRecordsWithBaseOffset(
-                        50, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "there"}));
+        MemoryLogRecords memoryRecords1 = genMemoryLogRecordsWithBaseOffset(
+                50, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "there"}));
         segment.append(51, -1L, -1L, memoryRecords1);
-        MemoryLogRecords memoryRecords2 =
-                genMemoryLogRecordsWithBaseOffset(
-                        60, Arrays.asList(new Object[] {1, "alpha"}, new Object[] {2, "beta"}));
+        MemoryLogRecords memoryRecords2 = genMemoryLogRecordsWithBaseOffset(
+                60, Arrays.asList(new Object[] {1, "alpha"}, new Object[] {2, "beta"}));
         segment.append(61, -1L, -1L, memoryRecords2);
         FetchDataInfo read = segment.read(55, 200, segment.getSizeInBytes(), true);
         assertThat(read).isNotNull();
@@ -441,12 +410,10 @@ final class LogSegmentTest extends LogTestBase {
         return LogTestUtils.createSegment(baseOffset, tempDir, indexIntervalBytes);
     }
 
-    private LogSegment createSegment(long baseOffset, boolean fileAlreadyExists, int initFileSize)
-            throws IOException {
+    private LogSegment createSegment(long baseOffset, boolean fileAlreadyExists, int initFileSize) throws IOException {
         conf.set(ConfigOptions.LOG_INDEX_INTERVAL_SIZE, MemorySize.parse("10bytes"));
         conf.set(ConfigOptions.LOG_INDEX_FILE_SIZE, MemorySize.parse("1kb"));
 
-        return LogSegment.open(
-                tempDir, baseOffset, conf, fileAlreadyExists, initFileSize, LogFormat.ARROW);
+        return LogSegment.open(tempDir, baseOffset, conf, fileAlreadyExists, initFileSize, LogFormat.ARROW);
     }
 }

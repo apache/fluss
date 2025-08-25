@@ -45,8 +45,7 @@ public class CompactedKeyEncoder implements KeyEncoder {
         for (int i = 0; i < keys.size(); i++) {
             encodeColIndexes[i] = rowType.getFieldIndex(keys.get(i));
             if (encodeColIndexes[i] == -1) {
-                throw new IllegalArgumentException(
-                        "Field " + keys.get(i) + " not found in input row type " + rowType);
+                throw new IllegalArgumentException("Field " + keys.get(i) + " not found in input row type " + rowType);
             }
         }
         return new CompactedKeyEncoder(rowType, encodeColIndexes);

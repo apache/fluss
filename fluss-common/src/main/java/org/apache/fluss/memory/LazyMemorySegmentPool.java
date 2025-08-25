@@ -67,8 +67,7 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
     private int pageUsage;
 
     @VisibleForTesting
-    LazyMemorySegmentPool(
-            int maxPages, int pageSize, long maxTimeToBlockMs, long perRequestMemorySize) {
+    LazyMemorySegmentPool(int maxPages, int pageSize, long maxTimeToBlockMs, long perRequestMemorySize) {
         checkArgument(maxPages > 0, "MaxPages for LazyMemorySegmentPool should be greater than 0.");
         checkArgument(
                 pageSize >= 64,
@@ -93,7 +92,8 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
     }
 
     public static LazyMemorySegmentPool createWriterBufferPool(Configuration conf) {
-        long totalBytes = conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE).getBytes();
+        long totalBytes =
+                conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE).getBytes();
         long batchSize = conf.get(ConfigOptions.CLIENT_WRITER_BATCH_SIZE).getBytes();
         checkArgument(
                 totalBytes >= batchSize * 2,
@@ -103,11 +103,13 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
                         totalBytes,
                         ConfigOptions.CLIENT_WRITER_BATCH_SIZE.key(),
                         batchSize));
-        int pageSize = (int) conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE).getBytes();
+        int pageSize =
+                (int) conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE).getBytes();
         long perRequestMemorySize =
                 conf.get(ConfigOptions.CLIENT_WRITER_PER_REQUEST_MEMORY_SIZE).getBytes();
         int segmentCount = (int) (totalBytes / pageSize);
-        long waitTimeout = conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_WAIT_TIMEOUT).toMillis();
+        long waitTimeout =
+                conf.get(ConfigOptions.CLIENT_WRITER_BUFFER_WAIT_TIMEOUT).toMillis();
         return new LazyMemorySegmentPool(segmentCount, pageSize, waitTimeout, perRequestMemorySize);
     }
 
@@ -117,7 +119,8 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
         long perRequestMemorySize =
                 conf.get(ConfigOptions.SERVER_BUFFER_PER_REQUEST_MEMORY_SIZE).getBytes();
         int segmentCount = (int) (totalBytes / pageSize);
-        long waitTimeout = conf.get(ConfigOptions.SERVER_BUFFER_POOL_WAIT_TIMEOUT).toMillis();
+        long waitTimeout =
+                conf.get(ConfigOptions.SERVER_BUFFER_POOL_WAIT_TIMEOUT).toMillis();
         return new LazyMemorySegmentPool(segmentCount, pageSize, waitTimeout, perRequestMemorySize);
     }
 
@@ -129,25 +132,22 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
     @Override
     public List<MemorySegment> allocatePages(int requiredPages) throws IOException {
         if (maxPages < requiredPages) { // immediately fail if the request is impossible to satisfy
-            throw new EOFException(
-                    String.format(
-                            "Allocation request cannot be satisfied because the number of maximum available pages is "
-                                    + "exceeded. Total pages: %d. Requested pages: %d",
-                            this.maxPages, requiredPages));
+            throw new EOFException(String.format(
+                    "Allocation request cannot be satisfied because the number of maximum available pages is "
+                            + "exceeded. Total pages: %d. Requested pages: %d",
+                    this.maxPages, requiredPages));
         }
 
-        return inLock(
-                lock,
-                () -> {
-                    checkClosed();
+        return inLock(lock, () -> {
+            checkClosed();
 
-                    if (freePages() < requiredPages) {
-                        waitForSegment(requiredPages);
-                    }
+            if (freePages() < requiredPages) {
+                waitForSegment(requiredPages);
+            }
 
-                    lazilyAllocatePages(requiredPages);
-                    return drain(requiredPages);
-                });
+            lazilyAllocatePages(requiredPages);
+            return drain(requiredPages);
+        });
     }
 
     private List<MemorySegment> drain(int numPages) {
@@ -180,17 +180,16 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
             while (freePages() < requiredPages) {
                 boolean success = moreMemory.await(maxTimeToBlockMs, TimeUnit.MILLISECONDS);
                 if (!success) {
-                    throw new EOFException(
-                            "Failed to allocate new segment within the configured max blocking time "
-                                    + maxTimeToBlockMs
-                                    + " ms. Total memory: "
-                                    + totalSize()
-                                    + " bytes. Page size: "
-                                    + pageSize
-                                    + " bytes. Available pages: "
-                                    + freePages()
-                                    + ". Requested pages: "
-                                    + requiredPages);
+                    throw new EOFException("Failed to allocate new segment within the configured max blocking time "
+                            + maxTimeToBlockMs
+                            + " ms. Total memory: "
+                            + totalSize()
+                            + " bytes. Page size: "
+                            + pageSize
+                            + " bytes. Available pages: "
+                            + freePages()
+                            + ". Requested pages: "
+                            + requiredPages);
                 }
                 checkClosed();
             }
@@ -222,19 +221,17 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
         if (memory.isEmpty()) {
             return;
         }
-        inLock(
-                lock,
-                () -> {
-                    final int newPageUsage = pageUsage - memory.size();
-                    if (newPageUsage < 0) {
-                        throw new RuntimeException("Return too more memories.");
-                    }
-                    pageUsage = newPageUsage;
-                    cachePages.addAll(memory);
-                    for (int i = 0; i < memory.size() && !waiters.isEmpty(); i++) {
-                        waiters.peekFirst().signal();
-                    }
-                });
+        inLock(lock, () -> {
+            final int newPageUsage = pageUsage - memory.size();
+            if (newPageUsage < 0) {
+                throw new RuntimeException("Return too more memories.");
+            }
+            pageUsage = newPageUsage;
+            cachePages.addAll(memory);
+            for (int i = 0; i < memory.size() && !waiters.isEmpty(); i++) {
+                waiters.peekFirst().signal();
+            }
+        });
     }
 
     @Override
@@ -249,13 +246,11 @@ public class LazyMemorySegmentPool implements MemorySegmentPool, Closeable {
 
     @Override
     public void close() {
-        inLock(
-                lock,
-                () -> {
-                    closed = true;
-                    cachePages.clear();
-                    waiters.forEach(Condition::signal);
-                });
+        inLock(lock, () -> {
+            closed = true;
+            cachePages.clear();
+            waiters.forEach(Condition::signal);
+        });
     }
 
     private void checkClosed() {

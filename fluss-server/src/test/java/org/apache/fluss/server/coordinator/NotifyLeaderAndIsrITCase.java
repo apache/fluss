@@ -44,11 +44,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** ITCase for notify leader and isr. */
 public class NotifyLeaderAndIsrITCase {
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(initConfig())
+            .build();
 
     private ZooKeeperClient zkClient;
 
@@ -60,49 +59,37 @@ public class NotifyLeaderAndIsrITCase {
     @Test
     void testNotifyLeaderAndIsr() throws Exception {
         long tableId =
-                RpcMessageTestUtils.createTable(
-                        FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+                RpcMessageTestUtils.createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
 
         LeaderAndIsr leaderAndIsr =
-                waitValue(
-                        () -> zkClient.getLeaderAndIsr(tb),
-                        Duration.ofMinutes(1),
-                        "Leader and isr not found");
+                waitValue(() -> zkClient.getLeaderAndIsr(tb), Duration.ofMinutes(1), "Leader and isr not found");
 
         // test leader.
         int leader = leaderAndIsr.leader();
         TabletServer tabletServer = FLUSS_CLUSTER_EXTENSION.getTabletServerById(leader);
         ReplicaManager replicaManager = tabletServer.getReplicaManager();
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    assertThat(replicaManager.getReplica(tb))
-                            .isInstanceOf(ReplicaManager.OnlineReplica.class);
-                    Replica replica = replicaManager.getReplicaOrException(tb);
-                    assertThat(replica.isLeader()).isTrue();
-                    assertThat(replica.getLeaderEpoch()).isEqualTo(0);
-                    assertThat(replica.getBucketEpoch()).isEqualTo(0);
-                });
+        retry(Duration.ofMinutes(1), () -> {
+            assertThat(replicaManager.getReplica(tb)).isInstanceOf(ReplicaManager.OnlineReplica.class);
+            Replica replica = replicaManager.getReplicaOrException(tb);
+            assertThat(replica.isLeader()).isTrue();
+            assertThat(replica.getLeaderEpoch()).isEqualTo(0);
+            assertThat(replica.getBucketEpoch()).isEqualTo(0);
+        });
 
         // test follower.
         for (int followId :
-                leaderAndIsr.isr().stream()
-                        .filter(id -> id != leader)
-                        .collect(Collectors.toList())) {
+                leaderAndIsr.isr().stream().filter(id -> id != leader).collect(Collectors.toList())) {
             TabletServer follower = FLUSS_CLUSTER_EXTENSION.getTabletServerById(followId);
             ReplicaManager replicaManager1 = follower.getReplicaManager();
-            retry(
-                    Duration.ofMinutes(1),
-                    () -> {
-                        assertThat(replicaManager1.getReplica(tb))
-                                .isInstanceOf(ReplicaManager.OnlineReplica.class);
-                        Replica replica = replicaManager1.getReplicaOrException(tb);
-                        assertThat(replica.isLeader()).isFalse();
-                        assertThat(replica.getLeaderEpoch()).isEqualTo(0);
-                        assertThat(replica.getBucketEpoch()).isEqualTo(0);
-                        assertThat(replica.getLeaderId()).isEqualTo(leader);
-                    });
+            retry(Duration.ofMinutes(1), () -> {
+                assertThat(replicaManager1.getReplica(tb)).isInstanceOf(ReplicaManager.OnlineReplica.class);
+                Replica replica = replicaManager1.getReplicaOrException(tb);
+                assertThat(replica.isLeader()).isFalse();
+                assertThat(replica.getLeaderEpoch()).isEqualTo(0);
+                assertThat(replica.getBucketEpoch()).isEqualTo(0);
+                assertThat(replica.getLeaderId()).isEqualTo(leader);
+            });
         }
     }
 

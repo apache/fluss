@@ -84,11 +84,7 @@ public class FlussFileRegion extends AbstractReferenceCounted implements FileReg
         long count = this.count - position;
         if (count < 0 || position < 0) {
             throw new IllegalArgumentException(
-                    "position out of range: "
-                            + position
-                            + " (expected: 0 - "
-                            + (this.count - 1)
-                            + ')');
+                    "position out of range: " + position + " (expected: 0 - " + (this.count - 1) + ')');
         }
         if (count == 0) {
             return 0L;
@@ -147,11 +143,7 @@ public class FlussFileRegion extends AbstractReferenceCounted implements FileReg
         long size = region.file.size();
         long count = region.count - position;
         if (region.position + count + position > size) {
-            throw new IOException(
-                    "Underlying file size "
-                            + size
-                            + " smaller then requested count "
-                            + region.count);
+            throw new IOException("Underlying file size " + size + " smaller then requested count " + region.count);
         }
     }
 }

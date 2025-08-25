@@ -62,25 +62,18 @@ public class WriterAppendInfo {
             long batchTimestamp) {
         maybeValidateDataBatch(batchSequence, isWriterInBatchExpired, lastOffset);
         updatedEntry.addBath(
-                batchSequence,
-                lastOffset,
-                (int) (lastOffset - firstOffsetMetadata.getMessageOffset()),
-                batchTimestamp);
+                batchSequence, lastOffset, (int) (lastOffset - firstOffsetMetadata.getMessageOffset()), batchTimestamp);
     }
 
-    private void maybeValidateDataBatch(
-            int appendFirstSeq, boolean isWriterInBatchExpired, long lastOffset) {
+    private void maybeValidateDataBatch(int appendFirstSeq, boolean isWriterInBatchExpired, long lastOffset) {
         int currentLastSeq =
-                !updatedEntry.isEmpty()
-                        ? updatedEntry.lastBatchSequence()
-                        : currentEntry.lastBatchSequence();
+                !updatedEntry.isEmpty() ? updatedEntry.lastBatchSequence() : currentEntry.lastBatchSequence();
         // must be in sequence, even for the first batch should start from 0
         if (!inSequence(currentLastSeq, appendFirstSeq, isWriterInBatchExpired)) {
-            throw new OutOfOrderSequenceException(
-                    String.format(
-                            "Out of order batch sequence for writer %s at offset %s in "
-                                    + "table-bucket %s : %s (incoming batch seq.), %s (current batch seq.)",
-                            writerId, lastOffset, tableBucket, appendFirstSeq, currentLastSeq));
+            throw new OutOfOrderSequenceException(String.format(
+                    "Out of order batch sequence for writer %s at offset %s in "
+                            + "table-bucket %s : %s (incoming batch seq.), %s (current batch seq.)",
+                    writerId, lastOffset, tableBucket, appendFirstSeq, currentLastSeq));
         }
     }
 

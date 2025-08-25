@@ -74,8 +74,7 @@ final class KvManagerTest {
     private static final short schemaId = 1;
     private final KvRecordTestUtils.KvRecordBatchFactory kvRecordBatchFactory =
             KvRecordTestUtils.KvRecordBatchFactory.of(schemaId);
-    private final KvRecordTestUtils.KvRecordFactory kvRecordFactory =
-            KvRecordTestUtils.KvRecordFactory.of(baseRowType);
+    private final KvRecordTestUtils.KvRecordFactory kvRecordFactory = KvRecordTestUtils.KvRecordFactory.of(baseRowType);
 
     private static ZooKeeperClient zkClient;
 
@@ -92,10 +91,7 @@ final class KvManagerTest {
 
     @BeforeAll
     static void baseBeforeAll() {
-        zkClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        zkClient = ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getZooKeeperClient(NOPErrorHandler.INSTANCE);
     }
 
     @BeforeEach
@@ -109,8 +105,7 @@ final class KvManagerTest {
 
         // we need a log manager for kv manager
 
-        logManager =
-                LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
+        logManager = LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
         kvManager = KvManager.create(conf, zkClient, logManager);
         kvManager.startup();
     }
@@ -254,14 +249,11 @@ final class KvManagerTest {
         kvTablet.flush(Long.MAX_VALUE, NOPErrorHandler.INSTANCE);
     }
 
-    private KvTablet getOrCreateKv(
-            TablePath tablePath, @Nullable String partitionName, TableBucket tableBucket)
+    private KvTablet getOrCreateKv(TablePath tablePath, @Nullable String partitionName, TableBucket tableBucket)
             throws Exception {
         PhysicalTablePath physicalTablePath =
-                PhysicalTablePath.of(
-                        tablePath.getDatabaseName(), tablePath.getTableName(), partitionName);
-        LogTablet logTablet =
-                logManager.getOrCreateLog(physicalTablePath, tableBucket, LogFormat.ARROW, 1, true);
+                PhysicalTablePath.of(tablePath.getDatabaseName(), tablePath.getTableName(), partitionName);
+        LogTablet logTablet = logManager.getOrCreateLog(physicalTablePath, tableBucket, LogFormat.ARROW, 1, true);
         return kvManager.getOrCreateKv(
                 physicalTablePath,
                 tableBucket,
@@ -276,8 +268,7 @@ final class KvManagerTest {
         return ValueEncoder.encodeValue(schemaId, kvRecord.getRow());
     }
 
-    private void verifyMultiGet(KvTablet kvTablet, byte[] key, byte[] expectedValue)
-            throws IOException {
+    private void verifyMultiGet(KvTablet kvTablet, byte[] key, byte[] expectedValue) throws IOException {
         List<byte[]> gotValues = kvTablet.multiGet(Collections.singletonList(key));
         assertThat(gotValues).containsExactly(expectedValue);
     }

@@ -36,16 +36,11 @@ public class PaimonSortedRecordReader extends PaimonRecordReader implements Sort
     Comparator<org.apache.fluss.row.InternalRow> comparator;
 
     public PaimonSortedRecordReader(
-            FileStoreTable fileStoreTable,
-            PaimonSplit split,
-            @Nullable int[][] project,
-            @Nullable Predicate predicate)
+            FileStoreTable fileStoreTable, PaimonSplit split, @Nullable int[][] project, @Nullable Predicate predicate)
             throws IOException {
         super(fileStoreTable, split, project, predicate);
         this.comparator =
-                toFlussRowComparator(
-                        paimonRowType,
-                        ((KeyValueFileStore) fileStoreTable.store()).newKeyComparator());
+                toFlussRowComparator(paimonRowType, ((KeyValueFileStore) fileStoreTable.store()).newKeyComparator());
     }
 
     @Override
@@ -55,9 +50,7 @@ public class PaimonSortedRecordReader extends PaimonRecordReader implements Sort
 
     private Comparator<org.apache.fluss.row.InternalRow> toFlussRowComparator(
             RowType rowType, Comparator<org.apache.paimon.data.InternalRow> paimonRowcomparator) {
-        return (row1, row2) ->
-                paimonRowcomparator.compare(
-                        new FlussRowAsPaimonRow(row1, rowType),
-                        new FlussRowAsPaimonRow(row2, rowType));
+        return (row1, row2) -> paimonRowcomparator.compare(
+                new FlussRowAsPaimonRow(row1, rowType), new FlussRowAsPaimonRow(row2, rowType));
     }
 }

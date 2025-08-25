@@ -39,11 +39,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class CoordinatorTestUtils {
 
     public static void makeSendLeaderAndStopRequestAlwaysSuccess(
-            CoordinatorContext coordinatorContext,
-            TestCoordinatorChannelManager testCoordinatorChannelManager) {
-        Map<Integer, TabletServerGateway> gateways =
-                makeTabletServerGateways(
-                        coordinatorContext.getLiveTabletServers().keySet(), Collections.emptySet());
+            CoordinatorContext coordinatorContext, TestCoordinatorChannelManager testCoordinatorChannelManager) {
+        Map<Integer, TabletServerGateway> gateways = makeTabletServerGateways(
+                coordinatorContext.getLiveTabletServers().keySet(), Collections.emptySet());
         testCoordinatorChannelManager.setGateways(gateways);
     }
 
@@ -51,16 +49,14 @@ public class CoordinatorTestUtils {
             CoordinatorContext coordinatorContext,
             TestCoordinatorChannelManager testCoordinatorChannelManager,
             Set<Integer> failServers) {
-        Map<Integer, TabletServerGateway> gateways =
-                makeTabletServerGateways(
-                        coordinatorContext.getLiveTabletServers().keySet(), failServers);
+        Map<Integer, TabletServerGateway> gateways = makeTabletServerGateways(
+                coordinatorContext.getLiveTabletServers().keySet(), failServers);
         testCoordinatorChannelManager.setGateways(gateways);
     }
 
     public static void makeSendLeaderAndStopRequestAlwaysSuccess(
             TestCoordinatorChannelManager testCoordinatorChannelManager, Set<Integer> servers) {
-        Map<Integer, TabletServerGateway> gateways =
-                makeTabletServerGateways(servers, Collections.emptySet());
+        Map<Integer, TabletServerGateway> gateways = makeTabletServerGateways(servers, Collections.emptySet());
         testCoordinatorChannelManager.setGateways(gateways);
     }
 
@@ -76,8 +72,7 @@ public class CoordinatorTestUtils {
             Set<Integer> servers, Set<Integer> failedServers) {
         Map<Integer, TabletServerGateway> gateways = new HashMap<>();
         for (Integer server : servers) {
-            TabletServerGateway tabletServerGateway =
-                    new TestTabletServerGateway(failedServers.contains(server));
+            TabletServerGateway tabletServerGateway = new TestTabletServerGateway(failedServers.contains(server));
             gateways.put(server, tabletServerGateway);
         }
         return gateways;
@@ -86,21 +81,17 @@ public class CoordinatorTestUtils {
     public static List<ServerInfo> createServers(List<Integer> servers) {
         List<ServerInfo> tabletServes = new ArrayList<>();
         for (int server : servers) {
-            tabletServes.add(
-                    new ServerInfo(
-                            server,
-                            "RACK" + server,
-                            Endpoint.fromListenersString("CLIENT://host:100"),
-                            ServerType.TABLET_SERVER));
+            tabletServes.add(new ServerInfo(
+                    server,
+                    "RACK" + server,
+                    Endpoint.fromListenersString("CLIENT://host:100"),
+                    ServerType.TABLET_SERVER));
         }
         return tabletServes;
     }
 
     public static void checkLeaderAndIsr(
-            ZooKeeperClient zooKeeperClient,
-            TableBucket tableBucket,
-            int expectLeaderEpoch,
-            int expectLeader)
+            ZooKeeperClient zooKeeperClient, TableBucket tableBucket, int expectLeaderEpoch, int expectLeader)
             throws Exception {
         LeaderAndIsr leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
         assertThat(leaderAndIsr.leaderEpoch()).isEqualTo(expectLeaderEpoch);

@@ -82,8 +82,7 @@ public class FlussRecordAsIcebergRecord implements Record {
         this.internalRow = logRecord.getRow();
         this.originRowFieldCount = internalRow.getFieldCount();
         checkState(
-                originRowFieldCount
-                        == icebergSchema.asStruct().fields().size() - LAKE_ICEBERG_SYSTEM_COLUMNS,
+                originRowFieldCount == icebergSchema.asStruct().fields().size() - LAKE_ICEBERG_SYSTEM_COLUMNS,
                 "The Iceberg table fields count must equals to LogRecord's fields count.");
     }
 
@@ -154,11 +153,9 @@ public class FlussRecordAsIcebergRecord implements Record {
                     .toBigDecimal();
         } else if (dataType instanceof LocalZonedTimestampType) {
             // Iceberg expects OffsetDateTime for timestamp with local timezone.
-            return getTimestampLtz(
-                    internalRow
-                            .getTimestampLtz(
-                                    pos, ((LocalZonedTimestampType) dataType).getPrecision())
-                            .toInstant());
+            return getTimestampLtz(internalRow
+                    .getTimestampLtz(pos, ((LocalZonedTimestampType) dataType).getPrecision())
+                    .toInstant());
         } else if (dataType instanceof TimestampType) {
             // Iceberg expects LocalDateType for timestamp without local timezone.
             return internalRow
@@ -169,9 +166,8 @@ public class FlussRecordAsIcebergRecord implements Record {
         } else if (dataType instanceof TimeType) {
             return DateTimeUtils.toLocalTime(internalRow.getInt(pos));
         }
-        throw new UnsupportedOperationException(
-                "Unsupported data type conversion for Fluss type: "
-                        + dataType.getClass().getName());
+        throw new UnsupportedOperationException("Unsupported data type conversion for Fluss type: "
+                + dataType.getClass().getName());
     }
 
     private OffsetDateTime getTimestampLtz(long timestamp) {
@@ -203,8 +199,7 @@ public class FlussRecordAsIcebergRecord implements Record {
         if (value == null || javaClass.isInstance(value)) {
             return javaClass.cast(value);
         } else {
-            throw new IllegalStateException(
-                    "Not an instance of " + javaClass.getName() + ": " + value);
+            throw new IllegalStateException("Not an instance of " + javaClass.getName() + ": " + value);
         }
     }
 

@@ -71,8 +71,7 @@ public class RecordAndPos {
             return false;
         }
         RecordAndPos that = (RecordAndPos) o;
-        return readRecordsCount == that.readRecordsCount
-                && Objects.equals(scanRecord, that.scanRecord);
+        return readRecordsCount == that.readRecordsCount && Objects.equals(scanRecord, that.scanRecord);
     }
 
     @Override
@@ -82,11 +81,6 @@ public class RecordAndPos {
 
     @Override
     public String toString() {
-        return "RecordAndPos{"
-                + "scanRecord="
-                + scanRecord
-                + ", readRecordsCount="
-                + readRecordsCount
-                + '}';
+        return "RecordAndPos{" + "scanRecord=" + scanRecord + ", readRecordsCount=" + readRecordsCount + '}';
     }
 }

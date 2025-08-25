@@ -45,10 +45,8 @@ public class KvSnapshotDataDownloader extends KvSnapshotDataTransfer {
      * @throws Exception If anything about the download goes wrong.
      */
     public void transferAllDataToDirectory(
-            KvSnapshotDownloadSpec kvSnapshotDownloadSpec, CloseableRegistry closeableRegistry)
-            throws Exception {
-        transferAllDataToDirectory(
-                Collections.singletonList(kvSnapshotDownloadSpec), closeableRegistry);
+            KvSnapshotDownloadSpec kvSnapshotDownloadSpec, CloseableRegistry closeableRegistry) throws Exception {
+        transferAllDataToDirectory(Collections.singletonList(kvSnapshotDownloadSpec), closeableRegistry);
     }
 
     /**
@@ -58,30 +56,22 @@ public class KvSnapshotDataDownloader extends KvSnapshotDataTransfer {
      * @throws Exception If anything about the download goes wrong.
      */
     void transferAllDataToDirectory(
-            Collection<KvSnapshotDownloadSpec> kvSnapshotDownloadSpecs,
-            CloseableRegistry closeableRegistry)
+            Collection<KvSnapshotDownloadSpec> kvSnapshotDownloadSpecs, CloseableRegistry closeableRegistry)
             throws Exception {
         List<FileDownloadSpec> fileDownloadSpecs = new ArrayList<>();
         for (KvSnapshotDownloadSpec kvSnapshotDownloadSpec : kvSnapshotDownloadSpecs) {
             KvSnapshotHandle kvSnapshotHandle = kvSnapshotDownloadSpec.getKvSnapshotHandle();
-            List<FsPathAndFileName> fsPathAndFileNames =
-                    Stream.concat(
-                                    kvSnapshotHandle.getSharedKvFileHandles().stream(),
-                                    kvSnapshotHandle.getPrivateFileHandles().stream())
-                            .map(
-                                    kvFileHandleAndLocalPath ->
-                                            new FsPathAndFileName(
-                                                    new FsPath(
-                                                            kvFileHandleAndLocalPath
-                                                                    .getKvFileHandle()
-                                                                    .getFilePath()),
-                                                    kvFileHandleAndLocalPath.getLocalPath()))
-                            .collect(Collectors.toList());
+            List<FsPathAndFileName> fsPathAndFileNames = Stream.concat(
+                            kvSnapshotHandle.getSharedKvFileHandles().stream(),
+                            kvSnapshotHandle.getPrivateFileHandles().stream())
+                    .map(kvFileHandleAndLocalPath -> new FsPathAndFileName(
+                            new FsPath(
+                                    kvFileHandleAndLocalPath.getKvFileHandle().getFilePath()),
+                            kvFileHandleAndLocalPath.getLocalPath()))
+                    .collect(Collectors.toList());
             fileDownloadSpecs.add(
-                    new FileDownloadSpec(
-                            fsPathAndFileNames, kvSnapshotDownloadSpec.getDownloadDestination()));
+                    new FileDownloadSpec(fsPathAndFileNames, kvSnapshotDownloadSpec.getDownloadDestination()));
         }
-        FileDownloadUtils.transferAllDataToDirectory(
-                fileDownloadSpecs, closeableRegistry, dataTransferThreadPool);
+        FileDownloadUtils.transferAllDataToDirectory(fileDownloadSpecs, closeableRegistry, dataTransferThreadPool);
     }
 }

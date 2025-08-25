@@ -63,18 +63,16 @@ public class RemoteLogSegment {
         this.remoteLogSegmentId = checkNotNull(remoteLogSegmentId);
 
         if (remoteLogStartOffset < 0) {
-            throw new IllegalArgumentException(
-                    "Unexpected start offset: "
-                            + remoteLogStartOffset
-                            + ". StartOffset for a tiered segment cannot be negative");
+            throw new IllegalArgumentException("Unexpected start offset: "
+                    + remoteLogStartOffset
+                    + ". StartOffset for a tiered segment cannot be negative");
         }
         this.remoteLogStartOffset = remoteLogStartOffset;
 
         if (remoteLogEndOffset < remoteLogStartOffset) {
-            throw new IllegalArgumentException(
-                    "Unexpected remote log end offset: "
-                            + remoteLogEndOffset
-                            + ". EndOffset for a remote segment must be greater than remote log start offset");
+            throw new IllegalArgumentException("Unexpected remote log end offset: "
+                    + remoteLogEndOffset
+                    + ". EndOffset for a remote segment must be greater than remote log start offset");
         }
         this.remoteLogEndOffset = remoteLogEndOffset;
         this.maxTimestamp = maxTimestamp;

@@ -34,7 +34,8 @@ import static org.assertj.core.api.Assumptions.assumeThat;
 /** Behavior tests for HDFS. */
 class HadoopLocalFileSystemBehaviorTest extends FileSystemBehaviorTestSuite {
 
-    @TempDir private Path tmp;
+    @TempDir
+    private Path tmp;
 
     @Override
     protected FileSystem getFileSystem() throws Exception {

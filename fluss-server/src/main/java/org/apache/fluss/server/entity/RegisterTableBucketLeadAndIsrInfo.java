@@ -28,7 +28,10 @@ import java.util.List;
 public class RegisterTableBucketLeadAndIsrInfo {
     private final TableBucket tableBucket;
     private final LeaderAndIsr leaderAndIsr;
-    @Nullable private final String partitionName;
+
+    @Nullable
+    private final String partitionName;
+
     private final List<Integer> liveReplicas;
 
     public RegisterTableBucketLeadAndIsrInfo(

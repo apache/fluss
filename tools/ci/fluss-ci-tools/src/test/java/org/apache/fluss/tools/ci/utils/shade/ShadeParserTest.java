@@ -45,8 +45,7 @@ class ShadeParserTest {
 
     @Test
     void testParsing() {
-        final Map<String, Set<Dependency>> dependenciesByModule =
-                ShadeParser.parseShadeOutput(getTestDependencyCopy());
+        final Map<String, Set<Dependency>> dependenciesByModule = ShadeParser.parseShadeOutput(getTestDependencyCopy());
 
         assertThat(dependenciesByModule).containsOnlyKeys("m1", "m2");
         assertThat(dependenciesByModule.get("m1"))
@@ -59,37 +58,28 @@ class ShadeParserTest {
 
     @Test
     void testLineParsingGroupId() {
-        assertThat(
-                        ShadeParser.parseDependency(
-                                "Including external:dependency1:jar:1.0 in the shaded jar."))
+        assertThat(ShadeParser.parseDependency("Including external:dependency1:jar:1.0 in the shaded jar."))
                 .hasValueSatisfying(
                         dependency -> assertThat(dependency.getGroupId()).isEqualTo("external"));
     }
 
     @Test
     void testLineParsingArtifactId() {
-        assertThat(
-                        ShadeParser.parseDependency(
-                                "Including external:dependency1:jar:1.0 in the shaded jar."))
+        assertThat(ShadeParser.parseDependency("Including external:dependency1:jar:1.0 in the shaded jar."))
                 .hasValueSatisfying(
-                        dependency ->
-                                assertThat(dependency.getArtifactId()).isEqualTo("dependency1"));
+                        dependency -> assertThat(dependency.getArtifactId()).isEqualTo("dependency1"));
     }
 
     @Test
     void testLineParsingVersion() {
-        assertThat(
-                        ShadeParser.parseDependency(
-                                "Including external:dependency1:jar:1.0 in the shaded jar."))
+        assertThat(ShadeParser.parseDependency("Including external:dependency1:jar:1.0 in the shaded jar."))
                 .hasValueSatisfying(
                         dependency -> assertThat(dependency.getVersion()).isEqualTo("1.0"));
     }
 
     @Test
     void testLineParsingWithNonJarType() {
-        assertThat(
-                        ShadeParser.parseDependency(
-                                "Including external:dependency1:pom:1.0 in the shaded jar."))
+        assertThat(ShadeParser.parseDependency("Including external:dependency1:pom:1.0 in the shaded jar."))
                 .isPresent();
     }
 }

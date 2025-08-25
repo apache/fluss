@@ -35,8 +35,7 @@ public class LakeStorageUtils {
 
     @Nullable
     public static Map<String, String> generateDefaultTableLakeOptions(Configuration clusterConf) {
-        Optional<DataLakeFormat> optDataLakeFormat =
-                clusterConf.getOptional(ConfigOptions.DATALAKE_FORMAT);
+        Optional<DataLakeFormat> optDataLakeFormat = clusterConf.getOptional(ConfigOptions.DATALAKE_FORMAT);
         if (!optDataLakeFormat.isPresent()) {
             return null;
         }

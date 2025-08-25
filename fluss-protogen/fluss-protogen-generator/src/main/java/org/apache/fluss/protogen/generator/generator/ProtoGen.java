@@ -51,12 +51,10 @@ public class ProtoGen {
         this.proto = proto;
         this.outerClassName = outerClassName;
         this.useOuterClass = useOuterClass;
-        this.enums =
-                proto.getEnumGroups().stream().map(ProtobufEnum::new).collect(Collectors.toList());
-        this.messages =
-                proto.getMessages().stream()
-                        .map(m -> new ProtobufMessage(m, useOuterClass))
-                        .collect(Collectors.toList());
+        this.enums = proto.getEnumGroups().stream().map(ProtobufEnum::new).collect(Collectors.toList());
+        this.messages = proto.getMessages().stream()
+                .map(m -> new ProtobufMessage(m, useOuterClass))
+                .collect(Collectors.toList());
     }
 
     public List<File> generate(File directory) throws IOException {

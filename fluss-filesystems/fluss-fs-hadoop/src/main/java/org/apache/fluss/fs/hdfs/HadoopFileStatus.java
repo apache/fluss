@@ -57,8 +57,7 @@ public class HadoopFileStatus implements FileStatus {
     /**
      * Creates a new {@code HadoopFileStatus} from Hadoop's {@link org.apache.hadoop.fs.FileStatus}.
      */
-    public static HadoopFileStatus fromHadoopStatus(
-            final org.apache.hadoop.fs.FileStatus fileStatus) {
+    public static HadoopFileStatus fromHadoopStatus(final org.apache.hadoop.fs.FileStatus fileStatus) {
         return new HadoopFileStatus(fileStatus);
     }
 }

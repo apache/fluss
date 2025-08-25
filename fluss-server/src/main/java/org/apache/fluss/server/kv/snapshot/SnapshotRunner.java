@@ -39,27 +39,27 @@ public class SnapshotRunner {
     private static final String LOG_ASYNC_COMPLETED_TEMPLATE =
             "Asynchronous incremental RocksDB snapshot (asynchronous part) in thread {} took {} ms.";
 
-    @Nonnull private final RocksIncrementalSnapshot rocksIncrementalSnapshot;
-    @Nonnull private final CloseableRegistry cancelStreamRegistry;
+    @Nonnull
+    private final RocksIncrementalSnapshot rocksIncrementalSnapshot;
+
+    @Nonnull
+    private final CloseableRegistry cancelStreamRegistry;
 
     public SnapshotRunner(
-            RocksIncrementalSnapshot rocksIncrementalSnapshot,
-            @Nonnull CloseableRegistry cancelStreamRegistry) {
+            RocksIncrementalSnapshot rocksIncrementalSnapshot, @Nonnull CloseableRegistry cancelStreamRegistry) {
         this.rocksIncrementalSnapshot = rocksIncrementalSnapshot;
         this.cancelStreamRegistry = cancelStreamRegistry;
     }
 
     public RunnableFuture<SnapshotResult> snapshot(
-            long snapshotId, long logOffset, @Nonnull SnapshotLocation snapshotLocation)
-            throws Exception {
+            long snapshotId, long logOffset, @Nonnull SnapshotLocation snapshotLocation) throws Exception {
         long startTime = System.currentTimeMillis();
         RocksIncrementalSnapshot.NativeRocksDBSnapshotResources snapshotResources =
                 rocksIncrementalSnapshot.syncPrepareResources(snapshotId);
         logCompletedInternal(LOG_SYNC_COMPLETED_TEMPLATE, startTime);
 
         SnapshotResultSupplier asyncSnapshot =
-                rocksIncrementalSnapshot.asyncSnapshot(
-                        snapshotResources, snapshotId, logOffset, snapshotLocation);
+                rocksIncrementalSnapshot.asyncSnapshot(snapshotResources, snapshotId, logOffset, snapshotLocation);
 
         return new AsyncSnapshotCallable<SnapshotResult>() {
             @Override

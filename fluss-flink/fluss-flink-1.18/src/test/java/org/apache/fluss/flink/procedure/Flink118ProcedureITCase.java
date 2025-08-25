@@ -30,12 +30,8 @@ public class Flink118ProcedureITCase extends FlinkProcedureITCase {
     @Test
     void testLackParams() {
         assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                                String.format(
-                                                        "Call %s.sys.list_acl('ANY', 'ANY', 'ANY')",
-                                                        CATALOG_NAME))
-                                        .wait())
+                        () -> tEnv.executeSql(String.format("Call %s.sys.list_acl('ANY', 'ANY', 'ANY')", CATALOG_NAME))
+                                .wait())
                 .hasMessageContaining(
                         "No match found for function signature list_acl(<CHARACTER>, <CHARACTER>, <CHARACTER>)");
     }

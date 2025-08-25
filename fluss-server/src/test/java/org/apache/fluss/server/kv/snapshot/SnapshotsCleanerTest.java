@@ -48,8 +48,7 @@ class SnapshotsCleanerTest {
         TestCompletedSnapshot cp3 = createSnapshot(tableBucket, 2);
         snapshotsCleaner.addSubsumedSnapshot(cp3);
 
-        snapshotsCleaner.cleanSubsumedSnapshots(
-                3, Collections.singleton(1L), () -> {}, Executors.directExecutor());
+        snapshotsCleaner.cleanSubsumedSnapshots(3, Collections.singleton(1L), () -> {}, Executors.directExecutor());
         // cp 1 is in use, shouldn't discard.
         assertThat(cp1.isDiscarded()).isFalse();
         assertThat(cp2.isDiscarded()).isTrue();
@@ -66,8 +65,7 @@ class SnapshotsCleanerTest {
         snapshotsCleaner.addSubsumedSnapshot(cp2);
         TestCompletedSnapshot cp3 = createSnapshot(tableBucket, 3);
         snapshotsCleaner.addSubsumedSnapshot(cp3);
-        snapshotsCleaner.cleanSubsumedSnapshots(
-                2, Collections.emptySet(), () -> {}, Executors.directExecutor());
+        snapshotsCleaner.cleanSubsumedSnapshots(2, Collections.emptySet(), () -> {}, Executors.directExecutor());
 
         assertThat(cp1.isDiscarded()).isTrue();
         // cp2 is the lowest snapshot that is still valid, shouldn't discard.
@@ -90,19 +88,15 @@ class SnapshotsCleanerTest {
 
         public CompletableFuture<Void> discardAsync(Executor ioExecutor) {
             CompletableFuture<Void> resultFuture = new CompletableFuture<>();
-            super.discardAsync(ioExecutor)
-                    .whenComplete(
-                            (ignore, throwable) -> {
-                                if (throwable != null) {
-                                    resultFuture.completeExceptionally(
-                                            new FlussRuntimeException(
-                                                    "Fail to discard TestCompletedSnapshot.",
-                                                    throwable));
-                                } else {
-                                    isDiscarded = true;
-                                    resultFuture.complete(null);
-                                }
-                            });
+            super.discardAsync(ioExecutor).whenComplete((ignore, throwable) -> {
+                if (throwable != null) {
+                    resultFuture.completeExceptionally(
+                            new FlussRuntimeException("Fail to discard TestCompletedSnapshot.", throwable));
+                } else {
+                    isDiscarded = true;
+                    resultFuture.complete(null);
+                }
+            });
             return resultFuture;
         }
 
@@ -116,8 +110,7 @@ class SnapshotsCleanerTest {
         private boolean isDiscarded;
 
         public TestKvSnapshotHandle(
-                List<KvFileHandleAndLocalPath> sharedFileHandles,
-                List<KvFileHandleAndLocalPath> privateFileHandles) {
+                List<KvFileHandleAndLocalPath> sharedFileHandles, List<KvFileHandleAndLocalPath> privateFileHandles) {
             super(sharedFileHandles, privateFileHandles, -1);
         }
 
@@ -151,15 +144,12 @@ class SnapshotsCleanerTest {
         List<KvFileHandleAndLocalPath> privateFileHandles = new ArrayList<>();
         for (int i = 0; i < 4; i++) {
             sharedFileHandles.add(
-                    KvFileHandleAndLocalPath.of(
-                            new KvFileHandle("share_remote_path", 1), "share_local_path"));
+                    KvFileHandleAndLocalPath.of(new KvFileHandle("share_remote_path", 1), "share_local_path"));
             privateFileHandles.add(
-                    KvFileHandleAndLocalPath.of(
-                            new KvFileHandle("private_remote_path", 1), "private_local_path"));
+                    KvFileHandleAndLocalPath.of(new KvFileHandle("private_remote_path", 1), "private_local_path"));
         }
 
-        TestKvSnapshotHandle kvSnapshotHandle =
-                new TestKvSnapshotHandle(sharedFileHandles, privateFileHandles);
+        TestKvSnapshotHandle kvSnapshotHandle = new TestKvSnapshotHandle(sharedFileHandles, privateFileHandles);
         return new TestCompletedSnapshot(tableBucket, snapshotId, snapshotPath, kvSnapshotHandle);
     }
 }

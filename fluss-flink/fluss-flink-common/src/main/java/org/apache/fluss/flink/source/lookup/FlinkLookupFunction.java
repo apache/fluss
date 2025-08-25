@@ -57,14 +57,18 @@ public class FlinkLookupFunction extends LookupFunction {
     private final int maxRetryTimes;
     private final RowType flinkRowType;
     private final LookupNormalizer lookupNormalizer;
-    @Nullable private final int[] projection;
+
+    @Nullable
+    private final int[] projection;
 
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
     private transient Table table;
     private transient Lookuper lookuper;
     private transient FlinkAsFlussRow lookupRow;
-    @Nullable private transient ProjectedRow projectedRow;
+
+    @Nullable
+    private transient ProjectedRow projectedRow;
 
     public FlinkLookupFunction(
             Configuration flussConfig,
@@ -97,8 +101,7 @@ public class FlinkLookupFunction extends LookupFunction {
             // reuse the projected row
             projectedRow = ProjectedRow.from(projection);
         }
-        flussRowToFlinkRowConverter =
-                new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
+        flussRowToFlinkRowConverter = new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
 
         Lookup lookup = table.newLookup();
         if (lookupNormalizer.getLookupType() == LookupType.PREFIX_LOOKUP) {
@@ -120,21 +123,20 @@ public class FlinkLookupFunction extends LookupFunction {
     @Override
     public Collection<RowData> lookup(RowData keyRow) {
         RowData normalizedKeyRow = lookupNormalizer.normalizeLookupKey(keyRow);
-        LookupNormalizer.RemainingFilter remainingFilter =
-                lookupNormalizer.createRemainingFilter(keyRow);
+        LookupNormalizer.RemainingFilter remainingFilter = lookupNormalizer.createRemainingFilter(keyRow);
         // wrap flink row as fluss row to lookup, the flink row has already been in expected order.
         InternalRow flussKeyRow = lookupRow.replace(normalizedKeyRow);
         for (int retry = 0; retry <= maxRetryTimes; retry++) {
             try {
-                List<InternalRow> lookupRows = lookuper.lookup(flussKeyRow).get().getRowList();
+                List<InternalRow> lookupRows =
+                        lookuper.lookup(flussKeyRow).get().getRowList();
                 if (lookupRows.isEmpty()) {
                     return Collections.emptyList();
                 }
                 List<RowData> projectedRows = new ArrayList<>();
                 for (InternalRow row : lookupRows) {
                     if (row != null) {
-                        RowData flinkRow =
-                                flussRowToFlinkRowConverter.toFlinkRowData(maybeProject(row));
+                        RowData flinkRow = flussRowToFlinkRowConverter.toFlinkRowData(maybeProject(row));
                         if (remainingFilter == null || remainingFilter.isMatch(flinkRow)) {
                             projectedRows.add(flinkRow);
                         }
@@ -144,9 +146,7 @@ public class FlinkLookupFunction extends LookupFunction {
             } catch (Exception e) {
                 LOG.error(String.format("Fluss lookup error, retry times = %d", retry), e);
                 if (retry >= maxRetryTimes) {
-                    String exceptionMsg =
-                            String.format(
-                                    "Execution of Fluss lookup failed, retry times = %d.", retry);
+                    String exceptionMsg = String.format("Execution of Fluss lookup failed, retry times = %d.", retry);
                     throw new RuntimeException(exceptionMsg, e);
                 }
 

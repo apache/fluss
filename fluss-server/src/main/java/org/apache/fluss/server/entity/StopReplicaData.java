@@ -27,8 +27,7 @@ public class StopReplicaData {
     private final int coordinatorEpoch;
     private final int leaderEpoch;
 
-    public StopReplicaData(
-            TableBucket tableBucket, boolean delete, int coordinatorEpoch, int leaderEpoch) {
+    public StopReplicaData(TableBucket tableBucket, boolean delete, int coordinatorEpoch, int leaderEpoch) {
         this.tableBucket = tableBucket;
         this.delete = delete;
         this.coordinatorEpoch = coordinatorEpoch;

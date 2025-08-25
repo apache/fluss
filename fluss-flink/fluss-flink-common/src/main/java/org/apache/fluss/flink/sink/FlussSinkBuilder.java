@@ -111,8 +111,7 @@ public class FlussSinkBuilder<InputT> {
     }
 
     /** Set a FlussSerializationSchema. */
-    public FlussSinkBuilder<InputT> setSerializationSchema(
-            FlussSerializationSchema<InputT> serializationSchema) {
+    public FlussSinkBuilder<InputT> setSerializationSchema(FlussSerializationSchema<InputT> serializationSchema) {
         this.serializationSchema = serializationSchema;
         return this;
     }
@@ -140,44 +139,42 @@ public class FlussSinkBuilder<InputT> {
                 throw new RuntimeException("Failed to get table info", e);
             }
         } catch (Exception e) {
-            throw new RuntimeException(
-                    "Failed to initialize FlussSource admin connection: " + e.getMessage(), e);
+            throw new RuntimeException("Failed to initialize FlussSource admin connection: " + e.getMessage(), e);
         }
         int numBucket = tableInfo.getNumBuckets();
         List<String> bucketKeys = tableInfo.getBucketKeys();
         List<String> partitionKeys = tableInfo.getPartitionKeys();
         RowType tableRowType = toFlinkRowType(tableInfo.getRowType());
-        DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
+        DataLakeFormat lakeFormat =
+                tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
 
         boolean isUpsert = tableInfo.hasPrimaryKey();
 
         if (isUpsert) {
             LOG.info("Initializing Fluss upsert sink writer ...");
-            writerBuilder =
-                    new FlinkSink.UpsertSinkWriterBuilder<>(
-                            tablePath,
-                            flussConfig,
-                            tableRowType,
-                            null, // not support partialUpdateColumns yet
-                            numBucket,
-                            bucketKeys,
-                            partitionKeys,
-                            lakeFormat,
-                            shuffleByBucketId,
-                            serializationSchema);
+            writerBuilder = new FlinkSink.UpsertSinkWriterBuilder<>(
+                    tablePath,
+                    flussConfig,
+                    tableRowType,
+                    null, // not support partialUpdateColumns yet
+                    numBucket,
+                    bucketKeys,
+                    partitionKeys,
+                    lakeFormat,
+                    shuffleByBucketId,
+                    serializationSchema);
         } else {
             LOG.info("Initializing Fluss append sink writer ...");
-            writerBuilder =
-                    new FlinkSink.AppendSinkWriterBuilder<>(
-                            tablePath,
-                            flussConfig,
-                            tableRowType,
-                            numBucket,
-                            bucketKeys,
-                            partitionKeys,
-                            lakeFormat,
-                            shuffleByBucketId,
-                            serializationSchema);
+            writerBuilder = new FlinkSink.AppendSinkWriterBuilder<>(
+                    tablePath,
+                    flussConfig,
+                    tableRowType,
+                    numBucket,
+                    bucketKeys,
+                    partitionKeys,
+                    lakeFormat,
+                    shuffleByBucketId,
+                    serializationSchema);
         }
 
         return new FlussSink<>(writerBuilder);

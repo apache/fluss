@@ -92,15 +92,14 @@ public class LogScannerImpl implements LogScanner {
         this.metadataUpdater = metadataUpdater;
         Projection projection = sanityProjection(projectedFields, tableInfo);
         this.scannerMetricGroup = new ScannerMetricGroup(clientMetricGroup, tablePath);
-        this.logFetcher =
-                new LogFetcher(
-                        tableInfo,
-                        projection,
-                        logScannerStatus,
-                        conf,
-                        metadataUpdater,
-                        scannerMetricGroup,
-                        remoteFileDownloader);
+        this.logFetcher = new LogFetcher(
+                tableInfo,
+                projection,
+                logScannerStatus,
+                conf,
+                metadataUpdater,
+                scannerMetricGroup,
+                remoteFileDownloader);
     }
 
     /**
@@ -114,10 +113,7 @@ public class LogScannerImpl implements LogScanner {
             for (int projectedField : projectedFields) {
                 if (projectedField < 0 || projectedField >= tableRowType.getFieldCount()) {
                     throw new IllegalArgumentException(
-                            "Projected field index "
-                                    + projectedField
-                                    + " is out of bound for schema "
-                                    + tableRowType);
+                            "Projected field index " + projectedField + " is out of bound for schema " + tableRowType);
                 }
             }
             return Projection.of(projectedFields);
@@ -170,10 +166,9 @@ public class LogScannerImpl implements LogScanner {
     @Override
     public void subscribe(int bucket, long offset) {
         if (isPartitionedTable) {
-            throw new IllegalStateException(
-                    "The table is a partitioned table, please use "
-                            + "\"subscribe(long partitionId, int bucket, long offset)\" to "
-                            + "subscribe a partitioned bucket instead.");
+            throw new IllegalStateException("The table is a partitioned table, please use "
+                    + "\"subscribe(long partitionId, int bucket, long offset)\" to "
+                    + "subscribe a partitioned bucket instead.");
         }
         acquireAndEnsureOpen();
         try {
@@ -188,10 +183,9 @@ public class LogScannerImpl implements LogScanner {
     @Override
     public void subscribe(long partitionId, int bucket, long offset) {
         if (!isPartitionedTable) {
-            throw new IllegalStateException(
-                    "The table is not a partitioned table, please use "
-                            + "\"subscribe(int bucket, long offset)\" to "
-                            + "subscribe a non-partitioned bucket instead.");
+            throw new IllegalStateException("The table is not a partitioned table, please use "
+                    + "\"subscribe(int bucket, long offset)\" to "
+                    + "subscribe a non-partitioned bucket instead.");
         }
         acquireAndEnsureOpen();
         try {
@@ -199,8 +193,7 @@ public class LogScannerImpl implements LogScanner {
             // we make assumption that the partition id must belong to the current table
             // if we can't find the partition id from the table path, we'll consider the table
             // is not exist
-            this.metadataUpdater.checkAndUpdatePartitionMetadata(
-                    tablePath, Collections.singleton(partitionId));
+            this.metadataUpdater.checkAndUpdatePartitionMetadata(tablePath, Collections.singleton(partitionId));
             this.logScannerStatus.assignScanBuckets(Collections.singletonMap(tableBucket, offset));
         } finally {
             release();
@@ -210,8 +203,7 @@ public class LogScannerImpl implements LogScanner {
     @Override
     public void unsubscribe(long partitionId, int bucket) {
         if (!isPartitionedTable) {
-            throw new IllegalStateException(
-                    "Can't unsubscribe a partition for a non-partitioned table.");
+            throw new IllegalStateException("Can't unsubscribe a partition for a non-partitioned table.");
         }
         acquireAndEnsureOpen();
         try {
@@ -262,18 +254,16 @@ public class LogScannerImpl implements LogScanner {
     private void acquire() {
         final Thread thread = Thread.currentThread();
         final long threadId = thread.getId();
-        if (threadId != currentThread.get()
-                && !currentThread.compareAndSet(NO_CURRENT_THREAD, threadId)) {
-            throw new ConcurrentModificationException(
-                    "Scanner is not safe for multithreaded access. "
-                            + "currentThread(name: "
-                            + thread.getName()
-                            + ", id: "
-                            + threadId
-                            + ")"
-                            + " otherThread(id: "
-                            + currentThread.get()
-                            + ")");
+        if (threadId != currentThread.get() && !currentThread.compareAndSet(NO_CURRENT_THREAD, threadId)) {
+            throw new ConcurrentModificationException("Scanner is not safe for multithreaded access. "
+                    + "currentThread(name: "
+                    + thread.getName()
+                    + ", id: "
+                    + threadId
+                    + ")"
+                    + " otherThread(id: "
+                    + currentThread.get()
+                    + ")");
         }
         refCount.incrementAndGet();
     }

@@ -49,17 +49,15 @@ public class DefaultLogin implements Login {
     public LoginContext login() throws LoginException {
         try (TemporaryClassLoaderContext ignored =
                 TemporaryClassLoaderContext.of(DefaultLogin.class.getClassLoader())) {
-            loginContext =
-                    new LoginContext(
-                            contextName,
-                            null,
-                            callbacks -> {
-                                // Nothing here until we support some mechanisms such as sasl/GSSAPI
-                                // later.
-                                throw new UnsupportedCallbackException(
-                                        callbacks[0], "Unrecognized SASL mechanism.");
-                            },
-                            jaasConfig);
+            loginContext = new LoginContext(
+                    contextName,
+                    null,
+                    callbacks -> {
+                        // Nothing here until we support some mechanisms such as sasl/GSSAPI
+                        // later.
+                        throw new UnsupportedCallbackException(callbacks[0], "Unrecognized SASL mechanism.");
+                    },
+                    jaasConfig);
             loginContext.login();
         }
         LOG.info("Successfully logged in.");

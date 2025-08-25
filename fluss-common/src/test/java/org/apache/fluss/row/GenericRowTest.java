@@ -94,12 +94,8 @@ class GenericRowTest {
         assertThat(genericRow.getDouble(2)).isEqualTo(0.7d);
         assertThat(genericRow.getDouble(3)).isEqualTo(0.8d);
 
-        genericRow =
-                GenericRow.of(
-                        BinaryString.fromString("0"),
-                        null,
-                        BinaryString.fromString("2"),
-                        BinaryString.fromString("3"));
+        genericRow = GenericRow.of(
+                BinaryString.fromString("0"), null, BinaryString.fromString("2"), BinaryString.fromString("3"));
         assertThat(genericRow.getChar(0, 1).toString()).isEqualTo("0");
         assertThat(genericRow.isNullAt(1)).isTrue();
         assertThat(genericRow.getChar(2, 1).toString()).isEqualTo("2");
@@ -108,34 +104,28 @@ class GenericRowTest {
         assertThat(genericRow.getString(2).toString()).isEqualTo("2");
         assertThat(genericRow.getString(3).toString()).isEqualTo("3");
 
-        genericRow =
-                GenericRow.of(
-                        null,
-                        Decimal.fromBigDecimal(new BigDecimal("1"), 18, 0),
-                        Decimal.fromBigDecimal(new BigDecimal("2"), 18, 0),
-                        Decimal.fromBigDecimal(new BigDecimal("3"), 18, 0));
+        genericRow = GenericRow.of(
+                null,
+                Decimal.fromBigDecimal(new BigDecimal("1"), 18, 0),
+                Decimal.fromBigDecimal(new BigDecimal("2"), 18, 0),
+                Decimal.fromBigDecimal(new BigDecimal("3"), 18, 0));
         assertThat(genericRow.isNullAt(0)).isTrue();
         assertThat(genericRow.getDecimal(1, 18, 0).toString()).isEqualTo("1");
         assertThat(genericRow.getDecimal(2, 18, 0).toString()).isEqualTo("2");
         assertThat(genericRow.getDecimal(3, 18, 0).toString()).isEqualTo("3");
 
-        genericRow =
-                GenericRow.of(
-                        TimestampNtz.fromMillis(5L),
-                        null,
-                        TimestampNtz.fromMillis(7L),
-                        TimestampNtz.fromMillis(8L));
+        genericRow = GenericRow.of(
+                TimestampNtz.fromMillis(5L), null, TimestampNtz.fromMillis(7L), TimestampNtz.fromMillis(8L));
         assertThat(genericRow.getTimestampNtz(0, 3)).isEqualTo(TimestampNtz.fromMillis(5));
         assertThat(genericRow.isNullAt(1)).isTrue();
         assertThat(genericRow.getTimestampNtz(2, 3)).isEqualTo(TimestampNtz.fromMillis(7));
         assertThat(genericRow.getTimestampNtz(3, 3)).isEqualTo(TimestampNtz.fromMillis(8));
 
-        genericRow =
-                GenericRow.of(
-                        TimestampLtz.fromEpochMicros(5L),
-                        TimestampLtz.fromEpochMicros(6L),
-                        TimestampLtz.fromEpochMicros(7L),
-                        null);
+        genericRow = GenericRow.of(
+                TimestampLtz.fromEpochMicros(5L),
+                TimestampLtz.fromEpochMicros(6L),
+                TimestampLtz.fromEpochMicros(7L),
+                null);
         assertThat(genericRow.getTimestampLtz(0, 3)).isEqualTo(TimestampLtz.fromEpochMicros(5));
         assertThat(genericRow.getTimestampLtz(1, 3)).isEqualTo(TimestampLtz.fromEpochMicros(6));
         assertThat(genericRow.getTimestampLtz(2, 3)).isEqualTo(TimestampLtz.fromEpochMicros(7));

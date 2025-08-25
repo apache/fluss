@@ -65,8 +65,7 @@ class MetricViewUpdaterTest {
         assertThat(m.getRate()).isEqualTo(0.2);
     }
 
-    private void scheduleTasks(
-            ScheduledExecutorService executorService, List<ScheduledFuture<?>> scheduledFutures) {
+    private void scheduleTasks(ScheduledExecutorService executorService, List<ScheduledFuture<?>> scheduledFutures) {
         for (ScheduledFuture<?> scheduledFuture : scheduledFutures) {
             ScheduledTask<?> scheduledTask = (ScheduledTask<?>) scheduledFuture;
             executorService.scheduleWithFixedDelay(

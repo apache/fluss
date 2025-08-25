@@ -52,19 +52,12 @@ public class DefaultTimer implements Timer {
     private final Clock clock;
 
     public DefaultTimer(String executorName, long tickMs, int wheelSize, Clock clock) {
-        this.taskExecutor =
-                Executors.newFixedThreadPool(1, new ExecutorThreadFactory(executorName));
+        this.taskExecutor = Executors.newFixedThreadPool(1, new ExecutorThreadFactory(executorName));
         this.delayQueue = new DelayQueue<>();
         this.taskCounter = new AtomicInteger(0);
         this.clock = clock;
-        this.timingWheel =
-                new TimingWheel(
-                        tickMs,
-                        wheelSize,
-                        TimeUnit.NANOSECONDS.toMillis(clock.nanoseconds()),
-                        taskCounter,
-                        delayQueue,
-                        clock);
+        this.timingWheel = new TimingWheel(
+                tickMs, wheelSize, TimeUnit.NANOSECONDS.toMillis(clock.nanoseconds()), taskCounter, delayQueue, clock);
     }
 
     public DefaultTimer(String executorName, long tickMs, int wheelSize) {
@@ -79,13 +72,8 @@ public class DefaultTimer implements Timer {
     public void add(TimerTask timerTask) {
         inReadLock(
                 readWriteLock,
-                () ->
-                        addTimerTaskEntry(
-                                new TimerTaskEntry(
-                                        timerTask,
-                                        timerTask.getDelayMs()
-                                                + TimeUnit.NANOSECONDS.toMillis(
-                                                        clock.nanoseconds()))));
+                () -> addTimerTaskEntry(new TimerTaskEntry(
+                        timerTask, timerTask.getDelayMs() + TimeUnit.NANOSECONDS.toMillis(clock.nanoseconds()))));
     }
 
     @Override

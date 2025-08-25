@@ -55,11 +55,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class LakeEnabledTableCreateITCase {
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(initConfig())
+            .build();
 
     private static Configuration lanceConf;
 
@@ -96,10 +95,9 @@ class LakeEnabledTableCreateITCase {
         conf.setString("datalake.format", "lance");
         String warehousePath;
         try {
-            warehousePath =
-                    Files.createTempDirectory("fluss-testing-datalake-enabled")
-                            .resolve("warehouse")
-                            .toString();
+            warehousePath = Files.createTempDirectory("fluss-testing-datalake-enabled")
+                    .resolve("warehouse")
+                    .toString();
         } catch (Exception e) {
             throw new FlussRuntimeException("Failed to create warehouse path");
         }
@@ -113,35 +111,32 @@ class LakeEnabledTableCreateITCase {
         Map<String, String> customProperties = new HashMap<>();
         customProperties.put("lance.batch_size", "256");
         // test bucket key log table
-        TableDescriptor logTable =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("log_c1", DataTypes.INT())
-                                        .column("log_c2", DataTypes.STRING())
-                                        .column("log_c3", DataTypes.TINYINT())
-                                        .column("log_c4", DataTypes.SMALLINT())
-                                        .column("log_c5", DataTypes.BIGINT())
-                                        .column("log_c6", DataTypes.BOOLEAN())
-                                        .column("log_c7", DataTypes.FLOAT())
-                                        .column("log_c8", DataTypes.DOUBLE())
-                                        .column("log_c9", DataTypes.CHAR(1))
-                                        .column("log_c10", DataTypes.BINARY(10))
-                                        .column("log_c11", DataTypes.BYTES())
-                                        .column("log_c12", DataTypes.DECIMAL(10, 2))
-                                        .column("log_c13", DataTypes.DATE())
-                                        .column("log_c14", DataTypes.TIME())
-                                        .column("log_c15", DataTypes.TIMESTAMP_LTZ())
-                                        .column("log_c16", DataTypes.TIMESTAMP())
-                                        .build())
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .customProperties(customProperties)
-                        .distributedBy(BUCKET_NUM, "log_c1", "log_c2")
-                        .build();
+        TableDescriptor logTable = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("log_c1", DataTypes.INT())
+                        .column("log_c2", DataTypes.STRING())
+                        .column("log_c3", DataTypes.TINYINT())
+                        .column("log_c4", DataTypes.SMALLINT())
+                        .column("log_c5", DataTypes.BIGINT())
+                        .column("log_c6", DataTypes.BOOLEAN())
+                        .column("log_c7", DataTypes.FLOAT())
+                        .column("log_c8", DataTypes.DOUBLE())
+                        .column("log_c9", DataTypes.CHAR(1))
+                        .column("log_c10", DataTypes.BINARY(10))
+                        .column("log_c11", DataTypes.BYTES())
+                        .column("log_c12", DataTypes.DECIMAL(10, 2))
+                        .column("log_c13", DataTypes.DATE())
+                        .column("log_c14", DataTypes.TIME())
+                        .column("log_c15", DataTypes.TIMESTAMP_LTZ())
+                        .column("log_c16", DataTypes.TIMESTAMP())
+                        .build())
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .customProperties(customProperties)
+                .distributedBy(BUCKET_NUM, "log_c1", "log_c2")
+                .build();
         TablePath logTablePath = TablePath.of(DATABASE, "log_table");
         admin.createTable(logTablePath, logTable, false).get();
-        LanceConfig config =
-                LanceConfig.from(lanceConf.toMap(), customProperties, DATABASE, "log_table");
+        LanceConfig config = LanceConfig.from(lanceConf.toMap(), customProperties, DATABASE, "log_table");
 
         // check the gotten log table
         Field logC1 = new Field("log_c1", FieldType.nullable(new ArrowType.Int(4 * 8, true)), null);
@@ -150,62 +145,40 @@ class LakeEnabledTableCreateITCase {
         Field logC4 = new Field("log_c4", FieldType.nullable(new ArrowType.Int(2 * 8, true)), null);
         Field logC5 = new Field("log_c5", FieldType.nullable(new ArrowType.Int(8 * 8, true)), null);
         Field logC6 = new Field("log_c6", FieldType.nullable(new ArrowType.Bool()), null);
-        Field logC7 =
-                new Field(
-                        "log_c7",
-                        FieldType.nullable(
-                                new ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE)),
-                        null);
-        Field logC8 =
-                new Field(
-                        "log_c8",
-                        FieldType.nullable(
-                                new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE)),
-                        null);
+        Field logC7 = new Field(
+                "log_c7", FieldType.nullable(new ArrowType.FloatingPoint(FloatingPointPrecision.SINGLE)), null);
+        Field logC8 = new Field(
+                "log_c8", FieldType.nullable(new ArrowType.FloatingPoint(FloatingPointPrecision.DOUBLE)), null);
         Field logC9 = new Field("log_c9", FieldType.nullable(new ArrowType.Utf8()), null);
-        Field logC10 =
-                new Field("log_c10", FieldType.nullable(new ArrowType.FixedSizeBinary(10)), null);
+        Field logC10 = new Field("log_c10", FieldType.nullable(new ArrowType.FixedSizeBinary(10)), null);
         Field logC11 = new Field("log_c11", FieldType.nullable(new ArrowType.Binary()), null);
         Field logC12 = new Field("log_c12", FieldType.nullable(new ArrowType.Decimal(10, 2)), null);
-        Field logC13 =
-                new Field("log_c13", FieldType.nullable(new ArrowType.Date(DateUnit.DAY)), null);
-        Field logC14 =
-                new Field(
-                        "log_c14",
-                        FieldType.nullable(new ArrowType.Time(TimeUnit.SECOND, 32)),
-                        null);
+        Field logC13 = new Field("log_c13", FieldType.nullable(new ArrowType.Date(DateUnit.DAY)), null);
+        Field logC14 = new Field("log_c14", FieldType.nullable(new ArrowType.Time(TimeUnit.SECOND, 32)), null);
         Field logC15 =
-                new Field(
-                        "log_c15",
-                        FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MICROSECOND, null)),
-                        null);
+                new Field("log_c15", FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MICROSECOND, null)), null);
         Field logC16 =
-                new Field(
-                        "log_c16",
-                        FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MICROSECOND, null)),
-                        null);
+                new Field("log_c16", FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MICROSECOND, null)), null);
 
         org.apache.arrow.vector.types.pojo.Schema expectedSchema =
-                new org.apache.arrow.vector.types.pojo.Schema(
-                        Arrays.asList(
-                                logC1, logC2, logC3, logC4, logC5, logC6, logC7, logC8, logC9,
-                                logC10, logC11, logC12, logC13, logC14, logC15, logC16));
-        assertThat(expectedSchema).isEqualTo(LanceDatasetAdapter.getSchema(config).get());
+                new org.apache.arrow.vector.types.pojo.Schema(Arrays.asList(
+                        logC1, logC2, logC3, logC4, logC5, logC6, logC7, logC8, logC9, logC10, logC11, logC12, logC13,
+                        logC14, logC15, logC16));
+        assertThat(expectedSchema)
+                .isEqualTo(LanceDatasetAdapter.getSchema(config).get());
     }
 
     @Test
     void testPrimaryKeyTable() throws Exception {
-        TableDescriptor pkTable =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("pk_c1", DataTypes.INT())
-                                        .column("pk_c2", DataTypes.STRING())
-                                        .primaryKey("pk_c1")
-                                        .build())
-                        .distributedBy(BUCKET_NUM)
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .build();
+        TableDescriptor pkTable = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("pk_c1", DataTypes.INT())
+                        .column("pk_c2", DataTypes.STRING())
+                        .primaryKey("pk_c1")
+                        .build())
+                .distributedBy(BUCKET_NUM)
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .build();
         TablePath pkTablePath = TablePath.of(DATABASE, "pk_table");
         assertThatThrownBy(() -> admin.createTable(pkTablePath, pkTable, false).get())
                 .cause()

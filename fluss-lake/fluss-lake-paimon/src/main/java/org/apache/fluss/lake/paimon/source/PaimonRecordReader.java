@@ -52,10 +52,7 @@ public class PaimonRecordReader implements RecordReader {
     protected RowType paimonRowType;
 
     public PaimonRecordReader(
-            FileStoreTable fileStoreTable,
-            PaimonSplit split,
-            @Nullable int[][] project,
-            @Nullable Predicate predicate)
+            FileStoreTable fileStoreTable, PaimonSplit split, @Nullable int[][] project, @Nullable Predicate predicate)
             throws IOException {
         ReadBuilder readBuilder = fileStoreTable.newReadBuilder();
         RowType paimonFullRowType = fileStoreTable.rowType();
@@ -70,11 +67,9 @@ public class PaimonRecordReader implements RecordReader {
         TableRead tableRead = readBuilder.newRead().executeFilter();
         paimonRowType = readBuilder.readType();
 
-        org.apache.paimon.reader.RecordReader<InternalRow> recordReader =
-                tableRead.createReader(split.dataSplit());
-        iterator =
-                new PaimonRecordReader.PaimonRowAsFlussRecordIterator(
-                        recordReader.toCloseableIterator(), paimonRowType);
+        org.apache.paimon.reader.RecordReader<InternalRow> recordReader = tableRead.createReader(split.dataSplit());
+        iterator = new PaimonRecordReader.PaimonRowAsFlussRecordIterator(
+                recordReader.toCloseableIterator(), paimonRowType);
     }
 
     @Override
@@ -82,18 +77,16 @@ public class PaimonRecordReader implements RecordReader {
         return iterator;
     }
 
-    private ReadBuilder applyProject(
-            ReadBuilder readBuilder, int[][] projects, RowType paimonFullRowType) {
-        int[] projectIds = Arrays.stream(projects).mapToInt(project -> project[0]).toArray();
+    private ReadBuilder applyProject(ReadBuilder readBuilder, int[][] projects, RowType paimonFullRowType) {
+        int[] projectIds =
+                Arrays.stream(projects).mapToInt(project -> project[0]).toArray();
 
         int offsetFieldPos = paimonFullRowType.getFieldIndex(OFFSET_COLUMN_NAME);
         int timestampFieldPos = paimonFullRowType.getFieldIndex(TIMESTAMP_COLUMN_NAME);
 
-        int[] paimonProject =
-                IntStream.concat(
-                                IntStream.of(projectIds),
-                                IntStream.of(offsetFieldPos, timestampFieldPos))
-                        .toArray();
+        int[] paimonProject = IntStream.concat(
+                        IntStream.of(projectIds), IntStream.of(offsetFieldPos, timestampFieldPos))
+                .toArray();
 
         return readBuilder.withProjection(paimonProject);
     }
@@ -110,13 +103,13 @@ public class PaimonRecordReader implements RecordReader {
         private final int timestampColIndex;
 
         public PaimonRowAsFlussRecordIterator(
-                org.apache.paimon.utils.CloseableIterator<InternalRow> paimonRowIterator,
-                RowType paimonRowType) {
+                org.apache.paimon.utils.CloseableIterator<InternalRow> paimonRowIterator, RowType paimonRowType) {
             this.paimonRowIterator = paimonRowIterator;
             this.logOffsetColIndex = paimonRowType.getFieldIndex(OFFSET_COLUMN_NAME);
             this.timestampColIndex = paimonRowType.getFieldIndex(TIMESTAMP_COLUMN_NAME);
 
-            int[] project = IntStream.range(0, paimonRowType.getFieldCount() - 2).toArray();
+            int[] project =
+                    IntStream.range(0, paimonRowType.getFieldCount() - 2).toArray();
             projectedRow = ProjectedRow.from(project);
             paimonRowAsFlussRow = new PaimonRowAsFlussRow();
         }
@@ -143,10 +136,7 @@ public class PaimonRecordReader implements RecordReader {
             long timestamp = paimonRow.getTimestamp(timestampColIndex, 6).getMillisecond();
 
             return new GenericRecord(
-                    offset,
-                    timestamp,
-                    changeType,
-                    projectedRow.replaceRow(paimonRowAsFlussRow.replaceRow(paimonRow)));
+                    offset, timestamp, changeType, projectedRow.replaceRow(paimonRowAsFlussRow.replaceRow(paimonRow)));
         }
     }
 }

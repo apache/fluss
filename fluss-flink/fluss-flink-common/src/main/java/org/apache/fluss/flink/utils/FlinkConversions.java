@@ -72,8 +72,7 @@ public class FlinkConversions {
     }
 
     /** Convert Fluss's RowType to Flink's RowType. */
-    public static org.apache.flink.table.types.logical.RowType toFlinkRowType(
-            RowType flussRowType) {
+    public static org.apache.flink.table.types.logical.RowType toFlinkRowType(RowType flussRowType) {
         return (org.apache.flink.table.types.logical.RowType)
                 flussRowType.accept(FlussTypeToFlinkType.INSTANCE).getLogicalType();
     }
@@ -85,14 +84,14 @@ public class FlinkConversions {
     }
 
     /** Convert Flink's RowType to Fluss' RowType. */
-    public static RowType toFlussRowType(
-            org.apache.flink.table.types.logical.RowType flinkRowType) {
+    public static RowType toFlussRowType(org.apache.flink.table.types.logical.RowType flinkRowType) {
         return (RowType) flinkRowType.accept(FlinkTypeToFlussType.INSTANCE);
     }
 
     /** Convert Fluss's table to Flink's table. */
     public static CatalogTable toFlinkTable(TableInfo tableInfo) {
-        Map<String, String> newOptions = new HashMap<>(tableInfo.getCustomProperties().toMap());
+        Map<String, String> newOptions =
+                new HashMap<>(tableInfo.getCustomProperties().toMap());
 
         // put fluss table properties into flink options, to make the properties visible to users
         convertFlussTablePropertiesToFlinkOptions(tableInfo.getProperties().toMap(), newOptions);
@@ -111,8 +110,7 @@ public class FlinkConversions {
             }
         }
 
-        org.apache.flink.table.api.Schema.Builder schemaBuilder =
-                org.apache.flink.table.api.Schema.newBuilder();
+        org.apache.flink.table.api.Schema.Builder schemaBuilder = org.apache.flink.table.api.Schema.newBuilder();
         if (tableInfo.hasPrimaryKey()) {
             schemaBuilder.primaryKey(tableInfo.getPrimaryKeys());
         }
@@ -120,9 +118,7 @@ public class FlinkConversions {
         Schema schema = tableInfo.getSchema();
         List<String> physicalColumns = schema.getColumnNames();
         int columnCount =
-                physicalColumns.size()
-                        + CatalogPropertiesUtils.nonPhysicalColumnsCount(
-                                newOptions, physicalColumns);
+                physicalColumns.size() + CatalogPropertiesUtils.nonPhysicalColumnsCount(newOptions, physicalColumns);
 
         int physicalColumnIndex = 0;
         for (int i = 0; i < columnCount; i++) {
@@ -130,8 +126,7 @@ public class FlinkConversions {
             if (optionalName == null) {
                 // build physical column from table row field
                 Schema.Column column = schema.getColumns().get(physicalColumnIndex++);
-                schemaBuilder.column(
-                        column.getName(), FlinkConversions.toFlinkType(column.getDataType()));
+                schemaBuilder.column(column.getName(), FlinkConversions.toFlinkType(column.getDataType()));
                 if (column.getComment().isPresent()) {
                     schemaBuilder.withComment(column.getComment().get());
                 }
@@ -160,14 +155,12 @@ public class FlinkConversions {
     public static TableDescriptor toFlussTable(ResolvedCatalogTable catalogTable) {
         Configuration flinkTableConf = Configuration.fromMap(catalogTable.getOptions());
         String connector = flinkTableConf.get(CONNECTOR);
-        if (!StringUtils.isNullOrWhitespaceOnly(connector)
-                && !FlinkCatalogFactory.IDENTIFIER.equals(connector)) {
-            throw new CatalogException(
-                    "Fluss Catalog only supports fluss tables,"
-                            + " but you specify  'connector'= '"
-                            + connector
-                            + "' when using Fluss Catalog\n"
-                            + " You can create TEMPORARY table instead if you want to create the table of other connector.");
+        if (!StringUtils.isNullOrWhitespaceOnly(connector) && !FlinkCatalogFactory.IDENTIFIER.equals(connector)) {
+            throw new CatalogException("Fluss Catalog only supports fluss tables,"
+                    + " but you specify  'connector'= '"
+                    + connector
+                    + "' when using Fluss Catalog\n"
+                    + " You can create TEMPORARY table instead if you want to create the table of other connector.");
         }
 
         ResolvedSchema resolvedSchema = catalogTable.getResolvedSchema();
@@ -179,32 +172,24 @@ public class FlinkConversions {
         }
 
         // first build schema with physical columns
-        Schema schema =
-                schemBuilder
-                        .fromColumns(
-                                resolvedSchema.getColumns().stream()
-                                        .filter(Column::isPhysical)
-                                        .map(
-                                                column ->
-                                                        new Schema.Column(
-                                                                column.getName(),
-                                                                FlinkConversions.toFlussType(
-                                                                        column.getDataType()),
-                                                                column.getComment().orElse(null)))
-                                        .collect(Collectors.toList()))
-                        .build();
+        Schema schema = schemBuilder
+                .fromColumns(resolvedSchema.getColumns().stream()
+                        .filter(Column::isPhysical)
+                        .map(column -> new Schema.Column(
+                                column.getName(),
+                                FlinkConversions.toFlussType(column.getDataType()),
+                                column.getComment().orElse(null)))
+                        .collect(Collectors.toList()))
+                .build();
         resolvedSchema.getColumns().stream()
                 .filter(col -> col instanceof Column.MetadataColumn)
                 .findAny()
-                .ifPresent(
-                        (col) -> {
-                            throw new CatalogException(
-                                    "Metadata column " + col + " is not supported.");
-                        });
+                .ifPresent((col) -> {
+                    throw new CatalogException("Metadata column " + col + " is not supported.");
+                });
 
         Map<String, String> customProperties = flinkTableConf.toMap();
-        CatalogPropertiesUtils.serializeComputedColumns(
-                customProperties, resolvedSchema.getColumns());
+        CatalogPropertiesUtils.serializeComputedColumns(customProperties, resolvedSchema.getColumns());
         CatalogPropertiesUtils.serializeWatermarkSpecs(
                 customProperties, catalogTable.getResolvedSchema().getWatermarkSpecs());
 
@@ -216,22 +201,18 @@ public class FlinkConversions {
         // then set distributed by information
         List<String> bucketKey;
         if (flinkTableConf.containsKey(BUCKET_KEY.key())) {
-            bucketKey =
-                    Arrays.stream(flinkTableConf.get(BUCKET_KEY).split(","))
-                            .map(String::trim)
-                            .collect(Collectors.toList());
+            bucketKey = Arrays.stream(flinkTableConf.get(BUCKET_KEY).split(","))
+                    .map(String::trim)
+                    .collect(Collectors.toList());
         } else {
             // use primary keys - partition keys
-            bucketKey =
-                    schema.getPrimaryKey()
-                            .map(
-                                    pk -> {
-                                        List<String> bucketKeys =
-                                                new ArrayList<>(pk.getColumnNames());
-                                        bucketKeys.removeAll(catalogTable.getPartitionKeys());
-                                        return bucketKeys;
-                                    })
-                            .orElse(Collections.emptyList());
+            bucketKey = schema.getPrimaryKey()
+                    .map(pk -> {
+                        List<String> bucketKeys = new ArrayList<>(pk.getColumnNames());
+                        bucketKeys.removeAll(catalogTable.getPartitionKeys());
+                        return bucketKeys;
+                    })
+                    .orElse(Collections.emptyList());
         }
         Integer bucketNum = flinkTableConf.getOptional(BUCKET_NUMBER).orElse(null);
 
@@ -256,15 +237,12 @@ public class FlinkConversions {
     /** Convert Fluss's ConfigOptions to Flink's ConfigOptions. */
     public static List<org.apache.flink.configuration.ConfigOption<?>> toFlinkOptions(
             Collection<ConfigOption<?>> flussOption) {
-        return flussOption.stream()
-                .map(FlinkConversions::toFlinkOption)
-                .collect(Collectors.toList());
+        return flussOption.stream().map(FlinkConversions::toFlinkOption).collect(Collectors.toList());
     }
 
     /** Convert Fluss's ConfigOption to Flink's ConfigOption. */
     @SuppressWarnings("unchecked")
-    public static <T> org.apache.flink.configuration.ConfigOption<T> toFlinkOption(
-            ConfigOption<T> flussOption) {
+    public static <T> org.apache.flink.configuration.ConfigOption<T> toFlinkOption(ConfigOption<T> flussOption) {
         org.apache.flink.configuration.ConfigOptions.OptionBuilder builder =
                 org.apache.flink.configuration.ConfigOptions.key(flussOption.key());
         org.apache.flink.configuration.ConfigOption<?> option;
@@ -276,8 +254,7 @@ public class FlinkConversions {
             } else {
                 // currently, we only support string type for list
                 //noinspection unchecked
-                String[] defaultValues =
-                        ((List<String>) flussOption.defaultValue()).toArray(new String[0]);
+                String[] defaultValues = ((List<String>) flussOption.defaultValue()).toArray(new String[0]);
                 option = builder.stringType().asList().defaultValues(defaultValues);
             }
         } else if (clazz.equals(Integer.class)) {
@@ -292,22 +269,18 @@ public class FlinkConversions {
             option = builder.doubleType().defaultValue((Double) flussOption.defaultValue());
         } else if (clazz.equals(Duration.class)) {
             // use string type in Flink option instead to make convert back easier
-            option =
-                    builder.stringType()
-                            .defaultValue(
-                                    TimeUtils.formatWithHighestUnit(
-                                            (Duration) flussOption.defaultValue()));
+            option = builder.stringType()
+                    .defaultValue(TimeUtils.formatWithHighestUnit((Duration) flussOption.defaultValue()));
         } else if (clazz.equals(Password.class)) {
             String defaultValue = ((Password) flussOption.defaultValue()).value();
             option = builder.stringType().defaultValue(defaultValue);
         } else if (clazz.equals(MemorySize.class)) {
             // use string type in Flink option instead to make convert back easier
-            option = builder.stringType().defaultValue(flussOption.defaultValue().toString());
+            option =
+                    builder.stringType().defaultValue(flussOption.defaultValue().toString());
         } else if (clazz.isEnum()) {
             //noinspection unchecked
-            option =
-                    builder.enumType((Class<Enum>) clazz)
-                            .defaultValue((Enum) flussOption.defaultValue());
+            option = builder.enumType((Class<Enum>) clazz).defaultValue((Enum) flussOption.defaultValue());
         } else {
             throw new IllegalArgumentException("Unsupported type: " + clazz);
         }
@@ -332,11 +305,9 @@ public class FlinkConversions {
         }
     }
 
-    private static Map<String, String> convertFlinkOptionsToFlussTableProperties(
-            Configuration options) {
+    private static Map<String, String> convertFlinkOptionsToFlussTableProperties(Configuration options) {
         Map<String, String> properties = new HashMap<>();
-        for (org.apache.flink.configuration.ConfigOption<?> option :
-                FlinkConnectorOptions.TABLE_OPTIONS) {
+        for (org.apache.flink.configuration.ConfigOption<?> option : FlinkConnectorOptions.TABLE_OPTIONS) {
             if (options.containsKey(option.key())) {
                 properties.put(option.key(), options.getValue(option));
             }

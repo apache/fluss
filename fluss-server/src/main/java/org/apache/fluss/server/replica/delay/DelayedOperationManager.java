@@ -101,13 +101,12 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
         // tryComplete() again. At this time, if the operation is still not completed, we are
         // guaranteed that it won't miss any future triggering event since the operation is already
         // on the watcher list for all keys.
-        if (operation.safeTryCompleteOrElse(
-                () -> {
-                    watchKeys.forEach(key -> watchForOperation(key, operation));
-                    if (!watchKeys.isEmpty()) {
-                        estimatedTotalOperations.incrementAndGet();
-                    }
-                })) {
+        if (operation.safeTryCompleteOrElse(() -> {
+            watchKeys.forEach(key -> watchForOperation(key, operation));
+            if (!watchKeys.isEmpty()) {
+                estimatedTotalOperations.incrementAndGet();
+            }
+        })) {
             return true;
         }
 
@@ -169,27 +168,23 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
     @VisibleForTesting
     public List<T> cancelForKey(Object key) {
         WatcherList wl = watcherList(key);
-        return inLock(
-                wl.watcherLock,
-                () -> {
-                    Watcher watcher = wl.watchersByKey.remove(key);
-                    if (watcher != null) {
-                        return watcher.cancel();
-                    } else {
-                        return new ArrayList<>();
-                    }
-                });
+        return inLock(wl.watcherLock, () -> {
+            Watcher watcher = wl.watchersByKey.remove(key);
+            if (watcher != null) {
+                return watcher.cancel();
+            } else {
+                return new ArrayList<>();
+            }
+        });
     }
 
     @VisibleForTesting
     void watchForOperation(Object key, T operation) {
         WatcherList wl = watcherList(key);
-        inLock(
-                wl.watcherLock,
-                () -> {
-                    Watcher watcher = wl.watchersByKey.computeIfAbsent(key, Watcher::new);
-                    watcher.watch(operation);
-                });
+        inLock(wl.watcherLock, () -> {
+            Watcher watcher = wl.watchersByKey.computeIfAbsent(key, Watcher::new);
+            watcher.watch(operation);
+        });
     }
 
     private WatcherList watcherList(Object key) {
@@ -198,29 +193,26 @@ public final class DelayedOperationManager<T extends DelayedOperation> {
 
     private void removeKeyIfEmpty(Object key, Watcher watcher) {
         WatcherList wl = watcherList(key);
-        inLock(
-                wl.watcherLock,
-                () -> {
-                    // if the current key is no longer correlated to the watcher to remove, skip.
-                    if (wl.watchersByKey.get(key) != watcher) {
-                        return;
-                    }
+        inLock(wl.watcherLock, () -> {
+            // if the current key is no longer correlated to the watcher to remove, skip.
+            if (wl.watchersByKey.get(key) != watcher) {
+                return;
+            }
 
-                    if (watcher != null && watcher.isEmpty()) {
-                        wl.watchersByKey.remove(key);
-                    }
-                });
+            if (watcher != null && watcher.isEmpty()) {
+                wl.watchersByKey.remove(key);
+            }
+        });
     }
 
     public void shutdown() {
         expirationReaper.initiateShutdown();
         // improve shutdown time by waking up any ShutdownableThread(s) blocked on poll by
         // sending a no-op.
-        timeoutTimer.add(
-                new TimerTask(0) {
-                    @Override
-                    public void run() {}
-                });
+        timeoutTimer.add(new TimerTask(0) {
+            @Override
+            public void run() {}
+        });
         try {
             expirationReaper.awaitShutdown();
         } catch (InterruptedException e) {

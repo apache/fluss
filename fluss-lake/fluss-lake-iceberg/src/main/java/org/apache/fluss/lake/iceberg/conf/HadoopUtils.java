@@ -39,8 +39,7 @@ public class HadoopUtils {
     /** The prefixes that Fluss adds to the Hadoop config for iceberg. */
     private static final String[] FLUSS_CONFIG_PREFIXES = {"iceberg.hadoop."};
 
-    public static Configuration getHadoopConfiguration(
-            org.apache.fluss.config.Configuration flussConfiguration) {
+    public static Configuration getHadoopConfiguration(org.apache.fluss.config.Configuration flussConfiguration) {
 
         // Instantiate an HdfsConfiguration to load the hdfs-site.xml and hdfs-default.xml
         // from the classpath
@@ -74,8 +73,7 @@ public class HadoopUtils {
         String hadoopConfDir = System.getenv("HADOOP_CONF_DIR");
         if (hadoopConfDir != null) {
             LOG.debug("Searching Hadoop configuration files in HADOOP_CONF_DIR: {}", hadoopConfDir);
-            foundHadoopConfiguration =
-                    addHadoopConfIfFound(result, hadoopConfDir) || foundHadoopConfiguration;
+            foundHadoopConfiguration = addHadoopConfIfFound(result, hadoopConfDir) || foundHadoopConfiguration;
         }
 
         // Approach 3: Fluss configuration
@@ -84,24 +82,18 @@ public class HadoopUtils {
             for (String prefix : FLUSS_CONFIG_PREFIXES) {
                 if (key.startsWith(prefix)) {
                     String newKey = key.substring(prefix.length());
-                    String value =
-                            flussConfiguration.getString(
-                                    ConfigBuilder.key(key).stringType().noDefaultValue(), null);
+                    String value = flussConfiguration.getString(
+                            ConfigBuilder.key(key).stringType().noDefaultValue(), null);
                     result.set(newKey, value);
-                    LOG.debug(
-                            "Adding Fluss config entry for {} as {}={} to Hadoop config",
-                            key,
-                            newKey,
-                            value);
+                    LOG.debug("Adding Fluss config entry for {} as {}={} to Hadoop config", key, newKey, value);
                     foundHadoopConfiguration = true;
                 }
             }
         }
 
         if (!foundHadoopConfiguration) {
-            LOG.warn(
-                    "Could not find Hadoop configuration via any of the supported methods "
-                            + "(Fluss configuration, environment variables).");
+            LOG.warn("Could not find Hadoop configuration via any of the supported methods "
+                    + "(Fluss configuration, environment variables).");
         }
 
         return result;
@@ -111,22 +103,17 @@ public class HadoopUtils {
      * Search Hadoop configuration files in the given path, and add them to the configuration if
      * found.
      */
-    private static boolean addHadoopConfIfFound(
-            Configuration configuration, String possibleHadoopConfPath) {
+    private static boolean addHadoopConfIfFound(Configuration configuration, String possibleHadoopConfPath) {
         boolean foundHadoopConfiguration = false;
         if (new File(possibleHadoopConfPath).exists()) {
             if (new File(possibleHadoopConfPath + "/core-site.xml").exists()) {
-                configuration.addResource(
-                        new org.apache.hadoop.fs.Path(possibleHadoopConfPath + "/core-site.xml"));
-                LOG.debug(
-                        "Adding {}/core-site.xml to hadoop configuration", possibleHadoopConfPath);
+                configuration.addResource(new org.apache.hadoop.fs.Path(possibleHadoopConfPath + "/core-site.xml"));
+                LOG.debug("Adding {}/core-site.xml to hadoop configuration", possibleHadoopConfPath);
                 foundHadoopConfiguration = true;
             }
             if (new File(possibleHadoopConfPath + "/hdfs-site.xml").exists()) {
-                configuration.addResource(
-                        new org.apache.hadoop.fs.Path(possibleHadoopConfPath + "/hdfs-site.xml"));
-                LOG.debug(
-                        "Adding {}/hdfs-site.xml to hadoop configuration", possibleHadoopConfPath);
+                configuration.addResource(new org.apache.hadoop.fs.Path(possibleHadoopConfPath + "/hdfs-site.xml"));
+                LOG.debug("Adding {}/hdfs-site.xml to hadoop configuration", possibleHadoopConfPath);
                 foundHadoopConfiguration = true;
             }
         }

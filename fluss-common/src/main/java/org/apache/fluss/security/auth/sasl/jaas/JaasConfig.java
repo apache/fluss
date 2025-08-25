@@ -98,8 +98,7 @@ public class JaasConfig extends Configuration {
 
     private AppConfigurationEntry.LoginModuleControlFlag loginModuleControlFlag(String flag) {
         if (flag == null) {
-            throw new IllegalArgumentException(
-                    "Login module control flag is not available in the JAAS config");
+            throw new IllegalArgumentException("Login module control flag is not available in the JAAS config");
         }
 
         AppConfigurationEntry.LoginModuleControlFlag controlFlag;
@@ -117,29 +116,24 @@ public class JaasConfig extends Configuration {
                 controlFlag = AppConfigurationEntry.LoginModuleControlFlag.OPTIONAL;
                 break;
             default:
-                throw new IllegalArgumentException(
-                        "Invalid jaas module control flag '" + flag + "' in JAAS config");
+                throw new IllegalArgumentException("Invalid jaas module control flag '" + flag + "' in JAAS config");
         }
         return controlFlag;
     }
 
-    private AppConfigurationEntry parseAppConfigurationEntry(StreamTokenizer tokenizer)
-            throws IOException {
+    private AppConfigurationEntry parseAppConfigurationEntry(StreamTokenizer tokenizer) throws IOException {
         String loginModule = tokenizer.sval;
         if (tokenizer.nextToken() == StreamTokenizer.TT_EOF) {
-            throw new IllegalArgumentException(
-                    "Login module control flag not specified in JAAS config");
+            throw new IllegalArgumentException("Login module control flag not specified in JAAS config");
         }
-        AppConfigurationEntry.LoginModuleControlFlag controlFlag =
-                loginModuleControlFlag(tokenizer.sval);
+        AppConfigurationEntry.LoginModuleControlFlag controlFlag = loginModuleControlFlag(tokenizer.sval);
         Map<String, String> options = new HashMap<>();
         while (tokenizer.nextToken() != StreamTokenizer.TT_EOF && tokenizer.ttype != ';') {
             String key = tokenizer.sval;
             if (tokenizer.nextToken() != '='
                     || tokenizer.nextToken() == StreamTokenizer.TT_EOF
                     || tokenizer.sval == null) {
-                throw new IllegalArgumentException(
-                        "Value not specified for key '" + key + "' in JAAS config");
+                throw new IllegalArgumentException("Value not specified for key '" + key + "' in JAAS config");
             }
             String value = tokenizer.sval;
             options.put(key, value);

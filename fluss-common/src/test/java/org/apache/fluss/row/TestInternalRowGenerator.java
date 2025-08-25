@@ -86,27 +86,11 @@ public class TestInternalRowGenerator {
         setRandomNull(writers[12], writer, 12, rnd, BinaryString.fromString(rnd.nextInt() + ""));
         setRandomNull(writers[13], writer, 13, rnd, Decimal.fromUnscaledLong(rnd.nextLong(), 5, 2));
         setRandomNull(
-                writers[14],
-                writer,
-                14,
-                rnd,
-                Decimal.fromBigDecimal(BigDecimal.valueOf(rnd.nextDouble()), 20, 0));
-        setRandomNull(
-                writers[15], writer, 15, rnd, TimestampNtz.fromMillis(System.currentTimeMillis()));
-        setRandomNull(
-                writers[16], writer, 16, rnd, TimestampNtz.fromMillis(System.currentTimeMillis()));
-        setRandomNull(
-                writers[17],
-                writer,
-                17,
-                rnd,
-                TimestampLtz.fromEpochMillis(System.currentTimeMillis()));
-        setRandomNull(
-                writers[18],
-                writer,
-                18,
-                rnd,
-                TimestampLtz.fromEpochMillis(System.currentTimeMillis()));
+                writers[14], writer, 14, rnd, Decimal.fromBigDecimal(BigDecimal.valueOf(rnd.nextDouble()), 20, 0));
+        setRandomNull(writers[15], writer, 15, rnd, TimestampNtz.fromMillis(System.currentTimeMillis()));
+        setRandomNull(writers[16], writer, 16, rnd, TimestampNtz.fromMillis(System.currentTimeMillis()));
+        setRandomNull(writers[17], writer, 17, rnd, TimestampLtz.fromEpochMillis(System.currentTimeMillis()));
+        setRandomNull(writers[18], writer, 18, rnd, TimestampLtz.fromEpochMillis(System.currentTimeMillis()));
 
         IndexedRow row = new IndexedRow(dataTypes);
         row.pointTo(writer.segment(), 0, writer.position());
@@ -131,11 +115,7 @@ public class TestInternalRowGenerator {
     }
 
     private static void setRandomNull(
-            IndexedRowWriter.FieldWriter fieldWriter,
-            IndexedRowWriter writer,
-            int pos,
-            Random rnd,
-            Object value) {
+            IndexedRowWriter.FieldWriter fieldWriter, IndexedRowWriter writer, int pos, Random rnd, Object value) {
         fieldWriter.writeField(writer, pos, rnd.nextBoolean() ? null : value);
     }
 

@@ -28,7 +28,8 @@ import java.nio.file.Path;
 /** Behavior tests for Fluss's {@link LocalFileSystem}. */
 class LocalFileSystemBehaviorTest extends FileSystemBehaviorTestSuite {
 
-    @TempDir private Path tmp;
+    @TempDir
+    private Path tmp;
 
     @Override
     protected FileSystem getFileSystem() throws Exception {

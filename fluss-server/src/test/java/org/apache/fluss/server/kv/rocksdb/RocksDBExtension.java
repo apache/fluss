@@ -47,12 +47,9 @@ public class RocksDBExtension implements BeforeEachCallback, AfterEachCallback {
     private void before() throws Exception {
         rockDbDir = Files.createTempDirectory("rocksdbDir").toFile();
         rocksDBResourceContainer = new RocksDBResourceContainer(new Configuration(), rockDbDir);
-        this.rocksDBKv =
-                new RocksDBKvBuilder(
-                                rockDbDir,
-                                rocksDBResourceContainer,
-                                rocksDBResourceContainer.getColumnOptions())
-                        .build();
+        this.rocksDBKv = new RocksDBKvBuilder(
+                        rockDbDir, rocksDBResourceContainer, rocksDBResourceContainer.getColumnOptions())
+                .build();
     }
 
     private void after() {

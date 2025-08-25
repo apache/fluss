@@ -32,8 +32,7 @@ public class AclBindingFilter {
     private final AccessControlEntryFilter entryFilter;
 
     /** A filter which matches any ACL binding. */
-    public static final AclBindingFilter ANY =
-            new AclBindingFilter(ResourceFilter.ANY, AccessControlEntryFilter.ANY);
+    public static final AclBindingFilter ANY = new AclBindingFilter(ResourceFilter.ANY, AccessControlEntryFilter.ANY);
 
     public AclBindingFilter(ResourceFilter resourceFilter, AccessControlEntryFilter entryFilter) {
         Objects.requireNonNull(resourceFilter);
@@ -43,8 +42,7 @@ public class AclBindingFilter {
     }
 
     public boolean matches(AclBinding binding) {
-        return resourceFilter.matches(binding.getResource())
-                && entryFilter.matches(binding.getAccessControlEntry());
+        return resourceFilter.matches(binding.getResource()) && entryFilter.matches(binding.getAccessControlEntry());
     }
 
     public ResourceFilter getResourceFilter() {

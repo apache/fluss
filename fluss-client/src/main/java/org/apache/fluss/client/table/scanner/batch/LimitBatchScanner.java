@@ -57,7 +57,10 @@ import java.util.concurrent.TimeoutException;
 public class LimitBatchScanner implements BatchScanner {
 
     private final TableInfo tableInfo;
-    @Nullable private final int[] projectedFields;
+
+    @Nullable
+    private final int[] projectedFields;
+
     private final int limit;
     private final InternalRow.FieldGetter[] fieldGetters;
     private final CompletableFuture<LimitScanResponse> scanFuture;
@@ -81,11 +84,10 @@ public class LimitBatchScanner implements BatchScanner {
             this.fieldGetters[i] = InternalRow.createFieldGetter(rowType.getTypeAt(i), i);
         }
 
-        LimitScanRequest limitScanRequest =
-                new LimitScanRequest()
-                        .setTableId(tableBucket.getTableId())
-                        .setBucketId(tableBucket.getBucket())
-                        .setLimit(limit);
+        LimitScanRequest limitScanRequest = new LimitScanRequest()
+                .setTableId(tableBucket.getTableId())
+                .setBucketId(tableBucket.getBucket())
+                .setLimit(limit);
 
         if (tableBucket.getPartitionId() != null) {
             limitScanRequest.setPartitionId(tableBucket.getPartitionId());
@@ -97,16 +99,12 @@ public class LimitBatchScanner implements BatchScanner {
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(leader);
         if (gateway == null) {
             // TODO handle this exception, like retry.
-            throw new LeaderNotAvailableException(
-                    "Server " + leader + " is not found in metadata cache.");
+            throw new LeaderNotAvailableException("Server " + leader + " is not found in metadata cache.");
         }
         this.scanFuture = gateway.limitScan(limitScanRequest);
 
-        this.kvValueDecoder =
-                new ValueDecoder(
-                        RowDecoder.create(
-                                tableInfo.getTableConfig().getKvFormat(),
-                                rowType.getChildren().toArray(new DataType[0])));
+        this.kvValueDecoder = new ValueDecoder(RowDecoder.create(
+                tableInfo.getTableConfig().getKvFormat(), rowType.getChildren().toArray(new DataType[0])));
         this.endOfInput = false;
     }
 
@@ -136,22 +134,18 @@ public class LimitBatchScanner implements BatchScanner {
         List<InternalRow> scanRows = new ArrayList<>();
         ByteBuffer recordsBuffer = ByteBuffer.wrap(limitScanResponse.getRecords());
         if (tableInfo.hasPrimaryKey()) {
-            DefaultValueRecordBatch valueRecords =
-                    DefaultValueRecordBatch.pointToByteBuffer(recordsBuffer);
-            ValueRecordReadContext readContext =
-                    new ValueRecordReadContext(kvValueDecoder.getRowDecoder());
+            DefaultValueRecordBatch valueRecords = DefaultValueRecordBatch.pointToByteBuffer(recordsBuffer);
+            ValueRecordReadContext readContext = new ValueRecordReadContext(kvValueDecoder.getRowDecoder());
             for (ValueRecord record : valueRecords.records(readContext)) {
                 scanRows.add(maybeProject(record.getRow()));
             }
         } else {
-            LogRecordReadContext readContext =
-                    LogRecordReadContext.createReadContext(tableInfo, false, null);
+            LogRecordReadContext readContext = LogRecordReadContext.createReadContext(tableInfo, false, null);
             LogRecords records = MemoryLogRecords.pointToByteBuffer(recordsBuffer);
             for (LogRecordBatch logRecordBatch : records.batches()) {
                 // A batch of log record maybe little more than limit, thus we need slice the
                 // last limit number.
-                try (CloseableIterator<LogRecord> logRecordIterator =
-                        logRecordBatch.records(readContext)) {
+                try (CloseableIterator<LogRecord> logRecordIterator = logRecordBatch.records(readContext)) {
                     while (logRecordIterator.hasNext()) {
                         scanRows.add(maybeProject(logRecordIterator.next().getRow()));
                     }

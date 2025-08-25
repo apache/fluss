@@ -70,39 +70,25 @@ public class PredicateBuilderTest {
 
     @Test
     public void testSplitAnd() {
-        PredicateBuilder builder =
-                new PredicateBuilder(
-                        RowType.of(
-                                new IntType(),
-                                new IntType(),
-                                new IntType(),
-                                new IntType(),
-                                new IntType(),
-                                new IntType(),
-                                new IntType()));
+        PredicateBuilder builder = new PredicateBuilder(RowType.of(
+                new IntType(),
+                new IntType(),
+                new IntType(),
+                new IntType(),
+                new IntType(),
+                new IntType(),
+                new IntType()));
 
-        Predicate child1 =
-                PredicateBuilder.or(builder.isNull(0), builder.isNull(1), builder.isNull(2));
-        Predicate child2 =
-                PredicateBuilder.and(builder.isNull(3), builder.isNull(4), builder.isNull(5));
+        Predicate child1 = PredicateBuilder.or(builder.isNull(0), builder.isNull(1), builder.isNull(2));
+        Predicate child2 = PredicateBuilder.and(builder.isNull(3), builder.isNull(4), builder.isNull(5));
         Predicate child3 = builder.isNull(6);
 
         assertThat(PredicateBuilder.splitAnd(PredicateBuilder.and(child1, child2, child3)))
-                .isEqualTo(
-                        Arrays.asList(
-                                child1,
-                                builder.isNull(3),
-                                builder.isNull(4),
-                                builder.isNull(5),
-                                child3));
+                .isEqualTo(Arrays.asList(child1, builder.isNull(3), builder.isNull(4), builder.isNull(5), child3));
     }
 
     static boolean test(
-            Predicate predicate,
-            long rowCount,
-            @Nullable Object min,
-            @Nullable Object max,
-            @Nullable Long nullCount) {
+            Predicate predicate, long rowCount, @Nullable Object min, @Nullable Object max, @Nullable Long nullCount) {
         return predicate.test(rowCount, row(min), row(max), new Long[] {nullCount});
     }
 }

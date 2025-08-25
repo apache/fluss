@@ -88,8 +88,7 @@ public class DefaultKvRecord implements KvRecord {
             return false;
         }
         DefaultKvRecord that = (DefaultKvRecord) o;
-        return sizeInBytes == that.sizeInBytes
-                && segment.equalTo(that.segment, offset, that.offset, sizeInBytes);
+        return sizeInBytes == that.sizeInBytes && segment.equalTo(that.segment, offset, that.offset, sizeInBytes);
     }
 
     @Override
@@ -97,8 +96,7 @@ public class DefaultKvRecord implements KvRecord {
         return MurmurHashUtils.hashBytes(segment, offset, sizeInBytes);
     }
 
-    public static int writeTo(OutputView outputView, byte[] key, @Nullable BinaryRow row)
-            throws IOException {
+    public static int writeTo(OutputView outputView, byte[] key, @Nullable BinaryRow row) throws IOException {
         // bytes for key length + bytes for key + bytes for row
         int sizeInBytes = sizeWithoutLength(key, row);
 
@@ -119,10 +117,7 @@ public class DefaultKvRecord implements KvRecord {
     }
 
     public static KvRecord readFrom(
-            MemorySegment segment,
-            int position,
-            short schemaId,
-            KvRecordBatch.ReadContext readContext) {
+            MemorySegment segment, int position, short schemaId, KvRecordBatch.ReadContext readContext) {
         int sizeInBytes = segment.getInt(position);
         DefaultKvRecord kvRecord = new DefaultKvRecord(readContext.getRowDecoder(schemaId));
         kvRecord.pointTo(segment, position, sizeInBytes + LENGTH_LENGTH);
@@ -135,9 +130,7 @@ public class DefaultKvRecord implements KvRecord {
     }
 
     private static int sizeWithoutLength(byte[] key, @Nullable BinaryRow row) {
-        return VarLengthUtils.sizeOfUnsignedVarInt(key.length)
-                + key.length
-                + (row == null ? 0 : row.getSizeInBytes());
+        return VarLengthUtils.sizeOfUnsignedVarInt(key.length) + key.length + (row == null ? 0 : row.getSizeInBytes());
     }
 
     private void readKeyAndRow() throws IOException {
@@ -178,8 +171,7 @@ public class DefaultKvRecord implements KvRecord {
         return sizeInBytes;
     }
 
-    private static void serializeInternalRow(OutputView outputView, InternalRow internalRow)
-            throws IOException {
+    private static void serializeInternalRow(OutputView outputView, InternalRow internalRow) throws IOException {
         if (internalRow instanceof IndexedRow) {
             IndexedRow indexedRow = (IndexedRow) internalRow;
             IndexedRowWriter.serializeIndexedRow(indexedRow, outputView);
@@ -187,9 +179,8 @@ public class DefaultKvRecord implements KvRecord {
             CompactedRow compactedRow = (CompactedRow) internalRow;
             CompactedRowWriter.serializeCompactedRow(compactedRow, outputView);
         } else {
-            throw new IllegalArgumentException(
-                    "No such internal row serializer for: "
-                            + internalRow.getClass().getSimpleName());
+            throw new IllegalArgumentException("No such internal row serializer for: "
+                    + internalRow.getClass().getSimpleName());
         }
     }
 }

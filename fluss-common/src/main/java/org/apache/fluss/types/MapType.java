@@ -74,8 +74,7 @@ public final class MapType extends DataType {
 
     @Override
     public String asSerializableString() {
-        return withNullability(
-                FORMAT, keyType.asSerializableString(), valueType.asSerializableString());
+        return withNullability(FORMAT, keyType.asSerializableString(), valueType.asSerializableString());
     }
 
     @Override

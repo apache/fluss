@@ -77,8 +77,7 @@ public class FlussRowToFlinkRowConverter {
     /**
      * Create a nullable runtime {@link FlussDeserializationConverter} from given {@link DataType}.
      */
-    protected FlussDeserializationConverter createNullableInternalConverter(
-            DataType flussDataType) {
+    protected FlussDeserializationConverter createNullableInternalConverter(DataType flussDataType) {
         return wrapIntoNullableInternalConverter(createInternalConverter(flussDataType));
     }
 
@@ -129,8 +128,7 @@ public class FlussRowToFlinkRowConverter {
             case DECIMAL:
                 return (flussField) -> {
                     Decimal decimal = (Decimal) flussField;
-                    return DecimalData.fromBigDecimal(
-                            decimal.toBigDecimal(), decimal.precision(), decimal.scale());
+                    return DecimalData.fromBigDecimal(decimal.toBigDecimal(), decimal.precision(), decimal.scale());
                 };
             case DATE:
             case TIME_WITHOUT_TIME_ZONE:
@@ -144,8 +142,7 @@ public class FlussRowToFlinkRowConverter {
                 return (flussField) -> {
                     TimestampLtz timestampLtz = (TimestampLtz) flussField;
                     return TimestampData.fromEpochMillis(
-                            timestampLtz.getEpochMillisecond(),
-                            timestampLtz.getNanoOfMillisecond());
+                            timestampLtz.getEpochMillisecond(), timestampLtz.getNanoOfMillisecond());
                 };
             default:
                 throw new UnsupportedOperationException("Unsupported data type: " + flussDataType);

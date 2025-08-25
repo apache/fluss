@@ -62,28 +62,26 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Tests for {@link org.apache.fluss.utils.ArrowUtils}. */
 class ArrowUtilsTest {
 
-    private static final List<DataType> TYPES =
-            Arrays.asList(
-                    DataTypes.TINYINT(),
-                    DataTypes.SMALLINT(),
-                    DataTypes.INT(),
-                    DataTypes.BIGINT(),
-                    DataTypes.FLOAT(),
-                    DataTypes.DOUBLE(),
-                    DataTypes.BOOLEAN(),
-                    DataTypes.STRING(),
-                    DataTypes.BYTES(),
-                    DataTypes.DATE(),
-                    DataTypes.TIME(),
-                    DataTypes.TIMESTAMP());
+    private static final List<DataType> TYPES = Arrays.asList(
+            DataTypes.TINYINT(),
+            DataTypes.SMALLINT(),
+            DataTypes.INT(),
+            DataTypes.BIGINT(),
+            DataTypes.FLOAT(),
+            DataTypes.DOUBLE(),
+            DataTypes.BOOLEAN(),
+            DataTypes.STRING(),
+            DataTypes.BYTES(),
+            DataTypes.DATE(),
+            DataTypes.TIME(),
+            DataTypes.TIMESTAMP());
 
     @Test
     void testEstimateArrowMetadataSizeInBytes() throws IOException {
-        RowType rowType =
-                DataTypes.ROW(
-                        DataTypes.FIELD("f1", DataTypes.INT()),
-                        DataTypes.FIELD("f2", DataTypes.STRING()),
-                        DataTypes.FIELD("f3", DataTypes.DOUBLE()));
+        RowType rowType = DataTypes.ROW(
+                DataTypes.FIELD("f1", DataTypes.INT()),
+                DataTypes.FIELD("f2", DataTypes.STRING()),
+                DataTypes.FIELD("f3", DataTypes.DOUBLE()));
         Schema schema = ArrowUtils.toArrowSchema(rowType);
         int metadataSize = ArrowUtils.estimateArrowMetadataLength(schema, DEFAULT_BODY_COMPRESSION);
 
@@ -146,9 +144,7 @@ class ArrowUtilsTest {
                 ArrowBlock block = MessageSerializer.serialize(writeChannel, recordBatch);
                 assertThat(metadataSize).as(errorMessage).isEqualTo(block.getMetadataLength());
                 assertThat(bufferSize).as(errorMessage).isEqualTo(block.getBodyLength());
-                assertThat(metadataSize + bufferSize)
-                        .as(errorMessage)
-                        .isEqualTo(out.toByteArray().length);
+                assertThat(metadataSize + bufferSize).as(errorMessage).isEqualTo(out.toByteArray().length);
             }
         }
     }
@@ -230,11 +226,7 @@ class ArrowUtilsTest {
                 for (int i = 0; i < rowCount; i++) {
                     if (nullable && RandomUtils.nextInt(0, 10) > 0) {
                         ((VarCharVector) vector)
-                                .setSafe(
-                                        i,
-                                        new Text(
-                                                RandomStringUtils.randomAlphabetic(
-                                                        RandomUtils.nextInt(0, 100))));
+                                .setSafe(i, new Text(RandomStringUtils.randomAlphabetic(RandomUtils.nextInt(0, 100))));
                     } else {
                         vector.setNull(i);
                     }
@@ -247,8 +239,7 @@ class ArrowUtilsTest {
                         ((VarBinaryVector) vector)
                                 .setSafe(
                                         i,
-                                        RandomStringUtils.randomAlphabetic(
-                                                        RandomUtils.nextInt(0, 100))
+                                        RandomStringUtils.randomAlphabetic(RandomUtils.nextInt(0, 100))
                                                 .getBytes());
                     } else {
                         vector.setNull(i);

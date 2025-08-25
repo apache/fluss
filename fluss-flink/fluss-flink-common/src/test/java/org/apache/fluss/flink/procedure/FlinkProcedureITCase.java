@@ -49,13 +49,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 public abstract class FlinkProcedureITCase {
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setCoordinatorServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
-                    .setTabletServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setCoordinatorServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
+            .setTabletServerListeners("FLUSS://localhost:0, CLIENT://localhost:0")
+            .setClusterConf(initConfig())
+            .build();
 
     static final String CATALOG_NAME = "testcatalog";
 
@@ -63,25 +62,20 @@ public abstract class FlinkProcedureITCase {
 
     @BeforeEach
     void before() throws ExecutionException, InterruptedException {
-        String bootstrapServers =
-                String.join(
-                        ",",
-                        FLUSS_CLUSTER_EXTENSION
-                                .getClientConfig("CLIENT")
-                                .get(ConfigOptions.BOOTSTRAP_SERVERS));
+        String bootstrapServers = String.join(
+                ",", FLUSS_CLUSTER_EXTENSION.getClientConfig("CLIENT").get(ConfigOptions.BOOTSTRAP_SERVERS));
         // create table environment
         tEnv = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
-        String catalogDDL =
-                String.format(
-                        "create catalog %s with ( \n"
-                                + "'type' = 'fluss', \n"
-                                + "'bootstrap.servers' = '%s', \n"
-                                + "'client.security.protocol' = 'sasl', \n"
-                                + "'client.security.sasl.mechanism' = 'PLAIN', \n"
-                                + "'client.security.sasl.username' = 'root', \n"
-                                + "'client.security.sasl.password' = 'password' \n"
-                                + ")",
-                        CATALOG_NAME, bootstrapServers);
+        String catalogDDL = String.format(
+                "create catalog %s with ( \n"
+                        + "'type' = 'fluss', \n"
+                        + "'bootstrap.servers' = '%s', \n"
+                        + "'client.security.protocol' = 'sasl', \n"
+                        + "'client.security.sasl.mechanism' = 'PLAIN', \n"
+                        + "'client.security.sasl.username' = 'root', \n"
+                        + "'client.security.sasl.password' = 'password' \n"
+                        + ")",
+                CATALOG_NAME, bootstrapServers);
         tEnv.executeSql(catalogDDL).await();
         tEnv.executeSql("use catalog " + CATALOG_NAME);
     }
@@ -96,17 +90,11 @@ public abstract class FlinkProcedureITCase {
             assertResultsIgnoreOrder(showProceduresIterator, expectedShowProceduresResult, true);
         }
 
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                                String.format(
-                                                        "show procedures from  %s.non_db",
-                                                        CATALOG_NAME))
-                                        .await())
-                .hasMessage(
-                        String.format(
-                                "Fail to show procedures because the Database `non_db` to show from/in does not exist in Catalog `%s`.",
-                                CATALOG_NAME));
+        assertThatThrownBy(() -> tEnv.executeSql(String.format("show procedures from  %s.non_db", CATALOG_NAME))
+                        .await())
+                .hasMessage(String.format(
+                        "Fail to show procedures because the Database `non_db` to show from/in does not exist in Catalog `%s`.",
+                        CATALOG_NAME));
     }
 
     @Test
@@ -118,21 +106,17 @@ public abstract class FlinkProcedureITCase {
 
     @Test
     void testIndexArgument() throws Exception {
-        tEnv.executeSql(
-                        String.format(
-                                "Call %s.sys.add_acl( resource => 'CLUSTER', permission => 'ALLOW', principal =>  'User:Alice', operation  =>  'READ', host => '*' )",
-                                CATALOG_NAME))
+        tEnv.executeSql(String.format(
+                        "Call %s.sys.add_acl( resource => 'CLUSTER', permission => 'ALLOW', principal =>  'User:Alice', operation  =>  'READ', host => '*' )",
+                        CATALOG_NAME))
                 .await();
         // index argument supports part of index argument(if it is optional)
-        try (CloseableIterator<Row> listProceduresIterator =
-                tEnv.executeSql(
-                                String.format(
-                                        "Call %s.sys.list_acl( resource => 'ANY')", CATALOG_NAME))
-                        .collect()) {
-            List<String> acls =
-                    CollectionUtil.iteratorToList(listProceduresIterator).stream()
-                            .map(Row::toString)
-                            .collect(Collectors.toList());
+        try (CloseableIterator<Row> listProceduresIterator = tEnv.executeSql(
+                        String.format("Call %s.sys.list_acl( resource => 'ANY')", CATALOG_NAME))
+                .collect()) {
+            List<String> acls = CollectionUtil.iteratorToList(listProceduresIterator).stream()
+                    .map(Row::toString)
+                    .collect(Collectors.toList());
             assertThat(acls)
                     .containsExactlyInAnyOrder(
                             "+I[resource=\"cluster\";permission=\"ALLOW\";principal=\"User:Alice\";operation=\"READ\";host=\"*\"]");
@@ -144,113 +128,85 @@ public abstract class FlinkProcedureITCase {
     void testAclProcedureIgnoreCase(boolean upperCase) throws Exception {
         // Only type operation and permission is case-ignored , while principal and resource name
         // must be case-insensitive
-        String addAcl =
-                String.format(
-                        upperCase
-                                ? "Call %s.sys.add_acl('CLUSTER', 'ALLOW', 'User:Alice', 'READ', '127.0.0.1' )"
-                                : "Call %s.sys.add_acl('cluster', 'allow', 'User:Alice', 'read', '127.0.0.1' )",
-                        CATALOG_NAME);
-        String listAcl =
-                String.format(
-                        upperCase
-                                ? "Call %s.sys.list_acl('ANY', 'ANY', 'ANY', 'ANY', 'ANY' )"
-                                : "Call %s.sys.list_acl('any', 'any', 'any', 'any', 'any' )",
-                        CATALOG_NAME);
-        String dropAcl =
-                String.format(
-                        upperCase
-                                ? "Call %s.sys.drop_acl('CLUSTER', 'ALLOW', 'User:Alice', 'READ', '127.0.0.1' )"
-                                : "Call %s.sys.drop_acl('cluster', 'allow', 'User:Alice', 'read', '127.0.0.1' )",
-                        CATALOG_NAME);
+        String addAcl = String.format(
+                upperCase
+                        ? "Call %s.sys.add_acl('CLUSTER', 'ALLOW', 'User:Alice', 'READ', '127.0.0.1' )"
+                        : "Call %s.sys.add_acl('cluster', 'allow', 'User:Alice', 'read', '127.0.0.1' )",
+                CATALOG_NAME);
+        String listAcl = String.format(
+                upperCase
+                        ? "Call %s.sys.list_acl('ANY', 'ANY', 'ANY', 'ANY', 'ANY' )"
+                        : "Call %s.sys.list_acl('any', 'any', 'any', 'any', 'any' )",
+                CATALOG_NAME);
+        String dropAcl = String.format(
+                upperCase
+                        ? "Call %s.sys.drop_acl('CLUSTER', 'ALLOW', 'User:Alice', 'READ', '127.0.0.1' )"
+                        : "Call %s.sys.drop_acl('cluster', 'allow', 'User:Alice', 'read', '127.0.0.1' )",
+                CATALOG_NAME);
         tEnv.executeSql(addAcl).await();
-        try (CloseableIterator<Row> listProceduresIterator = tEnv.executeSql(listAcl).collect()) {
-            List<String> acls =
-                    CollectionUtil.iteratorToList(listProceduresIterator).stream()
-                            .map(Row::toString)
-                            .collect(Collectors.toList());
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(listAcl).collect()) {
+            List<String> acls = CollectionUtil.iteratorToList(listProceduresIterator).stream()
+                    .map(Row::toString)
+                    .collect(Collectors.toList());
             assertThat(acls)
                     .containsExactlyInAnyOrder(
                             "+I[resource=\"cluster\";permission=\"ALLOW\";principal=\"User:Alice\";operation=\"READ\";host=\"127.0.0.1\"]");
         }
         tEnv.executeSql(dropAcl).await();
-        try (CloseableIterator<Row> listProceduresIterator = tEnv.executeSql(listAcl).collect()) {
-            List<String> acls =
-                    CollectionUtil.iteratorToList(listProceduresIterator).stream()
-                            .map(Row::toString)
-                            .collect(Collectors.toList());
+        try (CloseableIterator<Row> listProceduresIterator =
+                tEnv.executeSql(listAcl).collect()) {
+            List<String> acls = CollectionUtil.iteratorToList(listProceduresIterator).stream()
+                    .map(Row::toString)
+                    .collect(Collectors.toList());
             assertThat(acls).isEmpty();
         }
     }
 
     @Test
     void testNotAllowFilterWhenAddAcl() {
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                                String.format(
-                                                        "Call %s.sys.add_acl('CLUSTER', 'ALLOW', 'User:Alice', 'READ', 'ANY' )",
-                                                        CATALOG_NAME))
-                                        .wait())
-                .hasMessageContaining(
-                        "Wildcard 'ANY' can only be used for filtering, not for adding ACL entries.");
+        assertThatThrownBy(() -> tEnv.executeSql(String.format(
+                                "Call %s.sys.add_acl('CLUSTER', 'ALLOW', 'User:Alice', 'READ', 'ANY' )", CATALOG_NAME))
+                        .wait())
+                .hasMessageContaining("Wildcard 'ANY' can only be used for filtering, not for adding ACL entries.");
     }
 
     @Test
     void testUnsupportedOperation() {
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                                String.format(
-                                                        "Call %s.sys.list_acl('CLUSTER', 'ALLOW', 'User:Alice', 'UNKNOWN', 'ANY' )",
-                                                        CATALOG_NAME))
-                                        .wait())
-                .hasMessageContaining(
-                        "No enum constant org.apache.fluss.security.acl.OperationType.UNKNOWN");
+        assertThatThrownBy(() -> tEnv.executeSql(String.format(
+                                "Call %s.sys.list_acl('CLUSTER', 'ALLOW', 'User:Alice', 'UNKNOWN', 'ANY' )",
+                                CATALOG_NAME))
+                        .wait())
+                .hasMessageContaining("No enum constant org.apache.fluss.security.acl.OperationType.UNKNOWN");
     }
 
     @Test
     void testUnsupportedPermissionType() {
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                                String.format(
-                                                        "Call %s.sys.add_acl('CLUSTER', 'UNKNOWN', 'User:Alice', 'ANY', 'ANY' )",
-                                                        CATALOG_NAME))
-                                        .wait())
-                .hasMessageContaining(
-                        "No enum constant org.apache.fluss.security.acl.PermissionType.UNKNOWN");
+        assertThatThrownBy(() -> tEnv.executeSql(String.format(
+                                "Call %s.sys.add_acl('CLUSTER', 'UNKNOWN', 'User:Alice', 'ANY', 'ANY' )", CATALOG_NAME))
+                        .wait())
+                .hasMessageContaining("No enum constant org.apache.fluss.security.acl.PermissionType.UNKNOWN");
     }
 
     @Test
     void testDisableAuthorization() throws Exception {
         String catalogName = "disable_acl_catalog";
-        FlussClusterExtension flussClusterExtension = FlussClusterExtension.builder().build();
+        FlussClusterExtension flussClusterExtension =
+                FlussClusterExtension.builder().build();
         try {
             flussClusterExtension.start();
             // prepare table
             Configuration clientConfig = flussClusterExtension.getClientConfig();
             clientConfig.set(ConfigOptions.CLIENT_WRITER_RETRIES, 0);
             clientConfig.set(ConfigOptions.CLIENT_WRITER_ENABLE_IDEMPOTENCE, false);
-            String catalogDDL =
-                    String.format(
-                            "create catalog %s with ( \n"
-                                    + "'type' = 'fluss', \n"
-                                    + "'bootstrap.servers' = '%s' \n"
-                                    + ")",
-                            catalogName,
-                            String.join(
-                                    ",",
-                                    flussClusterExtension
-                                            .getClientConfig()
-                                            .get(ConfigOptions.BOOTSTRAP_SERVERS)));
+            String catalogDDL = String.format(
+                    "create catalog %s with ( \n" + "'type' = 'fluss', \n" + "'bootstrap.servers' = '%s' \n" + ")",
+                    catalogName,
+                    String.join(",", flussClusterExtension.getClientConfig().get(ConfigOptions.BOOTSTRAP_SERVERS)));
             tEnv.executeSql(catalogDDL).await();
-            assertThatThrownBy(
-                            () ->
-                                    tEnv.executeSql(
-                                                    String.format(
-                                                            "Call %s.sys.add_acl('CLUSTER', 'ALLOW', 'User:Alice', 'READ', '*' )",
-                                                            catalogName))
-                                            .await())
+            assertThatThrownBy(() -> tEnv.executeSql(String.format(
+                                    "Call %s.sys.add_acl('CLUSTER', 'ALLOW', 'User:Alice', 'READ', '*' )", catalogName))
+                            .await())
                     .rootCause()
                     .isExactlyInstanceOf(SecurityDisabledException.class)
                     .hasMessageContaining("No Authorizer is configured");

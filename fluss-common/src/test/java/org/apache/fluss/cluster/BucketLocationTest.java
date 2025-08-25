@@ -33,28 +33,21 @@ public class BucketLocationTest {
         int bucketId = 0;
         long tableId = 150001L;
         ServerNode leader = new ServerNode(0, "localhost", 9092, ServerType.TABLET_SERVER, "rack0");
-        ServerNode replica1 =
-                new ServerNode(1, "localhost", 9093, ServerType.TABLET_SERVER, "rack1");
-        ServerNode replica2 =
-                new ServerNode(2, "localhost", 9094, ServerType.TABLET_SERVER, "rack2");
+        ServerNode replica1 = new ServerNode(1, "localhost", 9093, ServerType.TABLET_SERVER, "rack1");
+        ServerNode replica2 = new ServerNode(2, "localhost", 9094, ServerType.TABLET_SERVER, "rack2");
         int[] replicas = new int[] {leader.id(), replica1.id(), replica2.id()};
         BucketLocation bucketLocation =
-                new BucketLocation(
-                        PhysicalTablePath.of(tablePath), tableId, bucketId, leader.id(), replicas);
+                new BucketLocation(PhysicalTablePath.of(tablePath), tableId, bucketId, leader.id(), replicas);
 
         assertThat(bucketLocation.getReplicas()).isEqualTo(replicas);
 
         assertThat(bucketLocation.toString())
-                .isEqualTo(
-                        "Bucket(physicalTablePath = test_db.test_table, TableBucket{tableId=150001, bucket=0}, "
-                                + "leader = 0, replicas = [0,1,2])");
+                .isEqualTo("Bucket(physicalTablePath = test_db.test_table, TableBucket{tableId=150001, bucket=0}, "
+                        + "leader = 0, replicas = [0,1,2])");
 
-        bucketLocation =
-                new BucketLocation(
-                        PhysicalTablePath.of(tablePath), tableId, bucketId, null, replicas);
+        bucketLocation = new BucketLocation(PhysicalTablePath.of(tablePath), tableId, bucketId, null, replicas);
         assertThat(bucketLocation.toString())
-                .isEqualTo(
-                        "Bucket(physicalTablePath = test_db.test_table, TableBucket{tableId=150001, bucket=0}, "
-                                + "leader = none, replicas = [0,1,2])");
+                .isEqualTo("Bucket(physicalTablePath = test_db.test_table, TableBucket{tableId=150001, bucket=0}, "
+                        + "leader = none, replicas = [0,1,2])");
     }
 }

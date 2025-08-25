@@ -62,11 +62,9 @@ public class ArrayUtilsTest {
         int[] array1 = new int[] {1, 2, 3, 4, 5, 6, 7};
         int[] array2 = new int[] {8, 9, 10};
 
-        assertThat(ArrayUtils.concat(array1, array2))
-                .isEqualTo(new int[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
+        assertThat(ArrayUtils.concat(array1, array2)).isEqualTo(new int[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10});
 
-        assertThat(ArrayUtils.concat(array2, array1))
-                .isEqualTo(new int[] {8, 9, 10, 1, 2, 3, 4, 5, 6, 7});
+        assertThat(ArrayUtils.concat(array2, array1)).isEqualTo(new int[] {8, 9, 10, 1, 2, 3, 4, 5, 6, 7});
     }
 
     @Test

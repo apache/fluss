@@ -36,10 +36,10 @@ import java.util.List;
 import java.util.Map;
 
 /** An implementation of {@link LakeTieringFactory} for testing purpose. */
-public class TestingLakeTieringFactory
-        implements LakeTieringFactory<TestingWriteResult, TestingCommittable> {
+public class TestingLakeTieringFactory implements LakeTieringFactory<TestingWriteResult, TestingCommittable> {
 
-    @Nullable private final TestingLakeCommitter testingLakeCommitter;
+    @Nullable
+    private final TestingLakeCommitter testingLakeCommitter;
 
     public TestingLakeTieringFactory(@Nullable TestingLakeCommitter testingLakeCommitter) {
         this.testingLakeCommitter = testingLakeCommitter;
@@ -50,8 +50,7 @@ public class TestingLakeTieringFactory
     }
 
     @Override
-    public LakeWriter<TestingWriteResult> createLakeWriter(WriterInitContext writerInitContext)
-            throws IOException {
+    public LakeWriter<TestingWriteResult> createLakeWriter(WriterInitContext writerInitContext) throws IOException {
         return new TestingLakeWriter();
     }
 
@@ -68,8 +67,7 @@ public class TestingLakeTieringFactory
 
     @Override
     public SimpleVersionedSerializer<TestingCommittable> getCommittableSerializer() {
-        throw new UnsupportedOperationException(
-                "method getCommittableSerializer is not supported.");
+        throw new UnsupportedOperationException("method getCommittableSerializer is not supported.");
     }
 
     private static final class TestingLakeWriter implements LakeWriter<TestingWriteResult> {
@@ -91,12 +89,12 @@ public class TestingLakeTieringFactory
     }
 
     /** A lake committer for testing purpose. */
-    public static final class TestingLakeCommitter
-            implements LakeCommitter<TestingWriteResult, TestingCommittable> {
+    public static final class TestingLakeCommitter implements LakeCommitter<TestingWriteResult, TestingCommittable> {
 
         private long currentSnapshot;
 
-        @Nullable private final CommittedLakeSnapshot mockCommittedSnapshot;
+        @Nullable
+        private final CommittedLakeSnapshot mockCommittedSnapshot;
 
         public TestingLakeCommitter() {
             this(null);
@@ -104,13 +102,11 @@ public class TestingLakeTieringFactory
 
         public TestingLakeCommitter(@Nullable CommittedLakeSnapshot mockCommittedSnapshot) {
             this.mockCommittedSnapshot = mockCommittedSnapshot;
-            this.currentSnapshot =
-                    mockCommittedSnapshot == null ? 0 : mockCommittedSnapshot.getLakeSnapshotId();
+            this.currentSnapshot = mockCommittedSnapshot == null ? 0 : mockCommittedSnapshot.getLakeSnapshotId();
         }
 
         @Override
-        public TestingCommittable toCommittable(List<TestingWriteResult> testingWriteResults)
-                throws IOException {
+        public TestingCommittable toCommittable(List<TestingWriteResult> testingWriteResults) throws IOException {
             List<Integer> writeResults = new ArrayList<>();
             for (TestingWriteResult testingWriteResult : testingWriteResults) {
                 writeResults.add(testingWriteResult.getWriteResult());
@@ -119,8 +115,7 @@ public class TestingLakeTieringFactory
         }
 
         @Override
-        public long commit(TestingCommittable committable, Map<String, String> snapshotProperties)
-                throws IOException {
+        public long commit(TestingCommittable committable, Map<String, String> snapshotProperties) throws IOException {
             return ++currentSnapshot;
         }
 
@@ -130,8 +125,8 @@ public class TestingLakeTieringFactory
         }
 
         @Override
-        public @Nullable CommittedLakeSnapshot getMissingLakeSnapshot(
-                @Nullable Long knownSnapshotId) throws IOException {
+        public @Nullable CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long knownSnapshotId)
+                throws IOException {
             if (knownSnapshotId == null) {
                 return mockCommittedSnapshot;
             } else {

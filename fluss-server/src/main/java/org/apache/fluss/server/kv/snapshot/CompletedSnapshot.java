@@ -86,10 +86,7 @@ public class CompletedSnapshot {
 
     @VisibleForTesting
     CompletedSnapshot(
-            TableBucket tableBucket,
-            long snapshotID,
-            FsPath snapshotLocation,
-            KvSnapshotHandle kvSnapshotHandle) {
+            TableBucket tableBucket, long snapshotID, FsPath snapshotLocation, KvSnapshotHandle kvSnapshotHandle) {
         this(tableBucket, snapshotID, snapshotLocation, kvSnapshotHandle, 0);
     }
 
@@ -127,11 +124,9 @@ public class CompletedSnapshot {
         // it'll discard the snapshot files for kv, it'll always discard
         // the private files; for shared files, only if they're not be registered in
         // SharedKvRegistry, can the files be deleted.
-        CompletableFuture<Void> discardKvFuture =
-                FutureUtils.runAsync(kvSnapshotHandle::discard, ioExecutor);
+        CompletableFuture<Void> discardKvFuture = FutureUtils.runAsync(kvSnapshotHandle::discard, ioExecutor);
 
-        CompletableFuture<Void> discardMetaFileFuture =
-                FutureUtils.runAsync(this::disposeMetadata, ioExecutor);
+        CompletableFuture<Void> discardMetaFileFuture = FutureUtils.runAsync(this::disposeMetadata, ioExecutor);
 
         return FutureUtils.runAfterwards(
                 FutureUtils.completeAll(Arrays.asList(discardKvFuture, discardMetaFileFuture)),
@@ -168,9 +163,7 @@ public class CompletedSnapshot {
 
     @Override
     public String toString() {
-        return String.format(
-                "CompletedSnapshot %d for %s located at %s",
-                snapshotID, tableBucket, snapshotLocation);
+        return String.format("CompletedSnapshot %d for %s located at %s", snapshotID, tableBucket, snapshotLocation);
     }
 
     @Override

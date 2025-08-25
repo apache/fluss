@@ -49,15 +49,13 @@ class ProjectedRowTest {
         assertThat(projectedRow.getInt(2)).isEqualTo(1);
         assertThat(projectedRow.getInt(3)).isEqualTo(4);
 
-        projectedRow.replaceRow(
-                GenericRow.of((short) 5, (short) 6, (short) 7, (short) 8, (short) 9, (short) 10));
+        projectedRow.replaceRow(GenericRow.of((short) 5, (short) 6, (short) 7, (short) 8, (short) 9, (short) 10));
         assertThat(projectedRow.getShort(0)).isEqualTo((short) 7);
         assertThat(projectedRow.getShort(1)).isEqualTo((short) 5);
         assertThat(projectedRow.getShort(2)).isEqualTo((short) 6);
         assertThat(projectedRow.getShort(3)).isEqualTo((short) 9);
 
-        projectedRow.replaceRow(
-                GenericRow.of((byte) 5, (byte) 6, (byte) 7, (byte) 8, (byte) 9, (byte) 10));
+        projectedRow.replaceRow(GenericRow.of((byte) 5, (byte) 6, (byte) 7, (byte) 8, (byte) 9, (byte) 10));
         assertThat(projectedRow.getByte(0)).isEqualTo((byte) 7);
         assertThat(projectedRow.getByte(1)).isEqualTo((byte) 5);
         assertThat(projectedRow.getByte(2)).isEqualTo((byte) 6);
@@ -81,13 +79,12 @@ class ProjectedRowTest {
         assertThat(projectedRow.getDouble(2)).isEqualTo(0.6d);
         assertThat(projectedRow.getDouble(3)).isEqualTo(0.9d);
 
-        projectedRow.replaceRow(
-                GenericRow.of(
-                        BinaryString.fromString("0"),
-                        BinaryString.fromString("1"),
-                        BinaryString.fromString("2"),
-                        BinaryString.fromString("3"),
-                        BinaryString.fromString("4")));
+        projectedRow.replaceRow(GenericRow.of(
+                BinaryString.fromString("0"),
+                BinaryString.fromString("1"),
+                BinaryString.fromString("2"),
+                BinaryString.fromString("3"),
+                BinaryString.fromString("4")));
         assertThat(projectedRow.getChar(0, 1).toString()).isEqualTo("2");
         assertThat(projectedRow.getChar(1, 1).toString()).isEqualTo("0");
         assertThat(projectedRow.getChar(2, 1).toString()).isEqualTo("1");
@@ -97,52 +94,43 @@ class ProjectedRowTest {
         assertThat(projectedRow.getString(2).toString()).isEqualTo("1");
         assertThat(projectedRow.getString(3).toString()).isEqualTo("4");
 
-        projectedRow.replaceRow(
-                GenericRow.of(
-                        Decimal.fromBigDecimal(new BigDecimal("0"), 18, 0),
-                        Decimal.fromBigDecimal(new BigDecimal("1"), 18, 0),
-                        Decimal.fromBigDecimal(new BigDecimal("2"), 18, 0),
-                        Decimal.fromBigDecimal(new BigDecimal("3"), 18, 0),
-                        Decimal.fromBigDecimal(new BigDecimal("4"), 18, 0)));
+        projectedRow.replaceRow(GenericRow.of(
+                Decimal.fromBigDecimal(new BigDecimal("0"), 18, 0),
+                Decimal.fromBigDecimal(new BigDecimal("1"), 18, 0),
+                Decimal.fromBigDecimal(new BigDecimal("2"), 18, 0),
+                Decimal.fromBigDecimal(new BigDecimal("3"), 18, 0),
+                Decimal.fromBigDecimal(new BigDecimal("4"), 18, 0)));
         assertThat(projectedRow.getDecimal(0, 18, 0).toString()).isEqualTo("2");
         assertThat(projectedRow.getDecimal(1, 18, 0).toString()).isEqualTo("0");
         assertThat(projectedRow.getDecimal(2, 18, 0).toString()).isEqualTo("1");
         assertThat(projectedRow.getDecimal(3, 18, 0).toString()).isEqualTo("4");
 
-        projectedRow.replaceRow(
-                GenericRow.of(
-                        TimestampNtz.fromMillis(5L),
-                        TimestampNtz.fromMillis(6L),
-                        TimestampNtz.fromMillis(7L),
-                        TimestampNtz.fromMillis(8L),
-                        TimestampNtz.fromMillis(9L),
-                        TimestampNtz.fromMillis(10L)));
+        projectedRow.replaceRow(GenericRow.of(
+                TimestampNtz.fromMillis(5L),
+                TimestampNtz.fromMillis(6L),
+                TimestampNtz.fromMillis(7L),
+                TimestampNtz.fromMillis(8L),
+                TimestampNtz.fromMillis(9L),
+                TimestampNtz.fromMillis(10L)));
         assertThat(projectedRow.getTimestampNtz(0, 3)).isEqualTo(TimestampNtz.fromMillis(7));
         assertThat(projectedRow.getTimestampNtz(1, 3)).isEqualTo(TimestampNtz.fromMillis(5));
         assertThat(projectedRow.getTimestampNtz(2, 3)).isEqualTo(TimestampNtz.fromMillis(6));
         assertThat(projectedRow.getTimestampNtz(3, 3)).isEqualTo(TimestampNtz.fromMillis(9));
 
-        projectedRow.replaceRow(
-                GenericRow.of(
-                        TimestampLtz.fromEpochMicros(5L),
-                        TimestampLtz.fromEpochMicros(6L),
-                        TimestampLtz.fromEpochMicros(7L),
-                        TimestampLtz.fromEpochMicros(8L),
-                        TimestampLtz.fromEpochMicros(9L),
-                        TimestampLtz.fromEpochMicros(10L)));
+        projectedRow.replaceRow(GenericRow.of(
+                TimestampLtz.fromEpochMicros(5L),
+                TimestampLtz.fromEpochMicros(6L),
+                TimestampLtz.fromEpochMicros(7L),
+                TimestampLtz.fromEpochMicros(8L),
+                TimestampLtz.fromEpochMicros(9L),
+                TimestampLtz.fromEpochMicros(10L)));
         assertThat(projectedRow.getTimestampLtz(0, 3)).isEqualTo(TimestampLtz.fromEpochMicros(7));
         assertThat(projectedRow.getTimestampLtz(1, 3)).isEqualTo(TimestampLtz.fromEpochMicros(5));
         assertThat(projectedRow.getTimestampLtz(2, 3)).isEqualTo(TimestampLtz.fromEpochMicros(6));
         assertThat(projectedRow.getTimestampLtz(3, 3)).isEqualTo(TimestampLtz.fromEpochMicros(9));
 
-        projectedRow.replaceRow(
-                GenericRow.of(
-                        new byte[] {5},
-                        new byte[] {6},
-                        new byte[] {7},
-                        new byte[] {8},
-                        new byte[] {9},
-                        new byte[] {10}));
+        projectedRow.replaceRow(GenericRow.of(
+                new byte[] {5}, new byte[] {6}, new byte[] {7}, new byte[] {8}, new byte[] {9}, new byte[] {10}));
         assertThat(projectedRow.getBytes(0)).isEqualTo(new byte[] {7});
         assertThat(projectedRow.getBytes(1)).isEqualTo(new byte[] {5});
         assertThat(projectedRow.getBytes(2)).isEqualTo(new byte[] {6});

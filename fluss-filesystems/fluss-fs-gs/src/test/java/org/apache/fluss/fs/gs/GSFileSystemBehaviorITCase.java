@@ -63,11 +63,10 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
         map.put("GCE_METADATA_HOST", "localhost:8080");
         CommonTestUtils.setEnv(map);
 
-        String path =
-                GSFileSystemPlugin.class
-                        .getClassLoader()
-                        .getResource("fake-service-account.json")
-                        .getPath();
+        String path = GSFileSystemPlugin.class
+                .getClassLoader()
+                .getResource("fake-service-account.json")
+                .getPath();
 
         GSFileSystemPlugin gsFileSystemPlugin = new GSFileSystemPlugin();
         Configuration configuration = new Configuration();
@@ -77,8 +76,7 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
         configuration.setString("fs.gs.auth.service.account.json.keyfile", path);
         configuration.setString("fs.gs.inputstream.support.gzip.encoding.enable", "false");
 
-        FileSystem fileSystem =
-                gsFileSystemPlugin.create(URI.create("gs://test-bucket/flusspath"), configuration);
+        FileSystem fileSystem = gsFileSystemPlugin.create(URI.create("gs://test-bucket/flusspath"), configuration);
 
         applyInMemoryStorage(fileSystem);
 
@@ -88,14 +86,12 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
     private static void applyInMemoryStorage(FileSystem fileSystem) throws IOException {
         try {
             Object fs = FieldUtils.readField(fileSystem, "fs", true);
-            final InMemoryGoogleCloudStorage inMemoryGoogleCloudStorage =
-                    new InMemoryGoogleCloudStorage();
-            GoogleCloudStorageFileSystem googleCloudStorageFileSystem =
-                    new GoogleCloudStorageFileSystem(
-                            googleCloudStorageOptions -> inMemoryGoogleCloudStorage,
-                            GoogleCloudStorageFileSystemOptions.DEFAULT.toBuilder()
-                                    .setCloudStorageOptions(inMemoryGoogleCloudStorage.getOptions())
-                                    .build());
+            final InMemoryGoogleCloudStorage inMemoryGoogleCloudStorage = new InMemoryGoogleCloudStorage();
+            GoogleCloudStorageFileSystem googleCloudStorageFileSystem = new GoogleCloudStorageFileSystem(
+                    googleCloudStorageOptions -> inMemoryGoogleCloudStorage,
+                    GoogleCloudStorageFileSystemOptions.DEFAULT.toBuilder()
+                            .setCloudStorageOptions(inMemoryGoogleCloudStorage.getOptions())
+                            .build());
 
             inMemoryGoogleCloudStorage.createBucket("test-bucket");
             Supplier<GoogleCloudStorageFileSystem> gsFs = () -> googleCloudStorageFileSystem;

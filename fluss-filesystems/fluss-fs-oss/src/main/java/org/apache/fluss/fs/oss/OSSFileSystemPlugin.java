@@ -127,15 +127,11 @@ public class OSSFileSystemPlugin implements FileSystemPlugin {
         for (String key : flussConfig.keySet()) {
             for (String prefix : FLUSS_CONFIG_PREFIXES) {
                 if (key.startsWith(prefix)) {
-                    String value =
-                            flussConfig.getString(
-                                    ConfigBuilder.key(key).stringType().noDefaultValue(), null);
+                    String value = flussConfig.getString(
+                            ConfigBuilder.key(key).stringType().noDefaultValue(), null);
                     conf.set(key, value);
 
-                    LOG.debug(
-                            "Adding Fluss config entry for {} as {} to Hadoop config",
-                            key,
-                            conf.get(key));
+                    LOG.debug("Adding Fluss config entry for {} as {} to Hadoop config", key, conf.get(key));
                 }
             }
         }
@@ -143,29 +139,25 @@ public class OSSFileSystemPlugin implements FileSystemPlugin {
     }
 
     private void setSignatureVersion4(
-            AliyunOSSFileSystem aliyunOSSFileSystem,
-            org.apache.hadoop.conf.Configuration hadoopConfig) {
+            AliyunOSSFileSystem aliyunOSSFileSystem, org.apache.hadoop.conf.Configuration hadoopConfig) {
         // hack logic, we use reflection to set signature version 4
         // todo: remove the hack logic once hadoop-aliyun lib support it
         AliyunOSSFileSystemStore aliyunOSSFileSystemStore = aliyunOSSFileSystem.getStore();
         try {
             // get oss client by reflection
-            Field ossClientField =
-                    aliyunOSSFileSystemStore.getClass().getDeclaredField("ossClient");
+            Field ossClientField = aliyunOSSFileSystemStore.getClass().getDeclaredField("ossClient");
             ossClientField.setAccessible(true);
             OSSClient ossClient = (OSSClient) ossClientField.get(aliyunOSSFileSystemStore);
             ossClient.switchSignatureVersion(SignVersion.V4);
             String region = hadoopConfig.get(REGION_KEY);
             if (region == null) {
                 throw new IllegalArgumentException(
-                        String.format(
-                                "Region key %s must be set for oss file system.", REGION_KEY));
+                        String.format("Region key %s must be set for oss file system.", REGION_KEY));
             }
             ossClient.setRegion(region);
         } catch (NoSuchFieldException | IllegalAccessException e) {
             // fail directly, we want to make sure use v4 signature
-            throw new FlussRuntimeException(
-                    "Fail to set signature version 4 for Oss filesystem.", e);
+            throw new FlussRuntimeException("Fail to set signature version 4 for Oss filesystem.", e);
         }
     }
 }

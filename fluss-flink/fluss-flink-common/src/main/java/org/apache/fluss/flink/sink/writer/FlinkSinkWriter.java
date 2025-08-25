@@ -106,8 +106,7 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
                 tablePath.getTableName());
         this.metricGroup = metricGroup;
         flinkMetricRegistry =
-                new FlinkMetricRegistry(
-                        metricGroup, Collections.singleton(MetricNames.WRITER_SEND_LATENCY_MS));
+                new FlinkMetricRegistry(metricGroup, Collections.singleton(MetricNames.WRITER_SEND_LATENCY_MS));
         connection = ConnectionFactory.createConnection(flussConfig, flinkMetricRegistry);
         table = connection.getTable(tablePath);
         sanityCheck(table.getTableInfo());
@@ -141,18 +140,16 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
                 return;
             }
             CompletableFuture<?> writeFuture = writeRow(opType, row);
-            writeFuture.whenComplete(
-                    (ignored, throwable) -> {
-                        if (throwable != null) {
-                            if (this.asyncWriterException == null) {
-                                this.asyncWriterException = throwable;
-                            }
+            writeFuture.whenComplete((ignored, throwable) -> {
+                if (throwable != null) {
+                    if (this.asyncWriterException == null) {
+                        this.asyncWriterException = throwable;
+                    }
 
-                            // Checking for exceptions from previous writes
-                            mailboxExecutor.execute(
-                                    this::checkAsyncException, "Update error metric");
-                        }
-                    });
+                    // Checking for exceptions from previous writes
+                    mailboxExecutor.execute(this::checkAsyncException, "Update error metric");
+                }
+            });
 
             numRecordsOutCounter.inc();
         } catch (Exception e) {
@@ -200,10 +197,9 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
         // when it's UpsertSinkWriter, it means it has primary key got from Flink's metadata
         boolean hasPrimaryKey = this instanceof UpsertSinkWriter;
         if (flussTableInfo.hasPrimaryKey() != hasPrimaryKey) {
-            throw new ValidationException(
-                    String.format(
-                            "Primary key constraint is not matched between metadata in Fluss (%s) and Flink (%s).",
-                            flussTableInfo.hasPrimaryKey(), hasPrimaryKey));
+            throw new ValidationException(String.format(
+                    "Primary key constraint is not matched between metadata in Fluss (%s) and Flink (%s).",
+                    flussTableInfo.hasPrimaryKey(), hasPrimaryKey));
         }
         RowType currentTableRowType = FlinkConversions.toFlinkRowType(flussTableInfo.getRowType());
         if (!this.tableRowType.copy(false).equals(currentTableRowType.copy(false))) {
@@ -214,12 +210,11 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
             // only allow fluss tables derived from fluss catalog. But this can happen if an ALTER
             // TABLE command executed on the fluss table, after the job is submitted but before the
             // SinkFunction is opened.
-            throw new ValidationException(
-                    "The Flink query schema is not matched to current Fluss table schema. "
-                            + "\nFlink query schema: "
-                            + this.tableRowType
-                            + "\nFluss table schema: "
-                            + currentTableRowType);
+            throw new ValidationException("The Flink query schema is not matched to current Fluss table schema. "
+                    + "\nFlink query schema: "
+                    + this.tableRowType
+                    + "\nFluss table schema: "
+                    + currentTableRowType);
         }
     }
 
@@ -228,8 +223,7 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
             return -1;
         }
 
-        Metric writerSendLatencyMs =
-                flinkMetricRegistry.getFlussMetric(MetricNames.WRITER_SEND_LATENCY_MS);
+        Metric writerSendLatencyMs = flinkMetricRegistry.getFlussMetric(MetricNames.WRITER_SEND_LATENCY_MS);
         if (writerSendLatencyMs == null) {
             return -1;
         }
@@ -248,8 +242,7 @@ public abstract class FlinkSinkWriter<InputT> implements SinkWriter<InputT> {
             asyncWriterException = null;
             numRecordsOutErrorsCounter.inc();
             LOG.error("Exception occurs while write row to fluss.", throwable);
-            throw new IOException(
-                    "One or more Fluss Writer send requests have encountered exception", throwable);
+            throw new IOException("One or more Fluss Writer send requests have encountered exception", throwable);
         }
     }
 

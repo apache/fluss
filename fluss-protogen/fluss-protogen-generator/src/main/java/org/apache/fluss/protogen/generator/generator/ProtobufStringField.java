@@ -51,9 +51,7 @@ public class ProtobufStringField extends ProtobufField<Field.String> {
                 ProtoGenUtil.camelCase(field.getName()));
         // add a better exception message for null argument.
         w.format("    if (%s == null) {\n", ProtoGenUtil.camelCase(field.getName()));
-        w.format(
-                "        throw new NullPointerException(\"Field '%s' cannot be null\");\n",
-                field.getName());
+        w.format("        throw new NullPointerException(\"Field '%s' cannot be null\");\n", field.getName());
         w.format("    }\n");
         w.println();
         w.format(
@@ -68,9 +66,7 @@ public class ProtobufStringField extends ProtobufField<Field.String> {
 
     @Override
     public void copy(PrintWriter w) {
-        w.format(
-                "%s(_other.%s());\n",
-                ProtoGenUtil.camelCase("set", ccName), ProtoGenUtil.camelCase("get", ccName));
+        w.format("%s(_other.%s());\n", ProtoGenUtil.camelCase("set", ccName), ProtoGenUtil.camelCase("get", ccName));
     }
 
     @Override
@@ -78,14 +74,10 @@ public class ProtobufStringField extends ProtobufField<Field.String> {
         if (isErrorField) {
             w.format("@Override\n");
         }
-        w.format(
-                "public %s %s() {\n",
-                field.getJavaType(), ProtoGenUtil.camelCase("get", field.getName()));
+        w.format("public %s %s() {\n", field.getJavaType(), ProtoGenUtil.camelCase("get", field.getName()));
         if (!field.isDefaultValueSet()) {
             w.format("    if (!%s()) {\n", ProtoGenUtil.camelCase("has", ccName));
-            w.format(
-                    "        throw new IllegalStateException(\"Field '%s' is not set\");\n",
-                    field.getName());
+            w.format("        throw new IllegalStateException(\"Field '%s' is not set\");\n", field.getName());
             w.format("    }\n");
         }
         w.format("    return %s;\n", ProtoGenUtil.camelCase(field.getName()));
@@ -116,9 +108,7 @@ public class ProtobufStringField extends ProtobufField<Field.String> {
     public void parse(PrintWriter w) {
         w.format("_%sLen = ProtoCodecUtils.readVarInt(_buffer);\n", ccName);
         w.format("int _%sBufferIdx = _buffer.readerIndex();\n", ccName);
-        w.format(
-                "%s = ProtoCodecUtils.readString(_buffer, _buffer.readerIndex(), _%sLen);\n",
-                ccName, ccName);
+        w.format("%s = ProtoCodecUtils.readString(_buffer, _buffer.readerIndex(), _%sLen);\n", ccName, ccName);
         w.format("_buffer.skipBytes(_%sLen);\n", ccName);
     }
 

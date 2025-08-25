@@ -119,23 +119,21 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 needRelease = true;
             }
 
-            FlussRequest request =
-                    new FlussRequest(
-                            apiKey,
-                            apiVersion,
-                            requestId,
-                            api,
-                            requestMessage,
-                            buffer,
-                            listenerName,
-                            isInternal,
-                            authenticator.isCompleted() ? authenticator.createPrincipal() : null,
-                            ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress(),
-                            future);
+            FlussRequest request = new FlussRequest(
+                    apiKey,
+                    apiVersion,
+                    requestId,
+                    api,
+                    requestMessage,
+                    buffer,
+                    listenerName,
+                    isInternal,
+                    authenticator.isCompleted() ? authenticator.createPrincipal() : null,
+                    ((InetSocketAddress) ctx.channel().remoteAddress()).getAddress(),
+                    future);
 
             future.whenCompleteAsync((r, t) -> sendResponse(ctx, request), ctx.executor());
-            if (apiKey == ApiKeys.AUTHENTICATE.id
-                    || (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id)) {
+            if (apiKey == ApiKeys.AUTHENTICATE.id || (state.isAuthenticating() && apiKey != ApiKeys.API_VERSIONS.id)) {
                 // handle to authentication for 3 cases:
                 // 1. the channel is in authing state, and the request is auth request, normal case
                 // 2. the channel is in authentication state, but receive non-auth request, error
@@ -166,10 +164,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         super.channelActive(ctx);
         this.ctx = ctx;
         this.remoteAddress = ctx.channel().remoteAddress();
-        switchState(
-                authenticator.isCompleted()
-                        ? ConnectionState.READY
-                        : ConnectionState.AUTHENTICATING);
+        switchState(authenticator.isCompleted() ? ConnectionState.READY : ConnectionState.AUTHENTICATING);
 
         // TODO: connection metrics (count, client tags, receive request avg idle time, etc.)
     }
@@ -231,8 +226,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         }
     }
 
-    private void sendSuccessResponse(
-            ChannelHandlerContext ctx, FlussRequest request, ApiMessage responseMessage) {
+    private void sendSuccessResponse(ChannelHandlerContext ctx, FlussRequest request, ApiMessage responseMessage) {
         // TODO: use a memory managed allocator
         ByteBufAllocator alloc = ctx.alloc();
         try {
@@ -301,9 +295,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     private void handleAuthenticateRequest(
             short apiKey, ApiMessage requestMessage, CompletableFuture<ApiMessage> future) {
         if (apiKey != ApiKeys.AUTHENTICATE.id) {
-            LOG.warn(
-                    "Connection is still in the authentication process. Unable to handle API key: {}.",
-                    apiKey);
+            LOG.warn("Connection is still in the authentication process. Unable to handle API key: {}.", apiKey);
             future.completeExceptionally(
                     new AuthenticationException(
                             "The connection has not completed authentication yet. This may be caused by a missing or incorrect configuration of 'client.security.protocol' on the client side."));
@@ -319,8 +311,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
         }
 
         if (!initialized) {
-            authenticator.initialize(
-                    new DefaultAuthenticateContext(authenticateRequest.getProtocol()));
+            authenticator.initialize(new DefaultAuthenticateContext(authenticateRequest.getProtocol()));
             initialized = true;
         }
 
@@ -341,8 +332,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                         ctx.channel().remoteAddress(),
                         e.getMessage(),
                         e);
-                authenticator.initialize(
-                        new DefaultAuthenticateContext(authenticateRequest.getProtocol()));
+                authenticator.initialize(new DefaultAuthenticateContext(authenticateRequest.getProtocol()));
             }
 
             future.completeExceptionally(e);

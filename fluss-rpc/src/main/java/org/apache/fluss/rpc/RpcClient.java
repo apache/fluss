@@ -41,8 +41,7 @@ public interface RpcClient extends AutoCloseable {
      *     server.
      * @return The RPC client.
      */
-    static RpcClient create(
-            Configuration conf, ClientMetricGroup clientMetricGroup, boolean isInnerClient) {
+    static RpcClient create(Configuration conf, ClientMetricGroup clientMetricGroup, boolean isInnerClient) {
         return new NettyClient(conf, clientMetricGroup, isInnerClient);
     }
 

@@ -45,8 +45,7 @@ import java.util.function.Supplier;
  * buckets to read inside the {@link FlinkSourceSplitReader}.
  */
 @Internal
-public class FlinkSourceFetcherManager
-        extends SingleThreadFetcherManagerAdapter<RecordAndPos, SourceSplitBase> {
+public class FlinkSourceFetcherManager extends SingleThreadFetcherManagerAdapter<RecordAndPos, SourceSplitBase> {
 
     private static final Logger LOG = LoggerFactory.getLogger(FlinkSourceFetcherManager.class);
 
@@ -75,17 +74,14 @@ public class FlinkSourceFetcherManager
     }
 
     public void removePartitions(
-            Map<Long, String> removedPartitions,
-            Consumer<Set<TableBucket>> unsubscribeTableBucketsCallback) {
+            Map<Long, String> removedPartitions, Consumer<Set<TableBucket>> unsubscribeTableBucketsCallback) {
         SplitFetcher<RecordAndPos, SourceSplitBase> splitFetcher = fetchers.get(0);
         if (splitFetcher != null) {
             // The fetcher thread is still running. This should be the majority of the cases.
-            enqueuePartitionsRemovedTask(
-                    splitFetcher, removedPartitions, unsubscribeTableBucketsCallback);
+            enqueuePartitionsRemovedTask(splitFetcher, removedPartitions, unsubscribeTableBucketsCallback);
         } else {
             splitFetcher = createSplitFetcher();
-            enqueuePartitionsRemovedTask(
-                    splitFetcher, removedPartitions, unsubscribeTableBucketsCallback);
+            enqueuePartitionsRemovedTask(splitFetcher, removedPartitions, unsubscribeTableBucketsCallback);
             startFetcher(splitFetcher);
         }
     }
@@ -94,21 +90,18 @@ public class FlinkSourceFetcherManager
             SplitFetcher<RecordAndPos, SourceSplitBase> splitFetcher,
             Map<Long, String> removedPartitions,
             Consumer<Set<TableBucket>> unsubscribeTableBucketsCallback) {
-        FlinkSourceSplitReader sourceSplitReader =
-                (FlinkSourceSplitReader) splitFetcher.getSplitReader();
+        FlinkSourceSplitReader sourceSplitReader = (FlinkSourceSplitReader) splitFetcher.getSplitReader();
 
-        splitFetcher.enqueueTask(
-                new SplitFetcherTask() {
-                    @Override
-                    public boolean run() {
-                        Set<TableBucket> unsubscribedBuckets =
-                                sourceSplitReader.removePartitions(removedPartitions);
-                        unsubscribeTableBucketsCallback.accept(unsubscribedBuckets);
-                        return true;
-                    }
+        splitFetcher.enqueueTask(new SplitFetcherTask() {
+            @Override
+            public boolean run() {
+                Set<TableBucket> unsubscribedBuckets = sourceSplitReader.removePartitions(removedPartitions);
+                unsubscribeTableBucketsCallback.accept(unsubscribedBuckets);
+                return true;
+            }
 
-                    @Override
-                    public void wakeUp() {}
-                });
+            @Override
+            public void wakeUp() {}
+        });
     }
 }

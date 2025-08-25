@@ -31,8 +31,7 @@ import java.util.Map;
 public class DatabaseRegistrationJsonSerde
         implements JsonSerializer<DatabaseRegistration>, JsonDeserializer<DatabaseRegistration> {
 
-    public static final DatabaseRegistrationJsonSerde INSTANCE =
-            new DatabaseRegistrationJsonSerde();
+    public static final DatabaseRegistrationJsonSerde INSTANCE = new DatabaseRegistrationJsonSerde();
 
     static final String COMMENT_NAME = "comment";
     static final String CUSTOM_PROPERTIES_NAME = "custom_properties";
@@ -43,8 +42,7 @@ public class DatabaseRegistrationJsonSerde
     private static final int VERSION = 1;
 
     @Override
-    public void serialize(DatabaseRegistration tableReg, JsonGenerator generator)
-            throws IOException {
+    public void serialize(DatabaseRegistration tableReg, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
 
         // serialize data version.

@@ -56,11 +56,6 @@ public class KvSnapshotMetadata {
 
     @Override
     public String toString() {
-        return "BucketSnapshotInfo{"
-                + "snapshotFiles="
-                + snapshotFiles
-                + ", logOffset="
-                + logOffset
-                + '}';
+        return "BucketSnapshotInfo{" + "snapshotFiles=" + snapshotFiles + ", logOffset=" + logOffset + '}';
     }
 }

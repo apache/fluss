@@ -32,12 +32,13 @@ import java.util.List;
  */
 public class CollectingMetricsReporter extends TestReporter {
 
-    @Nullable private final CharacterFilter characterFilter;
+    @Nullable
+    private final CharacterFilter characterFilter;
+
     private final List<MetricGroupAndName> addedMetrics = new ArrayList<>();
     private final List<MetricGroupAndName> removedMetrics = new ArrayList<>();
 
-    public CollectingMetricsReporter(
-            String reporterName, @Nullable CharacterFilter characterFilter) {
+    public CollectingMetricsReporter(String reporterName, @Nullable CharacterFilter characterFilter) {
         super(reporterName);
         this.characterFilter = characterFilter;
     }
@@ -62,8 +63,7 @@ public class CollectingMetricsReporter extends TestReporter {
     }
 
     @SuppressWarnings("OptionalGetWithoutIsPresent")
-    private MetricGroupAndName getMetricGroupAndName(
-            String name, List<MetricGroupAndName> removedMetrics) {
+    private MetricGroupAndName getMetricGroupAndName(String name, List<MetricGroupAndName> removedMetrics) {
         return removedMetrics.stream()
                 .filter(groupAndName -> groupAndName.name.equals(name))
                 .findAny()

@@ -66,11 +66,9 @@ public class FileUtils {
      * @throws IOException If an I/O error occurs, see {@link FileChannel#read(ByteBuffer, long)}
      *     for details on the possible exceptions
      */
-    public static void readFully(FileChannel channel, ByteBuffer destinationBuffer, long position)
-            throws IOException {
+    public static void readFully(FileChannel channel, ByteBuffer destinationBuffer, long position) throws IOException {
         if (position < 0) {
-            throw new IllegalArgumentException(
-                    "The file channel position cannot be negative, but it is " + position);
+            throw new IllegalArgumentException("The file channel position cannot be negative, but it is " + position);
         }
         long currentPosition = position;
         int bytesRead;
@@ -97,24 +95,21 @@ public class FileUtils {
      *     for details on the possible exceptions
      */
     public static void readFullyOrFail(
-            FileChannel channel, ByteBuffer destinationBuffer, long position, String description)
-            throws IOException {
+            FileChannel channel, ByteBuffer destinationBuffer, long position, String description) throws IOException {
         if (position < 0) {
-            throw new IllegalArgumentException(
-                    "The file channel position cannot be negative, but it is " + position);
+            throw new IllegalArgumentException("The file channel position cannot be negative, but it is " + position);
         }
         int expectedReadBytes = destinationBuffer.remaining();
         readFully(channel, destinationBuffer, position);
         if (destinationBuffer.hasRemaining()) {
-            throw new EOFException(
-                    String.format(
-                            "Failed to read `%s` from file channel `%s`. Expected to read %d bytes, "
-                                    + "but reached end of file after reading %d bytes. Started read from position %d.",
-                            description,
-                            channel,
-                            expectedReadBytes,
-                            expectedReadBytes - destinationBuffer.remaining(),
-                            position));
+            throw new EOFException(String.format(
+                    "Failed to read `%s` from file channel `%s`. Expected to read %d bytes, "
+                            + "but reached end of file after reading %d bytes. Started read from position %d.",
+                    description,
+                    channel,
+                    expectedReadBytes,
+                    expectedReadBytes - destinationBuffer.remaining(),
+                    position));
         }
     }
 
@@ -132,8 +127,8 @@ public class FileUtils {
      * @throws IOException If an I/O error occurs, see {@link FileChannel#read(ByteBuffer, long)}
      *     for details on the possible exceptions
      */
-    public static ByteBuffer loadByteBufferFromFile(
-            FileChannel channel, int size, int position, String description) throws IOException {
+    public static ByteBuffer loadByteBufferFromFile(FileChannel channel, int size, int position, String description)
+            throws IOException {
         ByteBuffer buffer = ByteBuffer.allocate(size);
         FileUtils.readFullyOrFail(channel, buffer, position, description);
         buffer.rewind();
@@ -191,22 +186,14 @@ public class FileUtils {
      * @throws IOException if both atomic and non-atomic moves fail, or parent dir flush fails if
      *     needFlushParentDir is true.
      */
-    public static void atomicMoveWithFallback(Path source, Path target, boolean needFlushParentDir)
-            throws IOException {
+    public static void atomicMoveWithFallback(Path source, Path target, boolean needFlushParentDir) throws IOException {
         try {
             Files.move(source, target, StandardCopyOption.ATOMIC_MOVE);
         } catch (IOException outer) {
             try {
-                LOG.warn(
-                        "Failed atomic move of {} to {} retrying with a non-atomic move",
-                        source,
-                        target,
-                        outer);
+                LOG.warn("Failed atomic move of {} to {} retrying with a non-atomic move", source, target, outer);
                 Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
-                LOG.debug(
-                        "Non-atomic move of {} to {} succeeded after atomic move failed",
-                        source,
-                        target);
+                LOG.debug("Non-atomic move of {} to {} succeeded after atomic move failed", source, target);
             } catch (IOException inner) {
                 inner.addSuppressed(outer);
                 throw inner;
@@ -234,8 +221,7 @@ public class FileUtils {
      */
     public static String replaceSuffix(String str, String oldSuffix, String newSuffix) {
         if (!str.endsWith(oldSuffix)) {
-            throw new IllegalArgumentException(
-                    "Expected string to end with " + oldSuffix + " but string is " + str);
+            throw new IllegalArgumentException("Expected string to end with " + oldSuffix + " but string is " + str);
         }
         return str.substring(0, str.length() - oldSuffix.length()) + newSuffix;
     }
@@ -423,8 +409,7 @@ public class FileUtils {
         }
     }
 
-    private static void guardIfNotThreadSafe(ThrowingConsumer<File, IOException> toRun, File file)
-            throws IOException {
+    private static void guardIfNotThreadSafe(ThrowingConsumer<File, IOException> toRun, File file) throws IOException {
         if (OperatingSystem.isMac()) {
             guardIfMac(toRun, file);
             return;
@@ -436,8 +421,7 @@ public class FileUtils {
     // Guard Mac for the same reason we guard windows. Refer to guardIfWindows for details.
     // The difference to guardIfWindows is that we don't swallow the AccessDeniedException because
     // doing that would lead to wrong behaviour.
-    private static void guardIfMac(ThrowingConsumer<File, IOException> toRun, File file)
-            throws IOException {
+    private static void guardIfMac(ThrowingConsumer<File, IOException> toRun, File file) throws IOException {
         synchronized (DELETE_LOCK) {
             toRun.accept(file);
             // briefly wait and fall through the loop

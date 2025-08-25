@@ -61,7 +61,9 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     private final int maxRetryTimes;
     private final RowType flinkRowType;
     private final LookupNormalizer lookupNormalizer;
-    @Nullable private final int[] projection;
+
+    @Nullable
+    private final int[] projection;
 
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
@@ -97,8 +99,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         } else {
             outputRowType = FlinkUtils.projectRowType(flinkRowType, projection);
         }
-        flussRowToFlinkRowConverter =
-                new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
+        flussRowToFlinkRowConverter = new FlussRowToFlinkRowConverter(FlinkConversions.toFlussRowType(outputRowType));
 
         Lookup lookup = table.newLookup();
         if (lookupNormalizer.getLookupType() == LookupType.PREFIX_LOOKUP) {
@@ -140,21 +141,13 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
             int currentRetry,
             InternalRow keyRow,
             @Nullable RemainingFilter remainingFilter) {
-        lookuper.lookup(keyRow)
-                .whenComplete(
-                        (result, throwable) -> {
-                            if (throwable != null) {
-                                handleLookupFailed(
-                                        resultFuture,
-                                        throwable,
-                                        currentRetry,
-                                        keyRow,
-                                        remainingFilter);
-                            } else {
-                                handleLookupSuccess(
-                                        resultFuture, result.getRowList(), remainingFilter);
-                            }
-                        });
+        lookuper.lookup(keyRow).whenComplete((result, throwable) -> {
+            if (throwable != null) {
+                handleLookupFailed(resultFuture, throwable, currentRetry, keyRow, remainingFilter);
+            } else {
+                handleLookupSuccess(resultFuture, result.getRowList(), remainingFilter);
+            }
+        });
     }
 
     private void handleLookupFailed(
@@ -170,10 +163,9 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         } else {
             LOG.error("Fluss asyncLookup error, retry times = {}", currentRetry, throwable);
             if (currentRetry >= maxRetryTimes) {
-                String exceptionMsg =
-                        String.format(
-                                "Execution of Fluss asyncLookup failed: %s, retry times = %d.",
-                                throwable.getMessage(), currentRetry);
+                String exceptionMsg = String.format(
+                        "Execution of Fluss asyncLookup failed: %s, retry times = %d.",
+                        throwable.getMessage(), currentRetry);
                 resultFuture.completeExceptionally(new RuntimeException(exceptionMsg, throwable));
             } else {
                 try {

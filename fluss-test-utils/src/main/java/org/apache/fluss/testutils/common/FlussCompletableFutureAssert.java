@@ -61,13 +61,11 @@ public class FlussCompletableFutureAssert<T>
          * @param <T> the expected {@link Throwable} type
          * @return a {@link ThrowableAssertAlternative} built with underlying throwable.
          */
-        public <T extends Throwable> ThrowableAssertAlternative<T> withThrowableOfType(
-                Class<T> type) {
+        public <T extends Throwable> ThrowableAssertAlternative<T> withThrowableOfType(Class<T> type) {
             final ThrowableAssertAlternative<Throwable> throwableAssert =
                     new ThrowableAssertAlternative<>(throwable).isInstanceOf(type);
             @SuppressWarnings("unchecked")
-            final ThrowableAssertAlternative<T> cast =
-                    (ThrowableAssertAlternative<T>) throwableAssert;
+            final ThrowableAssertAlternative<T> cast = (ThrowableAssertAlternative<T>) throwableAssert;
             return cast;
         }
     }
@@ -102,8 +100,7 @@ public class FlussCompletableFutureAssert<T>
      * @return a new assertion instance on the future's exception.
      * @param <E> type of the exception we expect the future to complete with
      */
-    public <E extends Throwable> ThrowableAssertAlternative<E> eventuallyFailsWith(
-            Class<E> exceptionClass) {
+    public <E extends Throwable> ThrowableAssertAlternative<E> eventuallyFailsWith(Class<E> exceptionClass) {
         return eventuallyFails().withThrowableOfType(exceptionClass);
     }
 
@@ -112,8 +109,7 @@ public class FlussCompletableFutureAssert<T>
         try {
             return actual.get();
         } catch (InterruptedException | ExecutionException | CancellationException e) {
-            throw Failures.instance()
-                    .failure(info, new BasicErrorMessageFactory(SHOULD_HAVE_SUCCEEDED, actual));
+            throw Failures.instance().failure(info, new BasicErrorMessageFactory(SHOULD_HAVE_SUCCEEDED, actual));
         }
     }
 
@@ -121,8 +117,7 @@ public class FlussCompletableFutureAssert<T>
         Objects.instance().assertNotNull(info, actual);
         try {
             actual.get();
-            throw Failures.instance()
-                    .failure(info, new BasicErrorMessageFactory(SHOULD_HAVE_FAILED, actual));
+            throw Failures.instance().failure(info, new BasicErrorMessageFactory(SHOULD_HAVE_FAILED, actual));
         } catch (InterruptedException | ExecutionException | CancellationException e) {
             return e;
         }

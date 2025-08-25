@@ -73,19 +73,15 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
         String dynamicJaasConfig;
 
         // 1. Check listener-specific and mechanism-specific config
-        String listenerMechanismKey =
-                String.format(
-                        SERVER_AUTHENTICATOR_PREFIX + "listener.name.%s.%s." + SASL_JAAS_CONFIG,
-                        listenerName.toLowerCase(Locale.ROOT),
-                        mechanism.toLowerCase(Locale.ROOT));
+        String listenerMechanismKey = String.format(
+                SERVER_AUTHENTICATOR_PREFIX + "listener.name.%s.%s." + SASL_JAAS_CONFIG,
+                listenerName.toLowerCase(Locale.ROOT),
+                mechanism.toLowerCase(Locale.ROOT));
         dynamicJaasConfig = configs.get(listenerMechanismKey);
 
         if (dynamicJaasConfig == null || dynamicJaasConfig.isEmpty()) {
             String globalMechanismKey =
-                    SERVER_AUTHENTICATOR_PREFIX
-                            + mechanism.toLowerCase(Locale.ROOT)
-                            + "."
-                            + SASL_JAAS_CONFIG;
+                    SERVER_AUTHENTICATOR_PREFIX + mechanism.toLowerCase(Locale.ROOT) + "." + SASL_JAAS_CONFIG;
             LOG.debug(
                     "No listener-mechanism JAAS config found for key: '{}'. Falling back to mechanism-level config: '{}'",
                     listenerMechanismKey,
@@ -105,12 +101,7 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
         try {
             LoginManager loginManager = LoginManager.acquireLoginManager(jaasContext);
             saslServer =
-                    createSaslServer(
-                            mechanism,
-                            address,
-                            configs,
-                            loginManager,
-                            jaasContext.configurationEntries());
+                    createSaslServer(mechanism, address, configs, loginManager, jaasContext.configurationEntries());
         } catch (Exception e) {
             throw new RuntimeException(e);
         }
@@ -124,10 +115,8 @@ public class SaslServerAuthenticator implements ServerAuthenticator {
     @Override
     public void matchProtocol(String protocol) {
         if (!enabledMechanisms.contains(protocol.toUpperCase())) {
-            throw new AuthenticationException(
-                    String.format(
-                            "SASL server enables %s while protocol of client is '%s'",
-                            enabledMechanisms, protocol));
+            throw new AuthenticationException(String.format(
+                    "SASL server enables %s while protocol of client is '%s'", enabledMechanisms, protocol));
         }
     }
 

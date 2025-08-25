@@ -66,24 +66,18 @@ public class PluginLoader implements AutoCloseable {
 
     @VisibleForTesting
     public static URLClassLoader createPluginClassLoader(
-            PluginDescriptor pluginDescriptor,
-            ClassLoader parentClassLoader,
-            String[] alwaysParentFirstPatterns) {
+            PluginDescriptor pluginDescriptor, ClassLoader parentClassLoader, String[] alwaysParentFirstPatterns) {
         return new PluginClassLoader(
                 pluginDescriptor.getPluginResourceURLs(),
                 parentClassLoader,
-                ArrayUtils.concat(
-                        alwaysParentFirstPatterns, pluginDescriptor.getLoaderExcludePatterns()));
+                ArrayUtils.concat(alwaysParentFirstPatterns, pluginDescriptor.getLoaderExcludePatterns()));
     }
 
     public static PluginLoader create(
-            PluginDescriptor pluginDescriptor,
-            ClassLoader parentClassLoader,
-            String[] alwaysParentFirstPatterns) {
+            PluginDescriptor pluginDescriptor, ClassLoader parentClassLoader, String[] alwaysParentFirstPatterns) {
         return new PluginLoader(
                 pluginDescriptor.getPluginId(),
-                createPluginClassLoader(
-                        pluginDescriptor, parentClassLoader, alwaysParentFirstPatterns));
+                createPluginClassLoader(pluginDescriptor, parentClassLoader, alwaysParentFirstPatterns));
     }
 
     /**
@@ -96,8 +90,7 @@ public class PluginLoader implements AutoCloseable {
      *     loaded from the plugin.
      */
     public <P> Iterator<P> load(Class<P> service) {
-        try (TemporaryClassLoaderContext ignored =
-                TemporaryClassLoaderContext.of(pluginClassLoader)) {
+        try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(pluginClassLoader)) {
             return new ContextClassLoaderSettingIterator<>(
                     ServiceLoader.load(service, pluginClassLoader).iterator(), pluginClassLoader);
         }
@@ -135,8 +128,7 @@ public class PluginLoader implements AutoCloseable {
 
         @Override
         public P next() {
-            try (TemporaryClassLoaderContext ignored =
-                    TemporaryClassLoaderContext.of(pluginClassLoader)) {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(pluginClassLoader)) {
                 return delegate.next();
             }
         }
@@ -151,16 +143,8 @@ public class PluginLoader implements AutoCloseable {
      */
     private static final class PluginClassLoader extends ComponentClassLoader {
 
-        PluginClassLoader(
-                URL[] pluginResourceURLs,
-                ClassLoader flussClassLoader,
-                String[] allowedFlussPackages) {
-            super(
-                    pluginResourceURLs,
-                    flussClassLoader,
-                    allowedFlussPackages,
-                    new String[0],
-                    Collections.emptyMap());
+        PluginClassLoader(URL[] pluginResourceURLs, ClassLoader flussClassLoader, String[] allowedFlussPackages) {
+            super(pluginResourceURLs, flussClassLoader, allowedFlussPackages, new String[0], Collections.emptyMap());
         }
     }
 }

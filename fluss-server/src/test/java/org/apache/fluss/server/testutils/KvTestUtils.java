@@ -59,16 +59,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class KvTestUtils {
 
     public static void checkSnapshot(
-            CompletedSnapshot completedSnapshot,
-            List<Tuple2<byte[], byte[]>> expectedKeyValues,
-            long expectLogOffset)
+            CompletedSnapshot completedSnapshot, List<Tuple2<byte[], byte[]>> expectedKeyValues, long expectLogOffset)
             throws Exception {
         Path temRebuildPath = Files.createTempDirectory("checkSnapshotTemporaryDir");
         try {
             assertThat(completedSnapshot.getLogOffset()).isEqualTo(expectLogOffset);
             try (RocksDBKv rocksDBKv =
-                    buildFromSnapshotHandle(
-                            completedSnapshot.getKvSnapshotHandle(), temRebuildPath)) {
+                    buildFromSnapshotHandle(completedSnapshot.getKvSnapshotHandle(), temRebuildPath)) {
                 // check the key counts
                 int keyCounts = getKeyCounts(rocksDBKv.getDb());
                 assertThat(keyCounts).isEqualTo(expectedKeyValues.size());
@@ -91,11 +88,8 @@ public class KvTestUtils {
      * @param expectedNewFileNum expected newly uploaded files number
      */
     public static void checkSnapshotIncrementWithNewlyFiles(
-            KvSnapshotHandle currentSnapshotHandle,
-            KvSnapshotHandle previousSnapshotHandle,
-            int expectedNewFileNum) {
-        Set<String> previousNewlyFiles =
-                toNewlyLocalFiles(previousSnapshotHandle.getSharedKvFileHandles());
+            KvSnapshotHandle currentSnapshotHandle, KvSnapshotHandle previousSnapshotHandle, int expectedNewFileNum) {
+        Set<String> previousNewlyFiles = toNewlyLocalFiles(previousSnapshotHandle.getSharedKvFileHandles());
         // get the new upload files from the current snapshot
         int newlyUploadedFiles = 0;
         for (KvFileHandleAndLocalPath handle : currentSnapshotHandle.getSharedKvFileHandles()) {
@@ -121,13 +115,10 @@ public class KvTestUtils {
         return new CompletedSnapshot(
                 tableBucket,
                 snapshotId,
-                new FsPath(
-                        snapshotRootDir
-                                + String.format(
-                                        "/tableBucket-%d-bucket-%d-snapshot-%d",
-                                        tableBucket.getTableId(),
-                                        tableBucket.getBucket(),
-                                        snapshotId)),
+                new FsPath(snapshotRootDir
+                        + String.format(
+                                "/tableBucket-%d-bucket-%d-snapshot-%d",
+                                tableBucket.getTableId(), tableBucket.getBucket(), snapshotId)),
                 new KvSnapshotHandle(Collections.emptyList(), Collections.emptyList(), 0),
                 0);
     }
@@ -142,32 +133,25 @@ public class KvTestUtils {
         return count;
     }
 
-    public static RocksDBKv buildFromSnapshotHandle(
-            KvSnapshotHandle kvSnapshotHandle, Path destPath) throws Exception {
+    public static RocksDBKv buildFromSnapshotHandle(KvSnapshotHandle kvSnapshotHandle, Path destPath) throws Exception {
         ExecutorService downloadThreadPool = Executors.newSingleThreadExecutor();
         try (CloseableRegistry closeableRegistry = new CloseableRegistry()) {
-            KvSnapshotDataDownloader dbDataDownloader =
-                    new KvSnapshotDataDownloader(downloadThreadPool);
-            KvSnapshotDownloadSpec downloadSpec1 =
-                    new KvSnapshotDownloadSpec(
-                            kvSnapshotHandle,
-                            destPath.resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING));
+            KvSnapshotDataDownloader dbDataDownloader = new KvSnapshotDataDownloader(downloadThreadPool);
+            KvSnapshotDownloadSpec downloadSpec1 = new KvSnapshotDownloadSpec(
+                    kvSnapshotHandle, destPath.resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING));
 
             dbDataDownloader.transferAllDataToDirectory(downloadSpec1, closeableRegistry);
             RocksDBResourceContainer rocksDBResourceContainer =
                     new RocksDBResourceContainer(new Configuration(), destPath.toFile());
             return new RocksDBKvBuilder(
-                            destPath.toFile(),
-                            rocksDBResourceContainer,
-                            rocksDBResourceContainer.getColumnOptions())
+                            destPath.toFile(), rocksDBResourceContainer, rocksDBResourceContainer.getColumnOptions())
                     .build();
         } finally {
             downloadThreadPool.shutdownNow();
         }
     }
 
-    public static void assertLookupResponse(
-            LookupResponse lookupResponse, @Nullable byte[] expectedValue) {
+    public static void assertLookupResponse(LookupResponse lookupResponse, @Nullable byte[] expectedValue) {
         assertThat(lookupResponse.getBucketsRespsCount()).isEqualTo(1);
         PbLookupRespForBucket pbLookupRespForBucket = lookupResponse.getBucketsRespAt(0);
         assertThat(pbLookupRespForBucket.getValuesCount()).isEqualTo(1);
@@ -179,10 +163,8 @@ public class KvTestUtils {
     public static void assertPrefixLookupResponse(
             PrefixLookupResponse prefixLookupResponse, List<List<byte[]>> expectedValues) {
         assertThat(prefixLookupResponse.getBucketsRespsCount()).isEqualTo(1);
-        PbPrefixLookupRespForBucket pbPrefixLookupRespForBucket =
-                prefixLookupResponse.getBucketsRespAt(0);
-        assertThat(pbPrefixLookupRespForBucket.getValueListsCount())
-                .isEqualTo(expectedValues.size());
+        PbPrefixLookupRespForBucket pbPrefixLookupRespForBucket = prefixLookupResponse.getBucketsRespAt(0);
+        assertThat(pbPrefixLookupRespForBucket.getValueListsCount()).isEqualTo(expectedValues.size());
         for (int i = 0; i < expectedValues.size(); i++) {
             PbValueList pbValueList = pbPrefixLookupRespForBucket.getValueListAt(i);
             List<byte[]> bytesResultForOnePrefixKey = expectedValues.get(i);

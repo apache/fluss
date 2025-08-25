@@ -73,18 +73,18 @@ class IcebergConversionsTest {
         Map<String, String> icebergProps = configuration.toMap();
         String catalogName = icebergProps.getOrDefault("name", "default_iceberg_catalog");
         return buildIcebergCatalog(
-                catalogName, icebergProps, IcebergConfiguration.from(configuration).get());
+                catalogName,
+                icebergProps,
+                IcebergConfiguration.from(configuration).get());
     }
 
-    private Table createIcebergTable(
-            Catalog catalog, TablePath tablePath, boolean isMultiplePartitionKeyTable) {
-        Schema schema =
-                new Schema(
-                        required(1, "id", Types.LongType.get()),
-                        optional(2, "name", Types.StringType.get()),
-                        optional(3, "country", Types.StringType.get()),
-                        optional(4, "region", Types.StringType.get()),
-                        optional(5, "__bucket", Types.IntegerType.get()));
+    private Table createIcebergTable(Catalog catalog, TablePath tablePath, boolean isMultiplePartitionKeyTable) {
+        Schema schema = new Schema(
+                required(1, "id", Types.LongType.get()),
+                optional(2, "name", Types.StringType.get()),
+                optional(3, "country", Types.StringType.get()),
+                optional(4, "region", Types.StringType.get()),
+                optional(5, "__bucket", Types.IntegerType.get()));
         PartitionSpec.Builder specBuilder = PartitionSpec.builderFor(schema);
         if (isMultiplePartitionKeyTable) {
             specBuilder.identity("country").identity("region");

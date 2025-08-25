@@ -45,7 +45,8 @@ class ComponentClassLoaderTest {
     private static String resourceToLoad;
     private static final URL RESOURCE_RETURNED_BY_OWNER = createURL();
 
-    @TempDir private static Path tmp;
+    @TempDir
+    private static Path tmp;
 
     @BeforeAll
     public static void setup() {
@@ -58,37 +59,23 @@ class ComponentClassLoaderTest {
 
     @Test
     void testComponentOnlyIsDefaultForClasses() throws Exception {
-        assertThatThrownBy(
-                        () -> {
-                            TestUrlClassLoader owner =
-                                    new TestUrlClassLoader(
-                                            NON_EXISTENT_CLASS_NAME, CLASS_RETURNED_BY_OWNER);
+        assertThatThrownBy(() -> {
+                    TestUrlClassLoader owner = new TestUrlClassLoader(NON_EXISTENT_CLASS_NAME, CLASS_RETURNED_BY_OWNER);
 
-                            final ComponentClassLoader componentClassLoader =
-                                    new ComponentClassLoader(
-                                            new URL[0],
-                                            owner,
-                                            new String[0],
-                                            new String[0],
-                                            Collections.emptyMap());
+                    final ComponentClassLoader componentClassLoader = new ComponentClassLoader(
+                            new URL[0], owner, new String[0], new String[0], Collections.emptyMap());
 
-                            componentClassLoader.loadClass(NON_EXISTENT_CLASS_NAME);
-                        })
+                    componentClassLoader.loadClass(NON_EXISTENT_CLASS_NAME);
+                })
                 .isInstanceOf(ClassNotFoundException.class);
     }
 
     @Test
     void testOwnerFirstClassFoundIgnoresComponent() throws Exception {
-        TestUrlClassLoader owner =
-                new TestUrlClassLoader(CLASS_TO_LOAD.getName(), CLASS_RETURNED_BY_OWNER);
+        TestUrlClassLoader owner = new TestUrlClassLoader(CLASS_TO_LOAD.getName(), CLASS_RETURNED_BY_OWNER);
 
-        final ComponentClassLoader componentClassLoader =
-                new ComponentClassLoader(
-                        new URL[0],
-                        owner,
-                        new String[] {CLASS_TO_LOAD.getName()},
-                        new String[0],
-                        Collections.emptyMap());
+        final ComponentClassLoader componentClassLoader = new ComponentClassLoader(
+                new URL[0], owner, new String[] {CLASS_TO_LOAD.getName()}, new String[0], Collections.emptyMap());
 
         final Class<?> loadedClass = componentClassLoader.loadClass(CLASS_TO_LOAD.getName());
         assertThat(loadedClass).isSameAs(CLASS_RETURNED_BY_OWNER);
@@ -98,13 +85,8 @@ class ComponentClassLoaderTest {
     void testOwnerFirstClassNotFoundFallsBackToComponent() throws Exception {
         TestUrlClassLoader owner = new TestUrlClassLoader();
 
-        final ComponentClassLoader componentClassLoader =
-                new ComponentClassLoader(
-                        new URL[0],
-                        owner,
-                        new String[] {CLASS_TO_LOAD.getName()},
-                        new String[0],
-                        Collections.emptyMap());
+        final ComponentClassLoader componentClassLoader = new ComponentClassLoader(
+                new URL[0], owner, new String[] {CLASS_TO_LOAD.getName()}, new String[0], Collections.emptyMap());
 
         final Class<?> loadedClass = componentClassLoader.loadClass(CLASS_TO_LOAD.getName());
         assertThat(loadedClass).isSameAs(CLASS_TO_LOAD);
@@ -112,16 +94,10 @@ class ComponentClassLoaderTest {
 
     @Test
     void testComponentFirstClassFoundIgnoresOwner() throws Exception {
-        TestUrlClassLoader owner =
-                new TestUrlClassLoader(CLASS_TO_LOAD.getName(), CLASS_RETURNED_BY_OWNER);
+        TestUrlClassLoader owner = new TestUrlClassLoader(CLASS_TO_LOAD.getName(), CLASS_RETURNED_BY_OWNER);
 
-        final ComponentClassLoader componentClassLoader =
-                new ComponentClassLoader(
-                        new URL[0],
-                        owner,
-                        new String[0],
-                        new String[] {CLASS_TO_LOAD.getName()},
-                        Collections.emptyMap());
+        final ComponentClassLoader componentClassLoader = new ComponentClassLoader(
+                new URL[0], owner, new String[0], new String[] {CLASS_TO_LOAD.getName()}, Collections.emptyMap());
 
         final Class<?> loadedClass = componentClassLoader.loadClass(CLASS_TO_LOAD.getName());
         assertThat(loadedClass).isSameAs(CLASS_TO_LOAD);
@@ -129,16 +105,10 @@ class ComponentClassLoaderTest {
 
     @Test
     void testComponentFirstClassNotFoundFallsBackToOwner() throws Exception {
-        TestUrlClassLoader owner =
-                new TestUrlClassLoader(NON_EXISTENT_CLASS_NAME, CLASS_RETURNED_BY_OWNER);
+        TestUrlClassLoader owner = new TestUrlClassLoader(NON_EXISTENT_CLASS_NAME, CLASS_RETURNED_BY_OWNER);
 
-        final ComponentClassLoader componentClassLoader =
-                new ComponentClassLoader(
-                        new URL[0],
-                        owner,
-                        new String[0],
-                        new String[] {NON_EXISTENT_CLASS_NAME},
-                        Collections.emptyMap());
+        final ComponentClassLoader componentClassLoader = new ComponentClassLoader(
+                new URL[0], owner, new String[0], new String[] {NON_EXISTENT_CLASS_NAME}, Collections.emptyMap());
 
         final Class<?> loadedClass = componentClassLoader.loadClass(NON_EXISTENT_CLASS_NAME);
         assertThat(loadedClass).isSameAs(CLASS_RETURNED_BY_OWNER);
@@ -153,8 +123,7 @@ class ComponentClassLoaderTest {
         TestUrlClassLoader owner = new TestUrlClassLoader();
 
         final ComponentClassLoader componentClassLoader =
-                new ComponentClassLoader(
-                        new URL[0], owner, new String[0], new String[0], Collections.emptyMap());
+                new ComponentClassLoader(new URL[0], owner, new String[0], new String[0], Collections.emptyMap());
 
         assertThat(componentClassLoader.getResource(NON_EXISTENT_RESOURCE_NAME)).isNull();
         assertThat(componentClassLoader.getResources(NON_EXISTENT_RESOURCE_NAME).hasMoreElements())
@@ -163,16 +132,10 @@ class ComponentClassLoaderTest {
 
     @Test
     void testOwnerFirstResourceFoundIgnoresComponent() {
-        TestUrlClassLoader owner =
-                new TestUrlClassLoader(resourceToLoad, RESOURCE_RETURNED_BY_OWNER);
+        TestUrlClassLoader owner = new TestUrlClassLoader(resourceToLoad, RESOURCE_RETURNED_BY_OWNER);
 
-        final ComponentClassLoader componentClassLoader =
-                new ComponentClassLoader(
-                        new URL[] {},
-                        owner,
-                        new String[] {resourceToLoad},
-                        new String[0],
-                        Collections.emptyMap());
+        final ComponentClassLoader componentClassLoader = new ComponentClassLoader(
+                new URL[] {}, owner, new String[] {resourceToLoad}, new String[0], Collections.emptyMap());
 
         final URL loadedResource = componentClassLoader.getResource(resourceToLoad);
         assertThat(loadedResource).isSameAs(RESOURCE_RETURNED_BY_OWNER);
@@ -182,13 +145,12 @@ class ComponentClassLoaderTest {
     void testOwnerFirstResourceNotFoundFallsBackToComponent() throws Exception {
         TestUrlClassLoader owner = new TestUrlClassLoader();
 
-        final ComponentClassLoader componentClassLoader =
-                new ComponentClassLoader(
-                        new URL[] {tmp.getRoot().toUri().toURL()},
-                        owner,
-                        new String[] {resourceToLoad},
-                        new String[0],
-                        Collections.emptyMap());
+        final ComponentClassLoader componentClassLoader = new ComponentClassLoader(
+                new URL[] {tmp.getRoot().toUri().toURL()},
+                owner,
+                new String[] {resourceToLoad},
+                new String[0],
+                Collections.emptyMap());
 
         final URL loadedResource = componentClassLoader.getResource(resourceToLoad);
         assertThat(loadedResource.toString()).contains(resourceToLoad);
@@ -196,16 +158,14 @@ class ComponentClassLoaderTest {
 
     @Test
     void testComponentFirstResourceFoundIgnoresOwner() throws Exception {
-        TestUrlClassLoader owner =
-                new TestUrlClassLoader(resourceToLoad, RESOURCE_RETURNED_BY_OWNER);
+        TestUrlClassLoader owner = new TestUrlClassLoader(resourceToLoad, RESOURCE_RETURNED_BY_OWNER);
 
-        final ComponentClassLoader componentClassLoader =
-                new ComponentClassLoader(
-                        new URL[] {tmp.getRoot().toUri().toURL()},
-                        owner,
-                        new String[0],
-                        new String[] {resourceToLoad},
-                        Collections.emptyMap());
+        final ComponentClassLoader componentClassLoader = new ComponentClassLoader(
+                new URL[] {tmp.getRoot().toUri().toURL()},
+                owner,
+                new String[0],
+                new String[] {resourceToLoad},
+                Collections.emptyMap());
 
         final URL loadedResource = componentClassLoader.getResource(resourceToLoad);
         assertThat(loadedResource.toString()).contains(resourceToLoad);
@@ -213,16 +173,10 @@ class ComponentClassLoaderTest {
 
     @Test
     void testComponentFirstResourceNotFoundFallsBackToOwner() {
-        TestUrlClassLoader owner =
-                new TestUrlClassLoader(NON_EXISTENT_RESOURCE_NAME, RESOURCE_RETURNED_BY_OWNER);
+        TestUrlClassLoader owner = new TestUrlClassLoader(NON_EXISTENT_RESOURCE_NAME, RESOURCE_RETURNED_BY_OWNER);
 
-        final ComponentClassLoader componentClassLoader =
-                new ComponentClassLoader(
-                        new URL[0],
-                        owner,
-                        new String[0],
-                        new String[] {NON_EXISTENT_RESOURCE_NAME},
-                        Collections.emptyMap());
+        final ComponentClassLoader componentClassLoader = new ComponentClassLoader(
+                new URL[0], owner, new String[0], new String[] {NON_EXISTENT_RESOURCE_NAME}, Collections.emptyMap());
 
         final URL loadedResource = componentClassLoader.getResource(NON_EXISTENT_RESOURCE_NAME);
         assertThat(loadedResource).isSameAs(RESOURCE_RETURNED_BY_OWNER);
@@ -246,8 +200,7 @@ class ComponentClassLoaderTest {
             this(checkNotNull(classNameToCheck), checkNotNull(classToReturn), null);
         }
 
-        public TestUrlClassLoader(
-                String classNameToCheck, Class<?> classToReturn, URL resourceToReturn) {
+        public TestUrlClassLoader(String classNameToCheck, Class<?> classToReturn, URL resourceToReturn) {
             super(new URL[0], null);
             this.nameToCheck = classNameToCheck;
             this.classToReturn = classToReturn;

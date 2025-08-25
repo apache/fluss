@@ -86,10 +86,7 @@ public class RocksDBKvBuilder {
             ensureRocksDBIsLoaded(System.getProperty("java.io.tmpdir"));
             prepareDirectories();
             rocksDBHandle =
-                    new RocksDBHandle(
-                            instanceRocksDBPath,
-                            optionsContainer.getDbOptions(),
-                            columnFamilyOptions);
+                    new RocksDBHandle(instanceRocksDBPath, optionsContainer.getDbOptions(), columnFamilyOptions);
             rocksDBHandle.openDB();
             db = rocksDBHandle.getDb();
             defaultColumnFamilyHandle = rocksDBHandle.getDefaultColumnFamilyHandle();
@@ -120,8 +117,7 @@ public class RocksDBKvBuilder {
                 throw new IOException("Not a directory: " + directory);
             }
         } else if (!directory.mkdirs()) {
-            throw new IOException(
-                    String.format("Could not create RocksDB data directory at %s.", directory));
+            throw new IOException(String.format("Could not create RocksDB data directory at %s.", directory));
         }
     }
 
@@ -139,16 +135,13 @@ public class RocksDBKvBuilder {
     }
 
     @VisibleForTesting
-    static void ensureRocksDBIsLoaded(
-            String tempDirectory, Supplier<NativeLibraryLoader> nativeLibraryLoaderSupplier)
+    static void ensureRocksDBIsLoaded(String tempDirectory, Supplier<NativeLibraryLoader> nativeLibraryLoaderSupplier)
             throws IOException {
         synchronized (RocksDBKvBuilder.class) {
             if (!rocksDbInitialized) {
 
                 final File tempDirParent = new File(tempDirectory).getAbsoluteFile();
-                LOG.info(
-                        "Attempting to load RocksDB native library and store it under '{}'",
-                        tempDirParent);
+                LOG.info("Attempting to load RocksDB native library and store it under '{}'", tempDirParent);
 
                 Throwable lastException = null;
                 for (int attempt = 1; attempt <= ROCKSDB_LIB_LOADING_ATTEMPTS; attempt++) {
@@ -167,20 +160,15 @@ public class RocksDBKvBuilder {
                         // loaders, but
                         //  apparently not when coming from the same file path, so there we go)
 
-                        rocksLibFolder =
-                                new File(tempDirParent, "rocksdb-lib-" + UUID.randomUUID());
+                        rocksLibFolder = new File(tempDirParent, "rocksdb-lib-" + UUID.randomUUID());
 
                         // make sure the temp path exists
-                        LOG.debug(
-                                "Attempting to create RocksDB native library folder {}",
-                                rocksLibFolder);
+                        LOG.debug("Attempting to create RocksDB native library folder {}", rocksLibFolder);
                         // noinspection ResultOfMethodCallIgnored
                         rocksLibFolder.mkdirs();
 
                         // explicitly load the JNI dependency if it has not been loaded before
-                        nativeLibraryLoaderSupplier
-                                .get()
-                                .loadLibrary(rocksLibFolder.getAbsolutePath());
+                        nativeLibraryLoaderSupplier.get().loadLibrary(rocksLibFolder.getAbsolutePath());
 
                         // this initialization here should validate that the loading succeeded
                         RocksDB.loadLibrary();
@@ -197,9 +185,7 @@ public class RocksDBKvBuilder {
                         try {
                             resetRocksDBLoadedFlag();
                         } catch (Throwable tt) {
-                            LOG.debug(
-                                    "Failed to reset 'initialized' flag in RocksDB native code loader",
-                                    tt);
+                            LOG.debug("Failed to reset 'initialized' flag in RocksDB native code loader", tt);
                         }
 
                         FileUtils.deleteDirectoryQuietly(rocksLibFolder);
@@ -213,8 +199,7 @@ public class RocksDBKvBuilder {
 
     @VisibleForTesting
     static void resetRocksDBLoadedFlag() throws Exception {
-        final Field initField =
-                org.rocksdb.NativeLibraryLoader.class.getDeclaredField("initialized");
+        final Field initField = org.rocksdb.NativeLibraryLoader.class.getDeclaredField("initialized");
         initField.setAccessible(true);
         initField.setBoolean(null, false);
     }

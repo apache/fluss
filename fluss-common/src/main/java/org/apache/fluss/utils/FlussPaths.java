@@ -110,10 +110,11 @@ public class FlussPaths {
      *
      * @param dataDir the local data root directory, i.e. the "data.dir" in the configuration
      */
-    public static File logTabletDir(
-            File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
+    public static File logTabletDir(File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
         final Path tabletParentDir = tabletParentDir(dataDir, tablePath, tableBucket);
-        return tabletParentDir.resolve(LOG_TABLET_DIR_PREFIX + tableBucket.getBucket()).toFile();
+        return tabletParentDir
+                .resolve(LOG_TABLET_DIR_PREFIX + tableBucket.getBucket())
+                .toFile();
     }
 
     /**
@@ -131,31 +132,23 @@ public class FlussPaths {
      *
      * @param dataDir the local data root directory, i.e. the "data.dir" in the configuration
      */
-    public static File kvTabletDir(
-            File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
+    public static File kvTabletDir(File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
         final Path tabletParentDir = tabletParentDir(dataDir, tablePath, tableBucket);
-        return tabletParentDir.resolve(KV_TABLET_DIR_PREFIX + tableBucket.getBucket()).toFile();
+        return tabletParentDir
+                .resolve(KV_TABLET_DIR_PREFIX + tableBucket.getBucket())
+                .toFile();
     }
 
-    private static Path tabletParentDir(
-            File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
+    private static Path tabletParentDir(File dataDir, PhysicalTablePath tablePath, TableBucket tableBucket) {
         String dbName = tablePath.getDatabaseName();
         Path tableDir =
-                Paths.get(
-                        dataDir.getAbsolutePath(),
-                        dbName,
-                        tablePath.getTableName() + "-" + tableBucket.getTableId());
+                Paths.get(dataDir.getAbsolutePath(), dbName, tablePath.getTableName() + "-" + tableBucket.getTableId());
         if (tablePath.getPartitionName() == null) {
             return tableDir;
         } else {
-            checkNotNull(
-                    tableBucket.getPartitionId(),
-                    "partition id shouldn't be null for partitioned table");
+            checkNotNull(tableBucket.getPartitionId(), "partition id shouldn't be null for partitioned table");
             return tableDir.resolve(
-                    tablePath.getPartitionName()
-                            + "-"
-                            + PARTITION_DIR_PREFIX
-                            + tableBucket.getPartitionId());
+                    tablePath.getPartitionName() + "-" + PARTITION_DIR_PREFIX + tableBucket.getPartitionId());
         }
     }
 
@@ -210,16 +203,14 @@ public class FlussPaths {
             tableId = Long.parseLong(tableDirName.substring(splitIndex + 1));
             tableName = tableDirName.substring(0, splitIndex);
         } catch (Exception e) {
-            throw new IllegalArgumentException(
-                    "Invalid table id in table directory path: " + tableDirName, e);
+            throw new IllegalArgumentException("Invalid table id in table directory path: " + tableDirName, e);
         }
 
         // Get path with bucket id.
         String tabletDirName = tabletDir.getName();
         String[] bucketIdSplit = tabletDirName.split("-");
         checkState(
-                tabletDirName.startsWith(LOG_TABLET_DIR_PREFIX)
-                        || tabletDirName.startsWith(KV_TABLET_DIR_PREFIX),
+                tabletDirName.startsWith(LOG_TABLET_DIR_PREFIX) || tabletDirName.startsWith(KV_TABLET_DIR_PREFIX),
                 "Found tablet directory '%s' is not in form of 'log-{bucket}' or 'kv-{bucket}'.",
                 tabletDirName);
         checkState(
@@ -230,8 +221,7 @@ public class FlussPaths {
         try {
             bucketId = Integer.parseInt(bucketIdSplit[1]);
         } catch (Exception e) {
-            throw new IllegalArgumentException(
-                    "Invalid bucket id in tablet directory path: " + tabletDirName, e);
+            throw new IllegalArgumentException("Invalid bucket id in tablet directory path: " + tabletDirName, e);
         }
 
         return Tuple2.of(
@@ -241,8 +231,7 @@ public class FlussPaths {
 
     public static boolean isPartitionDir(String dirName) {
         int splitIndex = dirName.lastIndexOf('-');
-        return splitIndex >= 0
-                && dirName.substring(splitIndex + 1).startsWith(PARTITION_DIR_PREFIX);
+        return splitIndex >= 0 && dirName.substring(splitIndex + 1).startsWith(PARTITION_DIR_PREFIX);
     }
 
     // ----------------------------------------------------------------------------------------
@@ -310,8 +299,7 @@ public class FlussPaths {
      * @return a File instance for producer snapshot.
      */
     public static File writerSnapshotFile(File logTabletDir, long offset) {
-        return new File(
-                logTabletDir, filenamePrefixFromOffset(offset) + WRITER_SNAPSHOT_FILE_SUFFIX);
+        return new File(logTabletDir, filenamePrefixFromOffset(offset) + WRITER_SNAPSHOT_FILE_SUFFIX);
     }
 
     /**
@@ -395,8 +383,7 @@ public class FlussPaths {
      * {@link #remoteOffsetIndexCacheFile(File, RemoteLogSegment)}.
      */
     public static UUID uuidFromRemoteIndexCacheFileName(String fileName) {
-        return UUID.fromString(
-                fileName.substring(fileName.indexOf('_') + 1, fileName.indexOf('.')));
+        return UUID.fromString(fileName.substring(fileName.indexOf('_') + 1, fileName.indexOf('.')));
     }
 
     // ----------------------------------------------------------------------------------------
@@ -452,8 +439,7 @@ public class FlussPaths {
      */
     public static FsPath remoteLogManifestFile(FsPath remoteLogTabletDir, UUID manifestId) {
         return new FsPath(
-                remoteLogTabletDir,
-                REMOTE_LOG_METADATA_DIR_NAME + "/" + manifestId + REMOTE_LOG_MANIFEST_FILE_SUFFIX);
+                remoteLogTabletDir, REMOTE_LOG_METADATA_DIR_NAME + "/" + manifestId + REMOTE_LOG_MANIFEST_FILE_SUFFIX);
     }
 
     /**
@@ -474,13 +460,9 @@ public class FlussPaths {
     }
 
     /** Returns the remote directory path for storing log segment files (log and index files). */
-    public static FsPath remoteLogSegmentDir(
-            FsPath remoteLogDir, RemoteLogSegment remoteLogSegment) {
+    public static FsPath remoteLogSegmentDir(FsPath remoteLogDir, RemoteLogSegment remoteLogSegment) {
         return new FsPath(
-                remoteLogTabletDir(
-                        remoteLogDir,
-                        remoteLogSegment.physicalTablePath(),
-                        remoteLogSegment.tableBucket()),
+                remoteLogTabletDir(remoteLogDir, remoteLogSegment.physicalTablePath(), remoteLogSegment.tableBucket()),
                 remoteLogSegment.remoteLogSegmentId().toString());
     }
 
@@ -498,8 +480,7 @@ public class FlussPaths {
      * @param baseOffset the base offset of the log segment
      */
     public static FsPath remoteLogSegmentFile(FsPath remoteLogSegmentDir, long baseOffset) {
-        return new FsPath(
-                remoteLogSegmentDir, filenamePrefixFromOffset(baseOffset) + LOG_FILE_SUFFIX);
+        return new FsPath(remoteLogSegmentDir, filenamePrefixFromOffset(baseOffset) + LOG_FILE_SUFFIX);
     }
 
     /** Returns the remote file path for storing the offset index file. */
@@ -508,9 +489,7 @@ public class FlussPaths {
         return remoteLogIndexFile(
                 remoteLogSegmentDir(
                         remoteLogTabletDir(
-                                remoteLogDir,
-                                remoteLogSegment.physicalTablePath(),
-                                remoteLogSegment.tableBucket()),
+                                remoteLogDir, remoteLogSegment.physicalTablePath(), remoteLogSegment.tableBucket()),
                         remoteLogSegment.remoteLogSegmentId()),
                 remoteLogSegment.remoteLogStartOffset(),
                 indexSuffix);
@@ -521,9 +500,7 @@ public class FlussPaths {
         return remoteLogIndexFile(
                 remoteLogSegmentDir(
                         remoteLogTabletDir(
-                                remoteLogDir,
-                                remoteLogSegment.physicalTablePath(),
-                                remoteLogSegment.tableBucket()),
+                                remoteLogDir, remoteLogSegment.physicalTablePath(), remoteLogSegment.tableBucket()),
                         remoteLogSegment.remoteLogSegmentId()),
                 remoteLogSegment.remoteLogEndOffset(),
                 indexSuffix);
@@ -560,8 +537,7 @@ public class FlussPaths {
      * @param baseOffset the base offset of the log segment
      * @param indexSuffix the file suffix of the index file
      */
-    public static FsPath remoteLogIndexFile(
-            FsPath remoteLogSegmentDir, long baseOffset, String indexSuffix) {
+    public static FsPath remoteLogIndexFile(FsPath remoteLogSegmentDir, long baseOffset, String indexSuffix) {
         return new FsPath(remoteLogSegmentDir, filenamePrefixFromOffset(baseOffset) + indexSuffix);
     }
 
@@ -622,13 +598,10 @@ public class FlussPaths {
      * @param tablePath - table path.
      * @param tableId - table id.
      */
-    public static FsPath remoteTableDir(
-            FsPath remoteKvOrLogBaseDir, TablePath tablePath, long tableId) {
+    public static FsPath remoteTableDir(FsPath remoteKvOrLogBaseDir, TablePath tablePath, long tableId) {
         return new FsPath(
                 remoteKvOrLogBaseDir,
-                String.format(
-                        "%s/%s-%d",
-                        tablePath.getDatabaseName(), tablePath.getTableName(), tableId));
+                String.format("%s/%s-%d", tablePath.getDatabaseName(), tablePath.getTableName(), tableId));
     }
 
     /**
@@ -649,18 +622,12 @@ public class FlussPaths {
      * @param tablePartition - table partition.
      */
     public static FsPath remotePartitionDir(
-            FsPath remoteKvOrLogBaseDir,
-            PhysicalTablePath partitionPath,
-            TablePartition tablePartition) {
+            FsPath remoteKvOrLogBaseDir, PhysicalTablePath partitionPath, TablePartition tablePartition) {
         return new FsPath(
-                remoteTableDir(
-                        remoteKvOrLogBaseDir,
-                        partitionPath.getTablePath(),
-                        tablePartition.getTableId()),
+                remoteTableDir(remoteKvOrLogBaseDir, partitionPath.getTablePath(), tablePartition.getTableId()),
                 String.format(
                         "%s-%s",
-                        partitionPath.getPartitionName(),
-                        PARTITION_DIR_PREFIX + tablePartition.getPartitionId()));
+                        partitionPath.getPartitionName(), PARTITION_DIR_PREFIX + tablePartition.getPartitionId()));
     }
 
     /**
@@ -710,9 +677,7 @@ public class FlussPaths {
         if (physicalPath.getPartitionName() == null) {
             return remoteTableDir(remoteDir, physicalPath.getTablePath(), tableBucket.getTableId());
         } else {
-            checkNotNull(
-                    tableBucket.getPartitionId(),
-                    "partition id shouldn't be null for partitioned table");
+            checkNotNull(tableBucket.getPartitionId(), "partition id shouldn't be null for partitioned table");
             return remotePartitionDir(
                     remoteDir,
                     physicalPath,

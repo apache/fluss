@@ -55,8 +55,7 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
         if (initialSegment == null) {
             throw new NullPointerException("Initial Segment may not be null");
         }
-        checkArgument(
-                initialSegment.size() == pageSize, "Initial segment size must match page size.");
+        checkArgument(initialSegment.size() == pageSize, "Initial segment size must match page size.");
         this.pageSize = pageSize;
         this.currentSegment = initialSegment;
         this.positionInSegment = 0;
@@ -129,10 +128,7 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
         }
         if (currentSegment.size() <= position) {
             throw new IllegalStateException(
-                    "Position "
-                            + position
-                            + " is out of bounds for segment of size "
-                            + this.currentSegment.size());
+                    "Position " + position + " is out of bounds for segment of size " + this.currentSegment.size());
         }
 
         this.positionInSegment = position;
@@ -148,8 +144,7 @@ public abstract class AbstractPagedOutputView implements OutputView, MemorySegme
      *     could not be obtained.
      */
     public void advance() throws IOException {
-        MemorySegmentBytesView segmentBytesView =
-                new MemorySegmentBytesView(currentSegment, 0, positionInSegment);
+        MemorySegmentBytesView segmentBytesView = new MemorySegmentBytesView(currentSegment, 0, positionInSegment);
         this.currentSegment = nextSegment();
         this.positionInSegment = 0;
         finishedPages.add(segmentBytesView);

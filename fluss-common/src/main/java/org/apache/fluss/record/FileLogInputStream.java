@@ -40,8 +40,7 @@ import static org.apache.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_
  * additional information regarding copyright ownership. */
 
 /** A log input stream which is backed by a {@link FileChannel}. */
-public class FileLogInputStream
-        implements LogInputStream<FileLogInputStream.FileChannelLogRecordBatch> {
+public class FileLogInputStream implements LogInputStream<FileLogInputStream.FileChannelLogRecordBatch> {
 
     private static final int HEADER_SIZE_UP_TO_MAGIC = MAGIC_OFFSET + MAGIC_LENGTH;
 
@@ -77,8 +76,7 @@ public class FileLogInputStream
         }
 
         byte magic = logHeaderBuffer.get(MAGIC_OFFSET);
-        FileChannelLogRecordBatch batch =
-                new FileChannelLogRecordBatch(offset, magic, fileRecords, position, length);
+        FileChannelLogRecordBatch batch = new FileChannelLogRecordBatch(offset, magic, fileRecords, position, length);
 
         position += batch.sizeInBytes();
         return batch;
@@ -99,8 +97,7 @@ public class FileLogInputStream
         private LogRecordBatch fullBatch;
         private LogRecordBatch batchHeader;
 
-        FileChannelLogRecordBatch(
-                long offset, byte magic, FileLogRecords fileRecords, int position, int batchSize) {
+        FileChannelLogRecordBatch(long offset, byte magic, FileLogRecords fileRecords, int position, int batchSize) {
             this.offset = offset;
             this.magic = magic;
             this.fileRecords = fileRecords;
@@ -218,11 +215,7 @@ public class FileLogInputStream
                 return FileUtils.loadByteBufferFromFile(channel, size, position, description);
             } catch (IOException e) {
                 throw new FlussRuntimeException(
-                        "Failed to load record batch at position "
-                                + position
-                                + " from "
-                                + fileRecords,
-                        e);
+                        "Failed to load record batch at position " + position + " from " + fileRecords, e);
             }
         }
 
@@ -263,13 +256,7 @@ public class FileLogInputStream
 
         @Override
         public String toString() {
-            return "FileChannelLogRecordBatch(magic: "
-                    + magic
-                    + ", offset: "
-                    + offset
-                    + ", size: "
-                    + batchSize
-                    + ")";
+            return "FileChannelLogRecordBatch(magic: " + magic + ", offset: " + offset + ", size: " + batchSize + ")";
         }
     }
 }

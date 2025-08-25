@@ -81,8 +81,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         // trigger RLMTask copy local log segment to remote and update metadata.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
 
-        List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        List<RemoteLogSegment> remoteLogSegmentList = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
         // should upload 4 segments to remote, only 1 active segment left
         assertThat(remoteLogSegmentList.size()).isEqualTo(4);
         assertThat(remoteLogManager.lookupPositionForOffset(remoteLogSegmentList.get(0), 2L))
@@ -98,17 +97,15 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         addMultiSegmentsToLogTablet(replicaManager.getReplicaOrException(tb).getLogTablet(), 5);
         // trigger RLMTask copy local log segment to remote and update metadata.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
-        List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        List<RemoteLogSegment> remoteLogSegmentList = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
         assertThat(remoteLogSegmentList.size()).isEqualTo(4);
         assertThat(remoteLogManager.lookupPositionForOffset(remoteLogSegmentList.get(0), 2L))
                 .isGreaterThan(10);
         // check remote storage has the files
         assertThat(listRemoteLogFiles(tb))
-                .isEqualTo(
-                        remoteLogSegmentList.stream()
-                                .map(s -> s.remoteLogSegmentId().toString())
-                                .collect(Collectors.toSet()));
+                .isEqualTo(remoteLogSegmentList.stream()
+                        .map(s -> s.remoteLogSegmentId().toString())
+                        .collect(Collectors.toSet()));
 
         // rebuild a remote log manager.
         replicaManager.shutdown();
@@ -135,9 +132,8 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         // should upload 4 segments to remote, only 1 active segment left
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
-        assertThat(remoteLog.allRemoteLogSegments())
-                .hasSize(4)
-                .allSatisfy(s -> assertThat(s.maxTimestamp()).isEqualTo(ts1));
+        assertThat(remoteLog.allRemoteLogSegments()).hasSize(4).allSatisfy(s -> assertThat(s.maxTimestamp())
+                .isEqualTo(ts1));
 
         // write 4 segments after 4 days
         manualClock.advanceTime(Duration.ofDays(4));
@@ -168,10 +164,9 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
                 .hasSize(4);
         // check remote storage has the files
         assertThat(listRemoteLogFiles(tb))
-                .isEqualTo(
-                        remoteLog.allRemoteLogSegments().stream()
-                                .map(s -> s.remoteLogSegmentId().toString())
-                                .collect(Collectors.toSet()));
+                .isEqualTo(remoteLog.allRemoteLogSegments().stream()
+                        .map(s -> s.remoteLogSegmentId().toString())
+                        .collect(Collectors.toSet()));
     }
 
     @ParameterizedTest
@@ -186,8 +181,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
 
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         // no remote log segment should be committed.
-        List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        List<RemoteLogSegment> remoteLogSegmentList = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
         assertThat(remoteLogSegmentList).isEmpty();
         // log storage should clean up the temporary data
         assertThat(listRemoteLogFiles(tb)).isEmpty();
@@ -205,8 +199,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         testCoordinatorGateway.commitRemoteLogManifestFail.set(true);
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         // no remote log segment should be committed.
-        List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        List<RemoteLogSegment> remoteLogSegmentList = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
         assertThat(remoteLogSegmentList).isEmpty();
         // log storage should clean up the temporary data
         assertThat(listRemoteLogFiles(tb)).isEmpty();
@@ -226,17 +219,15 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
         List<RemoteLogSegment> remoteLogSegments = remoteLog.allRemoteLogSegments();
-        assertThat(remoteLogSegments)
-                .hasSize(4)
-                .allSatisfy(s -> assertThat(s.maxTimestamp()).isEqualTo(ts1));
+        assertThat(remoteLogSegments).hasSize(4).allSatisfy(s -> assertThat(s.maxTimestamp())
+                .isEqualTo(ts1));
         assertThat(remoteLog.getRemoteLogStartOffset()).isEqualTo(0L);
         assertThat(remoteLog.getRemoteLogEndOffset()).hasValue(40L);
         // check remote storage has the files
         assertThat(listRemoteLogFiles(tb))
-                .isEqualTo(
-                        remoteLogSegments.stream()
-                                .map(s -> s.remoteLogSegmentId().toString())
-                                .collect(Collectors.toSet()));
+                .isEqualTo(remoteLogSegments.stream()
+                        .map(s -> s.remoteLogSegmentId().toString())
+                        .collect(Collectors.toSet()));
 
         // all upload segments should be deleted after commit.
         manualClock.advanceTime(Duration.ofDays(8));
@@ -249,10 +240,9 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(remoteLog.getRemoteLogEndOffset()).hasValue(40L);
         // remote storage should not delete files
         assertThat(listRemoteLogFiles(tb))
-                .isEqualTo(
-                        remoteLogSegments.stream()
-                                .map(s -> s.remoteLogSegmentId().toString())
-                                .collect(Collectors.toSet()));
+                .isEqualTo(remoteLogSegments.stream()
+                        .map(s -> s.remoteLogSegmentId().toString())
+                        .collect(Collectors.toSet()));
     }
 
     @ParameterizedTest
@@ -269,17 +259,15 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
         RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
         List<RemoteLogSegment> remoteLogSegments = remoteLog.allRemoteLogSegments();
-        assertThat(remoteLogSegments)
-                .hasSize(4)
-                .allSatisfy(s -> assertThat(s.maxTimestamp()).isEqualTo(ts1));
+        assertThat(remoteLogSegments).hasSize(4).allSatisfy(s -> assertThat(s.maxTimestamp())
+                .isEqualTo(ts1));
         assertThat(remoteLog.getRemoteLogStartOffset()).isEqualTo(0L);
         assertThat(remoteLog.getRemoteLogEndOffset()).hasValue(40L);
         // check remote storage has the files
         assertThat(listRemoteLogFiles(tb))
-                .isEqualTo(
-                        remoteLogSegments.stream()
-                                .map(s -> s.remoteLogSegmentId().toString())
-                                .collect(Collectors.toSet()));
+                .isEqualTo(remoteLogSegments.stream()
+                        .map(s -> s.remoteLogSegmentId().toString())
+                        .collect(Collectors.toSet()));
 
         // all upload segments should be deleted after commit.
         manualClock.advanceTime(Duration.ofDays(8));
@@ -292,10 +280,9 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(remoteLog.getRemoteLogEndOffset()).hasValue(40L);
         // remote storage should not delete files
         assertThat(listRemoteLogFiles(tb))
-                .isEqualTo(
-                        remoteLogSegments.stream()
-                                .map(s -> s.remoteLogSegmentId().toString())
-                                .collect(Collectors.toSet()));
+                .isEqualTo(remoteLogSegments.stream()
+                        .map(s -> s.remoteLogSegmentId().toString())
+                        .collect(Collectors.toSet()));
     }
 
     @ParameterizedTest
@@ -308,8 +295,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         addMultiSegmentsToLogTablet(logTablet, 5);
         // trigger RLMTask copy local log segment to remote and update metadata.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
-        List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        List<RemoteLogSegment> remoteLogSegmentList = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
         assertThat(remoteLogSegmentList.size()).isEqualTo(4);
         assertThat(remoteLogManager.lookupPositionForOffset(remoteLogSegmentList.get(0), 2L))
                 .isGreaterThan(10);
@@ -317,8 +303,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         // 1. first, fetch records from remote.
         // mock to update remote log end offset and delete local log segments.
         logTablet.updateRemoteLogEndOffset(40L);
-        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
-                new CompletableFuture<>();
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future = new CompletableFuture<>();
         replicaManager.fetchLogRecords(
                 new FetchParams(-1, Integer.MAX_VALUE),
                 Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 0L, 1024 * 1024)),
@@ -374,8 +359,7 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         assertThat(logTablet.getSegments()).hasSize(2);
 
         // 5. should fetch from remote, because local doesn't have the data
-        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
-                new CompletableFuture<>();
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future = new CompletableFuture<>();
         replicaManager.fetchLogRecords(
                 new FetchParams(-1, Integer.MAX_VALUE),
                 Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 0L, 1024 * 1024)),
@@ -418,15 +402,13 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
     @ValueSource(booleans = {true, false})
     void testConfigureTieredLogLocalSegments(boolean partitionedTable) throws Exception {
         int tieredLogLocalSegments = 8;
-        long tableId =
-                registerTableInZkClient(
-                        DATA1_TABLE_PATH,
-                        DATA1_SCHEMA,
-                        200L,
-                        Collections.emptyList(),
-                        Collections.singletonMap(
-                                ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key(),
-                                String.valueOf(tieredLogLocalSegments)));
+        long tableId = registerTableInZkClient(
+                DATA1_TABLE_PATH,
+                DATA1_SCHEMA,
+                200L,
+                Collections.emptyList(),
+                Collections.singletonMap(
+                        ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key(), String.valueOf(tieredLogLocalSegments)));
         TableBucket tb = makeTableBucket(tableId, partitionedTable);
 
         // make leader, and then remote log tablet should be created.
@@ -436,16 +418,14 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         addMultiSegmentsToLogTablet(replicaManager.getReplicaOrException(tb).getLogTablet(), 10);
         // trigger RLMTask copy local log segment to remote and update metadata.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
-        List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        List<RemoteLogSegment> remoteLogSegmentList = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
         // should upload 9 segments except for one active segment to remote
         assertThat(remoteLogSegmentList).hasSize(9);
         //  should still retain 8 segments since 8 segments is configured to retain in local
         assertThat(logTablet.getSegments()).hasSize(tieredLogLocalSegments);
 
         // fetch from offset 20 should be from local
-        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
-                new CompletableFuture<>();
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future = new CompletableFuture<>();
         replicaManager.fetchLogRecords(
                 new FetchParams(-1, Integer.MAX_VALUE),
                 Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 20L, 1024 * 1024)),
@@ -475,16 +455,14 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         addMultiSegmentsToLogTablet(logTablet, 5);
         // trigger RLMTask copy local log segment to remote and update metadata.
         remoteLogTaskScheduler.triggerPeriodicScheduledTasks();
-        List<RemoteLogSegment> remoteLogSegmentList =
-                remoteLogManager.relevantRemoteLogSegments(tb, 0L);
+        List<RemoteLogSegment> remoteLogSegmentList = remoteLogManager.relevantRemoteLogSegments(tb, 0L);
         assertThat(remoteLogSegmentList.size()).isEqualTo(4);
         assertThat(remoteLogManager.lookupPositionForOffset(remoteLogSegmentList.get(0), 2L))
                 .isGreaterThan(10);
         assertThat(listRemoteLogFiles(tb))
-                .isEqualTo(
-                        remoteLogSegmentList.stream()
-                                .map(s -> s.remoteLogSegmentId().toString())
-                                .collect(Collectors.toSet()));
+                .isEqualTo(remoteLogSegmentList.stream()
+                        .map(s -> s.remoteLogSegmentId().toString())
+                        .collect(Collectors.toSet()));
 
         // test stop replica and delete.
         remoteLogManager.stopReplica(replica, true);
@@ -509,16 +487,12 @@ class RemoteLogManagerTest extends RemoteLogTestBase {
         RemoteLogTablet remoteLog = remoteLogManager.remoteLogTablet(tb);
         assertThat(remoteLog.allRemoteLogSegments()).hasSize(4);
 
-        assertThat(remoteLogManager.lookupOffsetForTimestamp(tb, startTimestamp)).isEqualTo(0L);
-        remoteLogManager
-                .relevantRemoteLogSegments(tb, 0L)
-                .forEach(
-                        remoteLogSegment ->
-                                assertThat(
-                                                remoteLogManager.lookupOffsetForTimestamp(
-                                                        tb, remoteLogSegment.maxTimestamp()))
-                                        .isLessThan(remoteLogSegment.remoteLogEndOffset())
-                                        .isGreaterThan(remoteLogSegment.remoteLogStartOffset()));
+        assertThat(remoteLogManager.lookupOffsetForTimestamp(tb, startTimestamp))
+                .isEqualTo(0L);
+        remoteLogManager.relevantRemoteLogSegments(tb, 0L).forEach(remoteLogSegment -> assertThat(
+                        remoteLogManager.lookupOffsetForTimestamp(tb, remoteLogSegment.maxTimestamp()))
+                .isLessThan(remoteLogSegment.remoteLogEndOffset())
+                .isGreaterThan(remoteLogSegment.remoteLogStartOffset()));
         assertThat(remoteLogManager.lookupOffsetForTimestamp(tb, startTimestamp + 5000))
                 .isEqualTo(-1L);
     }

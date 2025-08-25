@@ -60,10 +60,8 @@ class HadoopUtilsTest {
                 createTestUser(UserGroupInformation.AuthenticationMethod.KERBEROS);
         assertThat(userWithoutCredentialsOrTokens.hasKerberosCredentials()).isTrue();
 
-        boolean isKerberosEnabled =
-                HadoopUtils.isKerberosSecurityEnabled(userWithoutCredentialsOrTokens);
-        boolean result =
-                HadoopUtils.areKerberosCredentialsValid(userWithoutCredentialsOrTokens, true);
+        boolean isKerberosEnabled = HadoopUtils.isKerberosSecurityEnabled(userWithoutCredentialsOrTokens);
+        boolean result = HadoopUtils.areKerberosCredentialsValid(userWithoutCredentialsOrTokens, true);
 
         assertThat(isKerberosEnabled).isTrue();
         assertThat(result).isTrue();
@@ -77,10 +75,10 @@ class HadoopUtilsTest {
                 createTestUser(UserGroupInformation.AuthenticationMethod.KERBEROS);
         userWithoutCredentialsButHavingToken.addToken(getHDFSDelegationToken());
 
-        assertThat(userWithoutCredentialsButHavingToken.hasKerberosCredentials()).isTrue();
+        assertThat(userWithoutCredentialsButHavingToken.hasKerberosCredentials())
+                .isTrue();
 
-        boolean result =
-                HadoopUtils.areKerberosCredentialsValid(userWithoutCredentialsButHavingToken, true);
+        boolean result = HadoopUtils.areKerberosCredentialsValid(userWithoutCredentialsButHavingToken, true);
 
         assertThat(result).isTrue();
     }
@@ -115,8 +113,7 @@ class HadoopUtilsTest {
     void testShouldReturnTrueIfTicketCacheIsNotUsed() {
         UserGroupInformation.setConfiguration(
                 getHadoopConfigWithAuthMethod(UserGroupInformation.AuthenticationMethod.KERBEROS));
-        UserGroupInformation user =
-                createTestUser(UserGroupInformation.AuthenticationMethod.KERBEROS);
+        UserGroupInformation user = createTestUser(UserGroupInformation.AuthenticationMethod.KERBEROS);
 
         boolean result = HadoopUtils.areKerberosCredentialsValid(user, false);
 
@@ -125,8 +122,7 @@ class HadoopUtilsTest {
 
     @Test
     void testShouldCheckIfTheUserHasHDFSDelegationToken() {
-        UserGroupInformation userWithToken =
-                createTestUser(UserGroupInformation.AuthenticationMethod.KERBEROS);
+        UserGroupInformation userWithToken = createTestUser(UserGroupInformation.AuthenticationMethod.KERBEROS);
         userWithToken.addToken(getHDFSDelegationToken());
 
         boolean result = HadoopUtils.hasHDFSDelegationToken(userWithToken);
@@ -136,8 +132,7 @@ class HadoopUtilsTest {
 
     @Test
     void testShouldReturnFalseIfTheUserHasNoHDFSDelegationToken() {
-        UserGroupInformation userWithoutToken =
-                createTestUser(UserGroupInformation.AuthenticationMethod.KERBEROS);
+        UserGroupInformation userWithoutToken = createTestUser(UserGroupInformation.AuthenticationMethod.KERBEROS);
         assertThat(userWithoutToken.getTokens().isEmpty()).isTrue();
 
         boolean result = HadoopUtils.hasHDFSDelegationToken(userWithoutToken);
@@ -147,11 +142,11 @@ class HadoopUtilsTest {
 
     @Test
     void testGetConfigurationFromHadoopEnv() throws Exception {
-        String testHadoopHomeDir =
-                Paths.get(getClass().getResource("/core-site.xml").toURI())
-                        .getParent()
-                        .toFile()
-                        .getAbsolutePath();
+        String testHadoopHomeDir = Paths.get(
+                        getClass().getResource("/core-site.xml").toURI())
+                .getParent()
+                .toFile()
+                .getAbsolutePath();
 
         final Map<String, String> originalEnv = System.getenv();
         final Map<String, String> newEnv = new HashMap<>(originalEnv);
@@ -159,8 +154,7 @@ class HadoopUtilsTest {
         newEnv.put("HADOOP_HOME", testHadoopHomeDir);
         CommonTestUtils.setEnv(newEnv);
         try {
-            org.apache.fluss.config.Configuration configuration =
-                    new org.apache.fluss.config.Configuration();
+            org.apache.fluss.config.Configuration configuration = new org.apache.fluss.config.Configuration();
             Configuration hadoopConf = HadoopUtils.getHadoopConfiguration(configuration);
             assertThat(hadoopConf.get("cp_conf_key")).isEqualTo("oompf!");
         } finally {
@@ -171,8 +165,7 @@ class HadoopUtilsTest {
         newEnv.put("HADOOP_CONF_DIR", testHadoopHomeDir);
         CommonTestUtils.setEnv(newEnv);
         try {
-            org.apache.fluss.config.Configuration configuration =
-                    new org.apache.fluss.config.Configuration();
+            org.apache.fluss.config.Configuration configuration = new org.apache.fluss.config.Configuration();
             Configuration hadoopConf = HadoopUtils.getHadoopConfiguration(configuration);
             assertThat(hadoopConf.get("cp_conf_key")).isEqualTo("oompf!");
         } finally {
@@ -182,8 +175,7 @@ class HadoopUtilsTest {
 
     @Test
     void testGetConfigurationFromFlussConfig() {
-        org.apache.fluss.config.Configuration configuration =
-                new org.apache.fluss.config.Configuration();
+        org.apache.fluss.config.Configuration configuration = new org.apache.fluss.config.Configuration();
         configuration.setString("fluss.hadoop.k1", "v1");
         Configuration hadoopConf = HadoopUtils.getHadoopConfiguration(configuration);
         assertThat(hadoopConf.get("k1")).isEqualTo("v1");
@@ -196,8 +188,7 @@ class HadoopUtilsTest {
         return conf;
     }
 
-    private static UserGroupInformation createTestUser(
-            UserGroupInformation.AuthenticationMethod authenticationMethod) {
+    private static UserGroupInformation createTestUser(UserGroupInformation.AuthenticationMethod authenticationMethod) {
         UserGroupInformation user = UserGroupInformation.createRemoteUser("test-user");
         user.setAuthenticationMethod(authenticationMethod);
         return user;

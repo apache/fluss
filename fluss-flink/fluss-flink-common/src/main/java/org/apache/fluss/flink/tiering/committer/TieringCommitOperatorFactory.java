@@ -29,15 +29,13 @@ import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 /** The factory to create {@link TieringCommitOperator}. */
 public class TieringCommitOperatorFactory<WriteResult, Committable>
         extends AbstractStreamOperatorFactory<CommittableMessage<Committable>>
-        implements OneInputStreamOperatorFactory<
-                TableBucketWriteResult<WriteResult>, CommittableMessage<Committable>> {
+        implements OneInputStreamOperatorFactory<TableBucketWriteResult<WriteResult>, CommittableMessage<Committable>> {
 
     private final Configuration flussConfig;
     private final LakeTieringFactory<WriteResult, Committable> lakeTieringFactory;
 
     public TieringCommitOperatorFactory(
-            Configuration flussConfig,
-            LakeTieringFactory<WriteResult, Committable> lakeTieringFactory) {
+            Configuration flussConfig, LakeTieringFactory<WriteResult, Committable> lakeTieringFactory) {
         this.flussConfig = flussConfig;
         this.lakeTieringFactory = lakeTieringFactory;
     }

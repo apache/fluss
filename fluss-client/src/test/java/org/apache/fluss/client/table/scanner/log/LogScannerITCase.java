@@ -90,8 +90,10 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
     void testPollWhileCreateTableNotReady() throws Exception {
         // create one table with 30 buckets.
         int bucketNumber = 30;
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(bucketNumber).build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(DATA1_SCHEMA)
+                .distributedBy(bucketNumber)
+                .build();
         createTable(DATA1_TABLE_PATH, tableDescriptor, false);
 
         // append a batch of data.
@@ -139,7 +141,8 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             LogScanner logScanner = table.newScan().createLogScanner();
             ExecutorService executor = Executors.newSingleThreadExecutor();
             // subscribe in thread1
-            executor.submit(() -> logScanner.subscribe(0, LogScanner.EARLIEST_OFFSET)).get();
+            executor.submit(() -> logScanner.subscribe(0, LogScanner.EARLIEST_OFFSET))
+                    .get();
             // subscribe again in main thread
             logScanner.subscribe(1, LogScanner.EARLIEST_OFFSET);
             // subscribe again in thread1
@@ -166,16 +169,14 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         final String db = "db";
         final String tbl = "log_heavy_table";
         // create table
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("small_str", DataTypes.STRING())
-                                        .column("bi", DataTypes.BIGINT())
-                                        .column("long_str", DataTypes.STRING())
-                                        .build())
-                        .distributedBy(1) // 1 bucket for benchmark
-                        .build();
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("small_str", DataTypes.STRING())
+                        .column("bi", DataTypes.BIGINT())
+                        .column("long_str", DataTypes.STRING())
+                        .build())
+                .distributedBy(1) // 1 bucket for benchmark
+                .build();
         createTable(TablePath.of(db, tbl), descriptor, false);
 
         // produce logs
@@ -187,8 +188,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         try (Table table = conn.getTable(TablePath.of(db, tbl))) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (long i = 0; i < recordSize; i++) {
-                final Object[] columns =
-                        new Object[] {randomAlphanumeric(10), i, randomAlphanumeric(1000)};
+                final Object[] columns = new Object[] {randomAlphanumeric(10), i, randomAlphanumeric(1000)};
                 appendWriter.append(row(columns));
                 if (i % 100 == 0) {
                     appendWriter.flush();
@@ -204,9 +204,11 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
                     assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
-                    assertThat(scanRecord.getRow().getString(0).getSizeInBytes()).isEqualTo(10);
+                    assertThat(scanRecord.getRow().getString(0).getSizeInBytes())
+                            .isEqualTo(10);
                     assertThat(scanRecord.getRow().getLong(1)).isEqualTo(scanned);
-                    assertThat(scanRecord.getRow().getString(2).getSizeInBytes()).isEqualTo(1000);
+                    assertThat(scanRecord.getRow().getString(2).getSizeInBytes())
+                            .isEqualTo(1000);
                     scanned++;
                 }
                 total += scanRecords.count();
@@ -221,17 +223,15 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         final String db = "db";
         final String tbl = "kv_heavy_table";
         // create table
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("small_str", DataTypes.STRING())
-                                        .column("bi", DataTypes.BIGINT())
-                                        .column("long_str", DataTypes.STRING())
-                                        .primaryKey("bi")
-                                        .build())
-                        .distributedBy(1) // 1 bucket for benchmark
-                        .build();
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("small_str", DataTypes.STRING())
+                        .column("bi", DataTypes.BIGINT())
+                        .column("long_str", DataTypes.STRING())
+                        .primaryKey("bi")
+                        .build())
+                .distributedBy(1) // 1 bucket for benchmark
+                .build();
         createTable(TablePath.of(db, tbl), descriptor, false);
 
         // produce logs
@@ -243,8 +243,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
         try (Table table = conn.getTable(TablePath.of(db, tbl))) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (long i = 0; i < recordSize; i++) {
-                final Object[] columns =
-                        new Object[] {randomAlphanumeric(10), i, randomAlphanumeric(1000)};
+                final Object[] columns = new Object[] {randomAlphanumeric(10), i, randomAlphanumeric(1000)};
                 upsertWriter.upsert(row(columns));
                 if (i % 100 == 0) {
                     upsertWriter.flush();
@@ -260,9 +259,11 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (ScanRecord scanRecord : scanRecords) {
                     assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.INSERT);
-                    assertThat(scanRecord.getRow().getString(0).getSizeInBytes()).isEqualTo(10);
+                    assertThat(scanRecord.getRow().getString(0).getSizeInBytes())
+                            .isEqualTo(10);
                     assertThat(scanRecord.getRow().getLong(1)).isEqualTo(scanned);
-                    assertThat(scanRecord.getRow().getString(2).getSizeInBytes()).isEqualTo(1000);
+                    assertThat(scanRecord.getRow().getString(2).getSizeInBytes())
+                            .isEqualTo(1000);
                     scanned++;
                 }
                 total += scanRecords.count();
@@ -276,22 +277,16 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
     @ValueSource(booleans = {true, false})
     void testScanFromStartTimestamp(boolean isPartitioned) throws Exception {
         TablePath tablePath =
-                TablePath.of(
-                        "test_db_1",
-                        "test_scan_from_timestamp" + (isPartitioned ? "_partitioned" : ""));
-        long tableId =
-                createTable(
-                        tablePath,
-                        isPartitioned ? DATA1_PARTITIONED_TABLE_DESCRIPTOR : DATA1_TABLE_DESCRIPTOR,
-                        false);
+                TablePath.of("test_db_1", "test_scan_from_timestamp" + (isPartitioned ? "_partitioned" : ""));
+        long tableId = createTable(
+                tablePath, isPartitioned ? DATA1_PARTITIONED_TABLE_DESCRIPTOR : DATA1_TABLE_DESCRIPTOR, false);
 
         String partitionName = null;
         Long partitionId = null;
         if (!isPartitioned) {
             FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
         } else {
-            Map<String, Long> partitionNameAndIds =
-                    FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
+            Map<String, Long> partitionNameAndIds = FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
             // just pick one partition
             Map.Entry<String, Long> partitionNameAndIdEntry =
                     partitionNameAndIds.entrySet().iterator().next();
@@ -324,13 +319,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             // try to fetch from firstStartTimestamp, which smaller than the first batch commit
             // timestamp.
             subscribeFromTimestamp(
-                    tablePath,
-                    partitionName,
-                    partitionId,
-                    table,
-                    logScanner,
-                    admin,
-                    firstStartTimestamp);
+                    tablePath, partitionName, partitionId, table, logScanner, admin, firstStartTimestamp);
             List<GenericRow> rowList = new ArrayList<>();
             while (rowList.size() < batchRecordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
@@ -354,13 +343,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             // try to fetch from secondStartTimestamp, which larger than the second batch commit
             // timestamp, return the data of second batch.
             subscribeFromTimestamp(
-                    tablePath,
-                    partitionName,
-                    partitionId,
-                    table,
-                    logScanner,
-                    admin,
-                    secondStartTimestamp);
+                    tablePath, partitionName, partitionId, table, logScanner, admin, secondStartTimestamp);
             rowList = new ArrayList<>();
             while (rowList.size() < batchRecordSize) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
@@ -379,21 +362,15 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
     @ValueSource(booleans = {true, false})
     void testScanFromLatestOffsets(boolean isPartitioned) throws Exception {
         TablePath tablePath =
-                TablePath.of(
-                        "test_db_1",
-                        "test_scan_from_latest_offsets" + (isPartitioned ? "_partitioned" : ""));
-        long tableId =
-                createTable(
-                        tablePath,
-                        isPartitioned ? DATA1_PARTITIONED_TABLE_DESCRIPTOR : DATA1_TABLE_DESCRIPTOR,
-                        false);
+                TablePath.of("test_db_1", "test_scan_from_latest_offsets" + (isPartitioned ? "_partitioned" : ""));
+        long tableId = createTable(
+                tablePath, isPartitioned ? DATA1_PARTITIONED_TABLE_DESCRIPTOR : DATA1_TABLE_DESCRIPTOR, false);
         String partitionName = null;
         Long partitionId = null;
         if (!isPartitioned) {
             FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
         } else {
-            Map<String, Long> partitionNameAndIds =
-                    FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
+            Map<String, Long> partitionNameAndIds = FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
             // just pick one partition
             partitionName = partitionNameAndIds.keySet().iterator().next();
             partitionId = partitionNameAndIds.get(partitionName);
@@ -405,13 +382,14 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
             // 1. first write one batch of data.
             AppendWriter appendWriter = table.newAppend().createWriter();
             for (int i = 0; i < batchRecordSize; i++) {
-                appendWriter.append(row(i, partitionName == null ? "a" : partitionName)).get();
+                appendWriter
+                        .append(row(i, partitionName == null ? "a" : partitionName))
+                        .get();
             }
 
             LogScanner logScanner = createLogScanner(table);
             // try to fetch from the latest offsets. For the first batch, it cannot get any data.
-            subscribeFromLatestOffset(
-                    tablePath, partitionName, partitionId, table, logScanner, admin);
+            subscribeFromLatestOffset(tablePath, partitionName, partitionId, table, logScanner, admin);
             assertThat(logScanner.poll(Duration.ofSeconds(1)).isEmpty()).isTrue();
 
             // 2. write the second batch.
@@ -439,15 +417,13 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
     @Test
     void testSubscribeOutOfRangeLog() throws Exception {
         TablePath tablePath = TablePath.of("test_db_1", "test_subscribe_out_of_range_log");
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("a", DataTypes.INT())
-                                        .column("b", DataTypes.STRING())
-                                        .build())
-                        .distributedBy(1)
-                        .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .build())
+                .distributedBy(1)
+                .build();
         createTable(tablePath, tableDescriptor, false);
         try (Table table = conn.getTable(tablePath)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
@@ -461,9 +437,7 @@ public class LogScannerITCase extends ClientToServerITCaseBase {
 
                 assertThatThrownBy(() -> logScanner.poll(Duration.ofSeconds(1)))
                         .isInstanceOf(FetchException.class)
-                        .hasMessageContaining(
-                                String.format(
-                                        "The fetching offset %s is out of range", Long.MIN_VALUE));
+                        .hasMessageContaining(String.format("The fetching offset %s is out of range", Long.MIN_VALUE));
             }
         }
     }

@@ -61,9 +61,7 @@ class PaimonSourceTestBase {
         configuration.setString("type", "paimon");
         configuration.setString("warehouse", tempWarehouseDir.toString());
         lakeStorage = new PaimonLakeStorage(configuration);
-        paimonCatalog =
-                CatalogFactory.createCatalog(
-                        CatalogContext.create(Options.fromMap(configuration.toMap())));
+        paimonCatalog = CatalogFactory.createCatalog(CatalogContext.create(Options.fromMap(configuration.toMap())));
     }
 
     public void createTable(TablePath tablePath, Schema schema) throws Exception {

@@ -50,8 +50,7 @@ public class ArrowWriterPoolTest {
     void testWriterMap() {
         ArrowWriterPool arrowWriterPool = new ArrowWriterPool(allocator);
         Map<String, Deque<ArrowWriter>> freeWritersMap = arrowWriterPool.freeWriters();
-        ArrowWriter writer1 =
-                arrowWriterPool.getOrCreateWriter(1L, 1, 1024, DATA1_ROW_TYPE, DEFAULT_COMPRESSION);
+        ArrowWriter writer1 = arrowWriterPool.getOrCreateWriter(1L, 1, 1024, DATA1_ROW_TYPE, DEFAULT_COMPRESSION);
         assertThat(writer1.getWriteLimitInBytes()).isEqualTo((int) (1024 * BUFFER_USAGE_RATIO));
         assertThat(freeWritersMap.isEmpty()).isTrue();
         long epoch = writer1.getEpoch();
@@ -64,8 +63,7 @@ public class ArrowWriterPoolTest {
         assertThat(freeWritersMap.size()).isEqualTo(1);
         assertThat(freeWritersMap.get("1-1-ZSTD-3")).hasSize(1);
 
-        ArrowWriter writer2 =
-                arrowWriterPool.getOrCreateWriter(1L, 2, 10, DATA1_ROW_TYPE, DEFAULT_COMPRESSION);
+        ArrowWriter writer2 = arrowWriterPool.getOrCreateWriter(1L, 2, 10, DATA1_ROW_TYPE, DEFAULT_COMPRESSION);
         assertThat(freeWritersMap.size()).isEqualTo(1);
         writer2.recycle(writer2.getEpoch());
         assertThat(freeWritersMap.size()).isEqualTo(2);
@@ -73,8 +71,7 @@ public class ArrowWriterPoolTest {
         // test key1: "tableId_schemaId"
         Deque<ArrowWriter> arrowWriters = freeWritersMap.get("1-1-ZSTD-3");
         assertThat(arrowWriters.size()).isEqualTo(1);
-        writer1 =
-                arrowWriterPool.getOrCreateWriter(1L, 1, 1000, DATA1_ROW_TYPE, DEFAULT_COMPRESSION);
+        writer1 = arrowWriterPool.getOrCreateWriter(1L, 1, 1000, DATA1_ROW_TYPE, DEFAULT_COMPRESSION);
         assertThat(arrowWriters.size()).isEqualTo(0);
         assertThat(writer1.getWriteLimitInBytes()).isEqualTo((int) (1000 * BUFFER_USAGE_RATIO));
         ArrowWriter writer3WithKey1 =

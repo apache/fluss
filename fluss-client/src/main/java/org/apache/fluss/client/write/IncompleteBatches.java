@@ -49,8 +49,7 @@ final class IncompleteBatches {
         synchronized (incomplete) {
             boolean removed = this.incomplete.remove(batch);
             if (!removed) {
-                throw new IllegalStateException(
-                        "Remove from the incomplete set failed. This should be impossible.");
+                throw new IllegalStateException("Remove from the incomplete set failed. This should be impossible.");
             }
         }
     }
@@ -63,9 +62,7 @@ final class IncompleteBatches {
 
     public Iterable<WriteBatch.RequestFuture> requestResults() {
         synchronized (incomplete) {
-            return incomplete.stream()
-                    .map(WriteBatch::getRequestFuture)
-                    .collect(Collectors.toList());
+            return incomplete.stream().map(WriteBatch::getRequestFuture).collect(Collectors.toList());
         }
     }
 

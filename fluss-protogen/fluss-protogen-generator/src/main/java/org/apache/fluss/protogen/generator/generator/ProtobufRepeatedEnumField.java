@@ -30,28 +30,19 @@ public class ProtobufRepeatedEnumField extends ProtobufRepeatedNumberField {
 
     @Override
     public void parse(PrintWriter w) {
-        w.format(
-                "%s _%s = %s;\n",
-                field.getJavaType(), ccName, ProtobufNumberField.parseNumber(field));
+        w.format("%s _%s = %s;\n", field.getJavaType(), ccName, ProtobufNumberField.parseNumber(field));
         w.format("if (_%s != null) {\n", ccName);
         w.format("   %s(_%s);\n", ProtoGenUtil.camelCase("add", singularName), ccName);
         w.format("}\n");
     }
 
     public void parsePacked(PrintWriter w) {
-        w.format(
-                "int _%s = ProtoCodecUtils.readVarInt(_buffer);\n",
-                ProtoGenUtil.camelCase(singularName, "size"));
+        w.format("int _%s = ProtoCodecUtils.readVarInt(_buffer);\n", ProtoGenUtil.camelCase(singularName, "size"));
         w.format(
                 "int _%s = _buffer.readerIndex() + _%s;\n",
-                ProtoGenUtil.camelCase(singularName, "endIdx"),
-                ProtoGenUtil.camelCase(singularName, "size"));
-        w.format(
-                "while (_buffer.readerIndex() < _%s) {\n",
-                ProtoGenUtil.camelCase(singularName, "endIdx"));
-        w.format(
-                "    %s _%sPacked = %s;\n",
-                field.getJavaType(), ccName, ProtobufNumberField.parseNumber(field));
+                ProtoGenUtil.camelCase(singularName, "endIdx"), ProtoGenUtil.camelCase(singularName, "size"));
+        w.format("while (_buffer.readerIndex() < _%s) {\n", ProtoGenUtil.camelCase(singularName, "endIdx"));
+        w.format("    %s _%sPacked = %s;\n", field.getJavaType(), ccName, ProtobufNumberField.parseNumber(field));
         w.format("    if (_%sPacked != null) {\n", ccName);
         w.format("        %s(_%sPacked);\n", ProtoGenUtil.camelCase("add", singularName), ccName);
         w.format("    }\n");

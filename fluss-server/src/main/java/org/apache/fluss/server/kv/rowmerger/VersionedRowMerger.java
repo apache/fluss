@@ -39,10 +39,8 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
  */
 public class VersionedRowMerger implements RowMerger {
 
-    private static final TimestampNtz MIN_TIMESTAMP_NTZ =
-            TimestampNtz.fromMillis(Long.MIN_VALUE, 0);
-    private static final TimestampLtz MIN_TIMESTAMP_LTZ =
-            TimestampLtz.fromEpochMillis(Long.MIN_VALUE, 0);
+    private static final TimestampNtz MIN_TIMESTAMP_NTZ = TimestampNtz.fromMillis(Long.MIN_VALUE, 0);
+    private static final TimestampLtz MIN_TIMESTAMP_LTZ = TimestampLtz.fromEpochMillis(Long.MIN_VALUE, 0);
 
     private final Comparator<BinaryRow> versionComparator;
 
@@ -60,8 +58,7 @@ public class VersionedRowMerger implements RowMerger {
     @Nullable
     @Override
     public BinaryRow delete(BinaryRow oldRow) {
-        throw new UnsupportedOperationException(
-                "DELETE is not supported for the versioned merge engine.");
+        throw new UnsupportedOperationException("DELETE is not supported for the versioned merge engine.");
     }
 
     @Override
@@ -74,14 +71,12 @@ public class VersionedRowMerger implements RowMerger {
         if (targetColumns == null) {
             return this;
         } else {
-            throw new UnsupportedOperationException(
-                    "Partial update is not supported for the versioned merge engine.");
+            throw new UnsupportedOperationException("Partial update is not supported for the versioned merge engine.");
         }
     }
 
     /** Create a comparator for version column. */
-    public static Comparator<BinaryRow> createVersionComparator(
-            RowType schema, String versionColumnName) {
+    public static Comparator<BinaryRow> createVersionComparator(RowType schema, String versionColumnName) {
         int columnIndex = schema.getFieldIndex(versionColumnName);
         checkArgument(
                 columnIndex >= 0,
@@ -92,36 +87,23 @@ public class VersionedRowMerger implements RowMerger {
         switch (columnType.getTypeRoot()) {
             case BIGINT:
                 return Comparator.comparing(
-                        row ->
-                                row.isNullAt(columnIndex)
-                                        ? Long.MIN_VALUE
-                                        : row.getLong(columnIndex));
+                        row -> row.isNullAt(columnIndex) ? Long.MIN_VALUE : row.getLong(columnIndex));
             case INTEGER:
                 return Comparator.comparing(
-                        row ->
-                                row.isNullAt(columnIndex)
-                                        ? Integer.MIN_VALUE
-                                        : row.getInt(columnIndex));
+                        row -> row.isNullAt(columnIndex) ? Integer.MIN_VALUE : row.getInt(columnIndex));
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 precision = ((TimestampType) columnType).getPrecision();
-                return Comparator.comparing(
-                        row ->
-                                row.isNullAt(columnIndex)
-                                        ? MIN_TIMESTAMP_NTZ
-                                        : row.getTimestampNtz(columnIndex, precision));
+                return Comparator.comparing(row ->
+                        row.isNullAt(columnIndex) ? MIN_TIMESTAMP_NTZ : row.getTimestampNtz(columnIndex, precision));
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 precision = ((LocalZonedTimestampType) columnType).getPrecision();
-                return Comparator.comparing(
-                        row ->
-                                row.isNullAt(columnIndex)
-                                        ? MIN_TIMESTAMP_LTZ
-                                        : row.getTimestampLtz(columnIndex, precision));
+                return Comparator.comparing(row ->
+                        row.isNullAt(columnIndex) ? MIN_TIMESTAMP_LTZ : row.getTimestampLtz(columnIndex, precision));
             default:
-                throw new IllegalArgumentException(
-                        String.format(
-                                "The version column '%s' for versioned merge engine must be one type of "
-                                        + "[INT, BIGINT, TIMESTAMP, TIMESTAMP_LTZ], but is %s.",
-                                versionColumnName, columnType));
+                throw new IllegalArgumentException(String.format(
+                        "The version column '%s' for versioned merge engine must be one type of "
+                                + "[INT, BIGINT, TIMESTAMP, TIMESTAMP_LTZ], but is %s.",
+                        versionColumnName, columnType));
         }
     }
 }

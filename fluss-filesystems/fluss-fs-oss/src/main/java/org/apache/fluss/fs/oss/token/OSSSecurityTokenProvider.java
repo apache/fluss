@@ -78,11 +78,10 @@ public class OSSSecurityTokenProvider {
         final AssumeRoleResponse response = acsClient.getAcsResponse(request);
 
         AssumeRoleResponse.Credentials credentials = response.getCredentials();
-        DefaultCredentials defaultCredentials =
-                new DefaultCredentials(
-                        response.getCredentials().getAccessKeyId(),
-                        response.getCredentials().getAccessKeySecret(),
-                        response.getCredentials().getSecurityToken());
+        DefaultCredentials defaultCredentials = new DefaultCredentials(
+                response.getCredentials().getAccessKeyId(),
+                response.getCredentials().getAccessKeySecret(),
+                response.getCredentials().getSecurityToken());
 
         Map<String, String> additionInfo = new HashMap<>();
         // we need to put endpoint as addition info
@@ -97,11 +96,10 @@ public class OSSSecurityTokenProvider {
     }
 
     private byte[] toJson(DefaultCredentials defaultCredentials) {
-        Credentials credentials =
-                new Credentials(
-                        defaultCredentials.getAccessKeyId(),
-                        defaultCredentials.getSecretAccessKey(),
-                        defaultCredentials.getSecurityToken());
+        Credentials credentials = new Credentials(
+                defaultCredentials.getAccessKeyId(),
+                defaultCredentials.getSecretAccessKey(),
+                defaultCredentials.getSecurityToken());
         return CredentialsJsonSerde.toJson(credentials);
     }
 }

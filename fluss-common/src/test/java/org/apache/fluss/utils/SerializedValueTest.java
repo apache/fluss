@@ -34,10 +34,8 @@ class SerializedValueTest {
         // verify the serializedBytes
         assertThat(serializedValueBytes).isEqualTo(InstantiationUtils.serializeObject(value));
 
-        String deserializeValue =
-                (String)
-                        SerializedValue.fromBytes(serializedValueBytes)
-                                .deserializeValue(Thread.currentThread().getContextClassLoader());
+        String deserializeValue = (String) SerializedValue.fromBytes(serializedValueBytes)
+                .deserializeValue(Thread.currentThread().getContextClassLoader());
         // verify the deserializeValue
         assertThat(deserializeValue).isEqualTo(value);
 

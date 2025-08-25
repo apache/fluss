@@ -34,9 +34,15 @@ public final class Dependency {
     private final String groupId;
     private final String artifactId;
     private final String version;
-    @Nullable private final String classifier;
-    @Nullable private final String scope;
-    @Nullable private final Boolean isOptional;
+
+    @Nullable
+    private final String classifier;
+
+    @Nullable
+    private final String scope;
+
+    @Nullable
+    private final Boolean isOptional;
 
     private Dependency(
             String groupId,
@@ -54,23 +60,11 @@ public final class Dependency {
     }
 
     public static Dependency create(
-            String groupId,
-            String artifactId,
-            String version,
-            String classifier,
-            String scope,
-            boolean isOptional) {
-        return new Dependency(
-                groupId,
-                artifactId,
-                version,
-                classifier,
-                Objects.requireNonNull(scope),
-                isOptional);
+            String groupId, String artifactId, String version, String classifier, String scope, boolean isOptional) {
+        return new Dependency(groupId, artifactId, version, classifier, Objects.requireNonNull(scope), isOptional);
     }
 
-    public static Dependency create(
-            String groupId, String artifactId, String version, String classifier) {
+    public static Dependency create(String groupId, String artifactId, String version, String classifier) {
         return new Dependency(groupId, artifactId, version, classifier, null, null);
     }
 

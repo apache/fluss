@@ -74,13 +74,12 @@ public class Endpoint {
     public static List<Endpoint> loadBindEndpoints(Configuration conf, ServerType serverType) {
         if (conf.getOptional(ConfigOptions.BIND_LISTENERS).isPresent()
                 && getHost(conf, serverType).isPresent()) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Config options are incompatible. Only one of '%s' and '%s' must be set.",
-                            ConfigOptions.BIND_LISTENERS.key(),
-                            serverType == ServerType.COORDINATOR
-                                    ? ConfigOptions.COORDINATOR_HOST.key()
-                                    : ConfigOptions.TABLET_SERVER_HOST.key()));
+            throw new IllegalArgumentException(String.format(
+                    "Config options are incompatible. Only one of '%s' and '%s' must be set.",
+                    ConfigOptions.BIND_LISTENERS.key(),
+                    serverType == ServerType.COORDINATOR
+                            ? ConfigOptions.COORDINATOR_HOST.key()
+                            : ConfigOptions.TABLET_SERVER_HOST.key()));
         }
 
         if (conf.getOptional(ConfigOptions.BIND_LISTENERS).isPresent()) {
@@ -88,22 +87,17 @@ public class Endpoint {
             List<Endpoint> endpoints = fromListenersString(listeners, true);
             String internalListenerName = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
             if (endpoints.stream()
-                    .noneMatch(
-                            endpoint -> endpoint.getListenerName().equals(internalListenerName))) {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "Internal listener name %s is not included in listeners %s",
-                                internalListenerName, listeners));
+                    .noneMatch(endpoint -> endpoint.getListenerName().equals(internalListenerName))) {
+                throw new IllegalArgumentException(String.format(
+                        "Internal listener name %s is not included in listeners %s", internalListenerName, listeners));
             }
             return endpoints;
         }
 
         if (conf.getOptional(ConfigOptions.INTERNAL_LISTENER_NAME).isPresent()) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Config '%s' cannot be set without '%s'",
-                            ConfigOptions.INTERNAL_LISTENER_NAME.key(),
-                            ConfigOptions.BIND_LISTENERS.key()));
+            throw new IllegalArgumentException(String.format(
+                    "Config '%s' cannot be set without '%s'",
+                    ConfigOptions.INTERNAL_LISTENER_NAME.key(), ConfigOptions.BIND_LISTENERS.key()));
         }
 
         Optional<String> maybeHost = getHost(conf, serverType);
@@ -119,8 +113,7 @@ public class Endpoint {
                 String.format("The '%s' is not configured.", ConfigOptions.BIND_LISTENERS.key()));
     }
 
-    public static List<Endpoint> loadAdvertisedEndpoints(
-            List<Endpoint> bindEndpoints, Configuration conf) {
+    public static List<Endpoint> loadAdvertisedEndpoints(List<Endpoint> bindEndpoints, Configuration conf) {
         List<Endpoint> advertisedEndpoints =
                 fromListenersString(conf.getString(ConfigOptions.ADVERTISED_LISTENERS), false);
         Set<String> bindListenerNames =
@@ -130,19 +123,14 @@ public class Endpoint {
             if (bindListenerNames.contains(advertisedEndpoint.listenerName)) {
                 advertisedEndpointMap.put(advertisedEndpoint.listenerName, advertisedEndpoint);
             } else {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "advertised listener name %s is not included in listeners %s",
-                                advertisedEndpoint.listenerName,
-                                Endpoint.toListenersString(bindEndpoints)));
+                throw new IllegalArgumentException(String.format(
+                        "advertised listener name %s is not included in listeners %s",
+                        advertisedEndpoint.listenerName, Endpoint.toListenersString(bindEndpoints)));
             }
         }
 
         return bindEndpoints.stream()
-                .map(
-                        endpoint ->
-                                advertisedEndpointMap.getOrDefault(
-                                        endpoint.getListenerName(), endpoint))
+                .map(endpoint -> advertisedEndpointMap.getOrDefault(endpoint.getListenerName(), endpoint))
                 .collect(Collectors.toList());
     }
 
@@ -150,37 +138,31 @@ public class Endpoint {
         return fromListenersString(listeners, true);
     }
 
-    private static List<Endpoint> fromListenersString(
-            String listeners, boolean requireDistinctPorts) {
+    private static List<Endpoint> fromListenersString(String listeners, boolean requireDistinctPorts) {
         if (StringUtils.isNullOrWhitespaceOnly(listeners)) {
             return Collections.emptyList();
         }
 
-        List<Endpoint> endpoints =
-                Arrays.stream(listeners.split(","))
-                        .map(Endpoint::fromListenerString)
-                        .collect(Collectors.toList());
+        List<Endpoint> endpoints = Arrays.stream(listeners.split(","))
+                .map(Endpoint::fromListenerString)
+                .collect(Collectors.toList());
 
         Set<String> distinctListenerNames =
                 endpoints.stream().map(Endpoint::getListenerName).collect(Collectors.toSet());
         if (endpoints.size() != distinctListenerNames.size()) {
             throw new IllegalArgumentException(
-                    String.format(
-                            "Each listener must have a different name, listeners: %s", listeners));
+                    String.format("Each listener must have a different name, listeners: %s", listeners));
         }
 
         if (requireDistinctPorts) {
-            List<Integer> portsExcludingZero =
-                    endpoints.stream()
-                            .map(Endpoint::getPort)
-                            .filter(port -> port != 0)
-                            .collect(Collectors.toList());
+            List<Integer> portsExcludingZero = endpoints.stream()
+                    .map(Endpoint::getPort)
+                    .filter(port -> port != 0)
+                    .collect(Collectors.toList());
             Set<Integer> distinctPorts = new HashSet<>(portsExcludingZero);
             if (portsExcludingZero.size() != distinctPorts.size()) {
                 throw new IllegalArgumentException(
-                        String.format(
-                                "There is more than one endpoint with the same port, listeners: %s",
-                                listeners));
+                        String.format("There is more than one endpoint with the same port, listeners: %s", listeners));
             }
         }
 

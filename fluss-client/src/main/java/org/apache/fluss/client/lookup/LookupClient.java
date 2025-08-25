@@ -63,11 +63,8 @@ public class LookupClient {
     public LookupClient(Configuration conf, MetadataUpdater metadataUpdater) {
         this.lookupQueue = new LookupQueue(conf);
         this.lookupSenderThreadPool = createThreadPool();
-        this.lookupSender =
-                new LookupSender(
-                        metadataUpdater,
-                        lookupQueue,
-                        conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_SIZE));
+        this.lookupSender = new LookupSender(
+                metadataUpdater, lookupQueue, conf.getInt(ConfigOptions.CLIENT_LOOKUP_MAX_INFLIGHT_SIZE));
         lookupSenderThreadPool.submit(lookupSender);
     }
 
@@ -99,12 +96,10 @@ public class LookupClient {
         if (lookupSenderThreadPool != null) {
             lookupSenderThreadPool.shutdown();
             try {
-                if (lookupSenderThreadPool.awaitTermination(
-                        timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                if (lookupSenderThreadPool.awaitTermination(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
                     lookupSenderThreadPool.shutdownNow();
 
-                    if (!lookupSenderThreadPool.awaitTermination(
-                            timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                    if (!lookupSenderThreadPool.awaitTermination(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
                         LOG.error("Failed to shutdown lookup client.");
                     }
                 }

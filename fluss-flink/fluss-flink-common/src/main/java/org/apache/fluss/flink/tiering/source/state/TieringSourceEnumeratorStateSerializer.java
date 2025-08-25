@@ -22,11 +22,9 @@ import org.apache.flink.core.io.SimpleVersionedSerializer;
 import java.io.IOException;
 
 /** Serializer for {@link TieringSourceEnumeratorState}. */
-public class TieringSourceEnumeratorStateSerializer
-        implements SimpleVersionedSerializer<TieringSourceEnumeratorState> {
+public class TieringSourceEnumeratorStateSerializer implements SimpleVersionedSerializer<TieringSourceEnumeratorState> {
 
-    public static final TieringSourceEnumeratorStateSerializer INSTANCE =
-            new TieringSourceEnumeratorStateSerializer();
+    public static final TieringSourceEnumeratorStateSerializer INSTANCE = new TieringSourceEnumeratorStateSerializer();
 
     private static final int VERSION = 0;
     private static final int CURRENT_VERSION = VERSION;
@@ -43,8 +41,7 @@ public class TieringSourceEnumeratorStateSerializer
     }
 
     @Override
-    public TieringSourceEnumeratorState deserialize(int version, byte[] serialized)
-            throws IOException {
+    public TieringSourceEnumeratorState deserialize(int version, byte[] serialized) throws IOException {
         // new state
         return new TieringSourceEnumeratorState();
     }

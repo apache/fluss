@@ -154,10 +154,7 @@ public class ReplicaTestBase {
 
     @BeforeAll
     static void baseBeforeAll() {
-        zkClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        zkClient = ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getZooKeeperClient(NOPErrorHandler.INSTANCE);
     }
 
     @BeforeEach
@@ -184,8 +181,7 @@ public class ReplicaTestBase {
         kvManager = KvManager.create(conf, zkClient, logManager);
         kvManager.startup();
 
-        serverMetadataCache =
-                new TabletServerMetadataCache(new MetadataManager(zkClient, conf), zkClient);
+        serverMetadataCache = new TabletServerMetadataCache(new MetadataManager(zkClient, conf), zkClient);
         initMetadataCache(serverMetadataCache);
 
         rpcClient = RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false);
@@ -204,59 +200,42 @@ public class ReplicaTestBase {
     }
 
     private void initMetadataCache(TabletServerMetadataCache metadataCache) {
-        metadataCache.updateClusterMetadata(
-                new ClusterMetadata(
+        metadataCache.updateClusterMetadata(new ClusterMetadata(
+                new ServerInfo(
+                        0, null, Endpoint.fromListenersString("CLIENT://localhost:1234"), ServerType.COORDINATOR),
+                new HashSet<>(Arrays.asList(
                         new ServerInfo(
-                                0,
-                                null,
-                                Endpoint.fromListenersString("CLIENT://localhost:1234"),
-                                ServerType.COORDINATOR),
-                        new HashSet<>(
-                                Arrays.asList(
-                                        new ServerInfo(
-                                                TABLET_SERVER_ID,
-                                                TABLET_SERVER_RACK,
-                                                Endpoint.fromListenersString(
-                                                        "CLIENT://localhost:90"),
-                                                ServerType.TABLET_SERVER),
-                                        new ServerInfo(
-                                                2,
-                                                "rack2",
-                                                Endpoint.fromListenersString(
-                                                        "CLIENT://localhost:91"),
-                                                ServerType.TABLET_SERVER),
-                                        new ServerInfo(
-                                                3,
-                                                "rack3",
-                                                Endpoint.fromListenersString(
-                                                        "CLIENT://localhost:92"),
-                                                ServerType.TABLET_SERVER)))));
+                                TABLET_SERVER_ID,
+                                TABLET_SERVER_RACK,
+                                Endpoint.fromListenersString("CLIENT://localhost:90"),
+                                ServerType.TABLET_SERVER),
+                        new ServerInfo(
+                                2,
+                                "rack2",
+                                Endpoint.fromListenersString("CLIENT://localhost:91"),
+                                ServerType.TABLET_SERVER),
+                        new ServerInfo(
+                                3,
+                                "rack3",
+                                Endpoint.fromListenersString("CLIENT://localhost:92"),
+                                ServerType.TABLET_SERVER)))));
     }
 
     private void registerTableInZkClient() throws Exception {
         TableDescriptor data1NonPkTableDescriptor =
                 TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(3).build();
-        zkClient.registerTable(
-                DATA1_TABLE_PATH,
-                TableRegistration.newTable(DATA1_TABLE_ID, data1NonPkTableDescriptor));
+        zkClient.registerTable(DATA1_TABLE_PATH, TableRegistration.newTable(DATA1_TABLE_ID, data1NonPkTableDescriptor));
         zkClient.registerSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
         zkClient.registerTable(
-                DATA1_TABLE_PATH_PK,
-                TableRegistration.newTable(DATA1_TABLE_ID_PK, DATA1_TABLE_DESCRIPTOR_PK));
+                DATA1_TABLE_PATH_PK, TableRegistration.newTable(DATA1_TABLE_ID_PK, DATA1_TABLE_DESCRIPTOR_PK));
         zkClient.registerSchema(DATA1_TABLE_PATH_PK, DATA1_SCHEMA_PK);
 
-        zkClient.registerTable(
-                DATA2_TABLE_PATH,
-                TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
+        zkClient.registerTable(DATA2_TABLE_PATH, TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
         zkClient.registerSchema(DATA2_TABLE_PATH, DATA2_SCHEMA);
     }
 
     protected long registerTableInZkClient(
-            TablePath tablePath,
-            Schema schema,
-            long tableId,
-            List<String> bucketKeys,
-            Map<String, String> properties)
+            TablePath tablePath, Schema schema, long tableId, List<String> bucketKeys, Map<String, String> properties)
             throws Exception {
         TableDescriptor.Builder builder =
                 TableDescriptor.builder().schema(schema).distributedBy(3, bucketKeys);
@@ -271,8 +250,7 @@ public class ReplicaTestBase {
         return tableId;
     }
 
-    protected ReplicaManager buildReplicaManager(CoordinatorGateway coordinatorGateway)
-            throws Exception {
+    protected ReplicaManager buildReplicaManager(CoordinatorGateway coordinatorGateway) throws Exception {
         return new ReplicaManager(
                 conf,
                 scheduler,
@@ -343,31 +321,25 @@ public class ReplicaTestBase {
 
     protected void makeLogTableAsLeader(
             TableBucket tb, List<Integer> replicas, List<Integer> isr, boolean partitionTable) {
-        makeLeaderAndFollower(
-                Collections.singletonList(
-                        new NotifyLeaderAndIsrData(
-                                partitionTable
-                                        ? DATA1_PHYSICAL_TABLE_PATH_PA_2024
-                                        : DATA1_PHYSICAL_TABLE_PATH,
-                                tb,
-                                replicas,
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        INITIAL_LEADER_EPOCH,
-                                        isr,
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))));
+        makeLeaderAndFollower(Collections.singletonList(new NotifyLeaderAndIsrData(
+                partitionTable ? DATA1_PHYSICAL_TABLE_PATH_PA_2024 : DATA1_PHYSICAL_TABLE_PATH,
+                tb,
+                replicas,
+                new LeaderAndIsr(
+                        TABLET_SERVER_ID,
+                        INITIAL_LEADER_EPOCH,
+                        isr,
+                        INITIAL_COORDINATOR_EPOCH,
+                        INITIAL_BUCKET_EPOCH))));
     }
 
     // TODO this is only for single tablet server unit test.
     // TODO add more test cases for partition table which make leader by this method.
     protected void makeKvTableAsLeader(long tableId, TablePath tablePath, int bucketId) {
-        makeKvTableAsLeader(
-                new TableBucket(tableId, bucketId), tablePath, INITIAL_LEADER_EPOCH, false);
+        makeKvTableAsLeader(new TableBucket(tableId, bucketId), tablePath, INITIAL_LEADER_EPOCH, false);
     }
 
-    protected void makeKvTableAsLeader(
-            TableBucket tb, TablePath tablePath, int leaderEpoch, boolean partitionTable) {
+    protected void makeKvTableAsLeader(TableBucket tb, TablePath tablePath, int leaderEpoch, boolean partitionTable) {
         makeKvTableAsLeader(
                 tb,
                 tablePath,
@@ -384,42 +356,34 @@ public class ReplicaTestBase {
             List<Integer> isr,
             int leaderEpoch,
             boolean partitionTable) {
-        makeLeaderAndFollower(
-                Collections.singletonList(
-                        new NotifyLeaderAndIsrData(
-                                partitionTable
-                                        ? DATA1_PHYSICAL_TABLE_PATH_PK_PA_2024
-                                        : PhysicalTablePath.of(tablePath),
-                                tb,
-                                replicas,
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        leaderEpoch,
-                                        isr,
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        // use leader epoch as bucket epoch
-                                        leaderEpoch))));
+        makeLeaderAndFollower(Collections.singletonList(new NotifyLeaderAndIsrData(
+                partitionTable ? DATA1_PHYSICAL_TABLE_PATH_PK_PA_2024 : PhysicalTablePath.of(tablePath),
+                tb,
+                replicas,
+                new LeaderAndIsr(
+                        TABLET_SERVER_ID,
+                        leaderEpoch,
+                        isr,
+                        INITIAL_COORDINATOR_EPOCH,
+                        // use leader epoch as bucket epoch
+                        leaderEpoch))));
     }
 
     protected void makeLeaderAndFollower(List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList) {
         replicaManager.becomeLeaderOrFollower(0, notifyLeaderAndIsrDataList, result -> {});
     }
 
-    protected Replica makeLogReplica(PhysicalTablePath physicalTablePath, TableBucket tableBucket)
-            throws Exception {
+    protected Replica makeLogReplica(PhysicalTablePath physicalTablePath, TableBucket tableBucket) throws Exception {
         return makeReplica(physicalTablePath, tableBucket, false, null);
     }
 
     protected Replica makeKvReplica(
-            PhysicalTablePath physicalTablePath,
-            TableBucket tableBucket,
-            SnapshotContext snapshotContext)
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket, SnapshotContext snapshotContext)
             throws Exception {
         return makeReplica(physicalTablePath, tableBucket, true, snapshotContext);
     }
 
-    protected Replica makeKvReplica(PhysicalTablePath physicalTablePath, TableBucket tableBucket)
-            throws Exception {
+    protected Replica makeKvReplica(PhysicalTablePath physicalTablePath, TableBucket tableBucket) throws Exception {
         return makeReplica(physicalTablePath, tableBucket, true, null);
     }
 
@@ -430,14 +394,11 @@ public class ReplicaTestBase {
             @Nullable SnapshotContext snapshotContext)
             throws Exception {
         if (snapshotContext == null) {
-            snapshotContext =
-                    new TestSnapshotContext(conf.getString(ConfigOptions.REMOTE_DATA_DIR));
+            snapshotContext = new TestSnapshotContext(conf.getString(ConfigOptions.REMOTE_DATA_DIR));
         }
-        BucketMetricGroup metricGroup =
-                replicaManager
-                        .getServerMetricGroup()
-                        .addPhysicalTableBucketMetricGroup(
-                                physicalTablePath, tableBucket.getBucket(), isPkTable);
+        BucketMetricGroup metricGroup = replicaManager
+                .getServerMetricGroup()
+                .addPhysicalTableBucketMetricGroup(physicalTablePath, tableBucket.getBucket(), isPkTable);
         return new Replica(
                 physicalTablePath,
                 tableBucket,
@@ -446,11 +407,8 @@ public class ReplicaTestBase {
                 conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis(),
                 conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER),
                 TABLET_SERVER_ID,
-                new OffsetCheckpointFile.LazyOffsetCheckpoints(
-                        new OffsetCheckpointFile(
-                                new File(
-                                        conf.getString(ConfigOptions.DATA_DIR),
-                                        HIGH_WATERMARK_CHECKPOINT_FILE_NAME))),
+                new OffsetCheckpointFile.LazyOffsetCheckpoints(new OffsetCheckpointFile(
+                        new File(conf.getString(ConfigOptions.DATA_DIR), HIGH_WATERMARK_CHECKPOINT_FILE_NAME))),
                 replicaManager.getDelayedWriteManager(),
                 replicaManager.getDelayedFetchLogManager(),
                 replicaManager.getAdjustIsrManager(),
@@ -465,18 +423,11 @@ public class ReplicaTestBase {
     private void initRemoteLogEnv() throws Exception {
         remoteLogStorage = new TestingRemoteLogStorage(conf);
         remoteLogTaskScheduler = new ManuallyTriggeredScheduledExecutorService();
-        remoteLogManager =
-                new RemoteLogManager(
-                        conf,
-                        zkClient,
-                        testCoordinatorGateway,
-                        remoteLogStorage,
-                        remoteLogTaskScheduler,
-                        manualClock);
+        remoteLogManager = new RemoteLogManager(
+                conf, zkClient, testCoordinatorGateway, remoteLogStorage, remoteLogTaskScheduler, manualClock);
     }
 
-    protected void addMultiSegmentsToLogTablet(LogTablet logTablet, int numSegments)
-            throws Exception {
+    protected void addMultiSegmentsToLogTablet(LogTablet logTablet, int numSegments) throws Exception {
         addMultiSegmentsToLogTablet(logTablet, numSegments, true);
     }
 
@@ -484,8 +435,8 @@ public class ReplicaTestBase {
      * Add multi segments to log tablet. The segments including four none-active segments and one
      * active segment.
      */
-    protected void addMultiSegmentsToLogTablet(
-            LogTablet logTablet, int numSegments, boolean advanceClock) throws Exception {
+    protected void addMultiSegmentsToLogTablet(LogTablet logTablet, int numSegments, boolean advanceClock)
+            throws Exception {
         if (logTablet.activeLogSegment().getSizeInBytes() > 0) {
             // roll active segment if it is not empty.
             logTablet.roll(Optional.empty());
@@ -497,12 +448,8 @@ public class ReplicaTestBase {
             for (int j = 0; j < DATA1.size(); j++) {
                 // use clock to mock a unique writer id at a time.
                 long writerId = manualClock.milliseconds();
-                MemoryLogRecords records =
-                        genMemoryLogRecordsWithWriterId(
-                                Collections.singletonList(DATA1.get(j)),
-                                writerId,
-                                batchSequence++,
-                                i * 10L + j);
+                MemoryLogRecords records = genMemoryLogRecordsWithWriterId(
+                        Collections.singletonList(DATA1.get(j)), writerId, batchSequence++, i * 10L + j);
                 if (advanceClock) {
                     manualClock.advanceTime(10, TimeUnit.MILLISECONDS);
                     batchSequence = 0;
@@ -521,13 +468,10 @@ public class ReplicaTestBase {
     }
 
     protected Set<String> listRemoteLogFiles(TableBucket tableBucket) throws IOException {
-        FsPath dir =
-                remoteLogTabletDir(
-                        remoteLogDir(conf),
-                        tableBucket.getPartitionId() == null
-                                ? DATA1_PHYSICAL_TABLE_PATH
-                                : DATA1_PHYSICAL_TABLE_PATH_PA_2024,
-                        tableBucket);
+        FsPath dir = remoteLogTabletDir(
+                remoteLogDir(conf),
+                tableBucket.getPartitionId() == null ? DATA1_PHYSICAL_TABLE_PATH : DATA1_PHYSICAL_TABLE_PATH_PA_2024,
+                tableBucket);
         return Arrays.stream(dir.getFileSystem().listStatus(dir))
                 .map(f -> f.getPath().getName())
                 .filter(f -> !f.equals("metadata"))
@@ -542,13 +486,9 @@ public class ReplicaTestBase {
         protected final TestingCompletedKvSnapshotCommitter testKvSnapshotStore;
         private final ExecutorService executorService;
 
-        public TestSnapshotContext(
-                String remoteKvTabletDir, TestingCompletedKvSnapshotCommitter testKvSnapshotStore)
+        public TestSnapshotContext(String remoteKvTabletDir, TestingCompletedKvSnapshotCommitter testKvSnapshotStore)
                 throws Exception {
-            this(
-                    remoteKvTabletDir,
-                    testKvSnapshotStore,
-                    new ManuallyTriggeredScheduledExecutorService());
+            this(remoteKvTabletDir, testKvSnapshotStore, new ManuallyTriggeredScheduledExecutorService());
         }
 
         public TestSnapshotContext(String remoteKvTabletDir) throws Exception {
@@ -574,8 +514,7 @@ public class ReplicaTestBase {
             this.testKvSnapshotStore = testKvSnapshotStore;
             this.executorService = Executors.newFixedThreadPool(1);
             this.scheduledExecutorService = manuallyTriggeredScheduledExecutorService;
-            closeableRegistry.registerCloseable(
-                    manuallyTriggeredScheduledExecutorService::shutdownNow);
+            closeableRegistry.registerCloseable(manuallyTriggeredScheduledExecutorService::shutdownNow);
         }
 
         @Override
@@ -627,8 +566,7 @@ public class ReplicaTestBase {
         }
 
         @Override
-        public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
-                getLatestCompletedSnapshotProvider() {
+        public FunctionWithException<TableBucket, CompletedSnapshot, Exception> getLatestCompletedSnapshotProvider() {
             return testKvSnapshotStore::getLatestCompletedSnapshot;
         }
 

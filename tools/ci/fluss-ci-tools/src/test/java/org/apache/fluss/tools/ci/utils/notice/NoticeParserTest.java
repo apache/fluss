@@ -30,49 +30,37 @@ class NoticeParserTest {
     @Test
     void testParseNoticeFileCommonPath() {
         final String module = "some-module";
-        final Dependency dependency1 =
-                Dependency.create("groupId1", "artifactId1", "version1", null);
-        final Dependency dependency2 =
-                Dependency.create("groupId2", "artifactId2", "version2", "classifier2");
-        final Dependency dependency3 =
-                Dependency.create("org.codehaus.woodstox", "stax2-api", "4.2.1", null);
-        final List<String> noticeContents =
-                Arrays.asList(
-                        module,
-                        "",
-                        "Some text about the applicable license",
-                        "- groupId1:artifactId1:version1",
-                        "- groupId2:artifactId2:classifier2:version2",
-                        "- org.codehaus.woodstox:stax2-api:4.2.1 (https://github.com/FasterXML/stax2-api/tree/stax2-api-4.2.1)",
-                        "",
-                        "some epilogue");
+        final Dependency dependency1 = Dependency.create("groupId1", "artifactId1", "version1", null);
+        final Dependency dependency2 = Dependency.create("groupId2", "artifactId2", "version2", "classifier2");
+        final Dependency dependency3 = Dependency.create("org.codehaus.woodstox", "stax2-api", "4.2.1", null);
+        final List<String> noticeContents = Arrays.asList(
+                module,
+                "",
+                "Some text about the applicable license",
+                "- groupId1:artifactId1:version1",
+                "- groupId2:artifactId2:classifier2:version2",
+                "- org.codehaus.woodstox:stax2-api:4.2.1 (https://github.com/FasterXML/stax2-api/tree/stax2-api-4.2.1)",
+                "",
+                "some epilogue");
 
-        assertThat(NoticeParser.parseNoticeFile(noticeContents))
-                .hasValueSatisfying(
-                        contents -> {
-                            assertThat(contents.getNoticeModuleName()).isEqualTo(module);
-                            assertThat(contents.getDeclaredDependencies())
-                                    .containsExactlyInAnyOrder(
-                                            dependency1, dependency2, dependency3);
-                        });
+        assertThat(NoticeParser.parseNoticeFile(noticeContents)).hasValueSatisfying(contents -> {
+            assertThat(contents.getNoticeModuleName()).isEqualTo(module);
+            assertThat(contents.getDeclaredDependencies())
+                    .containsExactlyInAnyOrder(dependency1, dependency2, dependency3);
+        });
     }
 
     @Test
     void testParseNoticeFileBundlesPath() {
         final String module = "some-module";
-        final Dependency dependency =
-                Dependency.create("groupId", "artifactId", "version", "classifier");
+        final Dependency dependency = Dependency.create("groupId", "artifactId", "version", "classifier");
         final List<String> noticeContents =
-                Arrays.asList(
-                        module, "", "Something bundles \"groupId:artifactId:classifier:version\"");
+                Arrays.asList(module, "", "Something bundles \"groupId:artifactId:classifier:version\"");
 
-        assertThat(NoticeParser.parseNoticeFile(noticeContents))
-                .hasValueSatisfying(
-                        contents -> {
-                            assertThat(contents.getNoticeModuleName()).isEqualTo(module);
-                            assertThat(contents.getDeclaredDependencies())
-                                    .containsExactlyInAnyOrder(dependency);
-                        });
+        assertThat(NoticeParser.parseNoticeFile(noticeContents)).hasValueSatisfying(contents -> {
+            assertThat(contents.getNoticeModuleName()).isEqualTo(module);
+            assertThat(contents.getDeclaredDependencies()).containsExactlyInAnyOrder(dependency);
+        });
     }
 
     @Test
@@ -81,12 +69,9 @@ class NoticeParserTest {
         final Dependency dependency = Dependency.create("groupId", "artifactId", "version", null);
         final List<String> noticeContents = Arrays.asList(module, "- " + dependency, "- a:b");
 
-        assertThat(NoticeParser.parseNoticeFile(noticeContents))
-                .hasValueSatisfying(
-                        contents -> {
-                            assertThat(contents.getNoticeModuleName()).isEqualTo(module);
-                            assertThat(contents.getDeclaredDependencies())
-                                    .containsExactlyInAnyOrder(dependency);
-                        });
+        assertThat(NoticeParser.parseNoticeFile(noticeContents)).hasValueSatisfying(contents -> {
+            assertThat(contents.getNoticeModuleName()).isEqualTo(module);
+            assertThat(contents.getDeclaredDependencies()).containsExactlyInAnyOrder(dependency);
+        });
     }
 }

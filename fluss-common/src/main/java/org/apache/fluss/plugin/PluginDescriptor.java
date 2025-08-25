@@ -37,8 +37,7 @@ public class PluginDescriptor {
      */
     private final String[] loaderExcludePatterns;
 
-    public PluginDescriptor(
-            String pluginId, URL[] pluginResourceURLs, String[] loaderExcludePatterns) {
+    public PluginDescriptor(String pluginId, URL[] pluginResourceURLs, String[] loaderExcludePatterns) {
         this.pluginId = pluginId;
         this.pluginResourceURLs = pluginResourceURLs;
         this.loaderExcludePatterns = loaderExcludePatterns;

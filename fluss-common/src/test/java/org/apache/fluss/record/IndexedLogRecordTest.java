@@ -38,8 +38,7 @@ class IndexedLogRecordTest extends LogTestBase {
         DataType[] fieldTypes = baseRowType.getChildren().toArray(new DataType[0]);
         // create row.
         IndexedRow row = new IndexedRow(fieldTypes);
-        IndexedRowWriter writer =
-                new IndexedRowWriter(baseRowType.getChildren().toArray(new DataType[0]));
+        IndexedRowWriter writer = new IndexedRowWriter(baseRowType.getChildren().toArray(new DataType[0]));
         writer.writeInt(10);
         writer.writeString(BinaryString.fromString("abc"));
         row.pointTo(writer.segment(), 0, writer.position());
@@ -47,12 +46,7 @@ class IndexedLogRecordTest extends LogTestBase {
         IndexedLogRecord.writeTo(outputView, ChangeType.APPEND_ONLY, row);
         // Test read from.
         IndexedLogRecord defaultLogRecord =
-                IndexedLogRecord.readFrom(
-                        MemorySegment.wrap(outputView.getCopyOfBuffer()),
-                        0,
-                        1000,
-                        10001,
-                        fieldTypes);
+                IndexedLogRecord.readFrom(MemorySegment.wrap(outputView.getCopyOfBuffer()), 0, 1000, 10001, fieldTypes);
 
         assertThat(defaultLogRecord.getSizeInBytes()).isEqualTo(17);
         assertThat(defaultLogRecord.logOffset()).isEqualTo(1000);
@@ -70,13 +64,8 @@ class IndexedLogRecordTest extends LogTestBase {
                 TestInternalRowGenerator.createAllRowType().getChildren().toArray(new DataType[0]);
 
         // Test read from.
-        LogRecord defaultLogRecord =
-                IndexedLogRecord.readFrom(
-                        MemorySegment.wrap(outputView.getCopyOfBuffer()),
-                        0,
-                        1000,
-                        10001,
-                        allColTypes);
+        LogRecord defaultLogRecord = IndexedLogRecord.readFrom(
+                MemorySegment.wrap(outputView.getCopyOfBuffer()), 0, 1000, 10001, allColTypes);
 
         assertThat(defaultLogRecord.logOffset()).isEqualTo(1000);
         assertThat(defaultLogRecord.timestamp()).isEqualTo(10001);

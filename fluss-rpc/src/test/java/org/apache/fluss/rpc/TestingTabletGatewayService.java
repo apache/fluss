@@ -79,8 +79,7 @@ import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
 import java.util.concurrent.CompletableFuture;
 
 /** A testing implementation of the {@link TabletServerGateway} interface. */
-public class TestingTabletGatewayService extends TestingGatewayService
-        implements TabletServerGateway {
+public class TestingTabletGatewayService extends TestingGatewayService implements TabletServerGateway {
     @Override
     public ServerType providerType() {
         return null;
@@ -98,8 +97,7 @@ public class TestingTabletGatewayService extends TestingGatewayService
     }
 
     @Override
-    public CompletableFuture<StopReplicaResponse> stopReplica(
-            StopReplicaRequest stopBucketReplicaRequest) {
+    public CompletableFuture<StopReplicaResponse> stopReplica(StopReplicaRequest stopBucketReplicaRequest) {
         return null;
     }
 
@@ -167,8 +165,7 @@ public class TestingTabletGatewayService extends TestingGatewayService
     }
 
     @Override
-    public CompletableFuture<GetDatabaseInfoResponse> getDatabaseInfo(
-            GetDatabaseInfoRequest request) {
+    public CompletableFuture<GetDatabaseInfoResponse> getDatabaseInfo(GetDatabaseInfoRequest request) {
         return null;
     }
 
@@ -208,8 +205,7 @@ public class TestingTabletGatewayService extends TestingGatewayService
     }
 
     @Override
-    public CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(
-            GetLatestKvSnapshotsRequest request) {
+    public CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(GetLatestKvSnapshotsRequest request) {
         return null;
     }
 
@@ -226,8 +222,7 @@ public class TestingTabletGatewayService extends TestingGatewayService
     }
 
     @Override
-    public CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(
-            ListPartitionInfosRequest request) {
+    public CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(ListPartitionInfosRequest request) {
         return null;
     }
 

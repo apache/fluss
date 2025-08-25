@@ -54,16 +54,15 @@ public class MockAuthServer implements Closeable {
             b.group(bossGroup, workerGroup)
                     .channel(NioServerSocketChannel.class)
                     .handler(new LoggingHandler(LogLevel.INFO))
-                    .childHandler(
-                            new ChannelInitializer<SocketChannel>() {
-                                @Override
-                                protected void initChannel(SocketChannel ch) {
-                                    ChannelPipeline p = ch.pipeline();
-                                    p.addLast(new HttpServerCodec());
-                                    p.addLast(new HttpServerExpectContinueHandler());
-                                    p.addLast(new AuthServerHandler());
-                                }
-                            });
+                    .childHandler(new ChannelInitializer<SocketChannel>() {
+                        @Override
+                        protected void initChannel(SocketChannel ch) {
+                            ChannelPipeline p = ch.pipeline();
+                            p.addLast(new HttpServerCodec());
+                            p.addLast(new HttpServerExpectContinueHandler());
+                            p.addLast(new AuthServerHandler());
+                        }
+                    });
 
             channelFuture = b.bind(8080).sync();
             return channelFuture;

@@ -47,8 +47,7 @@ class TieringSplitStateTest {
         TableBucket tableBucket = new TableBucket(1, 1024L, 2);
 
         // verify conversion between TieringLogSplitState and TieringLogSplit
-        TieringLogSplit tieringLogSplit =
-                new TieringLogSplit(tablePath, tableBucket, "partition1", 100L, 200L, 20);
+        TieringLogSplit tieringLogSplit = new TieringLogSplit(tablePath, tableBucket, "partition1", 100L, 200L, 20);
         TieringSplitState tieringLogSplitState = new TieringSplitState(tieringLogSplit);
         assertThat(tieringLogSplitState.toSourceSplit()).isEqualTo(tieringLogSplit);
     }

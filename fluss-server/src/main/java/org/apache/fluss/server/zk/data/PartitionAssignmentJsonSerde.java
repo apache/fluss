@@ -39,14 +39,12 @@ public class PartitionAssignmentJsonSerde
     private static final int VERSION = 1;
 
     @Override
-    public void serialize(PartitionAssignment partitionAssignment, JsonGenerator generator)
-            throws IOException {
+    public void serialize(PartitionAssignment partitionAssignment, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, VERSION);
 
         generator.writeNumberField(TABLE_ID, partitionAssignment.getTableId());
-        TableAssignmentJsonSerde.serializeBucketAssignments(
-                generator, partitionAssignment.getBucketAssignments());
+        TableAssignmentJsonSerde.serializeBucketAssignments(generator, partitionAssignment.getBucketAssignments());
 
         generator.writeEndObject();
     }
@@ -54,8 +52,7 @@ public class PartitionAssignmentJsonSerde
     @Override
     public PartitionAssignment deserialize(JsonNode node) {
         JsonNode bucketsNode = node.get(BUCKETS);
-        Map<Integer, BucketAssignment> assignments =
-                TableAssignmentJsonSerde.deserializeBucketAssignments(bucketsNode);
+        Map<Integer, BucketAssignment> assignments = TableAssignmentJsonSerde.deserializeBucketAssignments(bucketsNode);
         long tableId = node.get(TABLE_ID).asLong();
         return new PartitionAssignment(tableId, assignments);
     }

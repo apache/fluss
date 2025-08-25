@@ -40,9 +40,11 @@ public class ZooKeeperExtension implements CustomExtension {
 
     private static final Logger LOG = LoggerFactory.getLogger(ZooKeeperExtension.class);
 
-    @Nullable private TestingServer zooKeeperServer;
+    @Nullable
+    private TestingServer zooKeeperServer;
 
-    @Nullable private ZooKeeperClient zooKeeperClient;
+    @Nullable
+    private ZooKeeperClient zooKeeperClient;
 
     @Override
     public void before(ExtensionContext context) throws Exception {
@@ -116,7 +118,11 @@ public class ZooKeeperExtension implements CustomExtension {
     public void cleanupPath(String path) {
         checkNotNull(zooKeeperClient);
         try {
-            zooKeeperClient.getCuratorClient().delete().deletingChildrenIfNeeded().forPath(path);
+            zooKeeperClient
+                    .getCuratorClient()
+                    .delete()
+                    .deletingChildrenIfNeeded()
+                    .forPath(path);
         } catch (KeeperException.NoNodeException ignored) {
             // ignore, some tests may not create any nodes
         } catch (Exception e) {

@@ -36,23 +36,21 @@ public abstract class TieringSplit implements SourceSplit {
 
     protected final TablePath tablePath;
     protected final TableBucket tableBucket;
-    @Nullable protected final String partitionName;
+
+    @Nullable
+    protected final String partitionName;
 
     // the total number of splits in one round of tiering
     protected final int numberOfSplits;
 
     public TieringSplit(
-            TablePath tablePath,
-            TableBucket tableBucket,
-            @Nullable String partitionName,
-            int numberOfSplits) {
+            TablePath tablePath, TableBucket tableBucket, @Nullable String partitionName, int numberOfSplits) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.partitionName = partitionName;
         if ((tableBucket.getPartitionId() == null && partitionName != null)
                 || (tableBucket.getPartitionId() != null && partitionName == null)) {
-            throw new IllegalArgumentException(
-                    "Partition name and partition id must be both null or both not null.");
+            throw new IllegalArgumentException("Partition name and partition id must be both null or both not null.");
         }
         this.numberOfSplits = numberOfSplits;
     }

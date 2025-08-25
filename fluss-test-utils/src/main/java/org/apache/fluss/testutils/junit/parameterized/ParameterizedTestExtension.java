@@ -46,8 +46,7 @@ import java.util.stream.Stream;
  */
 public class ParameterizedTestExtension implements TestTemplateInvocationContextProvider {
 
-    private static final ExtensionContext.Namespace NAMESPACE =
-            ExtensionContext.Namespace.create("parameterized");
+    private static final ExtensionContext.Namespace NAMESPACE = ExtensionContext.Namespace.create("parameterized");
     private static final String PARAMETERS_STORE_KEY = "parameters";
     private static final String PARAMETER_FIELD_STORE_KEY_PREFIX = "parameterField_";
     private static final String INDEX_TEMPLATE = "{index}";
@@ -58,15 +57,11 @@ public class ParameterizedTestExtension implements TestTemplateInvocationContext
     }
 
     @Override
-    public Stream<TestTemplateInvocationContext> provideTestTemplateInvocationContexts(
-            ExtensionContext context) {
+    public Stream<TestTemplateInvocationContext> provideTestTemplateInvocationContexts(ExtensionContext context) {
 
         // Search method annotated with @Parameters
-        final List<Method> parameterProviders =
-                AnnotationSupport.findAnnotatedMethods(
-                        context.getRequiredTestClass(),
-                        Parameters.class,
-                        HierarchyTraversalMode.TOP_DOWN);
+        final List<Method> parameterProviders = AnnotationSupport.findAnnotatedMethods(
+                context.getRequiredTestClass(), Parameters.class, HierarchyTraversalMode.TOP_DOWN);
         if (parameterProviders.isEmpty()) {
             throw new IllegalStateException("Cannot find any parameter provider");
         }
@@ -76,7 +71,8 @@ public class ParameterizedTestExtension implements TestTemplateInvocationContext
 
         Method parameterProvider = parameterProviders.get(0);
         // Get potential test name
-        String testNameTemplate = parameterProvider.getAnnotation(Parameters.class).name();
+        String testNameTemplate =
+                parameterProvider.getAnnotation(Parameters.class).name();
 
         // Get parameter values
         final Object parameterValues;
@@ -92,31 +88,26 @@ public class ParameterizedTestExtension implements TestTemplateInvocationContext
         // Parameter values could be Object[][]
         if (parameterValues instanceof Object[][]) {
             Object[][] typedParameterValues = (Object[][]) parameterValues;
-            return createContextForParameters(
-                    Arrays.stream(typedParameterValues), testNameTemplate, context);
+            return createContextForParameters(Arrays.stream(typedParameterValues), testNameTemplate, context);
         }
 
         // or a Collection
         if (parameterValues instanceof Collection) {
             final Collection<?> typedParameterValues = (Collection<?>) parameterValues;
-            final Stream<Object[]> parameterValueStream =
-                    typedParameterValues.stream()
-                            .map(
-                                    (Function<Object, Object[]>)
-                                            parameterValue -> {
-                                                if (parameterValue instanceof Object[]) {
-                                                    return (Object[]) parameterValue;
-                                                } else {
-                                                    return new Object[] {parameterValue};
-                                                }
-                                            });
+            final Stream<Object[]> parameterValueStream = typedParameterValues.stream()
+                    .map((Function<Object, Object[]>) parameterValue -> {
+                        if (parameterValue instanceof Object[]) {
+                            return (Object[]) parameterValue;
+                        } else {
+                            return new Object[] {parameterValue};
+                        }
+                    });
             return createContextForParameters(parameterValueStream, testNameTemplate, context);
         }
 
-        throw new IllegalStateException(
-                String.format(
-                        "Return type of @Parameters annotated method \"%s\" should be either Object[][] or Collection",
-                        parameterProvider));
+        throw new IllegalStateException(String.format(
+                "Return type of @Parameters annotated method \"%s\" should be either Object[][] or Collection",
+                parameterProvider));
     }
 
     private static class FieldInjectingInvocationContext implements TestTemplateInvocationContext {
@@ -155,21 +146,18 @@ public class ParameterizedTestExtension implements TestTemplateInvocationContext
             public void beforeEach(ExtensionContext context) throws Exception {
                 for (int i = 0; i < parameterValues.length; i++) {
                     getParameterField(i, context).setAccessible(true);
-                    getParameterField(i, context)
-                            .set(context.getRequiredTestInstance(), parameterValues[i]);
+                    getParameterField(i, context).set(context.getRequiredTestInstance(), parameterValues[i]);
                 }
             }
         }
     }
 
-    private static class ConstructorParameterResolverInvocationContext
-            implements TestTemplateInvocationContext {
+    private static class ConstructorParameterResolverInvocationContext implements TestTemplateInvocationContext {
 
         private final String testNameTemplate;
         private final Object[] parameterValues;
 
-        public ConstructorParameterResolverInvocationContext(
-                String testNameTemplate, Object[] parameterValues) {
+        public ConstructorParameterResolverInvocationContext(String testNameTemplate, Object[] parameterValues) {
             this.testNameTemplate = testNameTemplate;
             this.parameterValues = parameterValues;
         }
@@ -197,15 +185,13 @@ public class ParameterizedTestExtension implements TestTemplateInvocationContext
             }
 
             @Override
-            public boolean supportsParameter(
-                    ParameterContext parameterContext, ExtensionContext extensionContext)
+            public boolean supportsParameter(ParameterContext parameterContext, ExtensionContext extensionContext)
                     throws ParameterResolutionException {
                 return true;
             }
 
             @Override
-            public Object resolveParameter(
-                    ParameterContext parameterContext, ExtensionContext extensionContext)
+            public Object resolveParameter(ParameterContext parameterContext, ExtensionContext extensionContext)
                     throws ParameterResolutionException {
                 return parameterValues[parameterContext.getIndex()];
             }
@@ -215,20 +201,15 @@ public class ParameterizedTestExtension implements TestTemplateInvocationContext
     // -------------------------------- Helper functions -------------------------------------------
 
     private Stream<TestTemplateInvocationContext> createContextForParameters(
-            Stream<Object[]> parameterValueStream,
-            String testNameTemplate,
-            ExtensionContext context) {
+            Stream<Object[]> parameterValueStream, String testNameTemplate, ExtensionContext context) {
         // Search fields annotated by @Parameter
         final List<Field> parameterFields =
-                AnnotationSupport.findAnnotatedFields(
-                        context.getRequiredTestClass(), Parameter.class);
+                AnnotationSupport.findAnnotatedFields(context.getRequiredTestClass(), Parameter.class);
 
         // Use constructor parameter style
         if (parameterFields.isEmpty()) {
-            return parameterValueStream.map(
-                    parameterValue ->
-                            new ConstructorParameterResolverInvocationContext(
-                                    testNameTemplate, parameterValue));
+            return parameterValueStream.map(parameterValue ->
+                    new ConstructorParameterResolverInvocationContext(testNameTemplate, parameterValue));
         }
 
         // Use field injection style
@@ -237,8 +218,7 @@ public class ParameterizedTestExtension implements TestTemplateInvocationContext
             context.getStore(NAMESPACE).put(getParameterFieldStoreKey(index), parameterField);
         }
         return parameterValueStream.map(
-                parameterValue ->
-                        new FieldInjectingInvocationContext(testNameTemplate, parameterValue));
+                parameterValue -> new FieldInjectingInvocationContext(testNameTemplate, parameterValue));
     }
 
     private static String getParameterFieldStoreKey(int parameterIndex) {

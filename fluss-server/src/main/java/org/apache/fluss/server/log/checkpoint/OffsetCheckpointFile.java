@@ -59,10 +59,7 @@ public final class OffsetCheckpointFile {
 
     public OffsetCheckpointFile(File file) throws IOException {
         this.checkpoint =
-                new CheckpointFile<>(
-                        file,
-                        OffsetCheckpointFile.CURRENT_VERSION,
-                        new OffsetCheckpointFile.Formatter());
+                new CheckpointFile<>(file, OffsetCheckpointFile.CURRENT_VERSION, new OffsetCheckpointFile.Formatter());
     }
 
     public void write(Map<TableBucket, Long> offsets) {
@@ -95,8 +92,7 @@ public final class OffsetCheckpointFile {
     }
 
     /** Formatter for offset checkpoint file. */
-    public static class Formatter
-            implements CheckpointFile.EntryFormatter<Pair<TableBucket, Long>> {
+    public static class Formatter implements CheckpointFile.EntryFormatter<Pair<TableBucket, Long>> {
 
         @Override
         public String toString(Pair<TableBucket, Long> entry) {
@@ -128,8 +124,7 @@ public final class OffsetCheckpointFile {
                 long partitionId = Long.parseLong(parts[1]);
                 int bucketId = Integer.parseInt(parts[2]);
                 long offset = Long.parseLong(parts[3]);
-                return Optional.of(
-                        new MutablePair<>(new TableBucket(tableId, partitionId, bucketId), offset));
+                return Optional.of(new MutablePair<>(new TableBucket(tableId, partitionId, bucketId), offset));
             } else {
                 return Optional.empty();
             }

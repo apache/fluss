@@ -164,8 +164,7 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
     }
 
     private void resize(int minCapacityAdd) throws IOException {
-        int newLen =
-                Math.max(this.memorySegment.size() * 2, this.memorySegment.size() + minCapacityAdd);
+        int newLen = Math.max(this.memorySegment.size() * 2, this.memorySegment.size() + minCapacityAdd);
         byte[] nb;
         try {
             nb = new byte[newLen];
@@ -189,9 +188,7 @@ public class MemorySegmentOutputView implements OutputView, MemorySegmentWritabl
                 }
             } else {
                 throw new IOException(
-                        "Failed to serialize element. Serialized size (> "
-                                + newLen
-                                + " bytes) exceeds JVM heap space",
+                        "Failed to serialize element. Serialized size (> " + newLen + " bytes) exceeds JVM heap space",
                         e);
             }
         }

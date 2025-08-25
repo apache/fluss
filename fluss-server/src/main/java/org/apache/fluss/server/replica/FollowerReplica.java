@@ -67,32 +67,22 @@ final class FollowerReplica {
      * frequency.
      */
     void updateFetchState(
-            LogOffsetMetadata followerFetchOffsetMetadata,
-            long followerFetchTimeMs,
-            long leaderEndOffset) {
-        followerReplicaState.updateAndGet(
-                currentReplicaState -> {
-                    long lastCaughtUpTimeMs = currentReplicaState.getLastCaughtUpTimeMs();
-                    if (followerFetchOffsetMetadata.getMessageOffset() >= leaderEndOffset) {
-                        lastCaughtUpTimeMs =
-                                Math.max(
-                                        currentReplicaState.getLastCaughtUpTimeMs(),
-                                        followerFetchTimeMs);
-                    } else if (followerFetchOffsetMetadata.getMessageOffset()
-                            >= currentReplicaState.getLastFetchLeaderLogEndOffset()) {
-                        lastCaughtUpTimeMs =
-                                Math.max(
-                                        currentReplicaState.getLastCaughtUpTimeMs(),
-                                        currentReplicaState.getLastFetchTimeMs());
-                    }
-                    return new FollowerReplicaState(
-                            followerFetchOffsetMetadata,
-                            Math.max(
-                                    leaderEndOffset,
-                                    currentReplicaState.getLastFetchLeaderLogEndOffset()),
-                            followerFetchTimeMs,
-                            lastCaughtUpTimeMs);
-                });
+            LogOffsetMetadata followerFetchOffsetMetadata, long followerFetchTimeMs, long leaderEndOffset) {
+        followerReplicaState.updateAndGet(currentReplicaState -> {
+            long lastCaughtUpTimeMs = currentReplicaState.getLastCaughtUpTimeMs();
+            if (followerFetchOffsetMetadata.getMessageOffset() >= leaderEndOffset) {
+                lastCaughtUpTimeMs = Math.max(currentReplicaState.getLastCaughtUpTimeMs(), followerFetchTimeMs);
+            } else if (followerFetchOffsetMetadata.getMessageOffset()
+                    >= currentReplicaState.getLastFetchLeaderLogEndOffset()) {
+                lastCaughtUpTimeMs =
+                        Math.max(currentReplicaState.getLastCaughtUpTimeMs(), currentReplicaState.getLastFetchTimeMs());
+            }
+            return new FollowerReplicaState(
+                    followerFetchOffsetMetadata,
+                    Math.max(leaderEndOffset, currentReplicaState.getLastFetchLeaderLogEndOffset()),
+                    followerFetchTimeMs,
+                    lastCaughtUpTimeMs);
+        });
     }
 
     /**
@@ -100,31 +90,23 @@ final class FollowerReplica {
      * accordingly.
      */
     void resetFollowerReplicaState(
-            long currentTimeMs,
-            long leaderEndOffset,
-            boolean isNewLeader,
-            boolean isFollowerInSync) {
-        followerReplicaState.updateAndGet(
-                currentReplicaState -> {
-                    // When the leader is elected or re-elected, the follower's last caught up time
-                    // is set to the current time if the follower is in the ISR, else to 0. The
-                    // latter is done to ensure that the high watermark is not hold back
-                    // unnecessarily for a follower which is not in the ISR anymore.
-                    long lastCaughtUpTimeMs = isFollowerInSync ? currentTimeMs : 0L;
-                    if (isNewLeader) {
-                        return new FollowerReplicaState(
-                                LogOffsetMetadata.UNKNOWN_OFFSET_METADATA,
-                                -1L,
-                                0L,
-                                lastCaughtUpTimeMs);
-                    } else {
-                        return new FollowerReplicaState(
-                                currentReplicaState.getLogEndOffsetMetadata(),
-                                leaderEndOffset,
-                                isFollowerInSync ? currentTimeMs : 0L,
-                                lastCaughtUpTimeMs);
-                    }
-                });
+            long currentTimeMs, long leaderEndOffset, boolean isNewLeader, boolean isFollowerInSync) {
+        followerReplicaState.updateAndGet(currentReplicaState -> {
+            // When the leader is elected or re-elected, the follower's last caught up time
+            // is set to the current time if the follower is in the ISR, else to 0. The
+            // latter is done to ensure that the high watermark is not hold back
+            // unnecessarily for a follower which is not in the ISR anymore.
+            long lastCaughtUpTimeMs = isFollowerInSync ? currentTimeMs : 0L;
+            if (isNewLeader) {
+                return new FollowerReplicaState(LogOffsetMetadata.UNKNOWN_OFFSET_METADATA, -1L, 0L, lastCaughtUpTimeMs);
+            } else {
+                return new FollowerReplicaState(
+                        currentReplicaState.getLogEndOffsetMetadata(),
+                        leaderEndOffset,
+                        isFollowerInSync ? currentTimeMs : 0L,
+                        lastCaughtUpTimeMs);
+            }
+        });
         LOG.trace("Reset state of follower replica to  {}", this);
     }
 
@@ -212,8 +194,7 @@ final class FollowerReplica {
          * replica lag.
          */
         boolean isCaughtUp(long leaderEndOffset, long currentTimeMs, long replicaMaxLagMs) {
-            return leaderEndOffset == getLogEndOffset()
-                    || currentTimeMs - lastCaughtUpTimeMs <= replicaMaxLagMs;
+            return leaderEndOffset == getLogEndOffset() || currentTimeMs - lastCaughtUpTimeMs <= replicaMaxLagMs;
         }
 
         @Override

@@ -77,12 +77,11 @@ public class IcebergConfiguration implements Serializable {
     }
 
     private static Object loadHadoopConfig(Configuration flussConfig) {
-        Class<?> configClass =
-                DynClasses.builder()
-                        .impl("org.apache.hadoop.hdfs.HdfsConfiguration")
-                        .impl("org.apache.hadoop.conf.Configuration")
-                        .orNull()
-                        .build();
+        Class<?> configClass = DynClasses.builder()
+                .impl("org.apache.hadoop.hdfs.HdfsConfiguration")
+                .impl("org.apache.hadoop.conf.Configuration")
+                .orNull()
+                .build();
 
         if (configClass == null) {
             LOG.info("Hadoop not found on classpath, not creating Hadoop config");

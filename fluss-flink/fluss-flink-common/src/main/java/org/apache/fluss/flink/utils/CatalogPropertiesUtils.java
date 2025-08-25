@@ -74,8 +74,7 @@ public class CatalogPropertiesUtils {
 
     private static final String WATERMARK_STRATEGY_EXPR = compoundKey(WATERMARK_STRATEGY, EXPR);
 
-    private static final String WATERMARK_STRATEGY_DATA_TYPE =
-            compoundKey(WATERMARK_STRATEGY, DATA_TYPE);
+    private static final String WATERMARK_STRATEGY_DATA_TYPE = compoundKey(WATERMARK_STRATEGY, DATA_TYPE);
 
     private static final String COMMENT = "comment";
     private static final Pattern SCHEMA_COLUMN_NAME_SUFFIX = Pattern.compile("\\d+\\.name");
@@ -97,8 +96,7 @@ public class CatalogPropertiesUtils {
         }
     }
 
-    public static void deserializeComputedColumn(
-            Map<String, String> map, int columnIndex, Schema.Builder builder) {
+    public static void deserializeComputedColumn(Map<String, String> map, int columnIndex, Schema.Builder builder) {
         final String nameKey = columnKey(columnIndex);
         final String exprKey = compoundKey(SCHEMA, columnIndex, EXPR);
         final String expr = getValue(map, exprKey);
@@ -126,12 +124,10 @@ public class CatalogPropertiesUtils {
             values.add(Arrays.asList(names[i], dataTypes[i], expressions[i], comments[i]));
         }
 
-        putIndexedProperties(
-                map, SCHEMA, Arrays.asList(NAME, DATA_TYPE, EXPR, COMMENT), values, idxList);
+        putIndexedProperties(map, SCHEMA, Arrays.asList(NAME, DATA_TYPE, EXPR, COMMENT), values, idxList);
     }
 
-    public static int nonPhysicalColumnsCount(
-            Map<String, String> tableOptions, List<String> physicalColumns) {
+    public static int nonPhysicalColumnsCount(Map<String, String> tableOptions, List<String> physicalColumns) {
         int count = 0;
         for (Map.Entry<String, String> entry : tableOptions.entrySet()) {
             if (isColumnNameKey(entry.getKey()) && !physicalColumns.contains(entry.getValue())) {
@@ -143,19 +139,20 @@ public class CatalogPropertiesUtils {
 
     private static boolean isColumnNameKey(String key) {
         return key.startsWith(SCHEMA)
-                && SCHEMA_COLUMN_NAME_SUFFIX.matcher(key.substring(SCHEMA.length() + 1)).matches();
+                && SCHEMA_COLUMN_NAME_SUFFIX
+                        .matcher(key.substring(SCHEMA.length() + 1))
+                        .matches();
     }
 
     public static String[] serializeComputedColumns(List<Column> columns) {
         return columns.stream()
-                .map(
-                        column -> {
-                            if (column instanceof Column.ComputedColumn) {
-                                final Column.ComputedColumn c = (Column.ComputedColumn) column;
-                                return serializeResolvedExpression(c.getExpression());
-                            }
-                            return null;
-                        })
+                .map(column -> {
+                    if (column instanceof Column.ComputedColumn) {
+                        final Column.ComputedColumn c = (Column.ComputedColumn) column;
+                        return serializeResolvedExpression(c.getExpression());
+                    }
+                    return null;
+                })
                 .toArray(String[]::new);
     }
 
@@ -178,20 +175,15 @@ public class CatalogPropertiesUtils {
         if (!specs.isEmpty()) {
             final List<List<String>> watermarkValues = new ArrayList<>();
             for (WatermarkSpec spec : specs) {
-                watermarkValues.add(
-                        Arrays.asList(
-                                spec.getRowtimeAttribute(),
-                                serializeResolvedExpression(spec.getWatermarkExpression()),
-                                serializeDataType(
-                                        spec.getWatermarkExpression().getOutputDataType())));
+                watermarkValues.add(Arrays.asList(
+                        spec.getRowtimeAttribute(),
+                        serializeResolvedExpression(spec.getWatermarkExpression()),
+                        serializeDataType(spec.getWatermarkExpression().getOutputDataType())));
             }
             putIndexedProperties(
                     map,
                     compoundKey(SCHEMA, WATERMARK),
-                    Arrays.asList(
-                            WATERMARK_ROWTIME,
-                            WATERMARK_STRATEGY_EXPR,
-                            WATERMARK_STRATEGY_DATA_TYPE),
+                    Arrays.asList(WATERMARK_ROWTIME, WATERMARK_STRATEGY_EXPR, WATERMARK_STRATEGY_DATA_TYPE),
                     watermarkValues);
         }
     }
@@ -212,10 +204,7 @@ public class CatalogPropertiesUtils {
      * <p>The arity of each subKeyValues must match the arity of propertyKeys.
      */
     private static void putIndexedProperties(
-            Map<String, String> map,
-            String key,
-            List<String> subKeys,
-            List<List<String>> subKeyValues) {
+            Map<String, String> map, String key, List<String> subKeys, List<List<String>> subKeyValues) {
         checkNotNull(key);
         checkNotNull(subKeys);
         checkNotNull(subKeyValues);
@@ -273,9 +262,7 @@ public class CatalogPropertiesUtils {
             for (int keyIdx = 0; keyIdx < values.size(); keyIdx++) {
                 String value = values.get(keyIdx);
                 if (value != null) {
-                    map.put(
-                            compoundKey(key, idxList.get(idx), subKeys.get(keyIdx)),
-                            values.get(keyIdx));
+                    map.put(compoundKey(key, idxList.get(idx), subKeys.get(keyIdx)), values.get(keyIdx));
                 }
             }
         }
@@ -335,23 +322,14 @@ public class CatalogPropertiesUtils {
         final String escapedSuffix = Pattern.quote(suffix);
         final String escapedSeparator = Pattern.quote(SEPARATOR);
         final Pattern pattern =
-                Pattern.compile(
-                        "^"
-                                + escapedKey
-                                + escapedSeparator
-                                + "(\\d+)"
-                                + escapedSeparator
-                                + escapedSuffix);
-        final IntStream indexes =
-                map.keySet().stream()
-                        .flatMapToInt(
-                                k -> {
-                                    final Matcher matcher = pattern.matcher(k);
-                                    if (matcher.find()) {
-                                        return IntStream.of(Integer.parseInt(matcher.group(1)));
-                                    }
-                                    return IntStream.empty();
-                                });
+                Pattern.compile("^" + escapedKey + escapedSeparator + "(\\d+)" + escapedSeparator + escapedSuffix);
+        final IntStream indexes = map.keySet().stream().flatMapToInt(k -> {
+            final Matcher matcher = pattern.matcher(k);
+            if (matcher.find()) {
+                return IntStream.of(Integer.parseInt(matcher.group(1)));
+            }
+            return IntStream.empty();
+        });
 
         return indexes.max().orElse(-1) + 1;
     }
@@ -363,8 +341,7 @@ public class CatalogPropertiesUtils {
     private static <T> T getValue(Map<String, String> map, String key, Function<String, T> parser) {
         final String value = map.get(key);
         if (value == null) {
-            throw new IllegalArgumentException(
-                    String.format("Could not find property key '%s'.", key));
+            throw new IllegalArgumentException(String.format("Could not find property key '%s'.", key));
         }
         try {
             return parser.apply(value);

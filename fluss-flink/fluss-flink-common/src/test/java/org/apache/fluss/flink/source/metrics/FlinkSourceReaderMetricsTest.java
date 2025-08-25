@@ -45,8 +45,7 @@ class FlinkSourceReaderMetricsTest {
         final TableBucket t3 = new TableBucket(0, null, 2);
 
         final FlinkSourceReaderMetrics flinkSourceReaderMetrics =
-                new FlinkSourceReaderMetrics(
-                        InternalSourceReaderMetricGroup.mock(metricListener.getMetricGroup()));
+                new FlinkSourceReaderMetrics(InternalSourceReaderMetricGroup.mock(metricListener.getMetricGroup()));
 
         flinkSourceReaderMetrics.registerTableBucket(t0);
         flinkSourceReaderMetrics.registerTableBucket(t1);
@@ -66,27 +65,24 @@ class FlinkSourceReaderMetricsTest {
 
     // ----------- Assertions --------------
 
-    private void assertCurrentOffset(
-            TableBucket tb, long expectedOffset, MetricListener metricListener) {
+    private void assertCurrentOffset(TableBucket tb, long expectedOffset, MetricListener metricListener) {
         final Optional<Gauge<Long>> currentOffsetGauge;
         if (tb.getPartitionId() == null) {
-            currentOffsetGauge =
-                    metricListener.getGauge(
-                            FLUSS_METRIC_GROUP,
-                            READER_METRIC_GROUP,
-                            BUCKET_GROUP,
-                            String.valueOf(tb.getBucket()),
-                            FlinkSourceReaderMetrics.CURRENT_OFFSET_METRIC_GAUGE);
+            currentOffsetGauge = metricListener.getGauge(
+                    FLUSS_METRIC_GROUP,
+                    READER_METRIC_GROUP,
+                    BUCKET_GROUP,
+                    String.valueOf(tb.getBucket()),
+                    FlinkSourceReaderMetrics.CURRENT_OFFSET_METRIC_GAUGE);
         } else {
-            currentOffsetGauge =
-                    metricListener.getGauge(
-                            FLUSS_METRIC_GROUP,
-                            READER_METRIC_GROUP,
-                            PARTITION_GROUP,
-                            String.valueOf(tb.getPartitionId()),
-                            BUCKET_GROUP,
-                            String.valueOf(tb.getBucket()),
-                            FlinkSourceReaderMetrics.CURRENT_OFFSET_METRIC_GAUGE);
+            currentOffsetGauge = metricListener.getGauge(
+                    FLUSS_METRIC_GROUP,
+                    READER_METRIC_GROUP,
+                    PARTITION_GROUP,
+                    String.valueOf(tb.getPartitionId()),
+                    BUCKET_GROUP,
+                    String.valueOf(tb.getBucket()),
+                    FlinkSourceReaderMetrics.CURRENT_OFFSET_METRIC_GAUGE);
         }
 
         assertThat(currentOffsetGauge).isPresent();

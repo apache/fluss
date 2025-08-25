@@ -49,8 +49,7 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
     private final Table icebergTable;
     private final RecordWriter recordWriter;
 
-    public IcebergLakeWriter(
-            IcebergCatalogProvider icebergCatalogProvider, WriterInitContext writerInitContext)
+    public IcebergLakeWriter(IcebergCatalogProvider icebergCatalogProvider, WriterInitContext writerInitContext)
             throws IOException {
         this.icebergCatalog = icebergCatalogProvider.get();
         this.icebergTable = getTable(writerInitContext.tablePath());
@@ -67,21 +66,18 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
         // Get target file size from table properties
         long targetFileSize = targetFileSize(icebergTable);
         FileFormat format = fileFormat(icebergTable);
-        OutputFileFactory outputFileFactory =
-                OutputFileFactory.builderFor(
-                                icebergTable,
-                                writerInitContext.tableBucket().getBucket(),
-                                // task id always 0
-                                0)
-                        .format(format)
-                        .build();
+        OutputFileFactory outputFileFactory = OutputFileFactory.builderFor(
+                        icebergTable,
+                        writerInitContext.tableBucket().getBucket(),
+                        // task id always 0
+                        0)
+                .format(format)
+                .build();
 
         if (equalityFieldIds.isEmpty()) {
-            return new AppendOnlyTaskWriter(
-                    icebergTable, writerInitContext, format, outputFileFactory, targetFileSize);
+            return new AppendOnlyTaskWriter(icebergTable, writerInitContext, format, outputFileFactory, targetFileSize);
         } else {
-            return new DeltaTaskWriter(
-                    icebergTable, writerInitContext, format, outputFileFactory, targetFileSize);
+            return new DeltaTaskWriter(icebergTable, writerInitContext, format, outputFileFactory, targetFileSize);
         }
     }
 
@@ -127,18 +123,15 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
     }
 
     private static FileFormat fileFormat(Table icebergTable) {
-        String formatString =
-                PropertyUtil.propertyAsString(
-                        icebergTable.properties(),
-                        TableProperties.DEFAULT_FILE_FORMAT,
-                        TableProperties.DEFAULT_FILE_FORMAT_DEFAULT);
+        String formatString = PropertyUtil.propertyAsString(
+                icebergTable.properties(),
+                TableProperties.DEFAULT_FILE_FORMAT,
+                TableProperties.DEFAULT_FILE_FORMAT_DEFAULT);
         return FileFormat.fromString(formatString);
     }
 
     private static long targetFileSize(Table icebergTable) {
         return PropertyUtil.propertyAsLong(
-                icebergTable.properties(),
-                WRITE_TARGET_FILE_SIZE_BYTES,
-                WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT);
+                icebergTable.properties(), WRITE_TARGET_FILE_SIZE_BYTES, WRITE_TARGET_FILE_SIZE_BYTES_DEFAULT);
     }
 }

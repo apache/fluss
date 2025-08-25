@@ -62,42 +62,36 @@ class TabletServerFailOverITCase {
     @ValueSource(booleans = {true, false})
     void testIOExceptionShouldStopTabletServer(boolean isLogTable) throws Exception {
         FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
-        Schema schema =
-                isLogTable
-                        ? Schema.newBuilder()
-                                .column("a", DataTypes.INT())
-                                .column("b", DataTypes.STRING())
-                                .build()
-                        : Schema.newBuilder()
-                                .column("a", DataTypes.INT())
-                                .column("b", DataTypes.STRING())
-                                .primaryKey("a")
-                                .build();
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .distributedBy(1)
-                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+        Schema schema = isLogTable
+                ? Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .build()
+                : Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .primaryKey("a")
                         .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(schema)
+                .distributedBy(1)
+                .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+                .build();
 
-        TablePath tablePath =
-                TablePath.of(
-                        "test_failover", "test_ioexception_table_" + (isLogTable ? "log" : "pk"));
+        TablePath tablePath = TablePath.of("test_failover", "test_ioexception_table_" + (isLogTable ? "log" : "pk"));
         long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
 
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
-        TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        TabletServerGateway leaderGateWay = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
 
         // delete the active segment, which will cause IOException when append log/changelog
-        LogSegment logSegment =
-                FLUSS_CLUSTER_EXTENSION
-                        .waitAndGetLeaderReplica(tb)
-                        .getLogTablet()
-                        .activeLogSegment();
+        LogSegment logSegment = FLUSS_CLUSTER_EXTENSION
+                .waitAndGetLeaderReplica(tb)
+                .getLogTablet()
+                .activeLogSegment();
         logSegment.deleteIfExists();
 
         // should get RetriableException since the leader server is shutdown
@@ -116,12 +110,11 @@ class TabletServerFailOverITCase {
     @Test
     void testKillServers() throws Exception {
         FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
-                        .distributedBy(1)
-                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 2)
-                        .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
+                .distributedBy(1)
+                .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 2)
+                .build();
         TablePath tablePath = TablePath.of("test_failover", "test_kill_servers");
         long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb = new TableBucket(tableId, 0);
@@ -137,26 +130,20 @@ class TabletServerFailOverITCase {
         ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
 
         // the follower should be removed from isr
-        LeaderAndIsr expectedLeaderAndIsr1 =
-                leaderAndIsr.newLeaderAndIsr(leader, Collections.singletonList(leader));
+        LeaderAndIsr expectedLeaderAndIsr1 = leaderAndIsr.newLeaderAndIsr(leader, Collections.singletonList(leader));
         retry(
                 Duration.ofMinutes(1),
-                () ->
-                        assertThat(zkClient.getLeaderAndIsr(tb).get())
-                                .isEqualTo(expectedLeaderAndIsr1));
+                () -> assertThat(zkClient.getLeaderAndIsr(tb).get()).isEqualTo(expectedLeaderAndIsr1));
 
         // kill the leader again
         FLUSS_CLUSTER_EXTENSION.stopTabletServer(leader);
 
         // should be no leader
         LeaderAndIsr expectedLeaderAndIsr2 =
-                expectedLeaderAndIsr1.newLeaderAndIsr(
-                        LeaderAndIsr.NO_LEADER, Collections.singletonList(leader));
+                expectedLeaderAndIsr1.newLeaderAndIsr(LeaderAndIsr.NO_LEADER, Collections.singletonList(leader));
         retry(
                 Duration.ofMinutes(1),
-                () ->
-                        assertThat(zkClient.getLeaderAndIsr(tb).get())
-                                .isEqualTo(expectedLeaderAndIsr2));
+                () -> assertThat(zkClient.getLeaderAndIsr(tb).get()).isEqualTo(expectedLeaderAndIsr2));
 
         // start the follower
         // should still be no leader since the follower is out of isr, should be elected as leader
@@ -169,19 +156,14 @@ class TabletServerFailOverITCase {
                 () -> assertThat(zkClient.getLeaderAndIsr(tb).get().leader()).isEqualTo(leader));
     }
 
-    private void writeData(
-            TabletServerGateway tabletServerGateway, long tableId, boolean isLogTable)
-            throws Exception {
+    private void writeData(TabletServerGateway tabletServerGateway, long tableId, boolean isLogTable) throws Exception {
         if (isLogTable) {
             tabletServerGateway
-                    .produceLog(
-                            newProduceLogRequest(tableId, 0, 1, genMemoryLogRecordsByObject(DATA1)))
+                    .produceLog(newProduceLogRequest(tableId, 0, 1, genMemoryLogRecordsByObject(DATA1)))
                     .get();
         } else {
             tabletServerGateway
-                    .putKv(
-                            newPutKvRequest(
-                                    tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
+                    .putKv(newPutKvRequest(tableId, 0, 1, genKvRecordBatch(DATA_1_WITH_KEY_AND_VALUE)))
                     .get();
         }
     }

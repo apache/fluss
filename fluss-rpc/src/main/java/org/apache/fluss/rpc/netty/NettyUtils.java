@@ -52,8 +52,7 @@ public class NettyUtils {
     }
 
     /** Return a SocketChannel class suitable for the given EventLoopGroup implementation. */
-    public static Class<? extends SocketChannel> getClientSocketChannelClass(
-            EventLoopGroup eventLoopGroup) {
+    public static Class<? extends SocketChannel> getClientSocketChannelClass(EventLoopGroup eventLoopGroup) {
         if (eventLoopGroup instanceof EpollEventLoopGroup) {
             return EpollSocketChannel.class;
         } else {
@@ -61,8 +60,7 @@ public class NettyUtils {
         }
     }
 
-    public static Class<? extends ServerSocketChannel> getServerSocketChannelClass(
-            EventLoopGroup eventLoopGroup) {
+    public static Class<? extends ServerSocketChannel> getServerSocketChannelClass(EventLoopGroup eventLoopGroup) {
         if (eventLoopGroup instanceof EpollEventLoopGroup) {
             return EpollServerSocketChannel.class;
         } else {
@@ -73,15 +71,13 @@ public class NettyUtils {
     public static CompletableFuture<Void> shutdownGroup(EventLoopGroup group) {
         CompletableFuture<Void> shutdownFuture = new CompletableFuture<>();
         if (group != null) {
-            group.shutdownGracefully()
-                    .addListener(
-                            finished -> {
-                                if (finished.isSuccess()) {
-                                    shutdownFuture.complete(null);
-                                } else {
-                                    shutdownFuture.completeExceptionally(finished.cause());
-                                }
-                            });
+            group.shutdownGracefully().addListener(finished -> {
+                if (finished.isSuccess()) {
+                    shutdownFuture.complete(null);
+                } else {
+                    shutdownFuture.completeExceptionally(finished.cause());
+                }
+            });
         } else {
             shutdownFuture.complete(null);
         }
@@ -91,15 +87,13 @@ public class NettyUtils {
     public static CompletableFuture<Void> shutdownChannel(Channel channel) {
         CompletableFuture<Void> shutdownFuture = new CompletableFuture<>();
         if (channel != null) {
-            channel.close()
-                    .addListener(
-                            finished -> {
-                                if (finished.isSuccess()) {
-                                    shutdownFuture.complete(null);
-                                } else {
-                                    shutdownFuture.completeExceptionally(finished.cause());
-                                }
-                            });
+            channel.close().addListener(finished -> {
+                if (finished.isSuccess()) {
+                    shutdownFuture.complete(null);
+                } else {
+                    shutdownFuture.completeExceptionally(finished.cause());
+                }
+            });
         } else {
             shutdownFuture.complete(null);
         }

@@ -31,8 +31,7 @@ public class StopReplicaResultForBucket extends ResultForBucket {
         super(tableBucket);
     }
 
-    public StopReplicaResultForBucket(
-            TableBucket tableBucket, Errors errorCode, @Nullable String errorMessage) {
+    public StopReplicaResultForBucket(TableBucket tableBucket, Errors errorCode, @Nullable String errorMessage) {
         super(tableBucket, new ApiError(errorCode, errorMessage));
     }
 

@@ -43,11 +43,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class LakeTableManagerITCase {
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(Configuration.fromMap(getDataLakeFormat()))
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(Configuration.fromMap(getDataLakeFormat()))
+            .build();
 
     private static Map<String, String> getDataLakeFormat() {
         Map<String, String> datalakeFormat = new HashMap<>();
@@ -58,50 +57,45 @@ class LakeTableManagerITCase {
     @Test
     void testCreateAndGetTable() throws Exception {
         AdminGateway adminGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(Schema.newBuilder().column("f1", DataTypes.INT()).build())
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder().column("f1", DataTypes.INT()).build())
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .build();
 
         TablePath tablePath = TablePath.of("fluss", "test_lake_table");
 
         // create the table
-        adminGateway.createTable(newCreateTableRequest(tablePath, tableDescriptor, false)).get();
+        adminGateway
+                .createTable(newCreateTableRequest(tablePath, tableDescriptor, false))
+                .get();
 
-        Map<String, String> properties =
-                TableDescriptor.fromJsonBytes(
-                                adminGateway
-                                        .getTableInfo(newGetTableInfoRequest(tablePath))
-                                        .get()
-                                        .getTableJson())
-                        .getProperties();
+        Map<String, String> properties = TableDescriptor.fromJsonBytes(adminGateway
+                        .getTableInfo(newGetTableInfoRequest(tablePath))
+                        .get()
+                        .getTableJson())
+                .getProperties();
         Map<String, String> expectedTableDataLakeProperties = new HashMap<>();
-        for (Map.Entry<String, String> dataLakePropertyEntry : getDataLakeFormat().entrySet()) {
+        for (Map.Entry<String, String> dataLakePropertyEntry :
+                getDataLakeFormat().entrySet()) {
             expectedTableDataLakeProperties.put(
                     "table." + dataLakePropertyEntry.getKey(), dataLakePropertyEntry.getValue());
         }
         assertThat(properties).containsAllEntriesOf(expectedTableDataLakeProperties);
 
         // test create table with datalake enabled
-        TableDescriptor lakeTableDescriptor =
-                TableDescriptor.builder()
-                        .schema(Schema.newBuilder().column("f1", DataTypes.INT()).build())
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .build();
+        TableDescriptor lakeTableDescriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder().column("f1", DataTypes.INT()).build())
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .build();
         TablePath lakeTablePath = TablePath.of("fluss", "test_lake_enabled_table");
         // create the table
         adminGateway
                 .createTable(newCreateTableRequest(lakeTablePath, lakeTableDescriptor, false))
                 .get();
         // create again, should throw TableAlreadyExistException thrown by lake
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .createTable(
-                                                newCreateTableRequest(
-                                                        lakeTablePath, lakeTableDescriptor, false))
-                                        .get())
+        assertThatThrownBy(() -> adminGateway
+                        .createTable(newCreateTableRequest(lakeTablePath, lakeTableDescriptor, false))
+                        .get())
                 .cause()
                 .isInstanceOf(TableAlreadyExistException.class)
                 .hasMessage(

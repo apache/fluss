@@ -55,90 +55,85 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Tests for {@link ArrowReader} and {@link ArrowWriter}. */
 class ArrowReaderWriterTest {
 
-    private static final List<DataType> ALL_TYPES =
-            Arrays.asList(
-                    DataTypes.BOOLEAN(),
-                    DataTypes.TINYINT(),
-                    DataTypes.SMALLINT(),
-                    DataTypes.INT(),
-                    DataTypes.BIGINT().copy(false),
-                    DataTypes.FLOAT(),
-                    DataTypes.DOUBLE(),
-                    DataTypes.DECIMAL(10, 3),
-                    DataTypes.CHAR(3),
-                    DataTypes.STRING(),
-                    DataTypes.BINARY(5),
-                    DataTypes.BYTES(),
-                    DataTypes.TIME(),
-                    DataTypes.DATE(),
-                    DataTypes.TIMESTAMP(0),
-                    DataTypes.TIMESTAMP(3),
-                    DataTypes.TIMESTAMP(6),
-                    DataTypes.TIMESTAMP(9),
-                    DataTypes.TIMESTAMP_LTZ(0),
-                    DataTypes.TIMESTAMP_LTZ(3),
-                    DataTypes.TIMESTAMP_LTZ(6),
-                    DataTypes.TIMESTAMP_LTZ(9));
+    private static final List<DataType> ALL_TYPES = Arrays.asList(
+            DataTypes.BOOLEAN(),
+            DataTypes.TINYINT(),
+            DataTypes.SMALLINT(),
+            DataTypes.INT(),
+            DataTypes.BIGINT().copy(false),
+            DataTypes.FLOAT(),
+            DataTypes.DOUBLE(),
+            DataTypes.DECIMAL(10, 3),
+            DataTypes.CHAR(3),
+            DataTypes.STRING(),
+            DataTypes.BINARY(5),
+            DataTypes.BYTES(),
+            DataTypes.TIME(),
+            DataTypes.DATE(),
+            DataTypes.TIMESTAMP(0),
+            DataTypes.TIMESTAMP(3),
+            DataTypes.TIMESTAMP(6),
+            DataTypes.TIMESTAMP(9),
+            DataTypes.TIMESTAMP_LTZ(0),
+            DataTypes.TIMESTAMP_LTZ(3),
+            DataTypes.TIMESTAMP_LTZ(6),
+            DataTypes.TIMESTAMP_LTZ(9));
 
-    private static final List<InternalRow> TEST_DATA =
-            Arrays.asList(
-                    GenericRow.of(
-                            true,
-                            (byte) 1,
-                            (short) 2,
-                            3,
-                            4L,
-                            5.0f,
-                            6.0,
-                            Decimal.fromUnscaledLong(1234, 10, 3),
-                            BinaryString.fromString("abc"),
-                            BinaryString.fromString("Hello World!"),
-                            new byte[] {1, 2, 3, 4, 5},
-                            new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
-                            3600000,
-                            100,
-                            TimestampNtz.fromMillis(3600000),
-                            TimestampNtz.fromMillis(3600123),
-                            TimestampNtz.fromMillis(3600123, 456000),
-                            TimestampNtz.fromMillis(3600123, 456789),
-                            TimestampLtz.fromEpochMillis(3600000),
-                            TimestampLtz.fromEpochMillis(3600123),
-                            TimestampLtz.fromEpochMillis(3600123, 456000),
-                            TimestampLtz.fromEpochMillis(3600123, 456789)),
-                    GenericRow.of(
-                            false,
-                            (byte) 1,
-                            (short) 2,
-                            null,
-                            4L,
-                            5.0f,
-                            6.0,
-                            Decimal.fromUnscaledLong(1234, 10, 3),
-                            BinaryString.fromString("abc"),
-                            null,
-                            new byte[] {1, 2, 3, 4, 5},
-                            new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
-                            3600000,
-                            123,
-                            null,
-                            TimestampNtz.fromMillis(3600120),
-                            TimestampNtz.fromMillis(3600120, 120000),
-                            TimestampNtz.fromMillis(3600120, 123450),
-                            null,
-                            TimestampLtz.fromEpochMillis(3600120),
-                            TimestampLtz.fromEpochMillis(3600120, 120000),
-                            TimestampLtz.fromEpochMillis(3600120, 123450)));
+    private static final List<InternalRow> TEST_DATA = Arrays.asList(
+            GenericRow.of(
+                    true,
+                    (byte) 1,
+                    (short) 2,
+                    3,
+                    4L,
+                    5.0f,
+                    6.0,
+                    Decimal.fromUnscaledLong(1234, 10, 3),
+                    BinaryString.fromString("abc"),
+                    BinaryString.fromString("Hello World!"),
+                    new byte[] {1, 2, 3, 4, 5},
+                    new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+                    3600000,
+                    100,
+                    TimestampNtz.fromMillis(3600000),
+                    TimestampNtz.fromMillis(3600123),
+                    TimestampNtz.fromMillis(3600123, 456000),
+                    TimestampNtz.fromMillis(3600123, 456789),
+                    TimestampLtz.fromEpochMillis(3600000),
+                    TimestampLtz.fromEpochMillis(3600123),
+                    TimestampLtz.fromEpochMillis(3600123, 456000),
+                    TimestampLtz.fromEpochMillis(3600123, 456789)),
+            GenericRow.of(
+                    false,
+                    (byte) 1,
+                    (short) 2,
+                    null,
+                    4L,
+                    5.0f,
+                    6.0,
+                    Decimal.fromUnscaledLong(1234, 10, 3),
+                    BinaryString.fromString("abc"),
+                    null,
+                    new byte[] {1, 2, 3, 4, 5},
+                    new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10},
+                    3600000,
+                    123,
+                    null,
+                    TimestampNtz.fromMillis(3600120),
+                    TimestampNtz.fromMillis(3600120, 120000),
+                    TimestampNtz.fromMillis(3600120, 123450),
+                    null,
+                    TimestampLtz.fromEpochMillis(3600120),
+                    TimestampLtz.fromEpochMillis(3600120, 120000),
+                    TimestampLtz.fromEpochMillis(3600120, 123450)));
 
     @Test
     void testReaderWriter() throws IOException {
         RowType rowType = DataTypes.ROW(ALL_TYPES.toArray(new DataType[0]));
         try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
-                VectorSchemaRoot root =
-                        VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
+                VectorSchemaRoot root = VectorSchemaRoot.create(ArrowUtils.toArrowSchema(rowType), allocator);
                 ArrowWriterPool provider = new ArrowWriterPool(allocator);
-                ArrowWriter writer =
-                        provider.getOrCreateWriter(
-                                1L, 1, Integer.MAX_VALUE, rowType, NO_COMPRESSION)) {
+                ArrowWriter writer = provider.getOrCreateWriter(1L, 1, Integer.MAX_VALUE, rowType, NO_COMPRESSION)) {
             for (InternalRow row : TEST_DATA) {
                 writer.writeRow(row);
             }
@@ -154,8 +149,7 @@ class ArrowReaderWriterTest {
             MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
             firstSegment.copyTo(ARROW_CHANGETYPE_OFFSET, segment, 0, size);
 
-            ArrowReader reader =
-                    ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);
+            ArrowReader reader = ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);
             int rowCount = reader.getRowCount();
             ColumnarRow row = reader.read(0);
             for (int i = 0; i < rowCount; i++) {
@@ -182,15 +176,13 @@ class ArrowReaderWriterTest {
                 assertThat(row.getInt(12)).isEqualTo(rowData.getInt(12));
                 assertThat(row.getInt(13)).isEqualTo(rowData.getInt(13));
                 if (!row.isNullAt(14)) {
-                    assertThat(row.getTimestampNtz(14, 0))
-                            .isEqualTo(rowData.getTimestampNtz(14, 0));
+                    assertThat(row.getTimestampNtz(14, 0)).isEqualTo(rowData.getTimestampNtz(14, 0));
                 }
                 assertThat(row.getTimestampNtz(15, 3)).isEqualTo(rowData.getTimestampNtz(15, 3));
                 assertThat(row.getTimestampNtz(16, 6)).isEqualTo(rowData.getTimestampNtz(16, 6));
                 assertThat(row.getTimestampNtz(17, 9)).isEqualTo(rowData.getTimestampNtz(17, 9));
                 if (!row.isNullAt(18)) {
-                    assertThat(row.getTimestampLtz(18, 0))
-                            .isEqualTo(rowData.getTimestampLtz(18, 0));
+                    assertThat(row.getTimestampLtz(18, 0)).isEqualTo(rowData.getTimestampLtz(18, 0));
                 }
                 assertThat(row.getTimestampLtz(19, 3)).isEqualTo(rowData.getTimestampLtz(19, 3));
                 assertThat(row.getTimestampLtz(20, 6)).isEqualTo(rowData.getTimestampLtz(20, 6));
@@ -204,9 +196,7 @@ class ArrowReaderWriterTest {
     void testWriterExceedMaxSizeInBytes() {
         try (BufferAllocator allocator = new RootAllocator(Long.MAX_VALUE);
                 ArrowWriterPool provider = new ArrowWriterPool(allocator);
-                ArrowWriter writer =
-                        provider.getOrCreateWriter(
-                                1L, 1, 1024, DATA1_ROW_TYPE, DEFAULT_COMPRESSION)) {
+                ArrowWriter writer = provider.getOrCreateWriter(1L, 1, 1024, DATA1_ROW_TYPE, DEFAULT_COMPRESSION)) {
             while (!writer.isFull()) {
                 writer.writeRow(row(DATA1.get(0)));
             }
@@ -214,8 +204,7 @@ class ArrowReaderWriterTest {
             // exceed max size
             assertThatThrownBy(() -> writer.writeRow(row(DATA1.get(0))))
                     .isInstanceOf(IllegalStateException.class)
-                    .hasMessage(
-                            "The arrow batch size is full and it shouldn't accept writing new rows, it's a bug.");
+                    .hasMessage("The arrow batch size is full and it shouldn't accept writing new rows, it's a bug.");
         }
     }
 }

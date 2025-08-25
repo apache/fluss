@@ -87,8 +87,7 @@ final class ReplicaTest extends ReplicaTestBase {
 
     @Test
     void testMakeLeader() throws Exception {
-        Replica logReplica =
-                makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
+        Replica logReplica = makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
         // log table.
         assertThat(logReplica.isKvTable()).isFalse();
         assertThat(logReplica.getLogTablet()).isNotNull();
@@ -97,8 +96,7 @@ final class ReplicaTest extends ReplicaTestBase {
         assertThat(logReplica.getLogTablet()).isNotNull();
         assertThat(logReplica.getKvTablet()).isNull();
 
-        Replica kvReplica =
-                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, new TableBucket(DATA1_TABLE_ID_PK, 1));
+        Replica kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, new TableBucket(DATA1_TABLE_ID_PK, 1));
         // Kv table.
         assertThat(kvReplica.isKvTable()).isTrue();
         assertThat(kvReplica.getLogTablet()).isNotNull();
@@ -109,77 +107,66 @@ final class ReplicaTest extends ReplicaTestBase {
 
     @Test
     void testAppendRecordsToLeader() throws Exception {
-        Replica logReplica =
-                makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
+        Replica logReplica = makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
         makeLogReplicaAsLeader(logReplica);
 
         MemoryLogRecords mr = genMemoryLogRecordsByObject(DATA1);
         LogAppendInfo appendInfo = logReplica.appendRecordsToLeader(mr, 0);
         assertThat(appendInfo.shallowCount()).isEqualTo(1);
 
-        FetchParams fetchParams =
-                new FetchParams(
-                        -1,
-                        (int)
-                                conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES)
-                                        .getBytes());
-        fetchParams.setCurrentFetch(
-                DATA1_TABLE_ID, 0, Integer.MAX_VALUE, DATA1_ROW_TYPE, DEFAULT_COMPRESSION, null);
+        FetchParams fetchParams = new FetchParams(-1, (int)
+                conf.get(ConfigOptions.CLIENT_SCANNER_LOG_FETCH_MAX_BYTES).getBytes());
+        fetchParams.setCurrentFetch(DATA1_TABLE_ID, 0, Integer.MAX_VALUE, DATA1_ROW_TYPE, DEFAULT_COMPRESSION, null);
         LogReadInfo logReadInfo = logReplica.fetchRecords(fetchParams);
         assertLogRecordsEquals(DATA1_ROW_TYPE, logReadInfo.getFetchedData().getRecords(), DATA1);
     }
 
     @Test
     void testPartialPutRecordsToLeader() throws Exception {
-        Replica kvReplica =
-                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, new TableBucket(DATA1_TABLE_ID_PK, 1));
+        Replica kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, new TableBucket(DATA1_TABLE_ID_PK, 1));
         makeKvReplicaAsLeader(kvReplica);
 
         // two records in a batch with same key, should also generate +I/-U/+U
-        KvRecordTestUtils.KvRecordFactory kvRecordFactory =
-                KvRecordTestUtils.KvRecordFactory.of(DATA1_ROW_TYPE);
+        KvRecordTestUtils.KvRecordFactory kvRecordFactory = KvRecordTestUtils.KvRecordFactory.of(DATA1_ROW_TYPE);
         KvRecordTestUtils.KvRecordBatchFactory kvRecordBatchFactory =
                 KvRecordTestUtils.KvRecordBatchFactory.of(DEFAULT_SCHEMA_ID);
-        KvRecordBatch kvRecords =
-                kvRecordBatchFactory.ofRecords(
-                        kvRecordFactory.ofRecord("k1", new Object[] {1, null}),
-                        kvRecordFactory.ofRecord("k1", new Object[] {2, null}),
-                        kvRecordFactory.ofRecord("k2", new Object[] {3, null}));
+        KvRecordBatch kvRecords = kvRecordBatchFactory.ofRecords(
+                kvRecordFactory.ofRecord("k1", new Object[] {1, null}),
+                kvRecordFactory.ofRecord("k1", new Object[] {2, null}),
+                kvRecordFactory.ofRecord("k2", new Object[] {3, null}));
 
         int[] targetColumns = new int[] {0};
         // put records
         putRecordsToLeader(kvReplica, kvRecords, targetColumns);
 
         targetColumns = new int[] {0, 1};
-        kvRecords =
-                kvRecordBatchFactory.ofRecords(
-                        kvRecordFactory.ofRecord("k1", new Object[] {2, "aa"}),
-                        kvRecordFactory.ofRecord("k2", new Object[] {3, "bb2"}),
-                        kvRecordFactory.ofRecord("k2", new Object[] {3, "bb4"}));
+        kvRecords = kvRecordBatchFactory.ofRecords(
+                kvRecordFactory.ofRecord("k1", new Object[] {2, "aa"}),
+                kvRecordFactory.ofRecord("k2", new Object[] {3, "bb2"}),
+                kvRecordFactory.ofRecord("k2", new Object[] {3, "bb4"}));
         LogAppendInfo logAppendInfo = putRecordsToLeader(kvReplica, kvRecords, targetColumns);
 
         assertThat(logAppendInfo.lastOffset()).isEqualTo(9);
 
-        MemoryLogRecords expected =
-                logRecords(
-                        4,
-                        Arrays.asList(
-                                ChangeType.UPDATE_BEFORE,
-                                ChangeType.UPDATE_AFTER,
-                                ChangeType.UPDATE_BEFORE,
-                                ChangeType.UPDATE_AFTER,
-                                ChangeType.UPDATE_BEFORE,
-                                ChangeType.UPDATE_AFTER),
-                        Arrays.asList(
-                                // for k1
-                                new Object[] {2, null},
-                                new Object[] {2, "aa"},
-                                // for k2
-                                new Object[] {3, null},
-                                new Object[] {3, "bb2"},
-                                // for k2
-                                new Object[] {3, "bb2"},
-                                new Object[] {3, "bb4"}));
+        MemoryLogRecords expected = logRecords(
+                4,
+                Arrays.asList(
+                        ChangeType.UPDATE_BEFORE,
+                        ChangeType.UPDATE_AFTER,
+                        ChangeType.UPDATE_BEFORE,
+                        ChangeType.UPDATE_AFTER,
+                        ChangeType.UPDATE_BEFORE,
+                        ChangeType.UPDATE_AFTER),
+                Arrays.asList(
+                        // for k1
+                        new Object[] {2, null},
+                        new Object[] {2, "aa"},
+                        // for k2
+                        new Object[] {3, null},
+                        new Object[] {3, "bb2"},
+                        // for k2
+                        new Object[] {3, "bb2"},
+                        new Object[] {3, "bb4"}));
 
         assertThatLogRecords(fetchRecords(kvReplica, 4))
                 .withSchema(DATA1_ROW_TYPE)
@@ -188,67 +175,52 @@ final class ReplicaTest extends ReplicaTestBase {
 
     @Test
     void testPutRecordsToLeader() throws Exception {
-        Replica kvReplica =
-                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, new TableBucket(DATA1_TABLE_ID_PK, 1));
+        Replica kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, new TableBucket(DATA1_TABLE_ID_PK, 1));
         makeKvReplicaAsLeader(kvReplica);
 
         // two records in a batch with same key, should also generate +I/-U/+U
-        KvRecordTestUtils.KvRecordFactory kvRecordFactory =
-                KvRecordTestUtils.KvRecordFactory.of(DATA1_ROW_TYPE);
+        KvRecordTestUtils.KvRecordFactory kvRecordFactory = KvRecordTestUtils.KvRecordFactory.of(DATA1_ROW_TYPE);
         KvRecordTestUtils.KvRecordBatchFactory kvRecordBatchFactory =
                 KvRecordTestUtils.KvRecordBatchFactory.of(DEFAULT_SCHEMA_ID);
-        KvRecordBatch kvRecords =
-                kvRecordBatchFactory.ofRecords(
-                        kvRecordFactory.ofRecord("k1", new Object[] {1, "a"}),
-                        kvRecordFactory.ofRecord("k1", new Object[] {2, "b"}),
-                        kvRecordFactory.ofRecord("k2", new Object[] {3, "b1"}));
+        KvRecordBatch kvRecords = kvRecordBatchFactory.ofRecords(
+                kvRecordFactory.ofRecord("k1", new Object[] {1, "a"}),
+                kvRecordFactory.ofRecord("k1", new Object[] {2, "b"}),
+                kvRecordFactory.ofRecord("k2", new Object[] {3, "b1"}));
         LogAppendInfo logAppendInfo = putRecordsToLeader(kvReplica, kvRecords);
         assertThat(logAppendInfo.lastOffset()).isEqualTo(3);
-        MemoryLogRecords expected =
-                logRecords(
-                        0L,
-                        Arrays.asList(
-                                ChangeType.INSERT,
-                                ChangeType.UPDATE_BEFORE,
-                                ChangeType.UPDATE_AFTER,
-                                ChangeType.INSERT),
-                        Arrays.asList(
-                                new Object[] {1, "a"},
-                                new Object[] {1, "a"},
-                                new Object[] {2, "b"},
-                                new Object[] {3, "b1"}));
-        assertThatLogRecords(fetchRecords(kvReplica))
-                .withSchema(DATA1_ROW_TYPE)
-                .isEqualTo(expected);
+        MemoryLogRecords expected = logRecords(
+                0L,
+                Arrays.asList(ChangeType.INSERT, ChangeType.UPDATE_BEFORE, ChangeType.UPDATE_AFTER, ChangeType.INSERT),
+                Arrays.asList(
+                        new Object[] {1, "a"}, new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "b1"}));
+        assertThatLogRecords(fetchRecords(kvReplica)).withSchema(DATA1_ROW_TYPE).isEqualTo(expected);
         int currentOffset = 4;
 
         // now, append another batch, it should also produce
         // delete & update_before & update_after message
-        kvRecords =
-                kvRecordBatchFactory.ofRecords(
-                        kvRecordFactory.ofRecord("k1", null),
-                        kvRecordFactory.ofRecord("k2", new Object[] {4, "b2"}),
-                        kvRecordFactory.ofRecord("k2", new Object[] {5, "b4"}));
+        kvRecords = kvRecordBatchFactory.ofRecords(
+                kvRecordFactory.ofRecord("k1", null),
+                kvRecordFactory.ofRecord("k2", new Object[] {4, "b2"}),
+                kvRecordFactory.ofRecord("k2", new Object[] {5, "b4"}));
         logAppendInfo = putRecordsToLeader(kvReplica, kvRecords);
         assertThat(logAppendInfo.lastOffset()).isEqualTo(8);
-        expected =
-                logRecords(
-                        currentOffset,
-                        Arrays.asList(
-                                ChangeType.DELETE,
-                                ChangeType.UPDATE_BEFORE,
-                                ChangeType.UPDATE_AFTER,
-                                ChangeType.UPDATE_BEFORE,
-                                ChangeType.UPDATE_AFTER),
-                        Arrays.asList(
-                                // for k1
-                                new Object[] {2, "b"},
-                                // for k2
-                                new Object[] {3, "b1"},
-                                new Object[] {4, "b2"},
-                                // for k2
-                                new Object[] {4, "b2"},
-                                new Object[] {5, "b4"}));
+        expected = logRecords(
+                currentOffset,
+                Arrays.asList(
+                        ChangeType.DELETE,
+                        ChangeType.UPDATE_BEFORE,
+                        ChangeType.UPDATE_AFTER,
+                        ChangeType.UPDATE_BEFORE,
+                        ChangeType.UPDATE_AFTER),
+                Arrays.asList(
+                        // for k1
+                        new Object[] {2, "b"},
+                        // for k2
+                        new Object[] {3, "b1"},
+                        new Object[] {4, "b2"},
+                        // for k2
+                        new Object[] {4, "b2"},
+                        new Object[] {5, "b4"}));
         assertThatLogRecords(fetchRecords(kvReplica, currentOffset))
                 .withSchema(DATA1_ROW_TYPE)
                 .isEqualTo(expected);
@@ -256,24 +228,22 @@ final class ReplicaTest extends ReplicaTestBase {
 
         // put for k1, delete for k2, put for k3; it should produce
         // +I for k1 since k1 has been deleted, -D for k2; +I for k3
-        kvRecords =
-                kvRecordBatchFactory.ofRecords(
-                        kvRecordFactory.ofRecord("k1", new Object[] {1, "a1"}),
-                        kvRecordFactory.ofRecord("k2", null),
-                        kvRecordFactory.ofRecord("k3", new Object[] {6, "b4"}));
+        kvRecords = kvRecordBatchFactory.ofRecords(
+                kvRecordFactory.ofRecord("k1", new Object[] {1, "a1"}),
+                kvRecordFactory.ofRecord("k2", null),
+                kvRecordFactory.ofRecord("k3", new Object[] {6, "b4"}));
         logAppendInfo = putRecordsToLeader(kvReplica, kvRecords);
         assertThat(logAppendInfo.lastOffset()).isEqualTo(11);
-        expected =
-                logRecords(
-                        currentOffset,
-                        Arrays.asList(ChangeType.INSERT, ChangeType.DELETE, ChangeType.INSERT),
-                        Arrays.asList(
-                                // for k1
-                                new Object[] {1, "a1"},
-                                // for k2
-                                new Object[] {5, "b4"},
-                                // for k3
-                                new Object[] {6, "b4"}));
+        expected = logRecords(
+                currentOffset,
+                Arrays.asList(ChangeType.INSERT, ChangeType.DELETE, ChangeType.INSERT),
+                Arrays.asList(
+                        // for k1
+                        new Object[] {1, "a1"},
+                        // for k2
+                        new Object[] {5, "b4"},
+                        // for k3
+                        new Object[] {6, "b4"}));
         assertThatLogRecords(fetchRecords(kvReplica, currentOffset))
                 .withSchema(DATA1_ROW_TYPE)
                 .isEqualTo(expected);
@@ -291,17 +261,14 @@ final class ReplicaTest extends ReplicaTestBase {
         currentOffset += 1;
 
         // delete k1 and put k1 again, should produce -D, +I
-        kvRecords =
-                kvRecordBatchFactory.ofRecords(
-                        kvRecordFactory.ofRecord("k1", null),
-                        kvRecordFactory.ofRecord("k1", new Object[] {1, "aaa"}));
+        kvRecords = kvRecordBatchFactory.ofRecords(
+                kvRecordFactory.ofRecord("k1", null), kvRecordFactory.ofRecord("k1", new Object[] {1, "aaa"}));
         logAppendInfo = putRecordsToLeader(kvReplica, kvRecords);
         assertThat(logAppendInfo.lastOffset()).isEqualTo(14);
-        expected =
-                logRecords(
-                        currentOffset,
-                        Arrays.asList(ChangeType.DELETE, ChangeType.INSERT),
-                        Arrays.asList(new Object[] {1, "a1"}, new Object[] {1, "aaa"}));
+        expected = logRecords(
+                currentOffset,
+                Arrays.asList(ChangeType.DELETE, ChangeType.INSERT),
+                Arrays.asList(new Object[] {1, "a1"}, new Object[] {1, "aaa"}));
         assertThatLogRecords(fetchRecords(kvReplica, currentOffset))
                 .withSchema(DATA1_ROW_TYPE)
                 .isEqualTo(expected);
@@ -312,68 +279,54 @@ final class ReplicaTest extends ReplicaTestBase {
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
 
         // create test context
-        TestSnapshotContext testKvSnapshotContext =
-                new TestSnapshotContext(snapshotKvTabletDir.getPath());
+        TestSnapshotContext testKvSnapshotContext = new TestSnapshotContext(snapshotKvTabletDir.getPath());
         ManuallyTriggeredScheduledExecutorService scheduledExecutorService =
                 testKvSnapshotContext.scheduledExecutorService;
-        TestingCompletedKvSnapshotCommitter kvSnapshotStore =
-                testKvSnapshotContext.testKvSnapshotStore;
+        TestingCompletedKvSnapshotCommitter kvSnapshotStore = testKvSnapshotContext.testKvSnapshotStore;
 
         // make a kv replica
-        Replica kvReplica =
-                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        Replica kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
         makeKvReplicaAsLeader(kvReplica);
-        KvRecordBatch kvRecords =
-                genKvRecordBatch(
-                        Tuple2.of("k1", new Object[] {1, "a"}),
-                        Tuple2.of("k1", new Object[] {2, "b"}),
-                        Tuple2.of("k2", new Object[] {3, "b1"}));
+        KvRecordBatch kvRecords = genKvRecordBatch(
+                Tuple2.of("k1", new Object[] {1, "a"}),
+                Tuple2.of("k1", new Object[] {2, "b"}),
+                Tuple2.of("k2", new Object[] {3, "b1"}));
         putRecordsToLeader(kvReplica, kvRecords);
 
         // trigger one snapshot,
         scheduledExecutorService.triggerNonPeriodicScheduledTask();
 
         // wait until the snapshot 0 success
-        CompletedSnapshot completedSnapshot0 =
-                kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
+        CompletedSnapshot completedSnapshot0 = kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
 
         // check snapshot
         long expectedLogOffset = 4;
-        List<Tuple2<byte[], byte[]>> expectedKeyValues =
-                getKeyValuePairs(
-                        genKvRecords(
-                                Tuple2.of("k1", new Object[] {2, "b"}),
-                                Tuple2.of("k2", new Object[] {3, "b1"})));
+        List<Tuple2<byte[], byte[]>> expectedKeyValues = getKeyValuePairs(
+                genKvRecords(Tuple2.of("k1", new Object[] {2, "b"}), Tuple2.of("k2", new Object[] {3, "b1"})));
         KvTestUtils.checkSnapshot(completedSnapshot0, expectedKeyValues, expectedLogOffset);
 
         // put some data again
-        kvRecords =
-                genKvRecordBatch(Tuple2.of("k2", new Object[] {4, "bk2"}), Tuple2.of("k1", null));
+        kvRecords = genKvRecordBatch(Tuple2.of("k2", new Object[] {4, "bk2"}), Tuple2.of("k1", null));
         putRecordsToLeader(kvReplica, kvRecords);
 
         // trigger next checkpoint
         scheduledExecutorService.triggerNonPeriodicScheduledTask();
         // wait until the snapshot 1 success
-        CompletedSnapshot completedSnapshot1 =
-                kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 1);
+        CompletedSnapshot completedSnapshot1 = kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 1);
 
         // check snapshot
         expectedLogOffset = 7;
-        expectedKeyValues =
-                getKeyValuePairs(genKvRecords(Tuple2.of("k2", new Object[] {4, "bk2"})));
+        expectedKeyValues = getKeyValuePairs(genKvRecords(Tuple2.of("k2", new Object[] {4, "bk2"})));
         KvTestUtils.checkSnapshot(completedSnapshot1, expectedKeyValues, expectedLogOffset);
 
         // check the snapshot should be incremental, with only one newly file
         KvTestUtils.checkSnapshotIncrementWithNewlyFiles(
-                completedSnapshot1.getKvSnapshotHandle(),
-                completedSnapshot0.getKvSnapshotHandle(),
-                1);
+                completedSnapshot1.getKvSnapshotHandle(), completedSnapshot0.getKvSnapshotHandle(), 1);
         // now, make the replica as follower to make kv can be destroyed
         makeKvReplicaAsFollower(kvReplica, 1);
 
         // make a new kv replica
-        testKvSnapshotContext =
-                new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore);
+        testKvSnapshotContext = new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore);
         kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
         scheduledExecutorService = testKvSnapshotContext.scheduledExecutorService;
         kvSnapshotStore = testKvSnapshotContext.testKvSnapshotStore;
@@ -387,22 +340,16 @@ final class ReplicaTest extends ReplicaTestBase {
 
         // put some data
         kvRecords =
-                genKvRecordBatch(
-                        Tuple2.of("k2", new Object[] {4, "bk21"}),
-                        Tuple2.of("k3", new Object[] {5, "k3"}));
+                genKvRecordBatch(Tuple2.of("k2", new Object[] {4, "bk21"}), Tuple2.of("k3", new Object[] {5, "k3"}));
         putRecordsToLeader(kvReplica, kvRecords);
 
         // trigger another one snapshot,
         scheduledExecutorService.triggerNonPeriodicScheduledTask();
         //  wait until the snapshot 2 success
-        CompletedSnapshot completedSnapshot2 =
-                kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 2);
+        CompletedSnapshot completedSnapshot2 = kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 2);
         expectedLogOffset = 10;
-        expectedKeyValues =
-                getKeyValuePairs(
-                        genKvRecords(
-                                Tuple2.of("k2", new Object[] {4, "bk21"}),
-                                Tuple2.of("k3", new Object[] {5, "k3"})));
+        expectedKeyValues = getKeyValuePairs(
+                genKvRecords(Tuple2.of("k2", new Object[] {4, "bk21"}), Tuple2.of("k3", new Object[] {5, "k3"})));
         KvTestUtils.checkSnapshot(completedSnapshot2, expectedKeyValues, expectedLogOffset);
     }
 
@@ -413,20 +360,15 @@ final class ReplicaTest extends ReplicaTestBase {
         ImmediateTriggeredScheduledExecutorService immediateTriggeredScheduledExecutorService =
                 new ImmediateTriggeredScheduledExecutorService();
         TestSnapshotContext testKvSnapshotContext =
-                new TestSnapshotContext(
-                        snapshotKvTabletDir.getPath(), immediateTriggeredScheduledExecutorService);
-        TestingCompletedKvSnapshotCommitter kvSnapshotStore =
-                testKvSnapshotContext.testKvSnapshotStore;
+                new TestSnapshotContext(snapshotKvTabletDir.getPath(), immediateTriggeredScheduledExecutorService);
+        TestingCompletedKvSnapshotCommitter kvSnapshotStore = testKvSnapshotContext.testKvSnapshotStore;
 
         // make a kv replica
-        Replica kvReplica =
-                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        Replica kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
         // now, make the replica as leader
         makeKvReplicaAsLeader(kvReplica, 0);
         KvRecordBatch kvRecords =
-                genKvRecordBatch(
-                        Tuple2.of("k1", new Object[] {1, "a"}),
-                        Tuple2.of("k2", new Object[] {2, "b"}));
+                genKvRecordBatch(Tuple2.of("k1", new Object[] {1, "a"}), Tuple2.of("k2", new Object[] {2, "b"}));
         putRecordsToLeader(kvReplica, kvRecords);
 
         // make leader again with a new epoch, check the snapshot should use the new epoch
@@ -442,20 +384,15 @@ final class ReplicaTest extends ReplicaTestBase {
     @Test
     void testRestore(@TempDir Path snapshotKvTabletDirPath) throws Exception {
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
-        TestSnapshotContext testKvSnapshotContext =
-                new TestSnapshotContext(snapshotKvTabletDirPath.toString());
+        TestSnapshotContext testKvSnapshotContext = new TestSnapshotContext(snapshotKvTabletDirPath.toString());
         ManuallyTriggeredScheduledExecutorService scheduledExecutorService =
                 testKvSnapshotContext.scheduledExecutorService;
-        TestingCompletedKvSnapshotCommitter kvSnapshotStore =
-                testKvSnapshotContext.testKvSnapshotStore;
+        TestingCompletedKvSnapshotCommitter kvSnapshotStore = testKvSnapshotContext.testKvSnapshotStore;
 
         // make a kv replica
-        Replica kvReplica =
-                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        Replica kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
         makeKvReplicaAsLeader(kvReplica);
-        putRecordsToLeader(
-                kvReplica,
-                DataTestUtils.genKvRecordBatch(new Object[] {1, "a"}, new Object[] {2, "b"}));
+        putRecordsToLeader(kvReplica, DataTestUtils.genKvRecordBatch(new Object[] {1, "a"}, new Object[] {2, "b"}));
         makeKvReplicaAsFollower(kvReplica, 1);
 
         // make a kv replica again, should restore from log
@@ -478,73 +415,55 @@ final class ReplicaTest extends ReplicaTestBase {
         kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
 
         // write data again
-        putRecordsToLeader(
-                kvReplica,
-                DataTestUtils.genKvRecordBatch(new Object[] {2, "bbb"}, new Object[] {3, "c"}));
+        putRecordsToLeader(kvReplica, DataTestUtils.genKvRecordBatch(new Object[] {2, "bbb"}, new Object[] {3, "c"}));
 
         // restore again
         makeKvReplicaAsLeader(kvReplica, 3);
         expectedKeyValues =
-                getKeyValuePairs(
-                        genKvRecords(
-                                new Object[] {1, "a"},
-                                new Object[] {2, "bbb"},
-                                new Object[] {3, "c"}));
+                getKeyValuePairs(genKvRecords(new Object[] {1, "a"}, new Object[] {2, "bbb"}, new Object[] {3, "c"}));
         kvTablet = kvReplica.getKvTablet();
         verifyGetKeyValues(kvTablet, expectedKeyValues);
     }
 
     private void makeLogReplicaAsLeader(Replica replica) throws Exception {
-        makeLeaderReplica(
-                replica,
-                DATA1_TABLE_PATH,
-                new TableBucket(DATA1_TABLE_ID, 1),
-                INITIAL_LEADER_EPOCH);
+        makeLeaderReplica(replica, DATA1_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1), INITIAL_LEADER_EPOCH);
     }
 
     private void makeKvReplicaAsLeader(Replica replica) throws Exception {
-        makeLeaderReplica(
-                replica,
-                DATA1_TABLE_PATH_PK,
-                new TableBucket(DATA1_TABLE_ID_PK, 1),
-                INITIAL_LEADER_EPOCH);
+        makeLeaderReplica(replica, DATA1_TABLE_PATH_PK, new TableBucket(DATA1_TABLE_ID_PK, 1), INITIAL_LEADER_EPOCH);
     }
 
     private void makeKvReplicaAsLeader(Replica replica, int leaderEpoch) throws Exception {
-        makeLeaderReplica(
-                replica, DATA1_TABLE_PATH_PK, new TableBucket(DATA1_TABLE_ID_PK, 1), leaderEpoch);
+        makeLeaderReplica(replica, DATA1_TABLE_PATH_PK, new TableBucket(DATA1_TABLE_ID_PK, 1), leaderEpoch);
     }
 
     private void makeKvReplicaAsFollower(Replica replica, int leaderEpoch) {
-        replica.makeFollower(
-                new NotifyLeaderAndIsrData(
-                        PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
-                        new TableBucket(DATA1_TABLE_ID_PK, 1),
+        replica.makeFollower(new NotifyLeaderAndIsrData(
+                PhysicalTablePath.of(DATA1_TABLE_PATH_PK),
+                new TableBucket(DATA1_TABLE_ID_PK, 1),
+                Collections.singletonList(TABLET_SERVER_ID),
+                new LeaderAndIsr(
+                        TABLET_SERVER_ID,
+                        leaderEpoch,
                         Collections.singletonList(TABLET_SERVER_ID),
-                        new LeaderAndIsr(
-                                TABLET_SERVER_ID,
-                                leaderEpoch,
-                                Collections.singletonList(TABLET_SERVER_ID),
-                                INITIAL_COORDINATOR_EPOCH,
-                                // we also use the leader epoch as bucket epoch
-                                leaderEpoch)));
+                        INITIAL_COORDINATOR_EPOCH,
+                        // we also use the leader epoch as bucket epoch
+                        leaderEpoch)));
     }
 
-    private void makeLeaderReplica(
-            Replica replica, TablePath tablePath, TableBucket tableBucket, int leaderEpoch)
+    private void makeLeaderReplica(Replica replica, TablePath tablePath, TableBucket tableBucket, int leaderEpoch)
             throws Exception {
-        replica.makeLeader(
-                new NotifyLeaderAndIsrData(
-                        PhysicalTablePath.of(tablePath),
-                        tableBucket,
+        replica.makeLeader(new NotifyLeaderAndIsrData(
+                PhysicalTablePath.of(tablePath),
+                tableBucket,
+                Collections.singletonList(TABLET_SERVER_ID),
+                new LeaderAndIsr(
+                        TABLET_SERVER_ID,
+                        leaderEpoch,
                         Collections.singletonList(TABLET_SERVER_ID),
-                        new LeaderAndIsr(
-                                TABLET_SERVER_ID,
-                                leaderEpoch,
-                                Collections.singletonList(TABLET_SERVER_ID),
-                                INITIAL_COORDINATOR_EPOCH,
-                                // we also use the leader epoch as bucket epoch
-                                leaderEpoch)));
+                        INITIAL_COORDINATOR_EPOCH,
+                        // we also use the leader epoch as bucket epoch
+                        leaderEpoch)));
     }
 
     private static LogRecords fetchRecords(Replica replica) throws IOException {
@@ -564,8 +483,8 @@ final class ReplicaTest extends ReplicaTestBase {
         return logReadInfo.getFetchedData().getRecords();
     }
 
-    private static MemoryLogRecords logRecords(
-            long baseOffset, List<ChangeType> changeTypes, List<Object[]> values) throws Exception {
+    private static MemoryLogRecords logRecords(long baseOffset, List<ChangeType> changeTypes, List<Object[]> values)
+            throws Exception {
         return createBasicMemoryLogRecords(
                 DATA1_ROW_TYPE,
                 DEFAULT_SCHEMA_ID,
@@ -579,8 +498,8 @@ final class ReplicaTest extends ReplicaTestBase {
                 DEFAULT_COMPRESSION);
     }
 
-    private LogAppendInfo putRecordsToLeader(
-            Replica replica, KvRecordBatch kvRecords, int[] targetColumns) throws Exception {
+    private LogAppendInfo putRecordsToLeader(Replica replica, KvRecordBatch kvRecords, int[] targetColumns)
+            throws Exception {
         LogAppendInfo logAppendInfo = replica.putRecordsToLeader(kvRecords, targetColumns, 0);
         KvTablet kvTablet = checkNotNull(replica.getKvTablet());
         // flush to make data visible
@@ -588,13 +507,12 @@ final class ReplicaTest extends ReplicaTestBase {
         return logAppendInfo;
     }
 
-    private LogAppendInfo putRecordsToLeader(Replica replica, KvRecordBatch kvRecords)
-            throws Exception {
+    private LogAppendInfo putRecordsToLeader(Replica replica, KvRecordBatch kvRecords) throws Exception {
         return putRecordsToLeader(replica, kvRecords, null);
     }
 
-    private void verifyGetKeyValues(
-            KvTablet kvTablet, List<Tuple2<byte[], byte[]>> expectedKeyValues) throws IOException {
+    private void verifyGetKeyValues(KvTablet kvTablet, List<Tuple2<byte[], byte[]>> expectedKeyValues)
+            throws IOException {
         List<byte[]> keys = new ArrayList<>();
         List<byte[]> expectValues = new ArrayList<>();
         for (Tuple2<byte[], byte[]> expectedKeyValue : expectedKeyValues) {
@@ -605,8 +523,7 @@ final class ReplicaTest extends ReplicaTestBase {
     }
 
     /** A scheduledExecutorService that will execute the scheduled task immediately. */
-    private static class ImmediateTriggeredScheduledExecutorService
-            extends ManuallyTriggeredScheduledExecutorService {
+    private static class ImmediateTriggeredScheduledExecutorService extends ManuallyTriggeredScheduledExecutorService {
         private boolean isScheduled = false;
 
         @Override

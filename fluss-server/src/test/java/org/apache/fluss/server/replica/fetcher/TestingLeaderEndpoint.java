@@ -51,13 +51,13 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
     /** The max fetch size for a bucket in bytes. */
     private final int maxFetchSizeForBucket;
 
-    public TestingLeaderEndpoint(
-            Configuration conf, ReplicaManager replicaManager, ServerNode localNode) {
+    public TestingLeaderEndpoint(Configuration conf, ReplicaManager replicaManager, ServerNode localNode) {
         this.replicaManager = replicaManager;
         this.localNode = localNode;
-        this.maxFetchSize = (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes();
-        this.maxFetchSizeForBucket =
-                (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES_FOR_BUCKET).getBytes();
+        this.maxFetchSize =
+                (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes();
+        this.maxFetchSizeForBucket = (int)
+                conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES_FOR_BUCKET).getBytes();
     }
 
     @Override
@@ -89,18 +89,14 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
         FetchLogRequest fetchLogRequest = fetchLogContext.getFetchLogRequest();
         Map<TableBucket, FetchReqInfo> fetchLogData = getFetchLogData(fetchLogRequest);
         replicaManager.fetchLogRecords(
-                new FetchParams(
-                        fetchLogRequest.getFollowerServerId(), fetchLogRequest.getMaxBytes()),
+                new FetchParams(fetchLogRequest.getFollowerServerId(), fetchLogRequest.getMaxBytes()),
                 fetchLogData,
-                result ->
-                        response.complete(
-                                new FetchData(new FetchLogResponse(), processResult(result))));
+                result -> response.complete(new FetchData(new FetchLogResponse(), processResult(result))));
         return response;
     }
 
     @Override
-    public Optional<FetchLogContext> buildFetchLogContext(
-            Map<TableBucket, BucketFetchStatus> replicas) {
+    public Optional<FetchLogContext> buildFetchLogContext(Map<TableBucket, BucketFetchStatus> replicas) {
         return RemoteLeaderEndpoint.buildFetchLogContext(
                 replicas, localNode.id(), maxFetchSize, maxFetchSizeForBucket, -1, -1);
     }
@@ -114,23 +110,19 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
     private Map<TableBucket, FetchLogResultForBucket> processResult(
             Map<TableBucket, FetchLogResultForBucket> fetchDataMap) {
         Map<TableBucket, FetchLogResultForBucket> result = new HashMap<>();
-        fetchDataMap.forEach(
-                (tb, value) -> {
-                    LogRecords logRecords = value.recordsOrEmpty();
-                    if (logRecords instanceof FileLogRecords) {
-                        FileLogRecords fileRecords = (FileLogRecords) logRecords;
-                        // convert FileLogRecords to MemoryLogRecords
-                        ByteBuffer buffer = ByteBuffer.allocate(fileRecords.sizeInBytes());
-                        unchecked(() -> fileRecords.readInto(buffer, 0)).run();
-                        MemoryLogRecords memRecords = MemoryLogRecords.pointToByteBuffer(buffer);
-                        result.put(
-                                tb,
-                                new FetchLogResultForBucket(
-                                        tb, memRecords, value.getHighWatermark()));
-                    } else {
-                        result.put(tb, value);
-                    }
-                });
+        fetchDataMap.forEach((tb, value) -> {
+            LogRecords logRecords = value.recordsOrEmpty();
+            if (logRecords instanceof FileLogRecords) {
+                FileLogRecords fileRecords = (FileLogRecords) logRecords;
+                // convert FileLogRecords to MemoryLogRecords
+                ByteBuffer buffer = ByteBuffer.allocate(fileRecords.sizeInBytes());
+                unchecked(() -> fileRecords.readInto(buffer, 0)).run();
+                MemoryLogRecords memRecords = MemoryLogRecords.pointToByteBuffer(buffer);
+                result.put(tb, new FetchLogResultForBucket(tb, memRecords, value.getHighWatermark()));
+            } else {
+                result.put(tb, value);
+            }
+        });
 
         return result;
     }

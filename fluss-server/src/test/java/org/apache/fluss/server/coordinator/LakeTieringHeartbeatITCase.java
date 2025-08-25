@@ -58,11 +58,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 class LakeTieringHeartbeatITCase {
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(Configuration.fromMap(getDataLakeFormat()))
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(Configuration.fromMap(getDataLakeFormat()))
+            .build();
 
     private static CoordinatorGateway coordinatorGateway;
 
@@ -84,8 +83,9 @@ class LakeTieringHeartbeatITCase {
         createLakeTables(tableCounts);
 
         // verify coordinator epoch in response
-        LakeTieringHeartbeatResponse heartbeatResponse =
-                coordinatorGateway.lakeTieringHeartbeat(new LakeTieringHeartbeatRequest()).get();
+        LakeTieringHeartbeatResponse heartbeatResponse = coordinatorGateway
+                .lakeTieringHeartbeat(new LakeTieringHeartbeatRequest())
+                .get();
         assertThat(heartbeatResponse.getCoordinatorEpoch()).isEqualTo(INITIAL_COORDINATOR_EPOCH);
 
         for (int i = 0; i < tableCounts; i++) {
@@ -118,32 +118,23 @@ class LakeTieringHeartbeatITCase {
         LakeTieringHeartbeatResponse lakeTieringHeartbeatResponse =
                 coordinatorGateway.lakeTieringHeartbeat(request).get();
         // error will only be in finish & failed response
-        List<PbHeartbeatRespForTable> tieringTableResps =
-                lakeTieringHeartbeatResponse.getTieringTableRespsList();
+        List<PbHeartbeatRespForTable> tieringTableResps = lakeTieringHeartbeatResponse.getTieringTableRespsList();
         assertThat(tieringTableResps).hasSize(1);
         assertThat(tieringTableResps.get(0).getTableId()).isEqualTo(0);
         assertThat(tieringTableResps.get(0).hasError()).isFalse();
 
-        List<PbHeartbeatRespForTable> finishedTableResps =
-                lakeTieringHeartbeatResponse.getFinishedTableRespsList();
+        List<PbHeartbeatRespForTable> finishedTableResps = lakeTieringHeartbeatResponse.getFinishedTableRespsList();
         assertThat(finishedTableResps).hasSize(2);
         for (PbHeartbeatRespForTable heartbeatRespForTable : finishedTableResps) {
-            verifyFencedTieringEpochException(
-                    heartbeatRespForTable, 1, 2, heartbeatRespForTable.getTableId());
+            verifyFencedTieringEpochException(heartbeatRespForTable, 1, 2, heartbeatRespForTable.getTableId());
         }
 
-        List<PbHeartbeatRespForTable> failedTableResps =
-                lakeTieringHeartbeatResponse.getFailedTableRespsList();
+        List<PbHeartbeatRespForTable> failedTableResps = lakeTieringHeartbeatResponse.getFailedTableRespsList();
         verifyFencedTieringEpochException(failedTableResps.get(0), 1, 2, 3);
 
         // now, let's finish some table and get the table again
-        request =
-                makeTieringHeartbeatRequest(
-                        new long[0],
-                        new long[] {1, 2, 3},
-                        new long[0],
-                        INITIAL_COORDINATOR_EPOCH,
-                        2);
+        request = makeTieringHeartbeatRequest(
+                new long[0], new long[] {1, 2, 3}, new long[0], INITIAL_COORDINATOR_EPOCH, 2);
         coordinatorGateway.lakeTieringHeartbeat(request).get();
 
         expectedTieredTableIds = new HashSet<>(Arrays.asList(1L, 2L, 3L));
@@ -158,28 +149,22 @@ class LakeTieringHeartbeatITCase {
 
         // verify error response for the tiering tables carried in heartbeat request
         // when tiering epoch is not match current tiering epoch
-        request =
-                makeTieringHeartbeatRequest(
-                        new long[] {1, 2, 3},
-                        new long[0],
-                        new long[0],
-                        INITIAL_COORDINATOR_EPOCH,
-                        2);
-        lakeTieringHeartbeatResponse = coordinatorGateway.lakeTieringHeartbeat(request).get();
+        request = makeTieringHeartbeatRequest(
+                new long[] {1, 2, 3}, new long[0], new long[0], INITIAL_COORDINATOR_EPOCH, 2);
+        lakeTieringHeartbeatResponse =
+                coordinatorGateway.lakeTieringHeartbeat(request).get();
         tieringTableResps = lakeTieringHeartbeatResponse.getTieringTableRespsList();
         assertThat(tieringTableResps).hasSize(3);
         for (PbHeartbeatRespForTable pbHeartbeatRespForTable : tieringTableResps) {
-            verifyFencedTieringEpochException(
-                    pbHeartbeatRespForTable, 2, 3, pbHeartbeatRespForTable.getTableId());
+            verifyFencedTieringEpochException(pbHeartbeatRespForTable, 2, 3, pbHeartbeatRespForTable.getTableId());
         }
 
         // verify error response for the tables carried in heartbeat request
         // when coordinator epoch is not match current coordinator epoch
         int invalidEpoch = INITIAL_COORDINATOR_EPOCH + 1;
-        request =
-                makeTieringHeartbeatRequest(
-                        new long[] {1}, new long[] {2}, new long[] {3}, invalidEpoch, 2);
-        lakeTieringHeartbeatResponse = coordinatorGateway.lakeTieringHeartbeat(request).get();
+        request = makeTieringHeartbeatRequest(new long[] {1}, new long[] {2}, new long[] {3}, invalidEpoch, 2);
+        lakeTieringHeartbeatResponse =
+                coordinatorGateway.lakeTieringHeartbeat(request).get();
         // collect all resp
         List<PbHeartbeatRespForTable> pbHeartbeatRespForTables =
                 new ArrayList<>(lakeTieringHeartbeatResponse.getTieringTableRespsList());
@@ -191,18 +176,15 @@ class LakeTieringHeartbeatITCase {
                     Errors.INVALID_COORDINATOR_EXCEPTION.code(),
                     String.format(
                             "The coordinator epoch %s in request is not match current coordinator epoch %d for table %d.",
-                            invalidEpoch,
-                            INITIAL_COORDINATOR_EPOCH,
-                            pbHeartbeatRespForTable.getTableId()));
+                            invalidEpoch, INITIAL_COORDINATOR_EPOCH, pbHeartbeatRespForTable.getTableId()));
         }
     }
 
     private void verifyNoAnyTableToTier() throws Exception {
-        assertThat(
-                        coordinatorGateway
-                                .lakeTieringHeartbeat(makeRequestTableTieringHeartbeat())
-                                .get()
-                                .hasTieringTable())
+        assertThat(coordinatorGateway
+                        .lakeTieringHeartbeat(makeRequestTableTieringHeartbeat())
+                        .get()
+                        .hasTieringTable())
                 .isFalse();
     }
 
@@ -233,10 +215,9 @@ class LakeTieringHeartbeatITCase {
     private PbLakeTieringTableInfo waitGetLakeTieringTableInfo() {
         return waitValue(
                 () -> {
-                    LakeTieringHeartbeatResponse response =
-                            coordinatorGateway
-                                    .lakeTieringHeartbeat(makeRequestTableTieringHeartbeat())
-                                    .get();
+                    LakeTieringHeartbeatResponse response = coordinatorGateway
+                            .lakeTieringHeartbeat(makeRequestTableTieringHeartbeat())
+                            .get();
                     if (response.hasTieringTable()) {
                         return Optional.of(response.getTieringTable());
                     } else {
@@ -247,8 +228,7 @@ class LakeTieringHeartbeatITCase {
                 "Fail to wait to get table info to be tiered.");
     }
 
-    private void verifyError(
-            ErrorResponse errorResponse, int errorCode, String expectedErrorMessage) {
+    private void verifyError(ErrorResponse errorResponse, int errorCode, String expectedErrorMessage) {
         assertThat(errorResponse.getErrorCode()).isEqualTo(errorCode);
         assertThat(errorResponse.getErrorMessage()).isEqualTo(expectedErrorMessage);
     }
@@ -256,11 +236,7 @@ class LakeTieringHeartbeatITCase {
     private LakeTieringHeartbeatRequest makeTieringHeartbeatRequest(
             long[] tieringTables, long[] finishTieringTables, long[] failedTieringTables) {
         return makeTieringHeartbeatRequest(
-                tieringTables,
-                finishTieringTables,
-                failedTieringTables,
-                INITIAL_COORDINATOR_EPOCH,
-                1);
+                tieringTables, finishTieringTables, failedTieringTables, INITIAL_COORDINATOR_EPOCH, 1);
     }
 
     private LakeTieringHeartbeatRequest makeTieringHeartbeatRequest(
@@ -296,15 +272,12 @@ class LakeTieringHeartbeatITCase {
         return heartbeatRequest;
     }
 
-    private void verifyLakeTieringTableInfo(
-            PbLakeTieringTableInfo pbLakeTieringTableInfo, long expectTableId) {
+    private void verifyLakeTieringTableInfo(PbLakeTieringTableInfo pbLakeTieringTableInfo, long expectTableId) {
         verifyLakeTieringTableInfo(pbLakeTieringTableInfo, expectTableId, 1);
     }
 
     private void verifyLakeTieringTableInfo(
-            PbLakeTieringTableInfo pbLakeTieringTableInfo,
-            long expectTableId,
-            long expectTieringEpoch) {
+            PbLakeTieringTableInfo pbLakeTieringTableInfo, long expectTableId, long expectTieringEpoch) {
         assertThat(pbLakeTieringTableInfo.getTableId()).isEqualTo(expectTableId);
         assertThat(pbLakeTieringTableInfo.getTieringEpoch()).isEqualTo(expectTieringEpoch);
         PbTablePath pbTablePath = pbLakeTieringTableInfo.getTablePath();
@@ -315,13 +288,11 @@ class LakeTieringHeartbeatITCase {
     private void createLakeTables(int tableCount) throws Exception {
         AdminGateway adminGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
         for (int i = 0; i < tableCount; i++) {
-            TableDescriptor tableDescriptor =
-                    TableDescriptor.builder()
-                            .schema(Schema.newBuilder().column("f1", DataTypes.INT()).build())
-                            .property("table.datalake.enabled", "true")
-                            .property(
-                                    ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(100))
-                            .build();
+            TableDescriptor tableDescriptor = TableDescriptor.builder()
+                    .schema(Schema.newBuilder().column("f1", DataTypes.INT()).build())
+                    .property("table.datalake.enabled", "true")
+                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(100))
+                    .build();
             TablePath tablePath = TablePath.of("fluss", "test_lake_table_" + i);
             // create the table
             adminGateway

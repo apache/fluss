@@ -68,7 +68,8 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
 
         // add three partitions.
         for (int i = 0; i < 3; i++) {
-            admin.createPartition(tablePath, newPartitionSpec("c", "c" + i), false).get();
+            admin.createPartition(tablePath, newPartitionSpec("c", "c" + i), false)
+                    .get();
         }
         partitionInfos = admin.listPartitionInfos(tablePath).get();
         assertThat(partitionInfos.size()).isEqualTo(3);
@@ -84,7 +85,9 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
             for (int j = 0; j < recordsPerPartition; j++) {
                 InternalRow row = row(j, "a" + j, partitionName);
                 upsertWriter.upsert(row);
-                expectPutRows.computeIfAbsent(partitionId, k -> new ArrayList<>()).add(row);
+                expectPutRows
+                        .computeIfAbsent(partitionId, k -> new ArrayList<>())
+                        .add(row);
             }
         }
 
@@ -120,7 +123,8 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
 
         // add three partitions.
         for (int i = 0; i < 3; i++) {
-            admin.createPartition(tablePath, newPartitionSpec("c", "c" + i), false).get();
+            admin.createPartition(tablePath, newPartitionSpec("c", "c" + i), false)
+                    .get();
         }
         partitionInfos = admin.listPartitionInfos(tablePath).get();
         assertThat(partitionInfos.size()).isEqualTo(3);
@@ -182,19 +186,18 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
         }
         appendWriter.flush();
 
-        List<PartitionInfo> partitionInfoList =
-                waitValue(
-                        () -> {
-                            List<PartitionInfo> partitionInfos =
-                                    admin.listPartitionInfos(DATA1_TABLE_PATH_PK).get();
-                            if (partitionInfos.size() == partitionSize) {
-                                return Optional.of(partitionInfos);
-                            } else {
-                                return Optional.empty();
-                            }
-                        },
-                        Duration.ofMinutes(1),
-                        "Fail to wait for the partition created.");
+        List<PartitionInfo> partitionInfoList = waitValue(
+                () -> {
+                    List<PartitionInfo> partitionInfos =
+                            admin.listPartitionInfos(DATA1_TABLE_PATH_PK).get();
+                    if (partitionInfos.size() == partitionSize) {
+                        return Optional.of(partitionInfos);
+                    } else {
+                        return Optional.empty();
+                    }
+                },
+                Duration.ofMinutes(1),
+                "Fail to wait for the partition created.");
         Map<Long, List<InternalRow>> expectPartitionIdAndAppendRows = new HashMap<>();
         for (PartitionInfo partitionInfo : partitionInfoList) {
             expectPartitionIdAndAppendRows.put(
@@ -225,27 +228,22 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
         upsertWriter.upsert(row(10, "a" + 10, "10"));
 
         // add another rows will throw TooManyPartitionsException final.
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThatThrownBy(() -> upsertWriter.upsert(row(10, "a" + 10, "10")).get())
-                                .rootCause()
-                                .isInstanceOf(TooManyPartitionsException.class)
-                                .hasMessageContaining(
-                                        "Exceed the maximum number of partitions for table "
-                                                + "test_db_1.test_pk_table_1, only allow 10 partitions."));
+        retry(Duration.ofMinutes(1), () -> assertThatThrownBy(
+                        () -> upsertWriter.upsert(row(10, "a" + 10, "10")).get())
+                .rootCause()
+                .isInstanceOf(TooManyPartitionsException.class)
+                .hasMessageContaining("Exceed the maximum number of partitions for table "
+                        + "test_db_1.test_pk_table_1, only allow 10 partitions."));
     }
 
-    private Schema createPartitionedTable(TablePath tablePath, boolean isPrimaryTable)
-            throws Exception {
-        Schema.Builder schemaBuilder =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .withComment("a is first column")
-                        .column("b", DataTypes.STRING())
-                        .withComment("b is second column")
-                        .column("c", DataTypes.STRING())
-                        .withComment("c is third column");
+    private Schema createPartitionedTable(TablePath tablePath, boolean isPrimaryTable) throws Exception {
+        Schema.Builder schemaBuilder = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .withComment("a is first column")
+                .column("b", DataTypes.STRING())
+                .withComment("b is second column")
+                .column("c", DataTypes.STRING())
+                .withComment("c is third column");
 
         if (isPrimaryTable) {
             schemaBuilder.primaryKey("a", "c");

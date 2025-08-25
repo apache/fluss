@@ -45,9 +45,7 @@ public class ProtobufRepeatedStringField extends ProtobufAbstractRepeated<Field.
                 "ProtoCodecUtils.StringHolder _%sSh = _%sStringHolder();\n",
                 ccName, ProtoGenUtil.camelCase("new", singularName));
         w.format("_%sSh.len = ProtoCodecUtils.readVarInt(_buffer);\n", ccName);
-        w.format(
-                "_%sSh.s = ProtoCodecUtils.readString(_buffer, _buffer.readerIndex(), _%sSh.len);\n",
-                ccName, ccName);
+        w.format("_%sSh.s = ProtoCodecUtils.readString(_buffer, _buffer.readerIndex(), _%sSh.len);\n", ccName, ccName);
         w.format("_buffer.skipBytes(_%sSh.len);\n", ccName);
     }
 
@@ -60,9 +58,7 @@ public class ProtobufRepeatedStringField extends ProtobufAbstractRepeated<Field.
         w.println();
 
         // get string at idx
-        w.format(
-                "public %s %s(int idx) {\n",
-                field.getJavaType(), ProtoGenUtil.camelCase("get", singularName, "at"));
+        w.format("public %s %s(int idx) {\n", field.getJavaType(), ProtoGenUtil.camelCase("get", singularName, "at"));
         w.format("    if (idx < 0 || idx >= _%sCount) {\n", pluralName);
         w.format(
                 "        throw new IndexOutOfBoundsException(\"Index \" + idx + \" is out of the list size (\" + _%sCount + \") for field '%s'\");\n",
@@ -74,15 +70,11 @@ public class ProtobufRepeatedStringField extends ProtobufAbstractRepeated<Field.
         w.println();
 
         // get list
-        w.format(
-                "public java.util.List<String> %s() {\n",
-                ProtoGenUtil.camelCase("get", pluralName, "list"));
+        w.format("public java.util.List<String> %s() {\n", ProtoGenUtil.camelCase("get", pluralName, "list"));
         w.format("    if (_%sCount == 0) {\n", pluralName);
         w.format("        return java.util.Collections.emptyList();\n");
         w.format("    } else {\n");
-        w.format(
-                "        java.util.List<String> _l = new java.util.ArrayList<>(_%sCount);\n",
-                pluralName);
+        w.format("        java.util.List<String> _l = new java.util.ArrayList<>(_%sCount);\n", pluralName);
         w.format("        for (int i = 0; i < _%sCount; i++) {\n", pluralName);
         w.format("            _l.add(%s(i));\n", ProtoGenUtil.camelCase("get", singularName, "at"));
         w.format("        }\n");
@@ -103,22 +95,17 @@ public class ProtobufRepeatedStringField extends ProtobufAbstractRepeated<Field.
 
     @Override
     public void copy(PrintWriter w) {
-        w.format(
-                "for (int i = 0; i < _other.%s(); i++) {\n",
-                ProtoGenUtil.camelCase("get", pluralName, "count"));
+        w.format("for (int i = 0; i < _other.%s(); i++) {\n", ProtoGenUtil.camelCase("get", pluralName, "count"));
         w.format(
                 "    %s(_other.%s(i));\n",
-                ProtoGenUtil.camelCase("add", singularName),
-                ProtoGenUtil.camelCase("get", singularName, "at"));
+                ProtoGenUtil.camelCase("add", singularName), ProtoGenUtil.camelCase("get", singularName, "at"));
         w.format("}\n");
     }
 
     @Override
     public void setter(PrintWriter w, String enclosingType) {
         // add
-        w.format(
-                "public void %s(String %s) {\n",
-                ProtoGenUtil.camelCase("add", singularName), singularName);
+        w.format("public void %s(String %s) {\n", ProtoGenUtil.camelCase("add", singularName), singularName);
         w.format(
                 "    ProtoCodecUtils.StringHolder _sh = _%sStringHolder();\n",
                 ProtoGenUtil.camelCase("new", singularName));
@@ -150,9 +137,7 @@ public class ProtobufRepeatedStringField extends ProtobufAbstractRepeated<Field.
                 "private ProtoCodecUtils.StringHolder _%sStringHolder() {\n",
                 ProtoGenUtil.camelCase("new", singularName));
         w.format("    if (%s == null) {\n", pluralName);
-        w.format(
-                "         %s = new java.util.ArrayList<ProtoCodecUtils.StringHolder>();\n",
-                pluralName);
+        w.format("         %s = new java.util.ArrayList<ProtoCodecUtils.StringHolder>();\n", pluralName);
         w.format("    }\n");
         w.format("    ProtoCodecUtils.StringHolder _sh = new ProtoCodecUtils.StringHolder();\n");
         w.format("    %s.add(_sh);\n", pluralName);

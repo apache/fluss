@@ -45,8 +45,7 @@ public class LogRecordBatchIterator<T extends LogRecordBatch> extends AbstractIt
             }
             return batch;
         } catch (EOFException e) {
-            throw new CorruptMessageException(
-                    "Unexpected EOF while attempting to read the next batch", e);
+            throw new CorruptMessageException("Unexpected EOF while attempting to read the next batch", e);
         } catch (IOException e) {
             throw new FlussRuntimeException(e);
         }

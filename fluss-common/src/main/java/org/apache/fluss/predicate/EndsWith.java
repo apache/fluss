@@ -45,13 +45,7 @@ public class EndsWith extends NullFalseLeafBinaryFunction {
     }
 
     @Override
-    public boolean test(
-            DataType type,
-            long rowCount,
-            Object min,
-            Object max,
-            Long nullCount,
-            Object patternLiteral) {
+    public boolean test(DataType type, long rowCount, Object min, Object max, Long nullCount, Object patternLiteral) {
         return true;
     }
 

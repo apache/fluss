@@ -26,7 +26,8 @@ public class TestServiceA implements TestSpi {
 
     public TestServiceA() {
         try {
-            dynamicDelegate = (TestSpi) Class.forName(DynamicClassA.class.getName()).newInstance();
+            dynamicDelegate =
+                    (TestSpi) Class.forName(DynamicClassA.class.getName()).newInstance();
         } catch (Exception e) {
             throw new IllegalStateException("Unable to load dynamic class.");
         }

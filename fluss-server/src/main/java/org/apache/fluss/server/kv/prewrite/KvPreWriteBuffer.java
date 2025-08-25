@@ -134,22 +134,16 @@ public class KvPreWriteBuffer implements AutoCloseable {
 
     private void update(Key key, Value value, long lsn) {
         if (maxLogSequenceNumber >= lsn) {
-            throw new IllegalArgumentException(
-                    "The log sequence number must be non-decreasing. "
-                            + "The current log sequence number is "
-                            + maxLogSequenceNumber
-                            + ", but the new log sequence number is "
-                            + lsn);
+            throw new IllegalArgumentException("The log sequence number must be non-decreasing. "
+                    + "The current log sequence number is "
+                    + maxLogSequenceNumber
+                    + ", but the new log sequence number is "
+                    + lsn);
         }
 
         // create the kv entry with previous pointer if exists, and put the new entry to the map
-        KvEntry kvEntry =
-                kvEntryMap.compute(
-                        key,
-                        (k, v) ->
-                                v == null
-                                        ? KvEntry.of(key, value, lsn)
-                                        : KvEntry.of(key, value, lsn, v));
+        KvEntry kvEntry = kvEntryMap.compute(
+                key, (k, v) -> v == null ? KvEntry.of(key, value, lsn) : KvEntry.of(key, value, lsn, v));
         // append the entry to the tail of the list for all kv entries
         allKvEntries.addLast(kvEntry);
         // update the max lsn
@@ -296,7 +290,8 @@ public class KvPreWriteBuffer implements AutoCloseable {
         private final long logSequenceNumber;
 
         // the previous mapped value in the buffer before this key-value put
-        @Nullable private final KvEntry previousEntry;
+        @Nullable
+        private final KvEntry previousEntry;
 
         public static KvEntry of(Key key, Value value, long sequenceNumber) {
             return new KvEntry(key, value, sequenceNumber, null);
@@ -306,8 +301,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
             return new KvEntry(key, value, sequenceNumber, previousEntry);
         }
 
-        private KvEntry(
-                Key key, Value value, long logSequenceNumber, @Nullable KvEntry previousEntry) {
+        private KvEntry(Key key, Value value, long logSequenceNumber, @Nullable KvEntry previousEntry) {
             this.key = key;
             this.value = value;
             this.logSequenceNumber = logSequenceNumber;
@@ -376,8 +370,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
 
         private Key(byte[] key) {
             this.key = key;
-            this.hashCode =
-                    MurmurHashUtils.hashUnsafeBytes(key, BYTE_ARRAY_BASE_OFFSET, key.length);
+            this.hashCode = MurmurHashUtils.hashUnsafeBytes(key, BYTE_ARRAY_BASE_OFFSET, key.length);
         }
 
         public byte[] get() {

@@ -142,8 +142,7 @@ class PaimonBinaryRowWriter {
             int len = input.getSizeInBytes();
             if (len <= 7) {
                 byte[] bytes = BinarySegmentUtils.allocateReuseBytes(len);
-                BinarySegmentUtils.copyToBytes(
-                        input.getSegments(), input.getOffset(), bytes, 0, len);
+                BinarySegmentUtils.copyToBytes(input.getSegments(), input.getOffset(), bytes, 0, len);
                 writeBytesToFixLenPart(buffer, getFieldOffset(pos), bytes, len);
             } else {
                 writeSegmentsToVarLenPart(pos, input.getSegments(), input.getOffset(), len);
@@ -243,8 +242,7 @@ class PaimonBinaryRowWriter {
         }
     }
 
-    private void writeSegmentsToVarLenPart(
-            int pos, MemorySegment[] segments, int offset, int size) {
+    private void writeSegmentsToVarLenPart(int pos, MemorySegment[] segments, int offset, int size) {
         final int roundedSize = roundNumberOfBytesToNearestWord(size);
 
         // grow the global buffer before writing data.
@@ -381,9 +379,7 @@ class PaimonBinaryRowWriter {
                 break;
             case DECIMAL:
                 final int decimalPrecision = getPrecision(fieldType);
-                fieldWriter =
-                        (writer, pos, value) ->
-                                writer.writeDecimal(pos, (Decimal) value, decimalPrecision);
+                fieldWriter = (writer, pos, value) -> writer.writeDecimal(pos, (Decimal) value, decimalPrecision);
                 break;
             case TINYINT:
                 fieldWriter = (writer, pos, value) -> writer.writeByte(pos, (byte) value);
@@ -407,21 +403,16 @@ class PaimonBinaryRowWriter {
                 break;
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 final int timestampNtzPrecision = getPrecision(fieldType);
-                fieldWriter =
-                        (writer, pos, value) ->
-                                writer.writeTimestampNtz(
-                                        pos, (TimestampNtz) value, timestampNtzPrecision);
+                fieldWriter = (writer, pos, value) ->
+                        writer.writeTimestampNtz(pos, (TimestampNtz) value, timestampNtzPrecision);
                 break;
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 final int timestampLtzPrecision = getPrecision(fieldType);
-                fieldWriter =
-                        (writer, pos, value) ->
-                                writer.writeTimestampLtz(
-                                        pos, (TimestampLtz) value, timestampLtzPrecision);
+                fieldWriter = (writer, pos, value) ->
+                        writer.writeTimestampLtz(pos, (TimestampLtz) value, timestampLtzPrecision);
                 break;
             default:
-                throw new IllegalArgumentException(
-                        "Unsupported type for Paimon BinaryRow writer: " + fieldType);
+                throw new IllegalArgumentException("Unsupported type for Paimon BinaryRow writer: " + fieldType);
         }
         if (!fieldType.isNullable()) {
             return fieldWriter;

@@ -45,8 +45,7 @@ public class ContextClassLoaderExtension implements BeforeAllCallback, AfterAllC
     private ClassLoader originalClassLoader;
     private URLClassLoader temporaryClassLoader;
 
-    private ContextClassLoaderExtension(
-            Function<File, URLClassLoader> temporaryClassLoaderFactory) {
+    private ContextClassLoaderExtension(Function<File, URLClassLoader> temporaryClassLoaderFactory) {
         this.temporaryClassLoaderFactory = temporaryClassLoaderFactory;
     }
 
@@ -90,28 +89,21 @@ public class ContextClassLoaderExtension implements BeforeAllCallback, AfterAllC
         private ContextClassLoaderExtensionBuilder() {}
     }
 
-    private static URLClassLoader setupClassLoader(
-            File temporaryFolder, Collection<ServiceEntry> serviceEntries) {
+    private static URLClassLoader setupClassLoader(File temporaryFolder, Collection<ServiceEntry> serviceEntries) {
         final Path root = temporaryFolder.toPath();
         try {
             writeServiceEntries(root, serviceEntries);
             final URL url = temporaryFolder.toPath().toUri().toURL();
-            return new URLClassLoader(
-                    new URL[] {url}, ContextClassLoaderExtension.class.getClassLoader());
+            return new URLClassLoader(new URL[] {url}, ContextClassLoaderExtension.class.getClassLoader());
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
 
-    private static void writeServiceEntries(Path tmpDir, Collection<ServiceEntry> serviceEntries)
-            throws IOException {
+    private static void writeServiceEntries(Path tmpDir, Collection<ServiceEntry> serviceEntries) throws IOException {
         for (ServiceEntry serviceEntry : serviceEntries) {
             final Path path =
-                    tmpDir.resolve(
-                            Paths.get(
-                                    "META-INF",
-                                    "services",
-                                    serviceEntry.serviceClass.getCanonicalName()));
+                    tmpDir.resolve(Paths.get("META-INF", "services", serviceEntry.serviceClass.getCanonicalName()));
 
             Files.createDirectories(path.getParent());
             Files.write(path, serviceEntry.serviceImplementations, StandardOpenOption.CREATE);

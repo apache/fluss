@@ -25,12 +25,9 @@ import java.util.Map;
 
 class TestUtils {
 
-    public static MetricGroup createTestMetricGroup(
-            String logicalScope, Map<String, String> variables) {
+    public static MetricGroup createTestMetricGroup(String logicalScope, Map<String, String> variables) {
         return TestMetricGroup.newBuilder()
-                .setLogicalScopeFunction(
-                        (characterFilter, character) ->
-                                characterFilter.filterCharacters(logicalScope))
+                .setLogicalScopeFunction((characterFilter, character) -> characterFilter.filterCharacters(logicalScope))
                 .setVariables(variables)
                 .build();
     }

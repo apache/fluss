@@ -47,11 +47,8 @@ class LakeStorageTest {
                 Collections.singletonList(new LakeStorageTest.TestPluginLakeStoragePlugin())
                         .iterator());
 
-        assertThatThrownBy(
-                        () ->
-                                LakeStoragePluginSetUp.fromDataLakeFormat(
-                                        TEST_LAKE_PLUGIN_FORMAT + "1",
-                                        new TestingPluginManager(lakeStoragePlugins)))
+        assertThatThrownBy(() -> LakeStoragePluginSetUp.fromDataLakeFormat(
+                        TEST_LAKE_PLUGIN_FORMAT + "1", new TestingPluginManager(lakeStoragePlugins)))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage("No LakeStoragePlugin can be found for datalake format: test-plugin1");
     }
@@ -65,28 +62,21 @@ class LakeStorageTest {
                 Collections.singletonList(new LakeStorageTest.TestPluginLakeStoragePlugin())
                         .iterator());
 
-        LakeStoragePlugin lakeStoragePlugin =
-                LakeStoragePluginSetUp.fromDataLakeFormat(
-                        TEST_LAKE_PLUGIN_FORMAT, new TestingPluginManager(lakeStoragePlugins));
+        LakeStoragePlugin lakeStoragePlugin = LakeStoragePluginSetUp.fromDataLakeFormat(
+                TEST_LAKE_PLUGIN_FORMAT, new TestingPluginManager(lakeStoragePlugins));
 
         assertThat(lakeStoragePlugin).isInstanceOf(PluginLakeStorageWrapper.class);
         LakeStorage lakeStorage = lakeStoragePlugin.createLakeStorage(new Configuration());
 
         // the LakeStorage should wrap TestPaimonLakeStorage
-        assertThat(lakeStorage)
-                .isInstanceOf(PluginLakeStorageWrapper.ClassLoaderFixingLakeStorage.class);
-        assertThat(
-                        ((PluginLakeStorageWrapper.ClassLoaderFixingLakeStorage) lakeStorage)
-                                .getWrappedDelegate())
+        assertThat(lakeStorage).isInstanceOf(PluginLakeStorageWrapper.ClassLoaderFixingLakeStorage.class);
+        assertThat(((PluginLakeStorageWrapper.ClassLoaderFixingLakeStorage) lakeStorage).getWrappedDelegate())
                 .isInstanceOf(TestPaimonLakeStorage.class);
 
         // the LakeCatalog should wrap TestPaimonLakeCatalog
         LakeCatalog lakeCatalog = lakeStorage.createLakeCatalog();
-        assertThat(lakeCatalog)
-                .isInstanceOf(PluginLakeStorageWrapper.ClassLoaderFixingLakeCatalog.class);
-        assertThat(
-                        ((PluginLakeStorageWrapper.ClassLoaderFixingLakeCatalog) lakeCatalog)
-                                .getWrappedDelegate())
+        assertThat(lakeCatalog).isInstanceOf(PluginLakeStorageWrapper.ClassLoaderFixingLakeCatalog.class);
+        assertThat(((PluginLakeStorageWrapper.ClassLoaderFixingLakeCatalog) lakeCatalog).getWrappedDelegate())
                 .isInstanceOf(TestPaimonLakeCatalog.class);
     }
 

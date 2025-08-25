@@ -91,13 +91,11 @@ public class ProtoBenchmark {
         pbP1.setName("name 1");
         pbP1.setEmail("name1@example.com");
         pbP1.setId(5);
-        AddressBookProtos.Person.PhoneNumber.Builder pb1Pn1 =
-                AddressBookProtos.Person.PhoneNumber.newBuilder();
+        AddressBookProtos.Person.PhoneNumber.Builder pb1Pn1 = AddressBookProtos.Person.PhoneNumber.newBuilder();
         pb1Pn1.setNumber("xxx-zzz-1111");
         pb1Pn1.setType(AddressBookProtos.Person.PhoneType.HOME);
 
-        AddressBookProtos.Person.PhoneNumber.Builder pb1Pn2 =
-                AddressBookProtos.Person.PhoneNumber.newBuilder();
+        AddressBookProtos.Person.PhoneNumber.Builder pb1Pn2 = AddressBookProtos.Person.PhoneNumber.newBuilder();
         pb1Pn2.setNumber("xxx-zzz-2222");
         pb1Pn2.setType(AddressBookProtos.Person.PhoneType.MOBILE);
 
@@ -109,8 +107,7 @@ public class ProtoBenchmark {
         pbP2.setEmail("name2@example.com");
         pbP2.setId(6);
 
-        AddressBookProtos.Person.PhoneNumber.Builder pb2Pn1 =
-                AddressBookProtos.Person.PhoneNumber.newBuilder();
+        AddressBookProtos.Person.PhoneNumber.Builder pb2Pn1 = AddressBookProtos.Person.PhoneNumber.newBuilder();
         pb2Pn1.setNumber("xxx-zzz-2222");
         pb2Pn1.setType(AddressBookProtos.Person.PhoneType.HOME);
 
@@ -172,11 +169,10 @@ public class ProtoBenchmark {
     }
 
     public static void main(String[] args) throws RunnerException {
-        Options opt =
-                new OptionsBuilder()
-                        .verbosity(VerboseMode.NORMAL)
-                        .include(".*" + ProtoBenchmark.class.getCanonicalName() + ".*")
-                        .build();
+        Options opt = new OptionsBuilder()
+                .verbosity(VerboseMode.NORMAL)
+                .include(".*" + ProtoBenchmark.class.getCanonicalName() + ".*")
+                .build();
 
         new Runner(opt).run();
     }

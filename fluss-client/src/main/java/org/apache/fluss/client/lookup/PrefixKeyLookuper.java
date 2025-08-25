@@ -82,28 +82,23 @@ class PrefixKeyLookuper implements Lookuper {
         this.lookupClient = lookupClient;
         // the row type of the input lookup row
         RowType lookupRowType = tableInfo.getRowType().project(lookupColumnNames);
-        DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
+        DataLakeFormat lakeFormat =
+                tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
 
         this.bucketKeyEncoder = KeyEncoder.of(lookupRowType, tableInfo.getBucketKeys(), lakeFormat);
         this.bucketingFunction = BucketingFunction.of(lakeFormat);
         this.partitionGetter =
-                tableInfo.isPartitioned()
-                        ? new PartitionGetter(lookupRowType, tableInfo.getPartitionKeys())
-                        : null;
-        this.kvValueDecoder =
-                new ValueDecoder(
-                        RowDecoder.create(
-                                tableInfo.getTableConfig().getKvFormat(),
-                                tableInfo.getRowType().getChildren().toArray(new DataType[0])));
+                tableInfo.isPartitioned() ? new PartitionGetter(lookupRowType, tableInfo.getPartitionKeys()) : null;
+        this.kvValueDecoder = new ValueDecoder(RowDecoder.create(
+                tableInfo.getTableConfig().getKvFormat(),
+                tableInfo.getRowType().getChildren().toArray(new DataType[0])));
     }
 
     private void validatePrefixLookup(TableInfo tableInfo, List<String> lookupColumns) {
         // verify is primary key table
         if (!tableInfo.hasPrimaryKey()) {
             throw new IllegalArgumentException(
-                    String.format(
-                            "Log table %s doesn't support prefix lookup",
-                            tableInfo.getTablePath()));
+                    String.format("Log table %s doesn't support prefix lookup", tableInfo.getTablePath()));
         }
 
         // verify the bucket keys are the prefix subset of physical primary keys
@@ -111,12 +106,11 @@ class PrefixKeyLookuper implements Lookuper {
         List<String> bucketKeys = tableInfo.getBucketKeys();
         for (int i = 0; i < bucketKeys.size(); i++) {
             if (!bucketKeys.get(i).equals(physicalPrimaryKeys.get(i))) {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "Can not perform prefix lookup on table '%s', "
-                                        + "because the bucket keys %s is not a prefix subset of the "
-                                        + "physical primary keys %s (excluded partition fields if present).",
-                                tableInfo.getTablePath(), bucketKeys, physicalPrimaryKeys));
+                throw new IllegalArgumentException(String.format(
+                        "Can not perform prefix lookup on table '%s', "
+                                + "because the bucket keys %s is not a prefix subset of the "
+                                + "physical primary keys %s (excluded partition fields if present).",
+                        tableInfo.getTablePath(), bucketKeys, physicalPrimaryKeys));
             }
         }
 
@@ -125,11 +119,10 @@ class PrefixKeyLookuper implements Lookuper {
             List<String> partitionKeys = tableInfo.getPartitionKeys();
             Set<String> lookupColumnsSet = new HashSet<>(lookupColumns);
             if (!lookupColumnsSet.containsAll(partitionKeys)) {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "Can not perform prefix lookup on table '%s', "
-                                        + "because the lookup columns %s must contain all partition fields %s.",
-                                tableInfo.getTablePath(), lookupColumns, partitionKeys));
+                throw new IllegalArgumentException(String.format(
+                        "Can not perform prefix lookup on table '%s', "
+                                + "because the lookup columns %s must contain all partition fields %s.",
+                        tableInfo.getTablePath(), lookupColumns, partitionKeys));
             }
         }
 
@@ -137,11 +130,10 @@ class PrefixKeyLookuper implements Lookuper {
         List<String> physicalLookupColumns = new ArrayList<>(lookupColumns);
         physicalLookupColumns.removeAll(tableInfo.getPartitionKeys());
         if (!physicalLookupColumns.equals(bucketKeys)) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Can not perform prefix lookup on table '%s', "
-                                    + "because the lookup columns %s must contain all bucket keys %s in order.",
-                            tableInfo.getTablePath(), lookupColumns, bucketKeys));
+            throw new IllegalArgumentException(String.format(
+                    "Can not perform prefix lookup on table '%s', "
+                            + "because the lookup columns %s must contain all bucket keys %s in order.",
+                    tableInfo.getTablePath(), lookupColumns, bucketKeys));
         }
     }
 
@@ -153,30 +145,22 @@ class PrefixKeyLookuper implements Lookuper {
         Long partitionId = null;
         if (partitionGetter != null) {
             try {
-                partitionId =
-                        getPartitionId(
-                                prefixKey,
-                                partitionGetter,
-                                tableInfo.getTablePath(),
-                                metadataUpdater);
+                partitionId = getPartitionId(prefixKey, partitionGetter, tableInfo.getTablePath(), metadataUpdater);
             } catch (PartitionNotExistException e) {
                 return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
             }
         }
 
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
-        return lookupClient
-                .prefixLookup(tableBucket, bucketKeyBytes)
-                .thenApply(
-                        result -> {
-                            List<InternalRow> rowList = new ArrayList<>(result.size());
-                            for (byte[] valueBytes : result) {
-                                if (valueBytes == null) {
-                                    continue;
-                                }
-                                rowList.add(kvValueDecoder.decodeValue(valueBytes).row);
-                            }
-                            return new LookupResult(rowList);
-                        });
+        return lookupClient.prefixLookup(tableBucket, bucketKeyBytes).thenApply(result -> {
+            List<InternalRow> rowList = new ArrayList<>(result.size());
+            for (byte[] valueBytes : result) {
+                if (valueBytes == null) {
+                    continue;
+                }
+                rowList.add(kvValueDecoder.decodeValue(valueBytes).row);
+            }
+            return new LookupResult(rowList);
+        });
     }
 }

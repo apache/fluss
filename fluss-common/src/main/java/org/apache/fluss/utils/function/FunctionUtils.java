@@ -50,8 +50,7 @@ public class FunctionUtils {
      * @param <B> output type
      * @return {@link Function} which throws all checked exception as an unchecked exception.
      */
-    public static <A, B> Function<A, B> uncheckedFunction(
-            FunctionWithException<A, B, ?> functionWithException) {
+    public static <A, B> Function<A, B> uncheckedFunction(FunctionWithException<A, B, ?> functionWithException) {
         return (A value) -> {
             try {
                 return functionWithException.apply(value);

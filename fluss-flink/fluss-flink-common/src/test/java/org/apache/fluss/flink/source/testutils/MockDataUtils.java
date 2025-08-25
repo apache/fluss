@@ -41,13 +41,12 @@ import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkRowType;
  * to verify functionality like schema handling, record deserialization, and data type conversion.
  */
 public class MockDataUtils {
-    public static final List<Order> ORDERS =
-            Arrays.asList(
-                    new Order(600, 20, 600, "addr1"),
-                    new Order(700, 22, 601, "addr2"),
-                    new Order(800, 23, 602, "addr3"),
-                    new Order(900, 24, 603, "addr4"),
-                    new Order(1000, 25, 604, "addr5"));
+    public static final List<Order> ORDERS = Arrays.asList(
+            new Order(600, 20, 600, "addr1"),
+            new Order(700, 22, 601, "addr2"),
+            new Order(800, 23, 602, "addr3"),
+            new Order(900, 24, 603, "addr4"),
+            new Order(1000, 25, 604, "addr5"));
 
     public static Schema getOrdersSchemaPK() {
         return Schema.newBuilder()

@@ -47,10 +47,8 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
         RemoteLogTablet remoteLogTablet = buildRemoteLogTablet(logTablet);
         List<RemoteLogSegment> remoteLogSegmentList = createRemoteLogSegmentList(logTablet);
         remoteLogTablet.addAndDeleteLogSegments(remoteLogSegmentList, Collections.emptyList());
-        assertThat(remoteLogTablet.getIdToRemoteLogSegmentMap())
-                .hasSize(remoteLogSegmentList.size());
-        assertThat(remoteLogTablet.allRemoteLogSegments())
-                .containsExactlyInAnyOrderElementsOf(remoteLogSegmentList);
+        assertThat(remoteLogTablet.getIdToRemoteLogSegmentMap()).hasSize(remoteLogSegmentList.size());
+        assertThat(remoteLogTablet.allRemoteLogSegments()).containsExactlyInAnyOrderElementsOf(remoteLogSegmentList);
         assertThat(remoteLogTablet.relevantRemoteLogSegments(0L))
                 .containsExactlyInAnyOrderElementsOf(remoteLogSegmentList);
     }
@@ -68,8 +66,7 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
         // try to delete two segments.
         RemoteLogSegment firstSegment = remoteLogSegmentList.get(0);
         RemoteLogSegment secondSegment = remoteLogSegmentList.get(1);
-        remoteLogTablet.addAndDeleteLogSegments(
-                Collections.emptyList(), Arrays.asList(firstSegment, secondSegment));
+        remoteLogTablet.addAndDeleteLogSegments(Collections.emptyList(), Arrays.asList(firstSegment, secondSegment));
         assertThat(remoteLogTablet.getIdToRemoteLogSegmentMap()).hasSize(3);
         assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(20);
         assertThat(remoteLogTablet.getRemoteLogEndOffset()).isEqualTo(OptionalLong.of(50));
@@ -88,8 +85,7 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
         RemoteLogTablet remoteLogTablet = buildRemoteLogTablet(logTablet);
         List<RemoteLogSegment> remoteLogSegmentList = createRemoteLogSegmentList(logTablet);
 
-        remoteLogTablet.addAndDeleteLogSegments(
-                remoteLogSegmentList.subList(0, 3), Collections.emptyList());
+        remoteLogTablet.addAndDeleteLogSegments(remoteLogSegmentList.subList(0, 3), Collections.emptyList());
         assertThat(remoteLogTablet.getIdToRemoteLogSegmentMap()).hasSize(3);
         assertThat(remoteLogTablet.getRemoteLogStartOffset()).isEqualTo(0);
         assertThat(remoteLogTablet.getRemoteLogEndOffset()).isEqualTo(OptionalLong.of(30));
@@ -117,13 +113,11 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
         RemoteLogTablet remoteLogTablet = buildRemoteLogTablet(logTablet);
         List<RemoteLogSegment> remoteLogSegmentList = createRemoteLogSegmentList(logTablet);
         remoteLogTablet.addAndDeleteLogSegments(remoteLogSegmentList, Collections.emptyList());
-        assertThat(remoteLogTablet.getIdToRemoteLogSegmentMap())
-                .hasSize(remoteLogSegmentList.size());
+        assertThat(remoteLogTablet.getIdToRemoteLogSegmentMap()).hasSize(remoteLogSegmentList.size());
 
         RemoteLogTablet newLogManifest = buildRemoteLogTablet(logTablet);
         newLogManifest.loadRemoteLogManifest(remoteLogTablet.currentManifest());
-        assertThat(newLogManifest.getIdToRemoteLogSegmentMap())
-                .isEqualTo(remoteLogTablet.getIdToRemoteLogSegmentMap());
+        assertThat(newLogManifest.getIdToRemoteLogSegmentMap()).isEqualTo(remoteLogTablet.getIdToRemoteLogSegmentMap());
     }
 
     @ParameterizedTest
@@ -170,8 +164,10 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
                         createLogSegmentWithMaxTimestamp(logTablet, 50, 40, 50)),
                 Collections.emptyList());
 
-        assertThat(remoteLogTablet.findSegmentByTimestamp(0L).remoteLogStartOffset()).isEqualTo(0L);
-        assertThat(remoteLogTablet.findSegmentByTimestamp(1L).remoteLogStartOffset()).isEqualTo(0L);
+        assertThat(remoteLogTablet.findSegmentByTimestamp(0L).remoteLogStartOffset())
+                .isEqualTo(0L);
+        assertThat(remoteLogTablet.findSegmentByTimestamp(1L).remoteLogStartOffset())
+                .isEqualTo(0L);
         assertThat(remoteLogTablet.findSegmentByTimestamp(10L).remoteLogStartOffset())
                 .isEqualTo(0L);
         assertThat(remoteLogTablet.findSegmentByTimestamp(40L).remoteLogStartOffset())
@@ -182,10 +178,7 @@ class RemoteLogTabletTest extends RemoteLogTestBase {
     }
 
     RemoteLogSegment createLogSegmentWithMaxTimestamp(
-            LogTablet logTablet,
-            long timestamp,
-            long remoteLogStartOffset,
-            long remoteLogEndOffset) {
+            LogTablet logTablet, long timestamp, long remoteLogStartOffset, long remoteLogEndOffset) {
         return RemoteLogSegment.Builder.builder()
                 .remoteLogSegmentId(UUID.randomUUID())
                 .remoteLogStartOffset(remoteLogStartOffset)

@@ -54,8 +54,7 @@ public class AclBinding {
             return false;
         }
         AclBinding that = (AclBinding) o;
-        return Objects.equals(resource, that.resource)
-                && Objects.equals(accessControlEntry, that.accessControlEntry);
+        return Objects.equals(resource, that.resource) && Objects.equals(accessControlEntry, that.accessControlEntry);
     }
 
     @Override
@@ -65,11 +64,6 @@ public class AclBinding {
 
     @Override
     public String toString() {
-        return "AclBinding{"
-                + "resource="
-                + resource
-                + ", accessControlEntry="
-                + accessControlEntry
-                + '}';
+        return "AclBinding{" + "resource=" + resource + ", accessControlEntry=" + accessControlEntry + '}';
     }
 }

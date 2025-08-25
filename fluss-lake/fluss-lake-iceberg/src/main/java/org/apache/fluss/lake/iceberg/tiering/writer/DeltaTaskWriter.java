@@ -43,8 +43,7 @@ public class DeltaTaskWriter extends RecordWriter {
             OutputFileFactory outputFileFactory,
             long targetFileSize) {
         super(
-                createTaskWriter(
-                        icebergTable, format, outputFileFactory, targetFileSize, writerInitContext),
+                createTaskWriter(icebergTable, format, outputFileFactory, targetFileSize, writerInitContext),
                 icebergTable.schema(),
                 writerInitContext.schema().getRowType(),
                 writerInitContext.tableBucket());
@@ -56,17 +55,11 @@ public class DeltaTaskWriter extends RecordWriter {
             OutputFileFactory outputFileFactory,
             long targetFileSize,
             WriterInitContext writerInitContext) {
-        int[] equalityFieldIds =
-                icebergTable.schema().identifierFieldIds().stream()
-                        .mapToInt(Integer::intValue)
-                        .toArray();
-        FileAppenderFactory<Record> appenderFactory =
-                new GenericAppenderFactory(
-                        icebergTable.schema(),
-                        icebergTable.spec(),
-                        equalityFieldIds,
-                        icebergTable.schema(),
-                        null);
+        int[] equalityFieldIds = icebergTable.schema().identifierFieldIds().stream()
+                .mapToInt(Integer::intValue)
+                .toArray();
+        FileAppenderFactory<Record> appenderFactory = new GenericAppenderFactory(
+                icebergTable.schema(), icebergTable.spec(), equalityFieldIds, icebergTable.schema(), null);
 
         List<String> columns = new ArrayList<>();
         for (Integer fieldId : icebergTable.schema().identifierFieldIds()) {
@@ -99,8 +92,7 @@ public class DeltaTaskWriter extends RecordWriter {
                 deltaWriter.delete(flussRecordAsIcebergRecord);
                 break;
             default:
-                throw new UnsupportedOperationException(
-                        "Unknown row kind: " + record.getChangeType());
+                throw new UnsupportedOperationException("Unknown row kind: " + record.getChangeType());
         }
     }
 }

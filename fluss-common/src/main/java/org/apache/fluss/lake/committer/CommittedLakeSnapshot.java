@@ -50,8 +50,7 @@ public class CommittedLakeSnapshot {
         logEndOffsets.put(Tuple2.of(null, bucketId), offset);
     }
 
-    public void addPartitionBucket(
-            Long partitionId, String partitionQualifiedName, int bucketId, long offset) {
+    public void addPartitionBucket(Long partitionId, String partitionQualifiedName, int bucketId, long offset) {
         logEndOffsets.put(Tuple2.of(partitionId, bucketId), offset);
         qualifiedPartitionNameById.put(partitionId, partitionQualifiedName);
     }

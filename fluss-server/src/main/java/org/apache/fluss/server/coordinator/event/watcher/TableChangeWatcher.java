@@ -58,8 +58,7 @@ public class TableChangeWatcher {
 
     public TableChangeWatcher(ZooKeeperClient zooKeeperClient, EventManager eventManager) {
         this.zooKeeperClient = zooKeeperClient;
-        this.curatorCache =
-                CuratorCache.build(zooKeeperClient.getCuratorClient(), DatabasesZNode.path());
+        this.curatorCache = CuratorCache.build(zooKeeperClient.getCuratorClient(), DatabasesZNode.path());
         this.eventManager = eventManager;
         this.curatorCache.listenable().addListener(new TablePathChangeListener());
     }
@@ -89,71 +88,59 @@ public class TableChangeWatcher {
                 LOG.debug("Received {} event", type);
             }
             switch (type) {
-                case NODE_CREATED:
-                    {
-                        if (newData != null) {
-                            // maybe it's for create a partition node
-                            // try to parse the path as a table partition node
-                            PhysicalTablePath physicalTablePath =
-                                    PartitionZNode.parsePath(newData.getPath());
-                            if (physicalTablePath != null) {
-                                assert physicalTablePath.getPartitionName() != null;
-                                processCreatePartition(
-                                        physicalTablePath.getTablePath(),
-                                        physicalTablePath.getPartitionName(),
-                                        newData);
-                            }
-                        }
-                        break;
-                    }
-                case NODE_CHANGED:
-                    {
-                        // we will first create the path for the table in zk when create schema for
-                        // the table, then put the real table info to the path. so, it'll be a node
-                        // changed event
-                        if (newData != null) {
-                            TablePath tablePath = TableZNode.parsePath(newData.getPath());
-                            if (tablePath == null) {
-                                break;
-                            }
-                            processCreateTable(tablePath, newData);
-                        }
-                        break;
-                    }
-                case NODE_DELETED:
-                    {
-                        // maybe it's for deletion of a partition
+                case NODE_CREATED: {
+                    if (newData != null) {
+                        // maybe it's for create a partition node
                         // try to parse the path as a table partition node
-                        PhysicalTablePath physicalTablePath =
-                                PartitionZNode.parsePath(oldData.getPath());
+                        PhysicalTablePath physicalTablePath = PartitionZNode.parsePath(newData.getPath());
                         if (physicalTablePath != null) {
-                            // it's for deletion of a table partition node
-                            TablePartition partition = PartitionZNode.decode(oldData.getData());
-                            eventManager.put(
-                                    new DropPartitionEvent(
-                                            partition.getTableId(),
-                                            partition.getPartitionId(),
-                                            physicalTablePath.getPartitionName()));
-                        } else {
-                            // maybe table node is deleted
-                            // try to parse the path as a table node
-                            TablePath tablePath = TableZNode.parsePath(oldData.getPath());
-                            if (tablePath == null) {
-                                break;
-                            }
-                            TableRegistration table = TableZNode.decode(oldData.getData());
-                            TableConfig tableConfig =
-                                    new TableConfig(Configuration.fromMap(table.properties));
-                            eventManager.put(
-                                    new DropTableEvent(
-                                            table.tableId,
-                                            tableConfig
-                                                    .getAutoPartitionStrategy()
-                                                    .isAutoPartitionEnabled(),
-                                            tableConfig.isDataLakeEnabled()));
+                            assert physicalTablePath.getPartitionName() != null;
+                            processCreatePartition(
+                                    physicalTablePath.getTablePath(), physicalTablePath.getPartitionName(), newData);
                         }
-                        break;
                     }
+                    break;
+                }
+                case NODE_CHANGED: {
+                    // we will first create the path for the table in zk when create schema for
+                    // the table, then put the real table info to the path. so, it'll be a node
+                    // changed event
+                    if (newData != null) {
+                        TablePath tablePath = TableZNode.parsePath(newData.getPath());
+                        if (tablePath == null) {
+                            break;
+                        }
+                        processCreateTable(tablePath, newData);
+                    }
+                    break;
+                }
+                case NODE_DELETED: {
+                    // maybe it's for deletion of a partition
+                    // try to parse the path as a table partition node
+                    PhysicalTablePath physicalTablePath = PartitionZNode.parsePath(oldData.getPath());
+                    if (physicalTablePath != null) {
+                        // it's for deletion of a table partition node
+                        TablePartition partition = PartitionZNode.decode(oldData.getData());
+                        eventManager.put(new DropPartitionEvent(
+                                partition.getTableId(),
+                                partition.getPartitionId(),
+                                physicalTablePath.getPartitionName()));
+                    } else {
+                        // maybe table node is deleted
+                        // try to parse the path as a table node
+                        TablePath tablePath = TableZNode.parsePath(oldData.getPath());
+                        if (tablePath == null) {
+                            break;
+                        }
+                        TableRegistration table = TableZNode.decode(oldData.getData());
+                        TableConfig tableConfig = new TableConfig(Configuration.fromMap(table.properties));
+                        eventManager.put(new DropTableEvent(
+                                table.tableId,
+                                tableConfig.getAutoPartitionStrategy().isAutoPartitionEnabled(),
+                                tableConfig.isDataLakeEnabled()));
+                    }
+                    break;
+                }
                 default:
                     break;
             }
@@ -170,8 +157,7 @@ public class TableChangeWatcher {
                 assignment = TableAssignment.builder().build();
             } else {
                 try {
-                    Optional<TableAssignment> optAssignment =
-                            zooKeeperClient.getTableAssignment(tableId);
+                    Optional<TableAssignment> optAssignment = zooKeeperClient.getTableAssignment(tableId);
                     if (optAssignment.isPresent()) {
                         assignment = optAssignment.get();
                     } else {
@@ -200,35 +186,25 @@ public class TableChangeWatcher {
             eventManager.put(new CreateTableEvent(tableInfo, assignment));
         }
 
-        private void processCreatePartition(
-                TablePath tablePath, String partitionName, ChildData partitionData) {
+        private void processCreatePartition(TablePath tablePath, String partitionName, ChildData partitionData) {
             TablePartition partition = PartitionZNode.decode(partitionData.getData());
             long partitionId = partition.getPartitionId();
             long tableId = partition.getTableId();
             PartitionAssignment partitionAssignment;
             try {
-                Optional<PartitionAssignment> optAssignment =
-                        zooKeeperClient.getPartitionAssignment(partitionId);
+                Optional<PartitionAssignment> optAssignment = zooKeeperClient.getPartitionAssignment(partitionId);
                 if (optAssignment.isPresent()) {
                     partitionAssignment = optAssignment.get();
                 } else {
-                    LOG.error(
-                            "No assignments for partition {} of table {} in zookeeper.",
-                            partitionName,
-                            tablePath);
+                    LOG.error("No assignments for partition {} of table {} in zookeeper.", partitionName, tablePath);
                     return;
                 }
             } catch (Exception e) {
-                LOG.error(
-                        "Fail to get assignments for partition {} of table {}.",
-                        partitionName,
-                        tablePath,
-                        e);
+                LOG.error("Fail to get assignments for partition {} of table {}.", partitionName, tablePath, e);
                 return;
             }
             eventManager.put(
-                    new CreatePartitionEvent(
-                            tablePath, tableId, partitionId, partitionName, partitionAssignment));
+                    new CreatePartitionEvent(tablePath, tableId, partitionId, partitionName, partitionAssignment));
         }
     }
 }

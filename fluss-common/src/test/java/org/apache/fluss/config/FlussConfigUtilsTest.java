@@ -33,20 +33,18 @@ class FlussConfigUtilsTest {
     void testExtractOptions() {
         Map<String, ConfigOption<?>> tableOptions = extractConfigOptions("table.");
         assertThat(tableOptions).isNotEmpty();
-        tableOptions.forEach(
-                (k, v) -> {
-                    assertThat(k).startsWith("table.");
-                    assertThat(v.key()).startsWith("table.");
-                });
+        tableOptions.forEach((k, v) -> {
+            assertThat(k).startsWith("table.");
+            assertThat(v.key()).startsWith("table.");
+        });
         assertThat(tableOptions.size()).isEqualTo(TABLE_OPTIONS.size());
 
         Map<String, ConfigOption<?>> clientOptions = extractConfigOptions("client.");
         assertThat(clientOptions).isNotEmpty();
-        clientOptions.forEach(
-                (k, v) -> {
-                    assertThat(k).startsWith("client.");
-                    assertThat(v.key()).startsWith("client.");
-                });
+        clientOptions.forEach((k, v) -> {
+            assertThat(k).startsWith("client.");
+            assertThat(v.key()).startsWith("client.");
+        });
         assertThat(clientOptions.size()).isEqualTo(CLIENT_OPTIONS.size());
     }
 }

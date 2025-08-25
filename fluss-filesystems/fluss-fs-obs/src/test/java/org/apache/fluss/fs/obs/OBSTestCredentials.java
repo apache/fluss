@@ -23,23 +23,25 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** Access to credentials to access OBS buckets during integration tests. */
 public class OBSTestCredentials {
-    @Nullable private static final String ENDPOINT = System.getenv("ARTIFACTS_OBS_ENDPOINT");
+    @Nullable
+    private static final String ENDPOINT = System.getenv("ARTIFACTS_OBS_ENDPOINT");
 
-    @Nullable private static final String REGION = System.getenv("ARTIFACTS_OBS_REGION");
+    @Nullable
+    private static final String REGION = System.getenv("ARTIFACTS_OBS_REGION");
 
-    @Nullable private static final String BUCKET = System.getenv("ARTIFACTS_OBS_BUCKET");
+    @Nullable
+    private static final String BUCKET = System.getenv("ARTIFACTS_OBS_BUCKET");
 
-    @Nullable private static final String ACCESS_KEY = System.getenv("ARTIFACTS_OBS_ACCESS_KEY");
+    @Nullable
+    private static final String ACCESS_KEY = System.getenv("ARTIFACTS_OBS_ACCESS_KEY");
 
-    @Nullable private static final String SECRET_KEY = System.getenv("ARTIFACTS_OBS_SECRET_KEY");
+    @Nullable
+    private static final String SECRET_KEY = System.getenv("ARTIFACTS_OBS_SECRET_KEY");
 
     // ------------------------------------------------------------------------
 
     public static boolean credentialsAvailable() {
-        return isNotEmpty(ENDPOINT)
-                && isNotEmpty(BUCKET)
-                && isNotEmpty(ACCESS_KEY)
-                && isNotEmpty(SECRET_KEY);
+        return isNotEmpty(ENDPOINT) && isNotEmpty(BUCKET) && isNotEmpty(ACCESS_KEY) && isNotEmpty(SECRET_KEY);
     }
 
     /** Checks if a String is not null and not empty. */
@@ -48,8 +50,7 @@ public class OBSTestCredentials {
     }
 
     public static void assumeCredentialsAvailable() {
-        assumeTrue(
-                credentialsAvailable(), "No OBS credentials available in this test's environment");
+        assumeTrue(credentialsAvailable(), "No OBS credentials available in this test's environment");
     }
 
     /**

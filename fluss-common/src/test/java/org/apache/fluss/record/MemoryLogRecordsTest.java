@@ -38,13 +38,12 @@ class MemoryLogRecordsTest {
 
     @Test
     void testPointToDirectByteBufferWithShift() throws Exception {
-        verifyPointToByteBuffer(
-                size -> {
-                    ByteBuffer buffer = ByteBuffer.allocateDirect(size + 3);
-                    buffer.put(new byte[] {1, 2, 3});
-                    buffer.position(3);
-                    return buffer;
-                });
+        verifyPointToByteBuffer(size -> {
+            ByteBuffer buffer = ByteBuffer.allocateDirect(size + 3);
+            buffer.put(new byte[] {1, 2, 3});
+            buffer.position(3);
+            return buffer;
+        });
     }
 
     @Test
@@ -54,21 +53,19 @@ class MemoryLogRecordsTest {
 
     @Test
     void testPointToHeapByteBufferWithShift() throws Exception {
-        verifyPointToByteBuffer(
-                size -> {
-                    ByteBuffer buffer = ByteBuffer.allocate(size + 3);
-                    buffer.put(new byte[] {1, 2, 3});
-                    buffer.position(3);
-                    return buffer;
-                });
+        verifyPointToByteBuffer(size -> {
+            ByteBuffer buffer = ByteBuffer.allocate(size + 3);
+            buffer.put(new byte[] {1, 2, 3});
+            buffer.position(3);
+            return buffer;
+        });
     }
 
     void verifyPointToByteBuffer(Function<Integer, ByteBuffer> bufferSupplier) throws Exception {
         int writerId = 1000;
         int seqno = 6;
         long baseOffset = 123L;
-        MemoryLogRecords records =
-                DataTestUtils.genMemoryLogRecordsWithWriterId(DATA1, writerId, seqno, baseOffset);
+        MemoryLogRecords records = DataTestUtils.genMemoryLogRecordsWithWriterId(DATA1, writerId, seqno, baseOffset);
         ByteBuffer buffer = bufferSupplier.apply(records.sizeInBytes());
 
         int originPos = buffer.position();

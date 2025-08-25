@@ -27,9 +27,14 @@ import javax.annotation.Nullable;
 /** Result of {@link org.apache.fluss.rpc.messages.LimitScanRequest} for each table bucket. */
 public class LimitScanResultForBucket extends ResultForBucket {
 
-    @Nullable private final DefaultValueRecordBatch values;
-    @Nullable private final LogRecords records;
-    @Nullable private final Boolean isLogTable;
+    @Nullable
+    private final DefaultValueRecordBatch values;
+
+    @Nullable
+    private final LogRecords records;
+
+    @Nullable
+    private final Boolean isLogTable;
 
     public LimitScanResultForBucket(TableBucket tableBucket, DefaultValueRecordBatch values) {
         this(tableBucket, ApiError.NONE, values, null, false);

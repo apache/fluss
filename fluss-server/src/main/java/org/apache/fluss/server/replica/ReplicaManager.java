@@ -240,38 +240,27 @@ public class ReplicaManager {
         this.serverId = serverId;
         this.metadataCache = metadataCache;
 
-        this.highWatermarkCheckpoint =
-                new OffsetCheckpointFile(
-                        new File(
-                                logManager.getDataDir().getAbsolutePath(),
-                                HIGH_WATERMARK_CHECKPOINT_FILE_NAME));
-        this.delayedWriteManager =
-                new DelayedOperationManager<>(
-                        "delay write",
-                        serverId,
-                        conf.getInt(ConfigOptions.LOG_REPLICA_WRITE_OPERATION_PURGE_NUMBER));
-        this.delayedFetchLogManager =
-                new DelayedOperationManager<>(
-                        "delay fetch log",
-                        serverId,
-                        conf.getInt(ConfigOptions.LOG_REPLICA_FETCH_OPERATION_PURGE_NUMBER));
+        this.highWatermarkCheckpoint = new OffsetCheckpointFile(
+                new File(logManager.getDataDir().getAbsolutePath(), HIGH_WATERMARK_CHECKPOINT_FILE_NAME));
+        this.delayedWriteManager = new DelayedOperationManager<>(
+                "delay write", serverId, conf.getInt(ConfigOptions.LOG_REPLICA_WRITE_OPERATION_PURGE_NUMBER));
+        this.delayedFetchLogManager = new DelayedOperationManager<>(
+                "delay fetch log", serverId, conf.getInt(ConfigOptions.LOG_REPLICA_FETCH_OPERATION_PURGE_NUMBER));
         this.internalListenerName = conf.get(ConfigOptions.INTERNAL_LISTENER_NAME);
 
-        this.replicaFetcherManager =
-                new ReplicaFetcherManager(
-                        conf,
-                        rpcClient,
-                        serverId,
-                        this,
-                        (nodeId) -> metadataCache.getTabletServer(nodeId, internalListenerName));
+        this.replicaFetcherManager = new ReplicaFetcherManager(
+                conf,
+                rpcClient,
+                serverId,
+                this,
+                (nodeId) -> metadataCache.getTabletServer(nodeId, internalListenerName));
         this.adjustIsrManager = new AdjustIsrManager(scheduler, coordinatorGateway, serverId);
         this.fatalErrorHandler = fatalErrorHandler;
 
         // for kv snapshot
         this.kvSnapshotResource = KvSnapshotResource.create(serverId, conf);
         this.kvSnapshotContext =
-                DefaultSnapshotContext.create(
-                        zkClient, completedKvSnapshotCommitter, kvSnapshotResource, conf);
+                DefaultSnapshotContext.create(zkClient, completedKvSnapshotCommitter, kvSnapshotResource, conf);
         this.remoteLogManager = remoteLogManager;
         this.serverMetricGroup = serverMetricGroup;
         this.clock = clock;
@@ -300,20 +289,18 @@ public class ReplicaManager {
         serverMetricGroup.gauge(MetricNames.REPLICA_COUNT, allReplicas::size);
         serverMetricGroup.gauge(MetricNames.WRITE_ID_COUNT, this::writerIdCount);
         serverMetricGroup.gauge(MetricNames.DELAYED_WRITE_COUNT, delayedWriteManager::numDelayed);
-        serverMetricGroup.gauge(
-                MetricNames.DELAYED_FETCH_COUNT, delayedFetchLogManager::numDelayed);
+        serverMetricGroup.gauge(MetricNames.DELAYED_FETCH_COUNT, delayedFetchLogManager::numDelayed);
     }
 
     private Stream<Replica> onlineReplicas() {
         return allReplicas.values().stream()
-                .map(
-                        t -> {
-                            if (t instanceof OnlineReplica) {
-                                return Optional.of(((OnlineReplica) t).getReplica());
-                            } else {
-                                return Optional.empty();
-                            }
-                        })
+                .map(t -> {
+                    if (t instanceof OnlineReplica) {
+                        return Optional.of(((OnlineReplica) t).getReplica());
+                    } else {
+                        return Optional.empty();
+                    }
+                })
                 .filter(Optional::isPresent)
                 .map(t -> (Replica) t.get());
     }
@@ -331,52 +318,45 @@ public class ReplicaManager {
             List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList,
             Consumer<List<NotifyLeaderAndIsrResultForBucket>> responseCallback) {
         Map<TableBucket, NotifyLeaderAndIsrResultForBucket> result = new HashMap<>();
-        inLock(
-                replicaStateChangeLock,
-                () -> {
-                    // check or apply coordinator epoch.
-                    validateAndApplyCoordinatorEpoch(requestCoordinatorEpoch, "notifyLeaderAndIsr");
+        inLock(replicaStateChangeLock, () -> {
+            // check or apply coordinator epoch.
+            validateAndApplyCoordinatorEpoch(requestCoordinatorEpoch, "notifyLeaderAndIsr");
 
-                    List<NotifyLeaderAndIsrData> replicasToBeLeader = new ArrayList<>();
-                    List<NotifyLeaderAndIsrData> replicasToBeFollower = new ArrayList<>();
-                    for (NotifyLeaderAndIsrData data : notifyLeaderAndIsrDataList) {
-                        TableBucket tb = data.getTableBucket();
-                        try {
-                            boolean becomeLeader = validateAndGetIsBecomeLeader(data);
-                            if (becomeLeader) {
-                                replicasToBeLeader.add(data);
-                            } else {
-                                replicasToBeFollower.add(data);
-                            }
-                        } catch (Exception e) {
-                            result.put(
-                                    tb,
-                                    new NotifyLeaderAndIsrResultForBucket(
-                                            tb, ApiError.fromThrowable(e)));
-                        }
+            List<NotifyLeaderAndIsrData> replicasToBeLeader = new ArrayList<>();
+            List<NotifyLeaderAndIsrData> replicasToBeFollower = new ArrayList<>();
+            for (NotifyLeaderAndIsrData data : notifyLeaderAndIsrDataList) {
+                TableBucket tb = data.getTableBucket();
+                try {
+                    boolean becomeLeader = validateAndGetIsBecomeLeader(data);
+                    if (becomeLeader) {
+                        replicasToBeLeader.add(data);
+                    } else {
+                        replicasToBeFollower.add(data);
                     }
+                } catch (Exception e) {
+                    result.put(tb, new NotifyLeaderAndIsrResultForBucket(tb, ApiError.fromThrowable(e)));
+                }
+            }
 
-                    makeLeaders(replicasToBeLeader, result);
-                    makeFollowers(replicasToBeFollower, result);
+            makeLeaders(replicasToBeLeader, result);
+            makeFollowers(replicasToBeFollower, result);
 
-                    // We initialize highWatermark thread after the first LeaderAndIsr request. This
-                    // ensures that all the replicas have been completely populated before starting
-                    // the checkpointing there by avoiding weird race conditions
-                    startHighWatermarkCheckPointThread();
-                    replicaFetcherManager.shutdownIdleFetcherThreads();
-                });
+            // We initialize highWatermark thread after the first LeaderAndIsr request. This
+            // ensures that all the replicas have been completely populated before starting
+            // the checkpointing there by avoiding weird race conditions
+            startHighWatermarkCheckPointThread();
+            replicaFetcherManager.shutdownIdleFetcherThreads();
+        });
 
         responseCallback.accept(new ArrayList<>(result.values()));
     }
 
     public void maybeUpdateMetadataCache(int coordinatorEpoch, ClusterMetadata clusterMetadata) {
-        inLock(
-                replicaStateChangeLock,
-                () -> {
-                    // check or apply coordinator epoch.
-                    validateAndApplyCoordinatorEpoch(coordinatorEpoch, "updateMetadataCache");
-                    metadataCache.updateClusterMetadata(clusterMetadata);
-                });
+        inLock(replicaStateChangeLock, () -> {
+            // check or apply coordinator epoch.
+            validateAndApplyCoordinatorEpoch(coordinatorEpoch, "updateMetadataCache");
+            metadataCache.updateClusterMetadata(clusterMetadata);
+        });
     }
 
     /**
@@ -397,13 +377,11 @@ public class ReplicaManager {
         }
 
         long startTime = System.currentTimeMillis();
-        Map<TableBucket, ProduceLogResultForBucket> appendResult =
-                appendToLocalLog(entriesPerBucket, requiredAcks);
+        Map<TableBucket, ProduceLogResultForBucket> appendResult = appendToLocalLog(entriesPerBucket, requiredAcks);
         LOG.debug("Append records to local log in {} ms", System.currentTimeMillis() - startTime);
 
         // maybe do delay write operation.
-        maybeAddDelayedWrite(
-                timeoutMs, requiredAcks, entriesPerBucket.size(), appendResult, responseCallback);
+        maybeAddDelayedWrite(timeoutMs, requiredAcks, entriesPerBucket.size(), appendResult, responseCallback);
     }
 
     /**
@@ -419,9 +397,7 @@ public class ReplicaManager {
         long startTime = System.currentTimeMillis();
         Map<TableBucket, LogReadResult> logReadResults = readFromLog(params, bucketFetchInfo);
         if (LOG.isTraceEnabled()) {
-            LOG.trace(
-                    "Fetch log records from local log in {} ms",
-                    System.currentTimeMillis() - startTime);
+            LOG.trace("Fetch log records from local log in {} ms", System.currentTimeMillis() - startTime);
         }
 
         // maybe do delay fetch log operation.
@@ -451,25 +427,21 @@ public class ReplicaManager {
 
         // maybe do delay write operation to write cdc log to be replicated to other follower
         // replicas.
-        maybeAddDelayedWrite(
-                timeoutMs, requiredAcks, entriesPerBucket.size(), kvPutResult, responseCallback);
+        maybeAddDelayedWrite(timeoutMs, requiredAcks, entriesPerBucket.size(), kvPutResult, responseCallback);
     }
 
     /** Lookup a single key value. */
     @VisibleForTesting
     protected void lookup(TableBucket tableBucket, byte[] key, Consumer<byte[]> responseCallback) {
-        lookups(
-                Collections.singletonMap(tableBucket, Collections.singletonList(key)),
-                multiLookupResponseCallBack -> {
-                    LookupResultForBucket result = multiLookupResponseCallBack.get(tableBucket);
-                    List<byte[]> values = result.lookupValues();
-                    checkState(
-                            values.size() == 1,
-                            "The result value for single lookup should be with size 1, "
-                                    + "but the result size is {}",
-                            values.size());
-                    responseCallback.accept(values.get(0));
-                });
+        lookups(Collections.singletonMap(tableBucket, Collections.singletonList(key)), multiLookupResponseCallBack -> {
+            LookupResultForBucket result = multiLookupResponseCallBack.get(tableBucket);
+            List<byte[]> values = result.lookupValues();
+            checkState(
+                    values.size() == 1,
+                    "The result value for single lookup should be with size 1, " + "but the result size is {}",
+                    values.size());
+            responseCallback.accept(values.get(0));
+        });
     }
 
     /** Lookup with multi key from leader replica of the buckets. */
@@ -485,8 +457,7 @@ public class ReplicaManager {
                 Replica replica = getReplicaOrException(tb);
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalLookupRequests().inc();
-                lookupResultForBucketMap.put(
-                        tb, new LookupResultForBucket(tb, replica.lookups(entry.getValue())));
+                lookupResultForBucketMap.put(tb, new LookupResultForBucket(tb, replica.lookups(entry.getValue())));
             } catch (Exception e) {
                 if (isUnexpectedException(e)) {
                     LOG.error("Error lookup from local kv on replica {}", tb, e);
@@ -497,8 +468,7 @@ public class ReplicaManager {
                         tableMetrics.failedLookupRequests().inc();
                     }
                 }
-                lookupResultForBucketMap.put(
-                        tb, new LookupResultForBucket(tb, ApiError.fromThrowable(e)));
+                lookupResultForBucketMap.put(tb, new LookupResultForBucket(tb, ApiError.fromThrowable(e)));
             }
         }
         LOG.debug("Lookup from local kv in {}ms", System.currentTimeMillis() - startTime);
@@ -544,9 +514,7 @@ public class ReplicaManager {
         for (TableBucket tb : tableBuckets) {
             try {
                 Replica replica = getReplicaOrException(tb);
-                result.add(
-                        new ListOffsetsResultForBucket(
-                                tb, replica.getOffset(remoteLogManager, listOffsetsParam)));
+                result.add(new ListOffsetsResultForBucket(tb, replica.getOffset(remoteLogManager, listOffsetsParam)));
             } catch (Exception e) {
                 LOG.error("Error processing list offsets operation on replica {}", tb, e);
                 result.add(new ListOffsetsResultForBucket(tb, ApiError.fromThrowable(e)));
@@ -560,77 +528,53 @@ public class ReplicaManager {
             List<StopReplicaData> stopReplicaDataList,
             Consumer<List<StopReplicaResultForBucket>> responseCallback) {
         List<StopReplicaResultForBucket> result = new ArrayList<>();
-        inLock(
-                replicaStateChangeLock,
-                () -> {
-                    // check or apply coordinator epoch.
-                    validateAndApplyCoordinatorEpoch(requestCoordinatorEpoch, "stopReplicas");
+        inLock(replicaStateChangeLock, () -> {
+            // check or apply coordinator epoch.
+            validateAndApplyCoordinatorEpoch(requestCoordinatorEpoch, "stopReplicas");
 
-                    // store the deleted table id and the table dir path to delete the table dir
-                    // after delete all the buckets of this table.
-                    Map<Long, Path> deletedTableIds = new HashMap<>();
-                    // the same to partition id and partition dir path
-                    Map<Long, Path> deletedPartitionIds = new HashMap<>();
+            // store the deleted table id and the table dir path to delete the table dir
+            // after delete all the buckets of this table.
+            Map<Long, Path> deletedTableIds = new HashMap<>();
+            // the same to partition id and partition dir path
+            Map<Long, Path> deletedPartitionIds = new HashMap<>();
 
-                    for (StopReplicaData data : stopReplicaDataList) {
-                        TableBucket tb = data.getTableBucket();
-                        HostedReplica hostedReplica = getReplica(tb);
-                        if (hostedReplica instanceof NoneReplica) {
-                            // do nothing fort this case.
-                            result.add(new StopReplicaResultForBucket(tb));
-                        } else if (hostedReplica instanceof OfflineReplica) {
-                            LOG.warn(
-                                    "Ignoring stopReplica request for table bucket {} as the local replica is offline",
-                                    tb);
-                            result.add(
-                                    new StopReplicaResultForBucket(
-                                            tb,
-                                            Errors.LOG_STORAGE_EXCEPTION,
-                                            "local replica is offline"));
-                        } else if (hostedReplica instanceof OnlineReplica) {
-                            Replica replica = ((OnlineReplica) hostedReplica).getReplica();
-                            int requestLeaderEpoch = data.getLeaderEpoch();
-                            int currentLeaderEpoch = replica.getLeaderEpoch();
-                            if (requestLeaderEpoch < currentLeaderEpoch) {
-                                String errorMessage =
-                                        String.format(
-                                                "invalid leader epoch %s in stop replica request, "
-                                                        + "The latest known leader epoch is %s for table bucket %s.",
-                                                requestLeaderEpoch, currentLeaderEpoch, tb);
-                                LOG.warn(
-                                        "Ignore the stop replica request because {}", errorMessage);
-                                result.add(
-                                        new StopReplicaResultForBucket(
-                                                tb,
-                                                Errors.FENCED_LEADER_EPOCH_EXCEPTION,
-                                                errorMessage));
-                            } else {
-                                try {
-                                    result.add(
-                                            stopReplica(
-                                                    tb,
-                                                    data.isDelete(),
-                                                    deletedTableIds,
-                                                    deletedPartitionIds));
-                                } catch (Exception e) {
-                                    LOG.error(
-                                            "Error processing stopReplica operation on hostedReplica {}",
-                                            tb,
-                                            e);
-                                    result.add(
-                                            new StopReplicaResultForBucket(
-                                                    tb, ApiError.fromThrowable(e)));
-                                }
-                            }
+            for (StopReplicaData data : stopReplicaDataList) {
+                TableBucket tb = data.getTableBucket();
+                HostedReplica hostedReplica = getReplica(tb);
+                if (hostedReplica instanceof NoneReplica) {
+                    // do nothing fort this case.
+                    result.add(new StopReplicaResultForBucket(tb));
+                } else if (hostedReplica instanceof OfflineReplica) {
+                    LOG.warn("Ignoring stopReplica request for table bucket {} as the local replica is offline", tb);
+                    result.add(new StopReplicaResultForBucket(
+                            tb, Errors.LOG_STORAGE_EXCEPTION, "local replica is offline"));
+                } else if (hostedReplica instanceof OnlineReplica) {
+                    Replica replica = ((OnlineReplica) hostedReplica).getReplica();
+                    int requestLeaderEpoch = data.getLeaderEpoch();
+                    int currentLeaderEpoch = replica.getLeaderEpoch();
+                    if (requestLeaderEpoch < currentLeaderEpoch) {
+                        String errorMessage = String.format(
+                                "invalid leader epoch %s in stop replica request, "
+                                        + "The latest known leader epoch is %s for table bucket %s.",
+                                requestLeaderEpoch, currentLeaderEpoch, tb);
+                        LOG.warn("Ignore the stop replica request because {}", errorMessage);
+                        result.add(
+                                new StopReplicaResultForBucket(tb, Errors.FENCED_LEADER_EPOCH_EXCEPTION, errorMessage));
+                    } else {
+                        try {
+                            result.add(stopReplica(tb, data.isDelete(), deletedTableIds, deletedPartitionIds));
+                        } catch (Exception e) {
+                            LOG.error("Error processing stopReplica operation on hostedReplica {}", tb, e);
+                            result.add(new StopReplicaResultForBucket(tb, ApiError.fromThrowable(e)));
                         }
                     }
+                }
+            }
 
-                    // must delete partition dir first, then table dir
-                    deletedPartitionIds.forEach(
-                            (id, dir) -> dropEmptyTableOrPartitionDir(dir, id, "partition"));
-                    deletedTableIds.forEach(
-                            (id, dir) -> dropEmptyTableOrPartitionDir(dir, id, "table"));
-                });
+            // must delete partition dir first, then table dir
+            deletedPartitionIds.forEach((id, dir) -> dropEmptyTableOrPartitionDir(dir, id, "partition"));
+            deletedTableIds.forEach((id, dir) -> dropEmptyTableOrPartitionDir(dir, id, "table"));
+        });
 
         responseCallback.accept(result);
     }
@@ -638,75 +582,56 @@ public class ReplicaManager {
     public void notifyRemoteLogOffsets(
             NotifyRemoteLogOffsetsData notifyRemoteLogOffsetsData,
             Consumer<NotifyRemoteLogOffsetsResponse> responseCallback) {
-        inLock(
-                replicaStateChangeLock,
-                () -> {
-                    // check or apply coordinator epoch.
-                    validateAndApplyCoordinatorEpoch(
-                            notifyRemoteLogOffsetsData.getCoordinatorEpoch(),
-                            "notifyRemoteLogOffsets");
-                    // update the remote log offsets and delete local segments already copied to
-                    // remote.
-                    TableBucket tb = notifyRemoteLogOffsetsData.getTableBucket();
-                    LogTablet logTablet = getReplicaOrException(tb).getLogTablet();
-                    logTablet.updateRemoteLogStartOffset(
-                            notifyRemoteLogOffsetsData.getRemoteLogStartOffset());
-                    logTablet.updateRemoteLogEndOffset(
-                            notifyRemoteLogOffsetsData.getRemoteLogEndOffset());
-                    responseCallback.accept(new NotifyRemoteLogOffsetsResponse());
-                });
+        inLock(replicaStateChangeLock, () -> {
+            // check or apply coordinator epoch.
+            validateAndApplyCoordinatorEpoch(
+                    notifyRemoteLogOffsetsData.getCoordinatorEpoch(), "notifyRemoteLogOffsets");
+            // update the remote log offsets and delete local segments already copied to
+            // remote.
+            TableBucket tb = notifyRemoteLogOffsetsData.getTableBucket();
+            LogTablet logTablet = getReplicaOrException(tb).getLogTablet();
+            logTablet.updateRemoteLogStartOffset(notifyRemoteLogOffsetsData.getRemoteLogStartOffset());
+            logTablet.updateRemoteLogEndOffset(notifyRemoteLogOffsetsData.getRemoteLogEndOffset());
+            responseCallback.accept(new NotifyRemoteLogOffsetsResponse());
+        });
     }
 
     public void notifyKvSnapshotOffset(
             NotifyKvSnapshotOffsetData notifyKvSnapshotOffsetData,
             Consumer<NotifyKvSnapshotOffsetResponse> responseCallback) {
-        inLock(
-                replicaStateChangeLock,
-                () -> {
-                    // check or apply coordinator epoch.
-                    validateAndApplyCoordinatorEpoch(
-                            notifyKvSnapshotOffsetData.getCoordinatorEpoch(),
-                            "notifyKvSnapshotOffset");
-                    // update the snapshot offset.
-                    TableBucket tb = notifyKvSnapshotOffsetData.getTableBucket();
-                    LogTablet logTablet = getReplicaOrException(tb).getLogTablet();
-                    logTablet.updateMinRetainOffset(
-                            notifyKvSnapshotOffsetData.getMinRetainOffset());
-                    responseCallback.accept(new NotifyKvSnapshotOffsetResponse());
-                });
+        inLock(replicaStateChangeLock, () -> {
+            // check or apply coordinator epoch.
+            validateAndApplyCoordinatorEpoch(
+                    notifyKvSnapshotOffsetData.getCoordinatorEpoch(), "notifyKvSnapshotOffset");
+            // update the snapshot offset.
+            TableBucket tb = notifyKvSnapshotOffsetData.getTableBucket();
+            LogTablet logTablet = getReplicaOrException(tb).getLogTablet();
+            logTablet.updateMinRetainOffset(notifyKvSnapshotOffsetData.getMinRetainOffset());
+            responseCallback.accept(new NotifyKvSnapshotOffsetResponse());
+        });
     }
 
     public void notifyLakeTableOffset(
             NotifyLakeTableOffsetData notifyLakeTableOffsetData,
             Consumer<NotifyLakeTableOffsetResponse> responseCallback) {
-        inLock(
-                replicaStateChangeLock,
-                () -> {
-                    // check or apply coordinator epoch.
-                    validateAndApplyCoordinatorEpoch(
-                            notifyLakeTableOffsetData.getCoordinatorEpoch(),
-                            "notifyLakeTableOffset");
+        inLock(replicaStateChangeLock, () -> {
+            // check or apply coordinator epoch.
+            validateAndApplyCoordinatorEpoch(notifyLakeTableOffsetData.getCoordinatorEpoch(), "notifyLakeTableOffset");
 
-                    Map<TableBucket, LakeBucketOffset> lakeBucketOffsets =
-                            notifyLakeTableOffsetData.getLakeBucketOffsets();
-                    for (Map.Entry<TableBucket, LakeBucketOffset> lakeBucketOffsetEntry :
-                            lakeBucketOffsets.entrySet()) {
-                        TableBucket tb = lakeBucketOffsetEntry.getKey();
-                        LakeBucketOffset lakeBucketOffset = lakeBucketOffsetEntry.getValue();
-                        LogTablet logTablet = getReplicaOrException(tb).getLogTablet();
-                        logTablet.updateLakeTableSnapshotId(lakeBucketOffset.getSnapshotId());
+            Map<TableBucket, LakeBucketOffset> lakeBucketOffsets = notifyLakeTableOffsetData.getLakeBucketOffsets();
+            for (Map.Entry<TableBucket, LakeBucketOffset> lakeBucketOffsetEntry : lakeBucketOffsets.entrySet()) {
+                TableBucket tb = lakeBucketOffsetEntry.getKey();
+                LakeBucketOffset lakeBucketOffset = lakeBucketOffsetEntry.getValue();
+                LogTablet logTablet = getReplicaOrException(tb).getLogTablet();
+                logTablet.updateLakeTableSnapshotId(lakeBucketOffset.getSnapshotId());
 
-                        lakeBucketOffset
-                                .getLogStartOffset()
-                                .ifPresent(logTablet::updateLakeLogStartOffset);
+                lakeBucketOffset.getLogStartOffset().ifPresent(logTablet::updateLakeLogStartOffset);
 
-                        lakeBucketOffset
-                                .getLogEndOffset()
-                                .ifPresent(logTablet::updateLakeLogEndOffset);
+                lakeBucketOffset.getLogEndOffset().ifPresent(logTablet::updateLakeLogEndOffset);
 
-                        responseCallback.accept(new NotifyLakeTableOffsetResponse());
-                    }
-                });
+                responseCallback.accept(new NotifyLakeTableOffsetResponse());
+            }
+        });
     }
 
     /**
@@ -723,10 +648,9 @@ public class ReplicaManager {
         if (replicasToBeLeader.isEmpty()) {
             return;
         }
-        replicaFetcherManager.removeFetcherForBuckets(
-                replicasToBeLeader.stream()
-                        .map(NotifyLeaderAndIsrData::getTableBucket)
-                        .collect(Collectors.toSet()));
+        replicaFetcherManager.removeFetcherForBuckets(replicasToBeLeader.stream()
+                .map(NotifyLeaderAndIsrData::getTableBucket)
+                .collect(Collectors.toSet()));
 
         for (NotifyLeaderAndIsrData data : replicasToBeLeader) {
             TableBucket tb = data.getTableBucket();
@@ -741,8 +665,7 @@ public class ReplicaManager {
                 result.put(tb, new NotifyLeaderAndIsrResultForBucket(tb));
             } catch (Exception e) {
                 LOG.error("Error make replica {} to leader", tb, e);
-                result.put(
-                        tb, new NotifyLeaderAndIsrResultForBucket(tb, ApiError.fromThrowable(e)));
+                result.put(tb, new NotifyLeaderAndIsrResultForBucket(tb, ApiError.fromThrowable(e)));
             }
         }
     }
@@ -756,13 +679,9 @@ public class ReplicaManager {
             long snapshotId = optLakeTableSnapshot.get().getSnapshotId();
             replica.getLogTablet().updateLakeTableSnapshotId(snapshotId);
 
-            lakeTableSnapshot
-                    .getLogStartOffset(tb)
-                    .ifPresent(replica.getLogTablet()::updateLakeLogStartOffset);
+            lakeTableSnapshot.getLogStartOffset(tb).ifPresent(replica.getLogTablet()::updateLakeLogStartOffset);
 
-            lakeTableSnapshot
-                    .getLogEndOffset(tb)
-                    .ifPresent(replica.getLogTablet()::updateLakeLogEndOffset);
+            lakeTableSnapshot.getLogEndOffset(tb).ifPresent(replica.getLogTablet()::updateLakeLogEndOffset);
         }
     }
 
@@ -796,24 +715,18 @@ public class ReplicaManager {
                 result.put(tb, new NotifyLeaderAndIsrResultForBucket(tb));
             } catch (Exception e) {
                 LOG.error("Error make replica {} to follower", tb, e);
-                result.put(
-                        tb, new NotifyLeaderAndIsrResultForBucket(tb, ApiError.fromThrowable(e)));
+                result.put(tb, new NotifyLeaderAndIsrResultForBucket(tb, ApiError.fromThrowable(e)));
             }
         }
 
         // Stopping the fetchers must be done first in order to initialize the fetch position
         // correctly.
         replicaFetcherManager.removeFetcherForBuckets(
-                replicasBecomeFollower.stream()
-                        .map(Replica::getTableBucket)
-                        .collect(Collectors.toSet()));
+                replicasBecomeFollower.stream().map(Replica::getTableBucket).collect(Collectors.toSet()));
 
-        replicasBecomeFollower.forEach(
-                replica -> completeDelayedOperations(replica.getTableBucket()));
+        replicasBecomeFollower.forEach(replica -> completeDelayedOperations(replica.getTableBucket()));
 
-        LOG.info(
-                "Stopped fetchers as part of become follower request for {} replicas",
-                replicasToBeFollower.size());
+        LOG.info("Stopped fetchers as part of become follower request for {} replicas", replicasToBeFollower.size());
 
         // Truncate the follower replicas LEO to highWatermark.
         // TODO this logic need to be removed after we introduce leader epoch cache, and fetcher
@@ -837,20 +750,15 @@ public class ReplicaManager {
                         tb,
                         new NotifyLeaderAndIsrResultForBucket(
                                 tb,
-                                ApiError.fromThrowable(
-                                        new StorageException(
-                                                String.format(
-                                                        "Could not find leader for follower replica %s while make "
-                                                                + "follower for %s.",
-                                                        serverId, tb)))));
+                                ApiError.fromThrowable(new StorageException(String.format(
+                                        "Could not find leader for follower replica %s while make "
+                                                + "follower for %s.",
+                                        serverId, tb)))));
             } else {
                 bucketAndStatus.put(
                         tb,
                         new InitialFetchStatus(
-                                tb.getTableId(),
-                                replica.getTablePath(),
-                                leaderId,
-                                logTablet.localLogEndOffset()));
+                                tb.getTableId(), replica.getTablePath(), leaderId, logTablet.localLogEndOffset()));
             }
         }
         replicaFetcherManager.addFetcherForBuckets(bucketAndStatus);
@@ -868,8 +776,7 @@ public class ReplicaManager {
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalProduceLogRequests().inc();
                 LOG.trace("Append records to local log tablet for table bucket {}", tb);
-                LogAppendInfo appendInfo =
-                        replica.appendRecordsToLeader(entry.getValue(), requiredAcks);
+                LogAppendInfo appendInfo = replica.appendRecordsToLeader(entry.getValue(), requiredAcks);
 
                 long baseOffset = appendInfo.firstOffset();
                 LOG.trace(
@@ -878,9 +785,7 @@ public class ReplicaManager {
                         baseOffset,
                         appendInfo.lastOffset());
 
-                resultForBucketMap.put(
-                        tb,
-                        new ProduceLogResultForBucket(tb, baseOffset, appendInfo.lastOffset() + 1));
+                resultForBucketMap.put(tb, new ProduceLogResultForBucket(tb, baseOffset, appendInfo.lastOffset() + 1));
                 tableMetrics.logBytesIn().inc(appendInfo.validBytes());
                 tableMetrics.logMessageIn().inc(appendInfo.numMessages());
             } catch (Exception e) {
@@ -893,8 +798,7 @@ public class ReplicaManager {
                         tableMetrics.failedProduceLogRequests().inc();
                     }
                 }
-                resultForBucketMap.put(
-                        tb, new ProduceLogResultForBucket(tb, ApiError.fromThrowable(e)));
+                resultForBucketMap.put(tb, new ProduceLogResultForBucket(tb, ApiError.fromThrowable(e)));
             }
         }
 
@@ -902,9 +806,7 @@ public class ReplicaManager {
     }
 
     private Map<TableBucket, PutKvResultForBucket> putToLocalKv(
-            Map<TableBucket, KvRecordBatch> entriesPerBucket,
-            @Nullable int[] targetColumns,
-            int requiredAcks) {
+            Map<TableBucket, KvRecordBatch> entriesPerBucket, @Nullable int[] targetColumns, int requiredAcks) {
         Map<TableBucket, PutKvResultForBucket> putResultForBucketMap = new HashMap<>();
         for (Map.Entry<TableBucket, KvRecordBatch> entry : entriesPerBucket.entrySet()) {
             TableBucket tb = entry.getKey();
@@ -914,15 +816,13 @@ public class ReplicaManager {
                 Replica replica = getReplicaOrException(tb);
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalPutKvRequests().inc();
-                LogAppendInfo appendInfo =
-                        replica.putRecordsToLeader(entry.getValue(), targetColumns, requiredAcks);
+                LogAppendInfo appendInfo = replica.putRecordsToLeader(entry.getValue(), targetColumns, requiredAcks);
                 LOG.trace(
                         "Written to local kv for {}, and the cdc log beginning at offset {} and ending at offset {}",
                         tb,
                         appendInfo.firstOffset(),
                         appendInfo.lastOffset());
-                putResultForBucketMap.put(
-                        tb, new PutKvResultForBucket(tb, appendInfo.lastOffset() + 1));
+                putResultForBucketMap.put(tb, new PutKvResultForBucket(tb, appendInfo.lastOffset() + 1));
 
                 // metric for kv
                 tableMetrics.kvMessageIn().inc(entry.getValue().getRecordCount());
@@ -940,18 +840,14 @@ public class ReplicaManager {
                         tableMetrics.failedPutKvRequests().inc();
                     }
                 }
-                putResultForBucketMap.put(
-                        tb, new PutKvResultForBucket(tb, ApiError.fromThrowable(e)));
+                putResultForBucketMap.put(tb, new PutKvResultForBucket(tb, ApiError.fromThrowable(e)));
             }
         }
 
         return putResultForBucketMap;
     }
 
-    public void limitScan(
-            TableBucket tableBucket,
-            int limit,
-            Consumer<LimitScanResultForBucket> responseCallback) {
+    public void limitScan(TableBucket tableBucket, int limit, Consumer<LimitScanResultForBucket> responseCallback) {
         LimitScanResultForBucket limitScanResultForBucket;
         PhysicalTableMetricGroup tableMetrics = null;
         try {
@@ -959,11 +855,9 @@ public class ReplicaManager {
             tableMetrics = replica.tableMetrics();
             tableMetrics.totalLimitScanRequests().inc();
             if (replica.isKvTable()) {
-                limitScanResultForBucket =
-                        new LimitScanResultForBucket(tableBucket, replica.limitKvScan(limit));
+                limitScanResultForBucket = new LimitScanResultForBucket(tableBucket, replica.limitKvScan(limit));
             } else {
-                limitScanResultForBucket =
-                        new LimitScanResultForBucket(tableBucket, replica.limitLogScan(limit));
+                limitScanResultForBucket = new LimitScanResultForBucket(tableBucket, replica.limitLogScan(limit));
             }
         } catch (Exception e) {
             if (isUnexpectedException(e)) {
@@ -975,8 +869,7 @@ public class ReplicaManager {
                     tableMetrics.failedLimitScanRequests().inc();
                 }
             }
-            limitScanResultForBucket =
-                    new LimitScanResultForBucket(tableBucket, ApiError.fromThrowable(e));
+            limitScanResultForBucket = new LimitScanResultForBucket(tableBucket, ApiError.fromThrowable(e));
         }
         responseCallback.accept(limitScanResultForBucket);
     }
@@ -997,10 +890,7 @@ public class ReplicaManager {
                 replica = getReplicaOrException(tb);
                 tableMetrics = replica.tableMetrics();
                 tableMetrics.totalFetchLogRequests().inc();
-                LOG.trace(
-                        "Fetching log record for replica {}, offset {}",
-                        tb,
-                        fetchReqInfo.getFetchOffset());
+                LOG.trace("Fetching log record for replica {}, offset {}", tb, fetchReqInfo.getFetchOffset());
                 replica.checkProjection(fetchReqInfo.getProjectFields());
                 fetchParams.setCurrentFetch(
                         tb.getTableId(),
@@ -1023,8 +913,7 @@ public class ReplicaManager {
                 logReadResult.put(
                         tb,
                         new LogReadResult(
-                                new FetchLogResultForBucket(
-                                        tb, fetchedData.getRecords(), readInfo.getHighWatermark()),
+                                new FetchLogResultForBucket(tb, fetchedData.getRecords(), readInfo.getHighWatermark()),
                                 fetchedData.getFetchOffsetMetadata()));
 
                 // update metrics
@@ -1050,15 +939,13 @@ public class ReplicaManager {
                 } else {
                     result = new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));
                 }
-                logReadResult.put(
-                        tb, new LogReadResult(result, LogOffsetMetadata.UNKNOWN_OFFSET_METADATA));
+                logReadResult.put(tb, new LogReadResult(result, LogOffsetMetadata.UNKNOWN_OFFSET_METADATA));
             }
         }
         return logReadResult;
     }
 
-    private FetchLogResultForBucket handleFetchOutOfRangeException(
-            Replica replica, long fetchOffset, Exception e) {
+    private FetchLogResultForBucket handleFetchOutOfRangeException(Replica replica, long fetchOffset, Exception e) {
         TableBucket tb = replica.getTableBucket();
         if (fetchOffset == FetchParams.FETCH_FROM_EARLIEST_OFFSET) {
             fetchOffset = replica.getLogStartOffset();
@@ -1068,8 +955,7 @@ public class ReplicaManager {
             // todo: currently, we just return empty records directly
             // need to return the info of datalake to make client can fetch
             // from datalake directly
-            return new FetchLogResultForBucket(
-                    tb, MemoryLogRecords.EMPTY, replica.getLogHighWatermark());
+            return new FetchLogResultForBucket(tb, MemoryLogRecords.EMPTY, replica.getLogHighWatermark());
         }
         // Once we get a fetch out of range exception from local storage, we need to check whether
         // the log segment already upload to the remote storage. If uploaded, we will return a list
@@ -1078,16 +964,12 @@ public class ReplicaManager {
         else if (canFetchFromRemoteLog(replica, fetchOffset)) {
             RemoteLogFetchInfo remoteLogFetchInfo = fetchLogFromRemote(replica, fetchOffset);
             if (remoteLogFetchInfo != null) {
-                return new FetchLogResultForBucket(
-                        tb, remoteLogFetchInfo, replica.getLogHighWatermark());
+                return new FetchLogResultForBucket(tb, remoteLogFetchInfo, replica.getLogHighWatermark());
             } else {
                 return new FetchLogResultForBucket(
                         tb,
-                        ApiError.fromThrowable(
-                                new LogOffsetOutOfRangeException(
-                                        String.format(
-                                                "The fetch offset %s is out of range for table bucket %s",
-                                                fetchOffset, tb))));
+                        ApiError.fromThrowable(new LogOffsetOutOfRangeException(String.format(
+                                "The fetch offset %s is out of range for table bucket %s", fetchOffset, tb))));
             }
         } else {
             return new FetchLogResultForBucket(tb, ApiError.fromThrowable(e));
@@ -1106,15 +988,10 @@ public class ReplicaManager {
         List<RemoteLogSegment> remoteLogSegmentList =
                 remoteLogManager.relevantRemoteLogSegments(replica.getTableBucket(), fetchOffset);
         if (!remoteLogSegmentList.isEmpty()) {
-            int firstStartPos =
-                    remoteLogManager.lookupPositionForOffset(
-                            remoteLogSegmentList.get(0), fetchOffset);
+            int firstStartPos = remoteLogManager.lookupPositionForOffset(remoteLogSegmentList.get(0), fetchOffset);
             PhysicalTablePath physicalTablePath = replica.getPhysicalTablePath();
-            FsPath remoteLogTabletDir =
-                    FlussPaths.remoteLogTabletDir(
-                            remoteLogManager.remoteLogDir(),
-                            physicalTablePath,
-                            replica.getTableBucket());
+            FsPath remoteLogTabletDir = FlussPaths.remoteLogTabletDir(
+                    remoteLogManager.remoteLogDir(), physicalTablePath, replica.getTableBucket());
             return new RemoteLogFetchInfo(
                     remoteLogTabletDir.toString(),
                     physicalTablePath.getPartitionName(),
@@ -1190,19 +1067,14 @@ public class ReplicaManager {
             Consumer<List<T>> responseCallback) {
         if (delayedWriteRequired(requiredAcks, requestBucketSize, writeResults)) {
             Map<TableBucket, DelayedWrite.DelayedBucketStatus<T>> bucketStatusMap = new HashMap<>();
-            writeResults.forEach(
-                    (tb, result) ->
-                            bucketStatusMap.put(
-                                    tb,
-                                    new DelayedWrite.DelayedBucketStatus<>(
-                                            result.getWriteLogEndOffset(), result)));
-            DelayedWrite<T> delayedWrite =
-                    new DelayedWrite<>(
-                            timeoutMs,
-                            new DelayedWrite.DelayedWriteMetadata<>(requiredAcks, bucketStatusMap),
-                            this,
-                            responseCallback,
-                            serverMetricGroup);
+            writeResults.forEach((tb, result) -> bucketStatusMap.put(
+                    tb, new DelayedWrite.DelayedBucketStatus<>(result.getWriteLogEndOffset(), result)));
+            DelayedWrite<T> delayedWrite = new DelayedWrite<>(
+                    timeoutMs,
+                    new DelayedWrite.DelayedWriteMetadata<>(requiredAcks, bucketStatusMap),
+                    this,
+                    responseCallback,
+                    serverMetricGroup);
 
             // try to complete the request immediately, otherwise put it into the manager.
             // This is because while the delayed write operation is being created, new
@@ -1229,8 +1101,7 @@ public class ReplicaManager {
         for (Map.Entry<TableBucket, LogReadResult> logReadResultEntry : logReadResults.entrySet()) {
             TableBucket tb = logReadResultEntry.getKey();
             LogReadResult logReadResult = logReadResultEntry.getValue();
-            FetchLogResultForBucket fetchLogResultForBucket =
-                    logReadResult.getFetchLogResultForBucket();
+            FetchLogResultForBucket fetchLogResultForBucket = logReadResult.getFetchLogResultForBucket();
             if (fetchLogResultForBucket.failed()) {
                 errorReadingData = true;
                 break;
@@ -1244,9 +1115,7 @@ public class ReplicaManager {
             fetchBucketStatusMap.put(
                     tb,
                     new FetchBucketStatus(
-                            bucketFetchInfo.get(tb),
-                            logReadResult.getLogOffsetMetadata(),
-                            fetchLogResultForBucket));
+                            bucketFetchInfo.get(tb), logReadResult.getLogOffsetMetadata(), fetchLogResultForBucket));
         }
 
         if (!hasFetchFromLocal
@@ -1254,23 +1123,13 @@ public class ReplicaManager {
                 || bucketFetchInfo.isEmpty()
                 || bytesReadable >= params.minFetchBytes()
                 || errorReadingData) {
-            responseCallback.accept(
-                    logReadResults.entrySet().stream()
-                            .collect(
-                                    Collectors.toMap(
-                                            Map.Entry::getKey,
-                                            entry ->
-                                                    entry.getValue()
-                                                            .getFetchLogResultForBucket())));
+            responseCallback.accept(logReadResults.entrySet().stream()
+                    .collect(Collectors.toMap(
+                            Map.Entry::getKey, entry -> entry.getValue().getFetchLogResultForBucket())));
         } else {
             // need to put the fetch log request into delayed fetch log manager.
             DelayedFetchLog delayedFetchLog =
-                    new DelayedFetchLog(
-                            params,
-                            this,
-                            fetchBucketStatusMap,
-                            responseCallback,
-                            serverMetricGroup);
+                    new DelayedFetchLog(params, this, fetchBucketStatusMap, responseCallback, serverMetricGroup);
 
             // try to complete the request immediately, otherwise put it into the
             // delayedFetchLogManager; this is because while the delayed fetch log operation is
@@ -1295,15 +1154,10 @@ public class ReplicaManager {
      */
     protected boolean validateAndGetIsBecomeLeader(NotifyLeaderAndIsrData data) {
         TableBucket tb = data.getTableBucket();
-        Replica replica =
-                maybeCreateReplica(data)
-                        .orElseThrow(
-                                () ->
-                                        new StorageException(
-                                                String.format(
-                                                        "The replica %s for table bucket %s is offline while "
-                                                                + "notify leader and isr",
-                                                        serverId, tb)));
+        Replica replica = maybeCreateReplica(data)
+                .orElseThrow(() -> new StorageException(String.format(
+                        "The replica %s for table bucket %s is offline while " + "notify leader and isr",
+                        serverId, tb)));
         int currentLeaderEpoch = replica.getLeaderEpoch();
         int requestLeaderEpoch = data.getLeaderEpoch();
         if (requestLeaderEpoch >= currentLeaderEpoch) {
@@ -1311,20 +1165,18 @@ public class ReplicaManager {
                 int leaderId = data.getLeader();
                 return leaderId == serverId;
             } else {
-                String errorMessage =
-                        String.format(
-                                "ignore the notify leader and isr request for bucket %s as itself "
-                                        + "is not in assigned replica list %s",
-                                tb, data.getReplicas());
+                String errorMessage = String.format(
+                        "ignore the notify leader and isr request for bucket %s as itself "
+                                + "is not in assigned replica list %s",
+                        tb, data.getReplicas());
                 LOG.warn(errorMessage);
                 throw new UnknownTableOrBucketException(errorMessage);
             }
         } else {
-            String errorMessage =
-                    String.format(
-                            "the leader epoch %s in request is smaller than the "
-                                    + "current leader epoch %s for table bucket %s",
-                            requestLeaderEpoch, currentLeaderEpoch, tb);
+            String errorMessage = String.format(
+                    "the leader epoch %s in request is smaller than the "
+                            + "current leader epoch %s for table bucket %s",
+                    requestLeaderEpoch, currentLeaderEpoch, tb);
             LOG.warn("Ignore the notify leader and isr request because {}", errorMessage);
             throw new FencedLeaderEpochException(errorMessage);
         }
@@ -1341,9 +1193,7 @@ public class ReplicaManager {
      * </pre>
      */
     private boolean delayedWriteRequired(
-            int requiredAcks,
-            int inputBucketSize,
-            Map<TableBucket, ? extends WriteResultForBucket> writeResults) {
+            int requiredAcks, int inputBucketSize, Map<TableBucket, ? extends WriteResultForBucket> writeResults) {
         boolean needDelayedWrite = false;
         int failedBucketSize = 0;
         for (WriteResultForBucket result : writeResults.values()) {
@@ -1359,8 +1209,7 @@ public class ReplicaManager {
     }
 
     private void maybeShrinkIsr() {
-        LOG.trace(
-                "Evaluating ISR list of buckets to see which replicas can be removed from the ISR list.");
+        LOG.trace("Evaluating ISR list of buckets to see which replicas can be removed from the ISR list.");
         // Shrink ISRs for non-offline replicas.
         for (Replica replica : getOnlineReplicaList()) {
             replica.maybeShrinkIsr();
@@ -1369,10 +1218,7 @@ public class ReplicaManager {
 
     /** Stop the given replica. */
     private StopReplicaResultForBucket stopReplica(
-            TableBucket tb,
-            boolean delete,
-            Map<Long, Path> deletedTableIds,
-            Map<Long, Path> deletedPartitionIds) {
+            TableBucket tb, boolean delete, Map<Long, Path> deletedTableIds, Map<Long, Path> deletedPartitionIds) {
         // First stop fetchers for this table bucket.
         replicaFetcherManager.removeFetcherForBuckets(Collections.singleton(tb));
 
@@ -1423,11 +1269,9 @@ public class ReplicaManager {
 
     private void validateAndApplyCoordinatorEpoch(int requestCoordinatorEpoch, String requestName) {
         if (requestCoordinatorEpoch < this.coordinatorEpoch) {
-            String errorMessage =
-                    String.format(
-                            "invalid coordinator epoch %s in %s request, "
-                                    + "The latest known coordinator epoch is %s.",
-                            requestCoordinatorEpoch, requestName, this.coordinatorEpoch);
+            String errorMessage = String.format(
+                    "invalid coordinator epoch %s in %s request, " + "The latest known coordinator epoch is %s.",
+                    requestCoordinatorEpoch, requestName, this.coordinatorEpoch);
             LOG.warn("Ignore the {} request because {}", requestName, errorMessage);
             throw new InvalidCoordinatorException(errorMessage);
         } else {
@@ -1458,29 +1302,26 @@ public class ReplicaManager {
                 TablePath tablePath = physicalTablePath.getTablePath();
                 TableInfo tableInfo = getTableInfo(zkClient, tablePath);
                 boolean isKvTable = tableInfo.hasPrimaryKey();
-                BucketMetricGroup bucketMetricGroup =
-                        serverMetricGroup.addPhysicalTableBucketMetricGroup(
-                                physicalTablePath, tb.getBucket(), isKvTable);
-                Replica replica =
-                        new Replica(
-                                physicalTablePath,
-                                tb,
-                                logManager,
-                                isKvTable ? kvManager : null,
-                                conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis(),
-                                conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER),
-                                serverId,
-                                new OffsetCheckpointFile.LazyOffsetCheckpoints(
-                                        highWatermarkCheckpoint),
-                                delayedWriteManager,
-                                delayedFetchLogManager,
-                                adjustIsrManager,
-                                kvSnapshotContext,
-                                metadataCache,
-                                fatalErrorHandler,
-                                bucketMetricGroup,
-                                tableInfo,
-                                clock);
+                BucketMetricGroup bucketMetricGroup = serverMetricGroup.addPhysicalTableBucketMetricGroup(
+                        physicalTablePath, tb.getBucket(), isKvTable);
+                Replica replica = new Replica(
+                        physicalTablePath,
+                        tb,
+                        logManager,
+                        isKvTable ? kvManager : null,
+                        conf.get(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME).toMillis(),
+                        conf.get(ConfigOptions.LOG_REPLICA_MIN_IN_SYNC_REPLICAS_NUMBER),
+                        serverId,
+                        new OffsetCheckpointFile.LazyOffsetCheckpoints(highWatermarkCheckpoint),
+                        delayedWriteManager,
+                        delayedFetchLogManager,
+                        adjustIsrManager,
+                        kvSnapshotContext,
+                        metadataCache,
+                        fatalErrorHandler,
+                        bucketMetricGroup,
+                        tableInfo,
+                        clock);
                 allReplicas.put(tb, new OnlineReplica(replica));
                 replicaOpt = Optional.of(replica);
             } else if (hostedReplica instanceof OnlineReplica) {
@@ -1579,9 +1420,7 @@ public class ReplicaManager {
         private final FetchLogResultForBucket fetchLogResultForBucket;
         private final LogOffsetMetadata logOffsetMetadata;
 
-        public LogReadResult(
-                FetchLogResultForBucket fetchLogResultForBucket,
-                LogOffsetMetadata logOffsetMetadata) {
+        public LogReadResult(FetchLogResultForBucket fetchLogResultForBucket, LogOffsetMetadata logOffsetMetadata) {
             this.fetchLogResultForBucket = fetchLogResultForBucket;
             this.logOffsetMetadata = logOffsetMetadata;
         }

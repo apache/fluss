@@ -47,11 +47,10 @@ class PaimonSplitPlannerTest extends PaimonSourceTestBase {
         // prepare paimon table
         int bucketNum = 2;
         TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE);
-        Schema.Builder builder =
-                Schema.newBuilder()
-                        .column("c1", DataTypes.INT())
-                        .column("c2", DataTypes.STRING())
-                        .column("c3", DataTypes.STRING());
+        Schema.Builder builder = Schema.newBuilder()
+                .column("c1", DataTypes.INT())
+                .column("c2", DataTypes.STRING())
+                .column("c3", DataTypes.STRING());
         builder.partitionKeys("c3");
         builder.primaryKey("c1", "c3");
         builder.option(CoreOptions.BUCKET.key(), String.valueOf(bucketNum));
@@ -59,10 +58,8 @@ class PaimonSplitPlannerTest extends PaimonSourceTestBase {
         createTable(tablePath, builder.build());
         Table table = getTable(tablePath);
 
-        GenericRow record1 =
-                GenericRow.of(12, BinaryString.fromString("a"), BinaryString.fromString("A"));
-        GenericRow record2 =
-                GenericRow.of(13, BinaryString.fromString("a"), BinaryString.fromString("A"));
+        GenericRow record1 = GenericRow.of(12, BinaryString.fromString("a"), BinaryString.fromString("A"));
+        GenericRow record2 = GenericRow.of(13, BinaryString.fromString("a"), BinaryString.fromString("A"));
         writeRecord(tablePath, Arrays.asList(record1, record2));
         Snapshot snapshot = table.latestSnapshot().get();
 
@@ -73,9 +70,6 @@ class PaimonSplitPlannerTest extends PaimonSourceTestBase {
 
         assertThat(actualSplits).hasSize(paimonSplits.size());
         assertThat(actualSplits)
-                .isEqualTo(
-                        paimonSplits.stream()
-                                .map(PaimonSplit::dataSplit)
-                                .collect(Collectors.toList()));
+                .isEqualTo(paimonSplits.stream().map(PaimonSplit::dataSplit).collect(Collectors.toList()));
     }
 }

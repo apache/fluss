@@ -44,15 +44,13 @@ class HadoopConfigLoadingTest {
 
     @Test
     void loadFromClasspathByDefault() {
-        org.apache.hadoop.conf.Configuration hadoopConf =
-                HadoopUtils.getHadoopConfiguration(new Configuration());
+        org.apache.hadoop.conf.Configuration hadoopConf = HadoopUtils.getHadoopConfiguration(new Configuration());
 
         assertThat(hadoopConf.get(IN_CP_CONFIG_KEY, null)).isEqualTo(IN_CP_CONFIG_VALUE);
     }
 
     @Test
-    void loadFromEnvVariables(@TempDir File hadoopConfDir, @TempDir File hadoopHome)
-            throws Exception {
+    void loadFromEnvVariables(@TempDir File hadoopConfDir, @TempDir File hadoopHome) throws Exception {
         final String k1 = "where?";
         final String v1 = "I'm on a boat";
         final String k2 = "when?";
@@ -112,8 +110,7 @@ class HadoopConfigLoadingTest {
     }
 
     @Test
-    void loadOverlappingConfig(@TempDir File hadoopConfDir, @TempDir File hadoopHome)
-            throws Exception {
+    void loadOverlappingConfig(@TempDir File hadoopConfDir, @TempDir File hadoopHome) throws Exception {
         final String k1 = "key1";
         final String k2 = "key2";
         final String k3 = "key3";

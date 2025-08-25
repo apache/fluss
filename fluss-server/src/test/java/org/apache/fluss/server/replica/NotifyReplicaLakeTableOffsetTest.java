@@ -48,8 +48,7 @@ class NotifyReplicaLakeTableOffsetTest extends ReplicaTestBase {
         notifyAndVerify(tb, replica, 2, 20L, 30L);
     }
 
-    private void notifyAndVerify(
-            TableBucket tb, Replica replica, long snapshotId, long startOffset, long endOffset)
+    private void notifyAndVerify(TableBucket tb, Replica replica, long snapshotId, long startOffset, long endOffset)
             throws Exception {
         NotifyLakeTableOffsetData notifyLakeTableOffsetData =
                 getNotifyLakeTableOffset(tb, snapshotId, startOffset, endOffset);
@@ -59,8 +58,7 @@ class NotifyReplicaLakeTableOffsetTest extends ReplicaTestBase {
         verifyLakeTableOffset(replica, snapshotId, startOffset, endOffset);
     }
 
-    private void verifyLakeTableOffset(
-            Replica replica, long snapshotId, long startOffset, long endOffset) {
+    private void verifyLakeTableOffset(Replica replica, long snapshotId, long startOffset, long endOffset) {
         AssertionsForClassTypes.assertThat(replica.getLogTablet().getLakeTableSnapshotId())
                 .isEqualTo(snapshotId);
         AssertionsForClassTypes.assertThat(replica.getLogTablet().getLakeLogStartOffset())
@@ -84,8 +82,6 @@ class NotifyReplicaLakeTableOffsetTest extends ReplicaTestBase {
     private NotifyLakeTableOffsetData getNotifyLakeTableOffset(
             TableBucket tableBucket, long snapshotId, long startOffset, long endOffset) {
         return new NotifyLakeTableOffsetData(
-                1,
-                Collections.singletonMap(
-                        tableBucket, new LakeBucketOffset(snapshotId, startOffset, endOffset)));
+                1, Collections.singletonMap(tableBucket, new LakeBucketOffset(snapshotId, startOffset, endOffset)));
     }
 }

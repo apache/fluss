@@ -24,8 +24,7 @@ import org.apache.fluss.security.auth.ServerAuthenticationPlugin;
 import org.apache.fluss.security.auth.ServerAuthenticator;
 
 /** Authentication plugin for SASL. */
-public class SaslAuthenticationPlugin
-        implements ClientAuthenticationPlugin, ServerAuthenticationPlugin {
+public class SaslAuthenticationPlugin implements ClientAuthenticationPlugin, ServerAuthenticationPlugin {
     static final String SASL_AUTH_PROTOCOL = "sasl";
 
     @Override

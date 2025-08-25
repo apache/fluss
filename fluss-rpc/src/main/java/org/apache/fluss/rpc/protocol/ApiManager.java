@@ -50,9 +50,7 @@ public class ApiManager {
         try {
             registerApiMethods(CoordinatorGateway.class, ServerType.COORDINATOR, ID_TO_API);
             registerApiMethods(TabletServerGateway.class, ServerType.TABLET_SERVER, ID_TO_API);
-            NAME_TO_API =
-                    ID_TO_API.values().stream()
-                            .collect(Collectors.toMap(ApiMethod::getMethodName, m -> m));
+            NAME_TO_API = ID_TO_API.values().stream().collect(Collectors.toMap(ApiMethod::getMethodName, m -> m));
         } catch (Exception e) {
             LOG.error("Failed to register RPC API methods.", e);
             throw e;
@@ -74,21 +72,16 @@ public class ApiManager {
     public ApiManager(ServerType providerType) {
         this.providerType = providerType;
         if (providerType == ServerType.COORDINATOR) {
-            this.id2Api =
-                    ID_TO_API.entrySet().stream()
-                            .filter(e -> e.getValue().inScope(ServerType.COORDINATOR))
-                            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+            this.id2Api = ID_TO_API.entrySet().stream()
+                    .filter(e -> e.getValue().inScope(ServerType.COORDINATOR))
+                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
         } else {
-            this.id2Api =
-                    ID_TO_API.entrySet().stream()
-                            .filter(e -> e.getValue().inScope(ServerType.TABLET_SERVER))
-                            .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
+            this.id2Api = ID_TO_API.entrySet().stream()
+                    .filter(e -> e.getValue().inScope(ServerType.TABLET_SERVER))
+                    .collect(Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue));
         }
-        this.enabledApis =
-                EnumSet.copyOf(
-                        id2Api.values().stream()
-                                .map(ApiMethod::getApiKey)
-                                .collect(Collectors.toList()));
+        this.enabledApis = EnumSet.copyOf(
+                id2Api.values().stream().map(ApiMethod::getApiKey).collect(Collectors.toList()));
     }
 
     public ServerType getProviderType() {
@@ -106,8 +99,7 @@ public class ApiManager {
     @VisibleForTesting
     public void registerApiMethod(ApiKeys api, Method method, ServerType providerType) {
         id2Api.put(api.id, createApiMethod(api, method, providerType));
-        enabledApis.addAll(
-                id2Api.values().stream().map(ApiMethod::getApiKey).collect(Collectors.toList()));
+        enabledApis.addAll(id2Api.values().stream().map(ApiMethod::getApiKey).collect(Collectors.toList()));
     }
 
     // ----------------------------------------------------------------------------------------
@@ -129,10 +121,9 @@ public class ApiManager {
                         // the same RPC method is supported by different providers
                         registeredMethods.put(api.id, existing.copyAndAddProvider(providerType));
                     } else {
-                        throw new IllegalStateException(
-                                String.format(
-                                        "Different RPC methods are registered with the same API key [%s].\n%s\n%s",
-                                        api, existing.getMethod(), method));
+                        throw new IllegalStateException(String.format(
+                                "Different RPC methods are registered with the same API key [%s].\n%s\n%s",
+                                api, existing.getMethod(), method));
                     }
                 } else {
                     registeredMethods.put(api.id, createApiMethod(api, method, providerType));
@@ -144,10 +135,8 @@ public class ApiManager {
     private static ApiMethod createApiMethod(ApiKeys api, Method method, ServerType providerType) {
         Class<?> requestClass = extractRequestClass(method);
         Class<?> responseClass = extractResponseClass(method);
-        checkMethodNaming(
-                method.getName(), requestClass.getSimpleName(), responseClass.getSimpleName());
-        return new ApiMethod(
-                api, requestClass, responseClass, method, ImmutableList.of(providerType));
+        checkMethodNaming(method.getName(), requestClass.getSimpleName(), responseClass.getSimpleName());
+        return new ApiMethod(api, requestClass, responseClass, method, ImmutableList.of(providerType));
     }
 
     private static Class<?> extractRequestClass(Method method) {
@@ -155,11 +144,10 @@ public class ApiManager {
         if (parameterTypes.length == 1 && ApiMessage.class.isAssignableFrom(parameterTypes[0])) {
             return parameterTypes[0];
         }
-        throw new IllegalStateException(
-                "RPC method ["
-                        + method
-                        + "] must have exactly one parameter of type "
-                        + ApiMessage.class.getSimpleName());
+        throw new IllegalStateException("RPC method ["
+                + method
+                + "] must have exactly one parameter of type "
+                + ApiMessage.class.getSimpleName());
     }
 
     private static Class<?> extractResponseClass(Method method) {
@@ -168,41 +156,35 @@ public class ApiManager {
             Type returnType = method.getGenericReturnType();
             if (returnType instanceof ParameterizedType) {
                 Type responseType = ((ParameterizedType) returnType).getActualTypeArguments()[0];
-                if (responseType instanceof Class
-                        && ApiMessage.class.isAssignableFrom((Class<?>) responseType)) {
+                if (responseType instanceof Class && ApiMessage.class.isAssignableFrom((Class<?>) responseType)) {
                     return (Class<?>) responseType;
                 }
             }
         }
         throw new IllegalStateException(
-                "RPC method ["
-                        + method
-                        + "] must have a return type of CompletableFuture<T extends ApiMessage>");
+                "RPC method [" + method + "] must have a return type of CompletableFuture<T extends ApiMessage>");
     }
 
-    private static void checkMethodNaming(
-            String methodName, String requestName, String responseName) {
+    private static void checkMethodNaming(String methodName, String requestName, String responseName) {
         String apiName = firstCharToUpper(methodName);
         String expectedRequestName = apiName + "Request";
         if (!expectedRequestName.equals(requestName)) {
-            throw new IllegalStateException(
-                    "RPC method ["
-                            + methodName
-                            + "] expects to have a request parameter of type "
-                            + expectedRequestName
-                            + ", but is "
-                            + requestName);
+            throw new IllegalStateException("RPC method ["
+                    + methodName
+                    + "] expects to have a request parameter of type "
+                    + expectedRequestName
+                    + ", but is "
+                    + requestName);
         }
 
         String expectedResponseName = apiName + "Response";
         if (!expectedResponseName.equals(responseName)) {
-            throw new IllegalStateException(
-                    "RPC method ["
-                            + methodName
-                            + "] expects to have a response return class of type "
-                            + expectedResponseName
-                            + ", but is "
-                            + responseName);
+            throw new IllegalStateException("RPC method ["
+                    + methodName
+                    + "] expects to have a response return class of type "
+                    + expectedResponseName
+                    + ", but is "
+                    + responseName);
         }
     }
 

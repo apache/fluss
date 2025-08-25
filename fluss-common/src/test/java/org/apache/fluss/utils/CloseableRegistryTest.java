@@ -32,8 +32,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Fail.fail;
 
 /** Tests for the {@link CloseableRegistry}. */
-public class CloseableRegistryTest
-        extends AbstractAutoCloseableRegistryTest<Closeable, Closeable, Object> {
+public class CloseableRegistryTest extends AbstractAutoCloseableRegistryTest<Closeable, Closeable, Object> {
 
     @Override
     protected void registerCloseable(final Closeable closeable) throws IOException {
@@ -41,8 +40,7 @@ public class CloseableRegistryTest
     }
 
     @Override
-    protected AbstractAutoCloseableRegistry<Closeable, Closeable, Object, IOException>
-            createRegistry() {
+    protected AbstractAutoCloseableRegistry<Closeable, Closeable, Object, IOException> createRegistry() {
 
         return new CloseableRegistry();
     }
@@ -53,8 +51,7 @@ public class CloseableRegistryTest
             AtomicInteger unclosedCounter,
             int maxStreams) {
 
-        return new ProducerThread<Closeable, Closeable, Object>(
-                registry, unclosedCounter, maxStreams) {
+        return new ProducerThread<Closeable, Closeable, Object>(registry, unclosedCounter, maxStreams) {
             @Override
             protected void createAndRegisterStream() throws IOException {
                 TestStream testStream = new TestStream(unclosedCounter);
@@ -82,21 +79,18 @@ public class CloseableRegistryTest
                 registeredClosableList.add(new TestClosable(String.valueOf(1 + i)));
             }
 
-            unregisterAndCloseAllHelper(
-                    registeredClosableList,
-                    closeableRegistry,
-                    ioex -> {
-                        // Check that error messages and suppressed exceptions are correctly
-                        // reported
-                        int checksum = 0;
-                        checksum += Integer.parseInt(ioex.getMessage());
-                        Throwable[] suppressed = ioex.getSuppressed();
-                        for (Throwable throwable : suppressed) {
-                            checksum += Integer.parseInt(throwable.getMessage());
-                        }
-                        // Checksum is sum from 1..6 = 15
-                        assertThat(checksum).isEqualTo(15);
-                    });
+            unregisterAndCloseAllHelper(registeredClosableList, closeableRegistry, ioex -> {
+                // Check that error messages and suppressed exceptions are correctly
+                // reported
+                int checksum = 0;
+                checksum += Integer.parseInt(ioex.getMessage());
+                Throwable[] suppressed = ioex.getSuppressed();
+                for (Throwable throwable : suppressed) {
+                    checksum += Integer.parseInt(throwable.getMessage());
+                }
+                // Checksum is sum from 1..6 = 15
+                assertThat(checksum).isEqualTo(15);
+            });
 
             // Check that unregistered Closable isn't closed.
             TestClosable unregisteredClosable = new TestClosable();
@@ -115,8 +109,7 @@ public class CloseableRegistryTest
         }
 
         try {
-            closeableRegistry.unregisterAndCloseAll(
-                    registeredClosableList.toArray(new Closeable[0]));
+            closeableRegistry.unregisterAndCloseAll(registeredClosableList.toArray(new Closeable[0]));
             if (exceptionCheck != null) {
                 fail("Exception expected");
             }

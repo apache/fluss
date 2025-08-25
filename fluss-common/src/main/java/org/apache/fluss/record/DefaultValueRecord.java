@@ -81,11 +81,7 @@ public class DefaultValueRecord implements ValueRecord {
         int sizeInBytesWithoutLength = segment.getInt(position + LENGTH_OFFSET);
         short schemaId = segment.getShort(position + SCHEMA_ID_OFFSET);
         RowDecoder decoder = readContext.getRowDecoder(schemaId);
-        BinaryRow value =
-                decoder.decode(
-                        segment,
-                        position + VALUE_OFFSET,
-                        sizeInBytesWithoutLength - SCHEMA_ID_LENGTH);
+        BinaryRow value = decoder.decode(segment, position + VALUE_OFFSET, sizeInBytesWithoutLength - SCHEMA_ID_LENGTH);
         return new DefaultValueRecord(schemaId, value);
     }
 }

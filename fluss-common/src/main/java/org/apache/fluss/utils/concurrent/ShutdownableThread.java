@@ -72,8 +72,7 @@ public abstract class ShutdownableThread extends Thread {
     /** After calling initiateShutdown(), use this API to wait until the shutdown is complete. */
     public void awaitShutdown() throws InterruptedException {
         if (!isShutdownInitiated()) {
-            throw new IllegalStateException(
-                    "initiateShutdown() was not called before awaitShutdown()");
+            throw new IllegalStateException("initiateShutdown() was not called before awaitShutdown()");
         } else {
             if (isStarted) {
                 shutdownComplete.await();

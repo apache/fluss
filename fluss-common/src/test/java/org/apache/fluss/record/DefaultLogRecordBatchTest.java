@@ -37,8 +37,7 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
 
     @Test
     void testRecordBatchSize() throws Exception {
-        MemoryLogRecords memoryLogRecords =
-                DataTestUtils.genMemoryLogRecordsByObject(TestData.DATA1);
+        MemoryLogRecords memoryLogRecords = DataTestUtils.genMemoryLogRecordsByObject(TestData.DATA1);
         int totalSize = 0;
         for (LogRecordBatch logRecordBatch : memoryLogRecords.batches()) {
             totalSize += logRecordBatch.sizeInBytes();
@@ -50,13 +49,8 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
     void testIndexedRowWriteAndReadBatch() throws Exception {
         int recordNumber = 50;
         RowType allRowType = TestInternalRowGenerator.createAllRowType();
-        MemoryLogRecordsIndexedBuilder builder =
-                MemoryLogRecordsIndexedBuilder.builder(
-                        baseLogOffset,
-                        schemaId,
-                        Integer.MAX_VALUE,
-                        magic,
-                        new UnmanagedPagedOutputView(100));
+        MemoryLogRecordsIndexedBuilder builder = MemoryLogRecordsIndexedBuilder.builder(
+                baseLogOffset, schemaId, Integer.MAX_VALUE, magic, new UnmanagedPagedOutputView(100));
 
         List<IndexedRow> rows = new ArrayList<>();
         for (int i = 0; i < recordNumber; i++) {
@@ -83,8 +77,7 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
 
         // verify record.
         int i = 0;
-        try (LogRecordReadContext readContext =
-                        LogRecordReadContext.createIndexedReadContext(allRowType, schemaId);
+        try (LogRecordReadContext readContext = LogRecordReadContext.createIndexedReadContext(allRowType, schemaId);
                 CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
             while (iter.hasNext()) {
                 LogRecord record = iter.next();
@@ -101,9 +94,8 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
     @Test
     void testNoRecordAppend() throws Exception {
         // 1. no record append with baseOffset as 0.
-        MemoryLogRecordsIndexedBuilder builder =
-                MemoryLogRecordsIndexedBuilder.builder(
-                        0L, schemaId, Integer.MAX_VALUE, magic, new UnmanagedPagedOutputView(100));
+        MemoryLogRecordsIndexedBuilder builder = MemoryLogRecordsIndexedBuilder.builder(
+                0L, schemaId, Integer.MAX_VALUE, magic, new UnmanagedPagedOutputView(100));
         MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
         Iterator<LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
         // only contains batch header.
@@ -118,20 +110,14 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
         assertThat(logRecordBatch.lastLogOffset()).isEqualTo(0);
         assertThat(logRecordBatch.nextLogOffset()).isEqualTo(1);
         assertThat(logRecordBatch.baseLogOffset()).isEqualTo(0);
-        try (LogRecordReadContext readContext =
-                        LogRecordReadContext.createIndexedReadContext(baseRowType, schemaId);
+        try (LogRecordReadContext readContext = LogRecordReadContext.createIndexedReadContext(baseRowType, schemaId);
                 CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
             assertThat(iter.hasNext()).isFalse();
         }
 
         // 2. no record append with baseOffset as 100.
-        builder =
-                MemoryLogRecordsIndexedBuilder.builder(
-                        100L,
-                        schemaId,
-                        Integer.MAX_VALUE,
-                        magic,
-                        new UnmanagedPagedOutputView(100));
+        builder = MemoryLogRecordsIndexedBuilder.builder(
+                100L, schemaId, Integer.MAX_VALUE, magic, new UnmanagedPagedOutputView(100));
         memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
         iterator = memoryLogRecords.batches().iterator();
         // only contains batch header.
@@ -146,8 +132,7 @@ public class DefaultLogRecordBatchTest extends LogTestBase {
         assertThat(logRecordBatch.lastLogOffset()).isEqualTo(100);
         assertThat(logRecordBatch.nextLogOffset()).isEqualTo(101);
         assertThat(logRecordBatch.baseLogOffset()).isEqualTo(100);
-        try (LogRecordReadContext readContext =
-                        LogRecordReadContext.createIndexedReadContext(baseRowType, schemaId);
+        try (LogRecordReadContext readContext = LogRecordReadContext.createIndexedReadContext(baseRowType, schemaId);
                 CloseableIterator<LogRecord> iter = logRecordBatch.records(readContext)) {
             assertThat(iter.hasNext()).isFalse();
         }

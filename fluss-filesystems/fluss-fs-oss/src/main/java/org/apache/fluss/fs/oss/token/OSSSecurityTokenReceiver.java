@@ -87,19 +87,15 @@ public class OSSSecurityTokenReceiver implements SecurityTokenReceiver {
 
         byte[] tokenBytes = token.getToken();
 
-        org.apache.fluss.fs.token.Credentials flussCredentials =
-                CredentialsJsonSerde.fromJson(tokenBytes);
+        org.apache.fluss.fs.token.Credentials flussCredentials = CredentialsJsonSerde.fromJson(tokenBytes);
 
-        credentials =
-                new DefaultCredentials(
-                        flussCredentials.getAccessKeyId(),
-                        flussCredentials.getSecretAccessKey(),
-                        flussCredentials.getSecurityToken());
+        credentials = new DefaultCredentials(
+                flussCredentials.getAccessKeyId(),
+                flussCredentials.getSecretAccessKey(),
+                flussCredentials.getSecurityToken());
         additionInfos = token.getAdditionInfos();
 
-        LOG.info(
-                "Session credentials updated successfully with access key: {}.",
-                credentials.getAccessKeyId());
+        LOG.info("Session credentials updated successfully with access key: {}.", credentials.getAccessKeyId());
     }
 
     public static Credentials getCredentials() {

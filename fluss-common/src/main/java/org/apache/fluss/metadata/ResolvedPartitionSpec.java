@@ -52,20 +52,16 @@ public class ResolvedPartitionSpec {
         this.partitionValues = partitionValues;
     }
 
-    public static ResolvedPartitionSpec fromPartitionSpec(
-            List<String> partitionKeys, PartitionSpec partitionSpec) {
-        return new ResolvedPartitionSpec(
-                partitionKeys, getReorderedPartitionValues(partitionKeys, partitionSpec));
+    public static ResolvedPartitionSpec fromPartitionSpec(List<String> partitionKeys, PartitionSpec partitionSpec) {
+        return new ResolvedPartitionSpec(partitionKeys, getReorderedPartitionValues(partitionKeys, partitionSpec));
     }
 
-    public static ResolvedPartitionSpec fromPartitionValue(
-            String partitionKey, String partitionValue) {
+    public static ResolvedPartitionSpec fromPartitionValue(String partitionKey, String partitionValue) {
         return new ResolvedPartitionSpec(
                 Collections.singletonList(partitionKey), Collections.singletonList(partitionValue));
     }
 
-    public static ResolvedPartitionSpec fromPartitionName(
-            List<String> partitionKeys, String partitionName) {
+    public static ResolvedPartitionSpec fromPartitionName(List<String> partitionKeys, String partitionName) {
         return new ResolvedPartitionSpec(partitionKeys, Arrays.asList(partitionName.split("\\$")));
     }
 
@@ -135,8 +131,7 @@ public class ResolvedPartitionSpec {
         for (String pair : keyValuePairs) {
             String[] keyValue = pair.split("=", 2);
             if (keyValue.length != 2) {
-                throw new IllegalArgumentException(
-                        "Invalid partition name format. Expected key=value, got: " + pair);
+                throw new IllegalArgumentException("Invalid partition name format. Expected key=value, got: " + pair);
             }
             keys.add(keyValue[0]);
             values.add(keyValue[1]);
@@ -164,12 +159,10 @@ public class ResolvedPartitionSpec {
         return getPartitionQualifiedName();
     }
 
-    private static List<String> getReorderedPartitionValues(
-            List<String> partitionKeys, PartitionSpec partitionSpec) {
+    private static List<String> getReorderedPartitionValues(List<String> partitionKeys, PartitionSpec partitionSpec) {
         Map<String, String> partitionSpecMap = partitionSpec.getSpecMap();
         List<String> reOrderedPartitionValues = new ArrayList<>(partitionKeys.size());
-        partitionKeys.forEach(
-                partitionKey -> reOrderedPartitionValues.add(partitionSpecMap.get(partitionKey)));
+        partitionKeys.forEach(partitionKey -> reOrderedPartitionValues.add(partitionSpecMap.get(partitionKey)));
         return reOrderedPartitionValues;
     }
 
@@ -181,15 +174,13 @@ public class ResolvedPartitionSpec {
         for (String otherPartitionKey : otherPartitionKeys) {
             if (!partitionKeys.contains(otherPartitionKey)) {
                 throw new InvalidPartitionException(
-                        String.format(
-                                "table don't contains this partitionKey: %s", otherPartitionKey));
+                        String.format("table don't contains this partitionKey: %s", otherPartitionKey));
             }
             int keyIndex = partitionKeys.indexOf(otherPartitionKey);
             expectedPartitionValues.add(partitionValues.get(keyIndex));
         }
 
-        String expectedPartitionName =
-                String.join(PARTITION_SPEC_SEPARATOR, expectedPartitionValues);
+        String expectedPartitionName = String.join(PARTITION_SPEC_SEPARATOR, expectedPartitionValues);
 
         String otherPartitionName = String.join(PARTITION_SPEC_SEPARATOR, otherPartitionValues);
 

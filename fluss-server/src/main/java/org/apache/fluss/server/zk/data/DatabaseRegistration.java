@@ -38,10 +38,7 @@ public class DatabaseRegistration {
     public final long modifiedTime;
 
     public DatabaseRegistration(
-            @Nullable String comment,
-            Map<String, String> customProperties,
-            long createdTime,
-            long modifiedTime) {
+            @Nullable String comment, Map<String, String> customProperties, long createdTime, long modifiedTime) {
         this.comment = comment;
         this.customProperties = customProperties;
         this.createdTime = createdTime;

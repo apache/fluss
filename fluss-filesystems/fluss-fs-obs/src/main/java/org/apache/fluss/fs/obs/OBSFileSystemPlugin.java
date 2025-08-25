@@ -94,8 +94,7 @@ public class OBSFileSystemPlugin implements FileSystemPlugin {
 
     protected org.apache.hadoop.fs.FileSystem initFileSystem(
             URI fsUri, org.apache.hadoop.conf.Configuration hadoopConfig) throws IOException {
-        org.apache.hadoop.fs.obs.OBSFileSystem fileSystem =
-                new org.apache.hadoop.fs.obs.OBSFileSystem();
+        org.apache.hadoop.fs.obs.OBSFileSystem fileSystem = new org.apache.hadoop.fs.obs.OBSFileSystem();
         fileSystem.initialize(fsUri, hadoopConfig);
         return fileSystem;
     }
@@ -116,15 +115,11 @@ public class OBSFileSystemPlugin implements FileSystemPlugin {
         for (String key : flussConfig.keySet()) {
             for (String prefix : FLUSS_CONFIG_PREFIXES) {
                 if (key.startsWith(prefix)) {
-                    String value =
-                            flussConfig.getString(
-                                    ConfigBuilder.key(key).stringType().noDefaultValue(), null);
+                    String value = flussConfig.getString(
+                            ConfigBuilder.key(key).stringType().noDefaultValue(), null);
                     conf.set(key, value);
 
-                    LOG.debug(
-                            "Adding Fluss config entry for {} as {} to Hadoop config",
-                            key,
-                            conf.get(key));
+                    LOG.debug("Adding Fluss config entry for {} as {} to Hadoop config", key, conf.get(key));
                 }
             }
         }

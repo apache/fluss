@@ -78,11 +78,10 @@ public class StringEncodingBenchmark {
     }
 
     public static void main(String[] args) throws RunnerException {
-        Options opt =
-                new OptionsBuilder()
-                        .verbosity(VerboseMode.NORMAL)
-                        .include(".*" + StringEncodingBenchmark.class.getCanonicalName() + ".*")
-                        .build();
+        Options opt = new OptionsBuilder()
+                .verbosity(VerboseMode.NORMAL)
+                .include(".*" + StringEncodingBenchmark.class.getCanonicalName() + ".*")
+                .build();
 
         new Runner(opt).run();
     }

@@ -41,8 +41,8 @@ public class FlinkRowAssertionsUtils {
                 .containsExactlyInAnyOrderElementsOf(expected);
     }
 
-    public static void assertQueryResultExactOrder(
-            TableEnvironment env, String query, List<String> expected) throws Exception {
+    public static void assertQueryResultExactOrder(TableEnvironment env, String query, List<String> expected)
+            throws Exception {
         try (CloseableIterator<Row> rowIter = env.executeSql(query).collect()) {
             List<String> actual = collectRowsWithTimeout(rowIter, expected.size(), true);
             assertThat(actual)
@@ -66,12 +66,11 @@ public class FlinkRowAssertionsUtils {
                     long elapsedTime = System.currentTimeMillis() - startTime;
                     if (elapsedTime > maxWaitTime) {
                         // Timeout reached - provide detailed failure info
-                        throw new AssertionError(
-                                String.format(
-                                        "Timeout after waiting %d ms for Flink job results. "
-                                                + "Expected %d records but only received %d. "
-                                                + "This might indicate a job hang or insufficient data generation.",
-                                        elapsedTime, expectedCount, actual.size()));
+                        throw new AssertionError(String.format(
+                                "Timeout after waiting %d ms for Flink job results. "
+                                        + "Expected %d records but only received %d. "
+                                        + "This might indicate a job hang or insufficient data generation.",
+                                elapsedTime, expectedCount, actual.size()));
                     }
                     Thread.sleep(10);
                 }

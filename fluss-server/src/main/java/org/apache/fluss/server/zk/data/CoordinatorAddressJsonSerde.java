@@ -47,13 +47,11 @@ public class CoordinatorAddressJsonSerde
     }
 
     @Override
-    public void serialize(CoordinatorAddress coordinatorAddress, JsonGenerator generator)
-            throws IOException {
+    public void serialize(CoordinatorAddress coordinatorAddress, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
         writeVersion(generator);
         generator.writeStringField(ID, coordinatorAddress.getId());
-        generator.writeStringField(
-                LISTENERS, Endpoint.toListenersString(coordinatorAddress.getEndpoints()));
+        generator.writeStringField(LISTENERS, Endpoint.toListenersString(coordinatorAddress.getEndpoints()));
         generator.writeEndObject();
     }
 

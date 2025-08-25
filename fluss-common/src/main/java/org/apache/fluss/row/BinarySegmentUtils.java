@@ -66,11 +66,7 @@ public final class BinarySegmentUtils {
      * @return true if equal, false otherwise
      */
     public static boolean equals(
-            MemorySegment[] segments1,
-            int offset1,
-            MemorySegment[] segments2,
-            int offset2,
-            int len) {
+            MemorySegment[] segments1, int offset1, MemorySegment[] segments2, int offset2, int len) {
         if (inFirstSegment(segments1, offset1, len) && inFirstSegment(segments2, offset2, len)) {
             return segments1[0].equalTo(segments2[0], offset1, offset2, len);
         } else {
@@ -118,8 +114,7 @@ public final class BinarySegmentUtils {
      * @param sizeInBytes size in bytes
      * @param target target output view
      */
-    public static void copyToView(
-            MemorySegment[] segments, int offset, int sizeInBytes, OutputView target)
+    public static void copyToView(MemorySegment[] segments, int offset, int sizeInBytes, OutputView target)
             throws IOException {
         for (MemorySegment sourceSegment : segments) {
             int curSegRemain = sourceSegment.size() - offset;
@@ -143,9 +138,7 @@ public final class BinarySegmentUtils {
 
         if (sizeInBytes != 0) {
             throw new RuntimeException(
-                    "No copy finished, this should be a bug, "
-                            + "The remaining length is: "
-                            + sizeInBytes);
+                    "No copy finished, this should be a bug, " + "The remaining length is: " + sizeInBytes);
         }
     }
 
@@ -166,21 +159,18 @@ public final class BinarySegmentUtils {
         if (numBytes2 == 0) { // quick way 1.
             return offset1;
         }
-        if (inFirstSegment(segments1, offset1, numBytes1)
-                && inFirstSegment(segments2, offset2, numBytes2)) {
+        if (inFirstSegment(segments1, offset1, numBytes1) && inFirstSegment(segments2, offset2, numBytes2)) {
             byte first = segments2[0].get(offset2);
             int end = numBytes1 - numBytes2 + offset1;
             for (int i = offset1; i <= end; i++) {
                 // quick way 2: equal first byte.
-                if (segments1[0].get(i) == first
-                        && segments1[0].equalTo(segments2[0], i, offset2, numBytes2)) {
+                if (segments1[0].get(i) == first && segments1[0].equalTo(segments2[0], i, offset2, numBytes2)) {
                     return i;
                 }
             }
             return -1;
         } else {
-            return findInMultiSegments(
-                    segments1, offset1, numBytes1, segments2, offset2, numBytes2);
+            return findInMultiSegments(segments1, offset1, numBytes1, segments2, offset2, numBytes2);
         }
     }
 
@@ -304,11 +294,7 @@ public final class BinarySegmentUtils {
     }
 
     static boolean equalsMultiSegments(
-            MemorySegment[] segments1,
-            int offset1,
-            MemorySegment[] segments2,
-            int offset2,
-            int len) {
+            MemorySegment[] segments1, int offset1, MemorySegment[] segments2, int offset2, int len) {
         if (len == 0) {
             // quick way and avoid segSize is zero.
             return true;
@@ -325,8 +311,7 @@ public final class BinarySegmentUtils {
 
         while (len > 0) {
             int equalLen = Math.min(Math.min(len, segSize1 - segOffset1), segSize2 - segOffset2);
-            if (!segments1[segIndex1].equalTo(
-                    segments2[segIndex2], segOffset1, segOffset2, equalLen)) {
+            if (!segments1[segIndex1].equalTo(segments2[segIndex2], segOffset1, segOffset2, equalLen)) {
                 return false;
             }
             len -= equalLen;

@@ -41,8 +41,7 @@ import static org.apache.fluss.flink.FlinkConnectorOptions.ScanStartupMode.TIMES
 /** Utility class for {@link FlinkConnectorOptions}. */
 public class FlinkConnectorOptionsUtils {
 
-    private static final DateTimeFormatter DATE_TIME_FORMATTER =
-            DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
+    private static final DateTimeFormatter DATE_TIME_FORMATTER = DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm:ss");
 
     public static ZoneId getLocalTimeZone(String timeZone) {
         return TableConfigOptions.LOCAL_TIME_ZONE.defaultValue().equals(timeZone)
@@ -60,10 +59,7 @@ public class FlinkConnectorOptionsUtils {
         options.startupMode = scanStartupMode;
         if (scanStartupMode == TIMESTAMP) {
             options.startupTimestampMs =
-                    parseTimestamp(
-                            tableOptions.get(SCAN_STARTUP_TIMESTAMP),
-                            SCAN_STARTUP_TIMESTAMP.key(),
-                            timeZone);
+                    parseTimestamp(tableOptions.get(SCAN_STARTUP_TIMESTAMP), SCAN_STARTUP_TIMESTAMP.key(), timeZone);
         }
         return options;
     }
@@ -91,10 +87,9 @@ public class FlinkConnectorOptionsUtils {
         for (int i = 0; i < keys.length; i++) {
             int index = schema.getFieldIndex(keys[i].trim());
             if (index < 0) {
-                throw new ValidationException(
-                        String.format(
-                                "Field '%s' not found in the schema. Available fields are: %s",
-                                keys[i].trim(), schema.getFieldNames()));
+                throw new ValidationException(String.format(
+                        "Field '%s' not found in the schema. Available fields are: %s",
+                        keys[i].trim(), schema.getFieldNames()));
             }
             indexes[i] = index;
         }
@@ -107,10 +102,9 @@ public class FlinkConnectorOptionsUtils {
         ScanStartupMode scanStartupMode = tableOptions.get(SCAN_STARTUP_MODE);
         if (scanStartupMode == TIMESTAMP) {
             if (!tableOptions.getOptional(SCAN_STARTUP_TIMESTAMP).isPresent()) {
-                throw new ValidationException(
-                        String.format(
-                                "'%s' is required int '%s' startup mode but missing.",
-                                SCAN_STARTUP_TIMESTAMP.key(), TIMESTAMP));
+                throw new ValidationException(String.format(
+                        "'%s' is required int '%s' startup mode but missing.",
+                        SCAN_STARTUP_TIMESTAMP.key(), TIMESTAMP));
             }
         }
     }

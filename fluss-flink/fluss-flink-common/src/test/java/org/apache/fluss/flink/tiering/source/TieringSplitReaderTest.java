@@ -63,34 +63,29 @@ class TieringSplitReaderTest extends FlinkTestBase {
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
         try (TieringSplitReader<TestingWriteResult> tieringSplitReader = createTieringReader()) {
             // test empty splits
-            SplitsAddition<TieringSplit> splitsAddition =
-                    new SplitsAddition<>(
-                            Arrays.asList(
-                                    createLogSplit(tablePath, tableId, 0, EARLIEST_OFFSET, 0),
-                                    createLogSplit(tablePath, tableId, 1, EARLIEST_OFFSET, 0),
-                                    createLogSplit(tablePath, tableId, 2, EARLIEST_OFFSET, 0)));
+            SplitsAddition<TieringSplit> splitsAddition = new SplitsAddition<>(Arrays.asList(
+                    createLogSplit(tablePath, tableId, 0, EARLIEST_OFFSET, 0),
+                    createLogSplit(tablePath, tableId, 1, EARLIEST_OFFSET, 0),
+                    createLogSplit(tablePath, tableId, 2, EARLIEST_OFFSET, 0)));
             tieringSplitReader.handleSplitsChanges(splitsAddition);
 
             // one fetch to mark the splits as empty split
             tieringSplitReader.fetch();
 
             // fetch again to get the fetch result of the splits
-            RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>> fetchResult =
-                    tieringSplitReader.fetch();
+            RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>> fetchResult = tieringSplitReader.fetch();
             for (int i = 0; i < 3; i++) {
                 fetchResult.nextSplit();
                 // should has result, but the writeResult should be null
-                TableBucketWriteResult<TestingWriteResult> nextRecord =
-                        fetchResult.nextRecordFromSplit();
+                TableBucketWriteResult<TestingWriteResult> nextRecord = fetchResult.nextRecordFromSplit();
                 assertThat(nextRecord).isNotNull();
                 assertThat(nextRecord.writeResult()).isNull();
             }
             assertThat(fetchResult.nextSplit()).isNull();
             assertThat(fetchResult.finishedSplits())
-                    .isEqualTo(
-                            splitsAddition.splits().stream()
-                                    .map(SourceSplit::splitId)
-                                    .collect(Collectors.toSet()));
+                    .isEqualTo(splitsAddition.splits().stream()
+                            .map(SourceSplit::splitId)
+                            .collect(Collectors.toSet()));
 
             // test snapshot splits
             // firstly, write some records into the table
@@ -99,12 +94,10 @@ class TieringSplitReaderTest extends FlinkTestBase {
             // check the expected records
             waitUntilSnapshot(tableId, 0);
 
-            splitsAddition =
-                    new SplitsAddition<>(
-                            Arrays.asList(
-                                    createSnapshotSplit(tablePath, tableId, 0, 0),
-                                    createSnapshotSplit(tablePath, tableId, 1, 0),
-                                    createSnapshotSplit(tablePath, tableId, 2, 0)));
+            splitsAddition = new SplitsAddition<>(Arrays.asList(
+                    createSnapshotSplit(tablePath, tableId, 0, 0),
+                    createSnapshotSplit(tablePath, tableId, 1, 0),
+                    createSnapshotSplit(tablePath, tableId, 2, 0)));
             tieringSplitReader.handleSplitsChanges(splitsAddition);
 
             // fetch firstly to make snapshot splits as pending splits
@@ -115,8 +108,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
                 // one fetch to make this snapshot split as finished
                 fetchResult = tieringSplitReader.fetch();
                 fetchResult.nextSplit();
-                TableBucketWriteResult<TestingWriteResult> tableBucketWriteResult =
-                        fetchResult.nextRecordFromSplit();
+                TableBucketWriteResult<TestingWriteResult> tableBucketWriteResult = fetchResult.nextRecordFromSplit();
                 assertThat(tableBucketWriteResult).isNotNull();
                 TestingWriteResult testingWriteResult = tableBucketWriteResult.writeResult();
                 assertThat(testingWriteResult).isNotNull();
@@ -135,7 +127,8 @@ class TieringSplitReaderTest extends FlinkTestBase {
                 TableBucket tableBucket = new TableBucket(tableId, bucket);
                 long startingOffset = firstRows.get(tableBucket).size();
                 // -U, +U
-                long stoppingOffset = startingOffset + secondRows.get(tableBucket).size() * 2L;
+                long stoppingOffset =
+                        startingOffset + secondRows.get(tableBucket).size() * 2L;
                 expectedRowCount.put(tableBucket, secondRows.get(tableBucket).size() * 2);
                 TieringLogSplit tieringLogSplit =
                         createLogSplit(tablePath, tableId, bucket, startingOffset, stoppingOffset);
@@ -143,8 +136,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
                 expectFinishTieringSplits.add(tieringLogSplit.splitId());
             }
             tieringSplitReader.handleSplitsChanges(new SplitsAddition<>(logSplits));
-            verifyTieringRows(
-                    tieringSplitReader, tableId, expectedRowCount, expectFinishTieringSplits);
+            verifyTieringRows(tieringSplitReader, tableId, expectedRowCount, expectFinishTieringSplits);
         }
     }
 
@@ -162,65 +154,51 @@ class TieringSplitReaderTest extends FlinkTestBase {
             waitUntilSnapshot(tableId1, 0);
 
             // first add snapshot split of bucket 0, bucket 1 of table id 0
-            SplitsAddition<TieringSplit> splitsAddition =
-                    new SplitsAddition<>(
-                            Arrays.asList(
-                                    createSnapshotSplit(tablePath0, tableId0, 0, 0),
-                                    createSnapshotSplit(tablePath0, tableId0, 1, 0)));
+            SplitsAddition<TieringSplit> splitsAddition = new SplitsAddition<>(Arrays.asList(
+                    createSnapshotSplit(tablePath0, tableId0, 0, 0), createSnapshotSplit(tablePath0, tableId0, 1, 0)));
             Set<String> table0Splits =
-                    splitsAddition.splits().stream()
-                            .map(TieringSplit::splitId)
-                            .collect(Collectors.toSet());
+                    splitsAddition.splits().stream().map(TieringSplit::splitId).collect(Collectors.toSet());
             tieringSplitReader.handleSplitsChanges(splitsAddition);
 
             // then add bucket0, bucket1, bucket2 of table id 1
-            splitsAddition =
-                    new SplitsAddition<>(
-                            Arrays.asList(
-                                    createLogSplit(
-                                            tablePath1,
-                                            tableId1,
-                                            0,
-                                            EARLIEST_OFFSET,
-                                            table1Rows.get(new TableBucket(tableId1, 0)).size()),
-                                    createSnapshotSplit(tablePath1, tableId1, 1, 0),
-                                    createLogSplit(
-                                            tablePath1,
-                                            tableId1,
-                                            2,
-                                            EARLIEST_OFFSET,
-                                            table1Rows.get(new TableBucket(tableId1, 2)).size())));
+            splitsAddition = new SplitsAddition<>(Arrays.asList(
+                    createLogSplit(
+                            tablePath1,
+                            tableId1,
+                            0,
+                            EARLIEST_OFFSET,
+                            table1Rows.get(new TableBucket(tableId1, 0)).size()),
+                    createSnapshotSplit(tablePath1, tableId1, 1, 0),
+                    createLogSplit(
+                            tablePath1,
+                            tableId1,
+                            2,
+                            EARLIEST_OFFSET,
+                            table1Rows.get(new TableBucket(tableId1, 2)).size())));
             tieringSplitReader.handleSplitsChanges(splitsAddition);
             Set<String> table1Splits =
-                    splitsAddition.splits().stream()
-                            .map(TieringSplit::splitId)
-                            .collect(Collectors.toSet());
+                    splitsAddition.splits().stream().map(TieringSplit::splitId).collect(Collectors.toSet());
 
             // add bucket2 of table id 0
-            splitsAddition =
-                    new SplitsAddition<>(
-                            Collections.singletonList(
-                                    createLogSplit(
-                                            tablePath0,
-                                            tableId0,
-                                            2,
-                                            EARLIEST_OFFSET,
-                                            table0Rows.get(new TableBucket(tableId0, 2)).size())));
+            splitsAddition = new SplitsAddition<>(Collections.singletonList(createLogSplit(
+                    tablePath0,
+                    tableId0,
+                    2,
+                    EARLIEST_OFFSET,
+                    table0Rows.get(new TableBucket(tableId0, 2)).size())));
             table0Splits.addAll(
-                    splitsAddition.splits().stream()
-                            .map(TieringSplit::splitId)
-                            .collect(Collectors.toSet()));
+                    splitsAddition.splits().stream().map(TieringSplit::splitId).collect(Collectors.toSet()));
             tieringSplitReader.handleSplitsChanges(splitsAddition);
 
             // verify should first finish table0, and then finish table1
             LinkedHashMap<Long, Map<TableBucket, Integer>> expectTierRows = new LinkedHashMap<>();
-            Map<TableBucket, Integer> tableId0ExpectTierRows =
-                    table0Rows.entrySet().stream()
-                            .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().size()));
+            Map<TableBucket, Integer> tableId0ExpectTierRows = table0Rows.entrySet().stream()
+                    .collect(Collectors.toMap(
+                            Map.Entry::getKey, e -> e.getValue().size()));
             expectTierRows.put(tableId0, tableId0ExpectTierRows);
-            Map<TableBucket, Integer> tableId1ExpectTierRows =
-                    table1Rows.entrySet().stream()
-                            .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().size()));
+            Map<TableBucket, Integer> tableId1ExpectTierRows = table1Rows.entrySet().stream()
+                    .collect(Collectors.toMap(
+                            Map.Entry::getKey, e -> e.getValue().size()));
             expectTierRows.put(tableId1, tableId1ExpectTierRows);
 
             LinkedHashMap<Long, Set<String>> expectedFinishSplits = new LinkedHashMap<>();
@@ -233,42 +211,37 @@ class TieringSplitReaderTest extends FlinkTestBase {
             TablePath tablePath2 = TablePath.of("fluss", "tiering_table2");
             long tableId2 = createTable(tablePath2, DEFAULT_LOG_TABLE_DESCRIPTOR);
             Map<TableBucket, List<InternalRow>> table2Rows = putRows(tableId2, tablePath2, 10);
-            splitsAddition =
-                    new SplitsAddition<>(
-                            Arrays.asList(
-                                    createLogSplit(
-                                            tablePath2,
-                                            tableId2,
-                                            0,
-                                            EARLIEST_OFFSET,
-                                            table2Rows.get(new TableBucket(tableId2, 0)).size()),
-                                    createLogSplit(
-                                            tablePath2,
-                                            tableId2,
-                                            1,
-                                            EARLIEST_OFFSET,
-                                            table2Rows.get(new TableBucket(tableId2, 1)).size()),
-                                    createLogSplit(
-                                            tablePath2,
-                                            tableId2,
-                                            2,
-                                            EARLIEST_OFFSET,
-                                            table2Rows.get(new TableBucket(tableId2, 2)).size())));
+            splitsAddition = new SplitsAddition<>(Arrays.asList(
+                    createLogSplit(
+                            tablePath2,
+                            tableId2,
+                            0,
+                            EARLIEST_OFFSET,
+                            table2Rows.get(new TableBucket(tableId2, 0)).size()),
+                    createLogSplit(
+                            tablePath2,
+                            tableId2,
+                            1,
+                            EARLIEST_OFFSET,
+                            table2Rows.get(new TableBucket(tableId2, 1)).size()),
+                    createLogSplit(
+                            tablePath2,
+                            tableId2,
+                            2,
+                            EARLIEST_OFFSET,
+                            table2Rows.get(new TableBucket(tableId2, 2)).size())));
             Set<String> table2Splits =
-                    splitsAddition.splits().stream()
-                            .map(TieringSplit::splitId)
-                            .collect(Collectors.toSet());
+                    splitsAddition.splits().stream().map(TieringSplit::splitId).collect(Collectors.toSet());
             tieringSplitReader.handleSplitsChanges(splitsAddition);
-            Map<TableBucket, Integer> expectedRowCount =
-                    table2Rows.entrySet().stream()
-                            .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().size()));
+            Map<TableBucket, Integer> expectedRowCount = table2Rows.entrySet().stream()
+                    .collect(Collectors.toMap(
+                            Map.Entry::getKey, e -> e.getValue().size()));
             verifyTieringRows(tieringSplitReader, tableId2, expectedRowCount, table2Splits);
         }
     }
 
     private TieringSplitReader<TestingWriteResult> createTieringReader() {
-        return new TieringSplitReader<>(
-                FLUSS_CLUSTER_EXTENSION.getClientConfig(), new TestingLakeTieringFactory());
+        return new TieringSplitReader<>(FLUSS_CLUSTER_EXTENSION.getClientConfig(), new TestingLakeTieringFactory());
     }
 
     private void verifyTieringRows(
@@ -292,8 +265,7 @@ class TieringSplitReaderTest extends FlinkTestBase {
             LinkedHashMap<Long, Set<String>> expectedFinishSplits)
             throws IOException {
         RecordsWithSplitIds<TableBucketWriteResult<TestingWriteResult>> fetchResult;
-        for (Map.Entry<Long, Map<TableBucket, Integer>> expectTieringRowEntry :
-                expectTierRows.entrySet()) {
+        for (Map.Entry<Long, Map<TableBucket, Integer>> expectTieringRowEntry : expectTierRows.entrySet()) {
             long tableId = expectTieringRowEntry.getKey();
             Map<TableBucket, Integer> expectRows = expectTieringRowEntry.getValue();
             Map<TableBucket, Integer> actualRows = new HashMap<>();
@@ -319,30 +291,23 @@ class TieringSplitReaderTest extends FlinkTestBase {
     }
 
     private TieringLogSplit createLogSplit(
-            TablePath tablePath,
-            long tableId,
-            int bucket,
-            long startingOffset,
-            long stoppingOffset) {
+            TablePath tablePath, long tableId, int bucket, long startingOffset, long stoppingOffset) {
         TableBucket tableBucket = new TableBucket(tableId, bucket);
         return new TieringLogSplit(tablePath, tableBucket, null, startingOffset, stoppingOffset, 3);
     }
 
-    private TieringSnapshotSplit createSnapshotSplit(
-            TablePath tablePath, long tableId, int bucket, long snapshotId) {
+    private TieringSnapshotSplit createSnapshotSplit(TablePath tablePath, long tableId, int bucket, long snapshotId) {
         TableBucket tableBucket = new TableBucket(tableId, bucket);
         return new TieringSnapshotSplit(tablePath, tableBucket, null, snapshotId, 10, 3);
     }
 
-    private Map<TableBucket, List<InternalRow>> putRows(long tableId, TablePath tablePath, int rows)
-            throws Exception {
+    private Map<TableBucket, List<InternalRow>> putRows(long tableId, TablePath tablePath, int rows) throws Exception {
         Map<TableBucket, List<InternalRow>> rowsByBuckets = new HashMap<>();
         try (Table table = conn.getTable(tablePath)) {
             boolean isPrimaryKey = table.getTableInfo().hasPrimaryKey();
-            TableWriter tableWriter =
-                    isPrimaryKey
-                            ? table.newUpsert().createWriter()
-                            : table.newAppend().createWriter();
+            TableWriter tableWriter = isPrimaryKey
+                    ? table.newUpsert().createWriter()
+                    : table.newAppend().createWriter();
             for (int i = 0; i < rows; i++) {
                 InternalRow row = row(i, "v" + i);
                 if (tableWriter instanceof UpsertWriter) {
@@ -351,7 +316,9 @@ class TieringSplitReaderTest extends FlinkTestBase {
                     ((AppendWriter) tableWriter).append(row);
                 }
                 TableBucket tableBucket = new TableBucket(tableId, getBucketId(row));
-                rowsByBuckets.computeIfAbsent(tableBucket, k -> new ArrayList<>()).add(row);
+                rowsByBuckets
+                        .computeIfAbsent(tableBucket, k -> new ArrayList<>())
+                        .add(row);
             }
             tableWriter.flush();
         }
@@ -359,10 +326,8 @@ class TieringSplitReaderTest extends FlinkTestBase {
     }
 
     private static int getBucketId(InternalRow row) {
-        CompactedKeyEncoder keyEncoder =
-                new CompactedKeyEncoder(
-                        DEFAULT_PK_TABLE_SCHEMA.getRowType(),
-                        DEFAULT_PK_TABLE_SCHEMA.getPrimaryKeyIndexes());
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(
+                DEFAULT_PK_TABLE_SCHEMA.getRowType(), DEFAULT_PK_TABLE_SCHEMA.getPrimaryKeyIndexes());
         byte[] key = keyEncoder.encodeKey(row);
         HashBucketAssigner hashBucketAssigner = new HashBucketAssigner(DEFAULT_BUCKET_NUM);
         return hashBucketAssigner.assignBucket(key);

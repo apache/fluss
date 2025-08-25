@@ -60,13 +60,11 @@ class JMXServerTest {
             assertThat(server).isPresent();
             mBeanServer.registerMBean(testObject, testObjectName);
 
-            JMXServiceURL url =
-                    new JMXServiceURL(
-                            "service:jmx:rmi://localhost:"
-                                    + server.get().getPort()
-                                    + "/jndi/rmi://localhost:"
-                                    + server.get().getPort()
-                                    + "/jmxrmi");
+            JMXServiceURL url = new JMXServiceURL("service:jmx:rmi://localhost:"
+                    + server.get().getPort()
+                    + "/jndi/rmi://localhost:"
+                    + server.get().getPort()
+                    + "/jmxrmi");
             JMXConnector jmxConn = JMXConnectorFactory.connect(url);
             MBeanServerConnection mbeanConnConn = jmxConn.getMBeanServerConnection();
 

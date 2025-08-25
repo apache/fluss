@@ -34,22 +34,17 @@ public class LakeTableFactory {
         paimonFlinkTableFactory = new FlinkTableFactory();
     }
 
-    public DynamicTableSource createDynamicTableSource(
-            DynamicTableFactory.Context context, String tableName) {
+    public DynamicTableSource createDynamicTableSource(DynamicTableFactory.Context context, String tableName) {
         ObjectIdentifier originIdentifier = context.getObjectIdentifier();
         ObjectIdentifier paimonIdentifier =
-                ObjectIdentifier.of(
-                        originIdentifier.getCatalogName(),
-                        originIdentifier.getDatabaseName(),
-                        tableName);
-        DynamicTableFactory.Context newContext =
-                new FactoryUtil.DefaultDynamicTableContext(
-                        paimonIdentifier,
-                        context.getCatalogTable(),
-                        context.getEnrichmentOptions(),
-                        context.getConfiguration(),
-                        context.getClassLoader(),
-                        context.isTemporary());
+                ObjectIdentifier.of(originIdentifier.getCatalogName(), originIdentifier.getDatabaseName(), tableName);
+        DynamicTableFactory.Context newContext = new FactoryUtil.DefaultDynamicTableContext(
+                paimonIdentifier,
+                context.getCatalogTable(),
+                context.getEnrichmentOptions(),
+                context.getConfiguration(),
+                context.getClassLoader(),
+                context.isTemporary());
 
         return paimonFlinkTableFactory.createDynamicTableSource(newContext);
     }

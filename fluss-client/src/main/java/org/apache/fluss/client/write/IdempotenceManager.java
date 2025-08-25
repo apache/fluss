@@ -67,9 +67,7 @@ public class IdempotenceManager {
     private volatile long writerId;
 
     public IdempotenceManager(
-            boolean idempotenceEnabled,
-            int maxInflightRequestsPerBucket,
-            TabletServerGateway tabletServerGateway) {
+            boolean idempotenceEnabled, int maxInflightRequestsPerBucket, TabletServerGateway tabletServerGateway) {
         this.idempotenceEnabled = idempotenceEnabled;
         this.maxInflightRequestsPerBucket = maxInflightRequestsPerBucket;
         this.idempotenceBucketMap = new IdempotenceBucketMap();
@@ -159,9 +157,7 @@ public class IdempotenceManager {
     synchronized void addInFlightBatch(WriteBatch batch, TableBucket tableBucket) {
         if (!batch.hasBatchSequence()) {
             throw new IllegalStateException(
-                    "Can't track batch for bucket "
-                            + tableBucket
-                            + " when batch sequence is not set.");
+                    "Can't track batch for bucket " + tableBucket + " when batch sequence is not set.");
         }
         idempotenceBucketMap.get(tableBucket).addInflightBatch(batch);
     }
@@ -224,8 +220,7 @@ public class IdempotenceManager {
             return;
         }
 
-        if (exception instanceof OutOfOrderSequenceException
-                || exception instanceof UnknownWriterIdException) {
+        if (exception instanceof OutOfOrderSequenceException || exception instanceof UnknownWriterIdException) {
             LOG.error(
                     "The server returned {} for table-bucket {} with writer id {} and batch sequence {}.",
                     exception,
@@ -263,8 +258,7 @@ public class IdempotenceManager {
         }
 
         if (error == Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION
-                && (batch.sequenceHasBeenReset()
-                        || !isNextSequence(tableBucket, batch.batchSequence()))) {
+                && (batch.sequenceHasBeenReset() || !isNextSequence(tableBucket, batch.batchSequence()))) {
             // We should retry the OutOfOrderSequenceException if the batch is not the next batch,
             // i.e. its batch sequence isn't the lastAckedBatchSequence + 1. However, if the first
             // in flight batch fails fatally, we will adjust the batch sequences of the other
@@ -322,9 +316,7 @@ public class IdempotenceManager {
     InitWriterRequest prepareInitWriterRequest(Set<PhysicalTablePath> physicalTables) {
         InitWriterRequest initWriterRequest = new InitWriterRequest();
         Set<TablePath> tables =
-                physicalTables.stream()
-                        .map(PhysicalTablePath::getTablePath)
-                        .collect(Collectors.toSet());
+                physicalTables.stream().map(PhysicalTablePath::getTablePath).collect(Collectors.toSet());
         for (TablePath tablePath : tables) {
             initWriterRequest
                     .addTablePath()

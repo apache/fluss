@@ -57,25 +57,25 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Integration tests for the Fluss sink connector in Flink. */
 public class FlussSinkITCase extends FlinkTestBase {
-    private static final Schema pkSchema =
-            Schema.newBuilder()
-                    .column("orderId", DataTypes.BIGINT())
-                    .column("itemId", DataTypes.BIGINT())
-                    .column("amount", DataTypes.INT())
-                    .column("address", DataTypes.STRING())
-                    .primaryKey("orderId")
-                    .build();
+    private static final Schema pkSchema = Schema.newBuilder()
+            .column("orderId", DataTypes.BIGINT())
+            .column("itemId", DataTypes.BIGINT())
+            .column("amount", DataTypes.INT())
+            .column("address", DataTypes.STRING())
+            .primaryKey("orderId")
+            .build();
 
-    private static final Schema logSchema =
-            Schema.newBuilder()
-                    .column("orderId", DataTypes.BIGINT())
-                    .column("itemId", DataTypes.BIGINT())
-                    .column("amount", DataTypes.INT())
-                    .column("address", DataTypes.STRING())
-                    .build();
+    private static final Schema logSchema = Schema.newBuilder()
+            .column("orderId", DataTypes.BIGINT())
+            .column("itemId", DataTypes.BIGINT())
+            .column("amount", DataTypes.INT())
+            .column("address", DataTypes.STRING())
+            .build();
 
-    private static final TableDescriptor pkTableDescriptor =
-            TableDescriptor.builder().schema(pkSchema).distributedBy(1, "orderId").build();
+    private static final TableDescriptor pkTableDescriptor = TableDescriptor.builder()
+            .schema(pkSchema)
+            .distributedBy(1, "orderId")
+            .build();
 
     private static final TableDescriptor logTableDescriptor =
             TableDescriptor.builder().schema(logSchema).build();
@@ -88,7 +88,8 @@ public class FlussSinkITCase extends FlinkTestBase {
 
     @BeforeEach
     public void setup() throws Exception {
-        bootstrapServers = conn.getConfiguration().get(ConfigOptions.BOOTSTRAP_SERVERS).get(0);
+        bootstrapServers =
+                conn.getConfiguration().get(ConfigOptions.BOOTSTRAP_SERVERS).get(0);
         env = StreamExecutionEnvironment.getExecutionEnvironment();
         env.setParallelism(2);
     }
@@ -101,8 +102,7 @@ public class FlussSinkITCase extends FlinkTestBase {
     @Test
     public void testRowDataTablePKSink() throws Exception {
         createTable(TablePath.of(DEFAULT_DB, pkTableName), pkTableDescriptor);
-        FlussRowToFlinkRowConverter converter =
-                new FlussRowToFlinkRowConverter(pkSchema.getRowType());
+        FlussRowToFlinkRowConverter converter = new FlussRowToFlinkRowConverter(pkSchema.getRowType());
 
         RowData row1 = converter.toFlinkRowData(row(600L, 20L, 600, "addr1"));
         row1.setRowKind(RowKind.INSERT);
@@ -131,18 +131,16 @@ public class FlussSinkITCase extends FlinkTestBase {
         inputRows.add(row6);
         inputRows.add(row7);
 
-        RowDataSerializationSchema serializationSchema =
-                new RowDataSerializationSchema(false, true);
+        RowDataSerializationSchema serializationSchema = new RowDataSerializationSchema(false, true);
 
         DataStream<RowData> stream = env.fromData(inputRows);
 
-        FlinkSink<RowData> flussSink =
-                FlussSink.<RowData>builder()
-                        .setBootstrapServers(bootstrapServers)
-                        .setDatabase(DEFAULT_DB)
-                        .setTable(pkTableName)
-                        .setSerializationSchema(serializationSchema)
-                        .build();
+        FlinkSink<RowData> flussSink = FlussSink.<RowData>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable(pkTableName)
+                .setSerializationSchema(serializationSchema)
+                .build();
 
         stream.sinkTo(flussSink).name("Fluss Sink");
 
@@ -189,8 +187,7 @@ public class FlussSinkITCase extends FlinkTestBase {
     @Test
     public void testRowDataTableLogSink() throws Exception {
         createTable(TablePath.of(DEFAULT_DB, logTableName), logTableDescriptor);
-        FlussRowToFlinkRowConverter converter =
-                new FlussRowToFlinkRowConverter(logSchema.getRowType());
+        FlussRowToFlinkRowConverter converter = new FlussRowToFlinkRowConverter(logSchema.getRowType());
 
         RowData row1 = converter.toFlinkRowData(row(600L, 20L, 600, "addr1"));
         RowData row2 = converter.toFlinkRowData(row(700L, 22L, 601, "addr2"));
@@ -209,13 +206,12 @@ public class FlussSinkITCase extends FlinkTestBase {
 
         DataStream<RowData> stream = env.fromData(inputRows);
 
-        FlinkSink<RowData> flussSink =
-                FlussSink.<RowData>builder()
-                        .setBootstrapServers(bootstrapServers)
-                        .setDatabase(DEFAULT_DB)
-                        .setTable(logTableName)
-                        .setSerializationSchema(serializationSchema)
-                        .build();
+        FlinkSink<RowData> flussSink = FlussSink.<RowData>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable(logTableName)
+                .setSerializationSchema(serializationSchema)
+                .build();
 
         stream.sinkTo(flussSink).name("Fluss Sink");
 
@@ -264,13 +260,12 @@ public class FlussSinkITCase extends FlinkTestBase {
         // Create a DataStream from the FlussSource
         DataStream<TestOrder> stream = env.fromData(orders);
 
-        FlinkSink<TestOrder> flussSink =
-                FlussSink.<TestOrder>builder()
-                        .setBootstrapServers(bootstrapServers)
-                        .setDatabase(DEFAULT_DB)
-                        .setTable(pkTableName)
-                        .setSerializationSchema(new TestOrderSerializationSchema())
-                        .build();
+        FlinkSink<TestOrder> flussSink = FlussSink.<TestOrder>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable(pkTableName)
+                .setSerializationSchema(new TestOrderSerializationSchema())
+                .build();
 
         stream.sinkTo(flussSink).name("Fluss Sink");
         env.executeAsync("Test Order Fluss Sink");
@@ -292,13 +287,12 @@ public class FlussSinkITCase extends FlinkTestBase {
             for (TableBucket bucket : scanRecords.buckets()) {
                 for (ScanRecord record : scanRecords.records(bucket)) {
                     InternalRow row = record.getRow();
-                    TestOrder order =
-                            new TestOrder(
-                                    row.getLong(0),
-                                    row.getLong(1),
-                                    row.getInt(2),
-                                    row.getString(3).toString(),
-                                    toFlinkRowKind(record.getChangeType()));
+                    TestOrder order = new TestOrder(
+                            row.getLong(0),
+                            row.getLong(1),
+                            row.getInt(2),
+                            row.getString(3).toString(),
+                            toFlinkRowKind(record.getChangeType()));
                     rows.add(order);
                 }
             }
@@ -362,8 +356,7 @@ public class FlussSinkITCase extends FlinkTestBase {
         }
     }
 
-    private static class TestOrderSerializationSchema
-            implements FlussSerializationSchema<TestOrder> {
+    private static class TestOrderSerializationSchema implements FlussSerializationSchema<TestOrder> {
         private static final long serialVersionUID = 1L;
 
         @Override

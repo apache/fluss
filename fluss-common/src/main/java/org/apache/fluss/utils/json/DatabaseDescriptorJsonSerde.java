@@ -39,8 +39,7 @@ public class DatabaseDescriptorJsonSerde
     private static final int VERSION = 1;
 
     @Override
-    public void serialize(DatabaseDescriptor databaseDescriptor, JsonGenerator generator)
-            throws IOException {
+    public void serialize(DatabaseDescriptor databaseDescriptor, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
 
         // serialize data version.
@@ -48,7 +47,8 @@ public class DatabaseDescriptorJsonSerde
 
         // serialize comment.
         if (databaseDescriptor.getComment().isPresent()) {
-            generator.writeStringField(COMMENT_NAME, databaseDescriptor.getComment().get());
+            generator.writeStringField(
+                    COMMENT_NAME, databaseDescriptor.getComment().get());
         }
 
         // serialize properties.

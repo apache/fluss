@@ -86,15 +86,13 @@ public class MetadataManager {
         this.maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
     }
 
-    public void createDatabase(
-            String databaseName, DatabaseDescriptor databaseDescriptor, boolean ignoreIfExists)
+    public void createDatabase(String databaseName, DatabaseDescriptor databaseDescriptor, boolean ignoreIfExists)
             throws DatabaseAlreadyExistException {
         if (databaseExists(databaseName)) {
             if (ignoreIfExists) {
                 return;
             }
-            throw new DatabaseAlreadyExistException(
-                    "Database " + databaseName + " already exists.");
+            throw new DatabaseAlreadyExistException("Database " + databaseName + " already exists.");
         }
 
         DatabaseRegistration databaseRegistration = DatabaseRegistration.of(databaseDescriptor);
@@ -105,8 +103,7 @@ public class MetadataManager {
                 if (ignoreIfExists) {
                     return;
                 }
-                throw new DatabaseAlreadyExistException(
-                        "Database " + databaseName + " already exists.");
+                throw new DatabaseAlreadyExistException("Database " + databaseName + " already exists.");
             } else {
                 throw new FlussRuntimeException("Failed to create database: " + databaseName, e);
             }
@@ -119,8 +116,7 @@ public class MetadataManager {
         try {
             optionalDB = zookeeperClient.getDatabase(databaseName);
         } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    String.format("Fail to get database '%s'.", databaseName), e);
+            throw new FlussRuntimeException(String.format("Fail to get database '%s'.", databaseName), e);
         }
 
         if (!optionalDB.isPresent()) {
@@ -129,16 +125,11 @@ public class MetadataManager {
 
         DatabaseRegistration databaseReg = optionalDB.get();
         return new DatabaseInfo(
-                databaseName,
-                databaseReg.toDatabaseDescriptor(),
-                databaseReg.createdTime,
-                databaseReg.modifiedTime);
+                databaseName, databaseReg.toDatabaseDescriptor(), databaseReg.createdTime, databaseReg.modifiedTime);
     }
 
     public boolean databaseExists(String databaseName) {
-        return uncheck(
-                () -> zookeeperClient.databaseExists(databaseName),
-                "Fail to check database exists or not");
+        return uncheck(() -> zookeeperClient.databaseExists(databaseName), "Fail to check database exists or not");
     }
 
     public List<String> listDatabases() {
@@ -150,8 +141,7 @@ public class MetadataManager {
             throw new DatabaseNotExistException("Database " + databaseName + " does not exist.");
         }
         return uncheck(
-                () -> zookeeperClient.listTables(databaseName),
-                "Fail to list tables for database:" + databaseName);
+                () -> zookeeperClient.listTables(databaseName), "Fail to list tables for database:" + databaseName);
     }
 
     /**
@@ -169,27 +159,23 @@ public class MetadataManager {
      *
      * <p>Return a map from partition name to partition id.
      */
-    public Map<String, Long> listPartitions(
-            TablePath tablePath, ResolvedPartitionSpec partitionFilter)
+    public Map<String, Long> listPartitions(TablePath tablePath, ResolvedPartitionSpec partitionFilter)
             throws TableNotExistException, TableNotPartitionedException, InvalidPartitionException {
         TableInfo tableInfo = getTable(tablePath);
         if (!tableInfo.isPartitioned()) {
-            throw new TableNotPartitionedException(
-                    "Table '" + tablePath + "' is not a partitioned table.");
+            throw new TableNotPartitionedException("Table '" + tablePath + "' is not a partitioned table.");
         }
         try {
             if (partitionFilter == null) {
                 return zookeeperClient.getPartitionNameAndIds(tablePath);
             } else {
 
-                return zookeeperClient.getPartitionNameAndIds(
-                        tablePath, tableInfo.getPartitionKeys(), partitionFilter);
+                return zookeeperClient.getPartitionNameAndIds(tablePath, tableInfo.getPartitionKeys(), partitionFilter);
             }
         } catch (Exception e) {
             throw new FlussRuntimeException(
                     String.format(
-                            "Fail to list partitions for table: %s, partitionSpec: %s.",
-                            tablePath, partitionFilter),
+                            "Fail to list partitions for table: %s, partitionSpec: %s.", tablePath, partitionFilter),
                     e);
         }
     }
@@ -209,8 +195,7 @@ public class MetadataManager {
         uncheck(() -> zookeeperClient.deleteDatabase(name), "Fail to drop database: " + name);
     }
 
-    public void dropTable(TablePath tablePath, boolean ignoreIfNotExists)
-            throws TableNotExistException {
+    public void dropTable(TablePath tablePath, boolean ignoreIfNotExists) throws TableNotExistException {
         if (!tableExists(tablePath)) {
             if (ignoreIfNotExists) {
                 return;
@@ -261,8 +246,7 @@ public class MetadataManager {
         validateTableDescriptor(tableToCreate, maxBucketNum);
 
         if (!databaseExists(tablePath.getDatabaseName())) {
-            throw new DatabaseNotExistException(
-                    "Database " + tablePath.getDatabaseName() + " does not exist.");
+            throw new DatabaseNotExistException("Database " + tablePath.getDatabaseName() + " does not exist.");
         }
         if (tableExists(tablePath)) {
             if (ignoreIfExists) {
@@ -278,8 +262,7 @@ public class MetadataManager {
         try {
             zookeeperClient.registerSchema(tablePath, tableToCreate.getSchema());
         } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    "Fail to register schema when creating table " + tablePath, e);
+            throw new FlussRuntimeException("Fail to register schema when creating table " + tablePath, e);
         }
 
         // register the table, we have registered the schema whose path have contained the node for
@@ -293,8 +276,7 @@ public class MetadataManager {
                         zookeeperClient.registerTableAssignment(tableId, tableAssignment);
                     }
                     // register the table
-                    zookeeperClient.registerTable(
-                            tablePath, TableRegistration.newTable(tableId, tableToCreate), false);
+                    zookeeperClient.registerTable(tablePath, TableRegistration.newTable(tableId, tableToCreate), false);
                     return tableId;
                 },
                 "Fail to create table " + tablePath);
@@ -305,8 +287,7 @@ public class MetadataManager {
         try {
             optionalTable = zookeeperClient.getTable(tablePath);
         } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    String.format("Failed to get table '%s'.", tablePath), e);
+            throw new FlussRuntimeException(String.format("Failed to get table '%s'.", tablePath), e);
         }
         if (!optionalTable.isPresent()) {
             throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
@@ -334,14 +315,12 @@ public class MetadataManager {
         try {
             currentSchemaId = zookeeperClient.getCurrentSchemaId(tablePath);
         } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    "Failed to get latest schema id of table " + tablePath, e);
+            throw new FlussRuntimeException("Failed to get latest schema id of table " + tablePath, e);
         }
         return getSchemaById(tablePath, currentSchemaId);
     }
 
-    public SchemaInfo getSchemaById(TablePath tablePath, int schemaId)
-            throws SchemaNotExistException {
+    public SchemaInfo getSchemaById(TablePath tablePath, int schemaId) throws SchemaNotExistException {
         Optional<SchemaInfo> optionalSchema;
         try {
             optionalSchema = zookeeperClient.getSchemaById(tablePath, schemaId);
@@ -353,11 +332,7 @@ public class MetadataManager {
             return optionalSchema.get();
         } else {
             throw new SchemaNotExistException(
-                    "Schema for table "
-                            + tablePath
-                            + " with schema id "
-                            + schemaId
-                            + " does not exist.");
+                    "Schema for table " + tablePath + " with schema id " + schemaId + " does not exist.");
         }
     }
 
@@ -369,8 +344,7 @@ public class MetadataManager {
     }
 
     public long initWriterId() {
-        return uncheck(
-                zookeeperClient::getWriterIdAndIncrement, "Fail to get writer id from zookeeper");
+        return uncheck(zookeeperClient::getWriterIdAndIncrement, "Fail to get writer id from zookeeper");
     }
 
     public Set<String> getPartitions(TablePath tablePath) {
@@ -386,35 +360,28 @@ public class MetadataManager {
             ResolvedPartitionSpec partition,
             boolean ignoreIfExists) {
         String partitionName = partition.getPartitionName();
-        Optional<TablePartition> optionalTablePartition =
-                getOptionalTablePartition(tablePath, partitionName);
+        Optional<TablePartition> optionalTablePartition = getOptionalTablePartition(tablePath, partitionName);
         if (optionalTablePartition.isPresent()) {
             if (ignoreIfExists) {
                 return;
             }
-            throw new PartitionAlreadyExistsException(
-                    String.format(
-                            "Partition '%s' already exists for table %s",
-                            partition.getPartitionQualifiedName(), tablePath));
+            throw new PartitionAlreadyExistsException(String.format(
+                    "Partition '%s' already exists for table %s", partition.getPartitionQualifiedName(), tablePath));
         }
 
         final int partitionNumber;
         try {
             partitionNumber = zookeeperClient.getPartitionNumber(tablePath);
             if (partitionNumber + 1 > maxPartitionNum) {
-                throw new TooManyPartitionsException(
-                        String.format(
-                                "Exceed the maximum number of partitions for table %s, only allow %s partitions.",
-                                tablePath, maxPartitionNum));
+                throw new TooManyPartitionsException(String.format(
+                        "Exceed the maximum number of partitions for table %s, only allow %s partitions.",
+                        tablePath, maxPartitionNum));
             }
         } catch (TooManyPartitionsException e) {
             throw e;
         } catch (Exception e) {
             throw new FlussRuntimeException(
-                    String.format(
-                            "Get the number of partition from zookeeper failed for table %s",
-                            tablePath),
-                    e);
+                    String.format("Get the number of partition from zookeeper failed for table %s", tablePath), e);
         }
 
         try {
@@ -422,13 +389,9 @@ public class MetadataManager {
             // currently, every partition has the same bucket count
             int totalBuckets = bucketCount * (partitionNumber + 1);
             if (totalBuckets > maxBucketNum) {
-                throw new TooManyBucketsException(
-                        String.format(
-                                "Adding partition '%s' would result in %d total buckets for table %s, exceeding the maximum of %d buckets.",
-                                partition.getPartitionName(),
-                                totalBuckets,
-                                tablePath,
-                                maxBucketNum));
+                throw new TooManyBucketsException(String.format(
+                        "Adding partition '%s' would result in %d total buckets for table %s, exceeding the maximum of %d buckets.",
+                        partition.getPartitionName(), totalBuckets, tablePath, maxBucketNum));
             }
         } catch (TooManyBucketsException e) {
             throw e;
@@ -442,14 +405,12 @@ public class MetadataManager {
             // register partition assignments and partition metadata to zk in transaction
             zookeeperClient.registerPartitionAssignmentAndMetadata(
                     partitionId, partitionName, partitionAssignment, tablePath, tableId);
-            LOG.info(
-                    "Register partition {} to zookeeper for table [{}].", partitionName, tablePath);
+            LOG.info("Register partition {} to zookeeper for table [{}].", partitionName, tablePath);
         } catch (KeeperException.NodeExistsException nodeExistsException) {
             if (!ignoreIfExists) {
-                throw new PartitionAlreadyExistsException(
-                        String.format(
-                                "Partition '%s' already exists for table %s",
-                                partition.getPartitionQualifiedName(), tablePath));
+                throw new PartitionAlreadyExistsException(String.format(
+                        "Partition '%s' already exists for table %s",
+                        partition.getPartitionQualifiedName(), tablePath));
             }
         } catch (Exception e) {
             throw new FlussRuntimeException(
@@ -460,48 +421,36 @@ public class MetadataManager {
         }
     }
 
-    public void dropPartition(
-            TablePath tablePath, ResolvedPartitionSpec partition, boolean ignoreIfNotExists) {
+    public void dropPartition(TablePath tablePath, ResolvedPartitionSpec partition, boolean ignoreIfNotExists) {
         String partitionName = partition.getPartitionName();
-        Optional<TablePartition> optionalTablePartition =
-                getOptionalTablePartition(tablePath, partitionName);
+        Optional<TablePartition> optionalTablePartition = getOptionalTablePartition(tablePath, partitionName);
         if (!optionalTablePartition.isPresent()) {
             if (ignoreIfNotExists) {
                 return;
             }
 
-            throw new PartitionNotExistException(
-                    String.format(
-                            "Partition '%s' does not exist for table %s",
-                            partition.getPartitionQualifiedName(), tablePath));
+            throw new PartitionNotExistException(String.format(
+                    "Partition '%s' does not exist for table %s", partition.getPartitionQualifiedName(), tablePath));
         }
 
         try {
             zookeeperClient.deletePartition(tablePath, partitionName);
         } catch (Exception e) {
-            LOG.error(
-                    "Fail to delete partition '{}' from zookeeper for table {}.",
-                    partitionName,
-                    tablePath,
-                    e);
+            LOG.error("Fail to delete partition '{}' from zookeeper for table {}.", partitionName, tablePath, e);
         }
     }
 
-    private Optional<TablePartition> getOptionalTablePartition(
-            TablePath tablePath, String partitionName) {
+    private Optional<TablePartition> getOptionalTablePartition(TablePath tablePath, String partitionName) {
         try {
             return zookeeperClient.getPartition(tablePath, partitionName);
         } catch (Exception e) {
             throw new FlussRuntimeException(
-                    String.format(
-                            "Fail to get partition '%s' of table %s from zookeeper.",
-                            tablePath, partitionName),
+                    String.format("Fail to get partition '%s' of table %s from zookeeper.", tablePath, partitionName),
                     e);
         }
     }
 
-    private void rethrowIfIsNotNoNodeException(
-            ThrowingRunnable<Exception> throwingRunnable, String exceptionMessage) {
+    private void rethrowIfIsNotNoNodeException(ThrowingRunnable<Exception> throwingRunnable, String exceptionMessage) {
         try {
             throwingRunnable.run();
         } catch (KeeperException.NoNodeException e) {

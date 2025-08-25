@@ -86,11 +86,12 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
     // Generic Serialization
     // --------------------------------------------------------------------------------------------
 
-    private static void serializeTypeWithGenericSerialization(
-            DataType dataType, JsonGenerator jsonGenerator) throws IOException {
+    private static void serializeTypeWithGenericSerialization(DataType dataType, JsonGenerator jsonGenerator)
+            throws IOException {
         jsonGenerator.writeStartObject();
 
-        jsonGenerator.writeStringField(FIELD_NAME_TYPE_NAME, dataType.getTypeRoot().name());
+        jsonGenerator.writeStringField(
+                FIELD_NAME_TYPE_NAME, dataType.getTypeRoot().name());
         if (!dataType.isNullable()) {
             jsonGenerator.writeBooleanField(FIELD_NAME_NULLABLE, false);
         }
@@ -125,8 +126,7 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
                 serializeTimestamp(timestampType.getPrecision(), jsonGenerator);
                 break;
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                final LocalZonedTimestampType localZonedTimestampType =
-                        (LocalZonedTimestampType) dataType;
+                final LocalZonedTimestampType localZonedTimestampType = (LocalZonedTimestampType) dataType;
                 serializeTimestamp(localZonedTimestampType.getPrecision(), jsonGenerator);
                 break;
             case ARRAY:
@@ -139,47 +139,40 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
                 serializeRow((RowType) dataType, jsonGenerator);
                 break;
             default:
-                throw new UnsupportedOperationException(
-                        String.format(
-                                "Unable to serialize logical type '%s'. Please check the documentation for supported types.",
-                                dataType.asSummaryString()));
+                throw new UnsupportedOperationException(String.format(
+                        "Unable to serialize logical type '%s'. Please check the documentation for supported types.",
+                        dataType.asSummaryString()));
         }
 
         jsonGenerator.writeEndObject();
     }
 
-    private static void serializeTimestamp(int precision, JsonGenerator jsonGenerator)
-            throws IOException {
+    private static void serializeTimestamp(int precision, JsonGenerator jsonGenerator) throws IOException {
         jsonGenerator.writeNumberField(FIELD_NAME_PRECISION, precision);
     }
 
-    private static void serializeDecimal(int precision, int scale, JsonGenerator jsonGenerator)
-            throws IOException {
+    private static void serializeDecimal(int precision, int scale, JsonGenerator jsonGenerator) throws IOException {
         jsonGenerator.writeNumberField(FIELD_NAME_PRECISION, precision);
         jsonGenerator.writeNumberField(FILED_NAME_SCALE, scale);
     }
 
-    private static void serializeCollection(DataType elementType, JsonGenerator jsonGenerator)
-            throws IOException {
+    private static void serializeCollection(DataType elementType, JsonGenerator jsonGenerator) throws IOException {
         jsonGenerator.writeFieldName(FIELD_NAME_ELEMENT_TYPE);
         serializeInternal(elementType, jsonGenerator);
     }
 
-    private static void serializeMap(MapType mapType, JsonGenerator jsonGenerator)
-            throws IOException {
+    private static void serializeMap(MapType mapType, JsonGenerator jsonGenerator) throws IOException {
         jsonGenerator.writeFieldName(FIELD_NAME_KEY_TYPE);
         serializeInternal(mapType.getKeyType(), jsonGenerator);
         jsonGenerator.writeFieldName(FIELD_NAME_VALUE_TYPE);
         serializeInternal(mapType.getValueType(), jsonGenerator);
     }
 
-    private static void serializeInternal(DataType datatype, JsonGenerator jsonGenerator)
-            throws IOException {
+    private static void serializeInternal(DataType datatype, JsonGenerator jsonGenerator) throws IOException {
         serializeTypeWithGenericSerialization(datatype, jsonGenerator);
     }
 
-    private static void serializeRow(RowType dataType, JsonGenerator jsonGenerator)
-            throws IOException {
+    private static void serializeRow(RowType dataType, JsonGenerator jsonGenerator) throws IOException {
         jsonGenerator.writeArrayFieldStart(FIELD_NAME_FIELDS);
         for (DataField dataField : dataType.getFields()) {
             jsonGenerator.writeStartObject();
@@ -293,8 +286,7 @@ public class DataTypeJsonSerde implements JsonSerializer<DataType>, JsonDeserial
         final List<DataField> fields = new ArrayList<>();
         for (JsonNode fieldNode : fieldNodes) {
             final String fieldName = fieldNode.get(FIELD_NAME_FIELD_NAME).asText();
-            final DataType fieldType =
-                    DataTypeJsonSerde.INSTANCE.deserialize(fieldNode.get(FIELD_NAME_FIELD_TYPE));
+            final DataType fieldType = DataTypeJsonSerde.INSTANCE.deserialize(fieldNode.get(FIELD_NAME_FIELD_TYPE));
             final String fieldDescription;
             if (fieldNode.has(FIELD_NAME_FIELD_DESCRIPTION)) {
                 fieldDescription = fieldNode.get(FIELD_NAME_FIELD_DESCRIPTION).asText();

@@ -68,10 +68,7 @@ public class SnapshotLocation {
     private final FileSystem filesystem;
 
     public SnapshotLocation(
-            FileSystem fileSystem,
-            FsPath snapshotDirectory,
-            FsPath sharedSnapshotDirectory,
-            int writeBufferSize) {
+            FileSystem fileSystem, FsPath snapshotDirectory, FsPath sharedSnapshotDirectory, int writeBufferSize) {
 
         if (writeBufferSize < 0) {
             throw new IllegalArgumentException("The write buffer size must be zero or larger.");
@@ -97,8 +94,7 @@ public class SnapshotLocation {
      * @return An output stream that writes files for the given snapshot.
      */
     public FsSnapshotOutputStream createSnapshotOutputStream(SnapshotFileScope scope) {
-        FsPath target =
-                scope == SnapshotFileScope.SHARED ? sharedSnapshotDirectory : snapshotDirectory;
+        FsPath target = scope == SnapshotFileScope.SHARED ? sharedSnapshotDirectory : snapshotDirectory;
 
         return new FsSnapshotOutputStream(target, filesystem, writeBufferSize);
     }
@@ -247,18 +243,12 @@ public class SnapshotLocation {
                     try {
                         outStream.close();
                     } catch (Throwable throwable) {
-                        LOG.warn(
-                                "Could not close the kv file stream for {}.",
-                                kvFilePath,
-                                throwable);
+                        LOG.warn("Could not close the kv file stream for {}.", kvFilePath, throwable);
                     } finally {
                         try {
                             fs.delete(kvFilePath, false);
                         } catch (Exception e) {
-                            LOG.warn(
-                                    "Cannot delete closed and discarded kv file stream for {}.",
-                                    kvFilePath,
-                                    e);
+                            LOG.warn("Cannot delete closed and discarded kv file stream for {}.", kvFilePath, e);
                         }
                     }
                 }
@@ -297,10 +287,7 @@ public class SnapshotLocation {
                             }
 
                         } catch (Exception deleteException) {
-                            LOG.warn(
-                                    "Could not delete the snapshot stream file {}.",
-                                    kvFilePath,
-                                    deleteException);
+                            LOG.warn("Could not delete the snapshot stream file {}.", kvFilePath, deleteException);
                         }
 
                         throw new IOException(
@@ -337,9 +324,7 @@ public class SnapshotLocation {
                 }
             }
 
-            throw new IOException(
-                    "Could not open output stream for uploading kv snapshot files",
-                    latestException);
+            throw new IOException("Could not open output stream for uploading kv snapshot files", latestException);
         }
     }
 }

@@ -77,9 +77,7 @@ final class ServerChannelInitializer extends NettyChannelInitializer {
                 .addLast(
                         "handler",
                         new NettyServerHandler(
-                                requestChannels[
-                                        MathUtils.murmurHash(ch.id().hashCode())
-                                                % requestChannels.length],
+                                requestChannels[MathUtils.murmurHash(ch.id().hashCode()) % requestChannels.length],
                                 apiManager,
                                 endpointListenerName,
                                 isInternal,

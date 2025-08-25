@@ -61,8 +61,7 @@ class CompactedKeyEncoderTest {
 
     @Test
     void testEncodeKeyWithKeyNames() {
-        final DataType[] dataTypes =
-                new DataType[] {DataTypes.STRING(), DataTypes.BIGINT(), DataTypes.STRING()};
+        final DataType[] dataTypes = new DataType[] {DataTypes.STRING(), DataTypes.BIGINT(), DataTypes.STRING()};
         final String[] fieldNames = new String[] {"partition", "f1", "f2"};
         final RowType rowType = RowType.of(dataTypes, fieldNames);
 
@@ -73,12 +72,11 @@ class CompactedKeyEncoderTest {
         byte[] encodedBytes = keyEncoder.encodeKey(row);
 
         // decode it, should only get "a2"
-        InternalRow encodedKey =
-                decodeRow(
-                        new DataType[] {
-                            DataTypes.STRING().copy(false),
-                        },
-                        encodedBytes);
+        InternalRow encodedKey = decodeRow(
+                new DataType[] {
+                    DataTypes.STRING().copy(false),
+                },
+                encodedBytes);
         assertThat(encodedKey.getFieldCount()).isEqualTo(1);
         assertThat(encodedKey.getString(0).toString()).isEqualTo("a2");
     }
@@ -86,9 +84,7 @@ class CompactedKeyEncoderTest {
     @Test
     void testGetKey() {
         // test int, long as primary key
-        final RowType rowType =
-                RowType.of(
-                        DataTypes.INT(), DataTypes.BIGINT(), DataTypes.INT(), DataTypes.STRING());
+        final RowType rowType = RowType.of(DataTypes.INT(), DataTypes.BIGINT(), DataTypes.INT(), DataTypes.STRING());
         int[] pkIndexes = new int[] {0, 1, 2};
         final CompactedKeyEncoder compactedKeyEncoder = new CompactedKeyEncoder(rowType, pkIndexes);
 
@@ -98,38 +94,25 @@ class CompactedKeyEncoderTest {
         assertThat(keyBytes).isEqualTo(new byte[] {1, 3, 2});
 
         // should throw exception when the column is null
-        assertThatThrownBy(
-                        () -> {
-                            InternalRow nullRow = row(1, 2L, null, "a2");
-                            compactedKeyEncoder.encodeKey(nullRow);
-                        })
+        assertThatThrownBy(() -> {
+                    InternalRow nullRow = row(1, 2L, null, "a2");
+                    compactedKeyEncoder.encodeKey(nullRow);
+                })
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage(
-                        "Null value is not allowed for compacted key encoder in position 2 with type INT.");
+                .hasMessage("Null value is not allowed for compacted key encoder in position 2 with type INT.");
 
         // test int, string as primary key
-        RowType rowType1 =
-                RowType.of(
-                        DataTypes.STRING(),
-                        DataTypes.INT(),
-                        DataTypes.STRING(),
-                        DataTypes.STRING());
+        RowType rowType1 = RowType.of(DataTypes.STRING(), DataTypes.INT(), DataTypes.STRING(), DataTypes.STRING());
         pkIndexes = new int[] {1, 2};
         final CompactedKeyEncoder keyEncoder1 = new CompactedKeyEncoder(rowType1, pkIndexes);
-        row =
-                row(
-                        BinaryString.fromString("a1"),
-                        1,
-                        BinaryString.fromString("a2"),
-                        BinaryString.fromString("a3"));
+        row = row(BinaryString.fromString("a1"), 1, BinaryString.fromString("a2"), BinaryString.fromString("a3"));
         keyBytes = keyEncoder1.encodeKey(row);
 
-        InternalRow keyRow =
-                decodeRow(
-                        new DataType[] {
-                            DataTypes.INT().copy(false), DataTypes.STRING().copy(false),
-                        },
-                        keyBytes);
+        InternalRow keyRow = decodeRow(
+                new DataType[] {
+                    DataTypes.INT().copy(false), DataTypes.STRING().copy(false),
+                },
+                keyBytes);
         assertThat(keyRow.getInt(0)).isEqualTo(1);
         assertThat(keyRow.getString(1).toString()).isEqualTo("a2");
     }
@@ -155,15 +138,13 @@ class CompactedKeyEncoderTest {
             InternalRow keyRow = decodeRow(keyDataTypes, keyBytes);
 
             // get the field getter for the key field
-            InternalRow.FieldGetter[] fieldGetters =
-                    new InternalRow.FieldGetter[keyDataTypes.length];
+            InternalRow.FieldGetter[] fieldGetters = new InternalRow.FieldGetter[keyDataTypes.length];
             for (int i = 0; i < keyDataTypes.length; i++) {
                 fieldGetters[i] = InternalRow.createFieldGetter(keyDataTypes[i], i);
             }
             // get the field from key row and origin row, and then check each field
             for (int i = 0; i < keyDataTypes.length; i++) {
-                assertThat(fieldGetters[i].getFieldOrNull(keyRow))
-                        .isEqualTo(fieldGetters[i].getFieldOrNull(row));
+                assertThat(fieldGetters[i].getFieldOrNull(keyRow)).isEqualTo(fieldGetters[i].getFieldOrNull(row));
             }
         }
     }

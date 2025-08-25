@@ -42,8 +42,7 @@ public class ZooKeeperTestUtils {
     }
 
     /** Create a {@link ZooKeeperClient} client using provided connect string. */
-    public static ZooKeeperClient createZooKeeperClient(
-            String connectString, FatalErrorHandler fatalErrorHandler) {
+    public static ZooKeeperClient createZooKeeperClient(String connectString, FatalErrorHandler fatalErrorHandler) {
         final Configuration config = new Configuration();
         config.setString(ConfigOptions.ZOOKEEPER_ADDRESS, connectString);
 

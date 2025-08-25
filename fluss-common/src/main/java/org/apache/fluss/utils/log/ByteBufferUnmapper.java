@@ -89,8 +89,7 @@ public final class ByteBufferUnmapper {
         try {
             UNMAP.invokeExact(buffer);
         } catch (Throwable throwable) {
-            throw new IOException(
-                    "Unable to unmap the mapped buffer: " + resourceDescription, throwable);
+            throw new IOException("Unable to unmap the mapped buffer: " + resourceDescription, throwable);
         }
     }
 
@@ -110,8 +109,7 @@ public final class ByteBufferUnmapper {
         }
     }
 
-    private static MethodHandle unmapJava7Or8(MethodHandles.Lookup lookup)
-            throws ReflectiveOperationException {
+    private static MethodHandle unmapJava7Or8(MethodHandles.Lookup lookup) throws ReflectiveOperationException {
         /* "Compile" a MethodHandle that is roughly equivalent to the following lambda:
          *
          * (ByteBuffer buffer) -> {
@@ -127,28 +125,19 @@ public final class ByteBufferUnmapper {
         m.setAccessible(true);
         MethodHandle directBufferCleanerMethod = lookup.unreflect(m);
         Class<?> cleanerClass = directBufferCleanerMethod.type().returnType();
-        MethodHandle cleanMethod =
-                lookup.findVirtual(cleanerClass, "clean", methodType(void.class));
-        MethodHandle nonNullTest =
-                lookup.findStatic(
-                                ByteBufferUnmapper.class,
-                                "nonNull",
-                                methodType(boolean.class, Object.class))
-                        .asType(methodType(boolean.class, cleanerClass));
-        MethodHandle noop =
-                dropArguments(
-                        constant(Void.class, null).asType(methodType(void.class)), 0, cleanerClass);
-        return filterReturnValue(
-                        directBufferCleanerMethod, guardWithTest(nonNullTest, cleanMethod, noop))
+        MethodHandle cleanMethod = lookup.findVirtual(cleanerClass, "clean", methodType(void.class));
+        MethodHandle nonNullTest = lookup.findStatic(
+                        ByteBufferUnmapper.class, "nonNull", methodType(boolean.class, Object.class))
+                .asType(methodType(boolean.class, cleanerClass));
+        MethodHandle noop = dropArguments(constant(Void.class, null).asType(methodType(void.class)), 0, cleanerClass);
+        return filterReturnValue(directBufferCleanerMethod, guardWithTest(nonNullTest, cleanMethod, noop))
                 .asType(methodType(void.class, ByteBuffer.class));
     }
 
-    private static MethodHandle unmapJava9(MethodHandles.Lookup lookup)
-            throws ReflectiveOperationException {
+    private static MethodHandle unmapJava9(MethodHandles.Lookup lookup) throws ReflectiveOperationException {
         Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
         MethodHandle unmapper =
-                lookup.findVirtual(
-                        unsafeClass, "invokeCleaner", methodType(void.class, ByteBuffer.class));
+                lookup.findVirtual(unsafeClass, "invokeCleaner", methodType(void.class, ByteBuffer.class));
         Field f = unsafeClass.getDeclaredField("theUnsafe");
         f.setAccessible(true);
         Object theUnsafe = f.get(null);

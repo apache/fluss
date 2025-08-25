@@ -60,14 +60,10 @@ public class FileLogRecordsTest extends LogTestBase {
 
     @BeforeEach
     void setup() throws Exception {
-        values =
-                Arrays.asList(
-                        genMemoryLogRecordsWithBaseOffset(
-                                0L, Collections.singletonList(new Object[] {0, " abcd"})),
-                        genMemoryLogRecordsWithBaseOffset(
-                                1L, Collections.singletonList(new Object[] {1, " efgh"})),
-                        genMemoryLogRecordsWithBaseOffset(
-                                2L, Collections.singletonList(new Object[] {2, " hijk"})));
+        values = Arrays.asList(
+                genMemoryLogRecordsWithBaseOffset(0L, Collections.singletonList(new Object[] {0, " abcd"})),
+                genMemoryLogRecordsWithBaseOffset(1L, Collections.singletonList(new Object[] {1, " efgh"})),
+                genMemoryLogRecordsWithBaseOffset(2L, Collections.singletonList(new Object[] {2, " hijk"})));
         fileLogRecords = createFileLogRecords();
     }
 
@@ -82,15 +78,9 @@ public class FileLogRecordsTest extends LogTestBase {
         FileChannel fileChannelMock = mock(FileChannel.class);
         when(fileChannelMock.size()).thenReturn((long) Integer.MAX_VALUE);
 
-        FileLogRecords records =
-                new FileLogRecords(fileMock, fileChannelMock, 0, Integer.MAX_VALUE, false);
-        assertThatThrownBy(
-                        () ->
-                                records.append(
-                                        genMemoryLogRecordsWithBaseOffset(
-                                                1L,
-                                                Collections.singletonList(
-                                                        new Object[] {1, "efgh"}))))
+        FileLogRecords records = new FileLogRecords(fileMock, fileChannelMock, 0, Integer.MAX_VALUE, false);
+        assertThatThrownBy(() -> records.append(
+                        genMemoryLogRecordsWithBaseOffset(1L, Collections.singletonList(new Object[] {1, "efgh"}))))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("bytes is too large for segment with current file position");
     }
@@ -108,11 +98,9 @@ public class FileLogRecordsTest extends LogTestBase {
 
     @Test
     void testOutOfRangeSlice() {
-        assertThatThrownBy(
-                        () ->
-                                fileLogRecords
-                                        .slice(fileLogRecords.sizeInBytes() + 1, 15)
-                                        .sizeInBytes())
+        assertThatThrownBy(() -> fileLogRecords
+                        .slice(fileLogRecords.sizeInBytes() + 1, 15)
+                        .sizeInBytes())
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("exceeds end position of FileRecords");
     }
@@ -120,12 +108,13 @@ public class FileLogRecordsTest extends LogTestBase {
     @Test
     void testFileSize() throws Exception {
         // Test that the cached size variable matches the actual file size as we append messages.
-        assertThat(fileLogRecords.sizeInBytes()).isEqualTo(fileLogRecords.channel().size());
+        assertThat(fileLogRecords.sizeInBytes())
+                .isEqualTo(fileLogRecords.channel().size());
         for (int i = 3; i < 13; i++) {
             fileLogRecords.append(
-                    genMemoryLogRecordsWithBaseOffset(
-                            i, Collections.singletonList(new Object[] {i, "ijkl"})));
-            assertThat(fileLogRecords.sizeInBytes()).isEqualTo(fileLogRecords.channel().size());
+                    genMemoryLogRecordsWithBaseOffset(i, Collections.singletonList(new Object[] {i, "ijkl"})));
+            assertThat(fileLogRecords.sizeInBytes())
+                    .isEqualTo(fileLogRecords.channel().size());
         }
     }
 
@@ -146,25 +135,21 @@ public class FileLogRecordsTest extends LogTestBase {
         int maxSizeInBytes = 16384;
 
         try {
-            Future<Object> readerCompletion =
-                    executor.submit(
-                            () -> {
-                                while (log.sizeInBytes() < maxSizeInBytes) {
-                                    int currentSize = log.sizeInBytes();
-                                    FileLogRecords slice = log.slice(0, currentSize);
-                                    assertThat(slice.sizeInBytes()).isEqualTo(currentSize);
-                                }
-                                return null;
-                            });
+            Future<Object> readerCompletion = executor.submit(() -> {
+                while (log.sizeInBytes() < maxSizeInBytes) {
+                    int currentSize = log.sizeInBytes();
+                    FileLogRecords slice = log.slice(0, currentSize);
+                    assertThat(slice.sizeInBytes()).isEqualTo(currentSize);
+                }
+                return null;
+            });
 
-            Future<Object> writerCompletion =
-                    executor.submit(
-                            () -> {
-                                while (log.sizeInBytes() < maxSizeInBytes) {
-                                    append(log, values);
-                                }
-                                return null;
-                            });
+            Future<Object> writerCompletion = executor.submit(() -> {
+                while (log.sizeInBytes() < maxSizeInBytes) {
+                    append(log, values);
+                }
+                return null;
+            });
 
             writerCompletion.get();
             readerCompletion.get();
@@ -178,11 +163,14 @@ public class FileLogRecordsTest extends LogTestBase {
         // Iterating over the file does file reads but shouldn't change the position of the
         // underlying FileChannel.
         long position = fileLogRecords.channel().position();
-        Iterator<LogRecordBatch> fileLogRecordsIterator = fileLogRecords.batches().iterator();
+        Iterator<LogRecordBatch> fileLogRecordsIterator =
+                fileLogRecords.batches().iterator();
         for (MemoryLogRecords value : values) {
             assertThat(fileLogRecordsIterator.hasNext()).isTrue();
             assertLogRecordBatchEquals(
-                    DATA1_ROW_TYPE, fileLogRecordsIterator.next(), value.batchIterator().next());
+                    DATA1_ROW_TYPE,
+                    fileLogRecordsIterator.next(),
+                    value.batchIterator().next());
         }
         assertThat(fileLogRecords.channel().position()).isEqualTo(position);
     }
@@ -197,41 +185,32 @@ public class FileLogRecordsTest extends LogTestBase {
         LogRecordBatch first = items.get(0);
 
         // read from second message until the end.
-        read =
-                fileLogRecords.slice(
-                        first.sizeInBytes(), fileLogRecords.sizeInBytes() - first.sizeInBytes());
-        assertThat(read.sizeInBytes())
-                .isEqualTo(fileLogRecords.sizeInBytes() - first.sizeInBytes());
+        read = fileLogRecords.slice(first.sizeInBytes(), fileLogRecords.sizeInBytes() - first.sizeInBytes());
+        assertThat(read.sizeInBytes()).isEqualTo(fileLogRecords.sizeInBytes() - first.sizeInBytes());
         assertThat(batches(read)).isEqualTo(items.subList(1, items.size()));
 
         // read from second message and size is past the end of the file.
         read = fileLogRecords.slice(first.sizeInBytes(), fileLogRecords.sizeInBytes());
-        assertThat(read.sizeInBytes())
-                .isEqualTo(fileLogRecords.sizeInBytes() - first.sizeInBytes());
+        assertThat(read.sizeInBytes()).isEqualTo(fileLogRecords.sizeInBytes() - first.sizeInBytes());
         assertThat(batches(read)).isEqualTo(items.subList(1, items.size()));
 
         // read from second message and position + size overflows.
         read = fileLogRecords.slice(first.sizeInBytes(), Integer.MAX_VALUE);
-        assertThat(read.sizeInBytes())
-                .isEqualTo(fileLogRecords.sizeInBytes() - first.sizeInBytes());
+        assertThat(read.sizeInBytes()).isEqualTo(fileLogRecords.sizeInBytes() - first.sizeInBytes());
         assertThat(batches(read)).isEqualTo(items.subList(1, items.size()));
 
         // read from second message and size is past the end of the file on a view/slice.
-        read =
-                fileLogRecords
-                        .slice(1, fileLogRecords.sizeInBytes() - 1)
-                        .slice(first.sizeInBytes() - 1, fileLogRecords.sizeInBytes());
-        assertThat(read.sizeInBytes())
-                .isEqualTo(fileLogRecords.sizeInBytes() - first.sizeInBytes());
+        read = fileLogRecords
+                .slice(1, fileLogRecords.sizeInBytes() - 1)
+                .slice(first.sizeInBytes() - 1, fileLogRecords.sizeInBytes());
+        assertThat(read.sizeInBytes()).isEqualTo(fileLogRecords.sizeInBytes() - first.sizeInBytes());
         assertThat(batches(read)).isEqualTo(items.subList(1, items.size()));
 
         // read from second message and position + size overflows on a view/slice.
-        read =
-                fileLogRecords
-                        .slice(1, fileLogRecords.sizeInBytes() - 1)
-                        .slice(first.sizeInBytes() - 1, Integer.MAX_VALUE);
-        assertThat(read.sizeInBytes())
-                .isEqualTo(fileLogRecords.sizeInBytes() - first.sizeInBytes());
+        read = fileLogRecords
+                .slice(1, fileLogRecords.sizeInBytes() - 1)
+                .slice(first.sizeInBytes() - 1, Integer.MAX_VALUE);
+        assertThat(read.sizeInBytes()).isEqualTo(fileLogRecords.sizeInBytes() - first.sizeInBytes());
         assertThat(batches(read)).isEqualTo(items.subList(1, items.size()));
 
         // read a single message starting from second message
@@ -244,8 +223,7 @@ public class FileLogRecordsTest extends LogTestBase {
     @Test
     void testSearch() throws Exception {
         fileLogRecords.append(
-                genMemoryLogRecordsWithBaseOffset(
-                        50L, Collections.singletonList(new Object[] {0, " test"})));
+                genMemoryLogRecordsWithBaseOffset(50L, Collections.singletonList(new Object[] {0, " test"})));
 
         List<LogRecordBatch> batches = batches(fileLogRecords);
         int position = 0;
@@ -301,8 +279,7 @@ public class FileLogRecordsTest extends LogTestBase {
         when(channelMock.position(42L)).thenReturn(null);
 
         FileLogRecords fileRecords =
-                new FileLogRecords(
-                        new File(tempDir, "test2.tmp"), channelMock, 0, Integer.MAX_VALUE, false);
+                new FileLogRecords(new File(tempDir, "test2.tmp"), channelMock, 0, Integer.MAX_VALUE, false);
         fileRecords.truncateTo(42);
 
         verify(channelMock, atLeastOnce()).size();
@@ -316,8 +293,7 @@ public class FileLogRecordsTest extends LogTestBase {
         when(channelMock.size()).thenReturn(42L);
 
         FileLogRecords fileRecords =
-                new FileLogRecords(
-                        new File(tempDir, "test2.tmp"), channelMock, 0, Integer.MAX_VALUE, false);
+                new FileLogRecords(new File(tempDir, "test2.tmp"), channelMock, 0, Integer.MAX_VALUE, false);
 
         assertThatThrownBy(() -> fileRecords.truncateTo(43))
                 .isInstanceOf(FlussRuntimeException.class)
@@ -333,8 +309,7 @@ public class FileLogRecordsTest extends LogTestBase {
         when(channelMock.truncate(anyLong())).thenReturn(channelMock);
 
         FileLogRecords fileRecords =
-                new FileLogRecords(
-                        new File(tempDir, "test2.tmp"), channelMock, 0, Integer.MAX_VALUE, false);
+                new FileLogRecords(new File(tempDir, "test2.tmp"), channelMock, 0, Integer.MAX_VALUE, false);
         fileRecords.truncateTo(23);
 
         verify(channelMock, atLeastOnce()).size();
@@ -421,8 +396,7 @@ public class FileLogRecordsTest extends LogTestBase {
         return fileRecords;
     }
 
-    private void append(FileLogRecords fileLogRecords, List<MemoryLogRecords> values)
-            throws Exception {
+    private void append(FileLogRecords fileLogRecords, List<MemoryLogRecords> values) throws Exception {
         for (MemoryLogRecords records : values) {
             fileLogRecords.append(records);
         }

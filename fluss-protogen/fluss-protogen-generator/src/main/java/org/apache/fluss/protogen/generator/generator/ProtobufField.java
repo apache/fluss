@@ -103,8 +103,7 @@ public abstract class ProtobufField<FieldType extends Field<?>> {
                 "        private static final int %s_SIZE = ProtoCodecUtils.computeVarIntSize(%s);\n",
                 tagName(), tagName());
         if (!field.isRepeated()) {
-            w.format(
-                    "        private static final int %s = 1 << (%d %% 32);\n", fieldMask(), index);
+            w.format("        private static final int %s = 1 << (%d %% 32);\n", fieldMask(), index);
         }
     }
 
@@ -123,9 +122,7 @@ public abstract class ProtobufField<FieldType extends Field<?>> {
         if (isErrorField) {
             w.format("       @Override\n");
         }
-        w.format(
-                "        public %s %s() {\n",
-                enclosingType, ProtoGenUtil.camelCase("clear", field.getName()));
+        w.format("        public %s %s() {\n", enclosingType, ProtoGenUtil.camelCase("clear", field.getName()));
         w.format("            _bitField%d &= ~%s;\n", bitFieldIndex(), fieldMask());
         clear(w);
         w.format("            return this;\n");

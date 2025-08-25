@@ -105,14 +105,11 @@ public class RemoteLogDownloader implements Closeable {
         this.remoteFileDownloader = remoteFileDownloader;
         this.scannerMetricGroup = scannerMetricGroup;
         this.pollTimeout = pollTimeout;
-        this.prefetchSemaphore =
-                new Semaphore(conf.getInt(ConfigOptions.CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM));
+        this.prefetchSemaphore = new Semaphore(conf.getInt(ConfigOptions.CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM));
         // The local tmp dir to store the fetched log segment files,
         // add UUID to avoid conflict between tasks.
         this.localLogDir =
-                Paths.get(
-                        conf.get(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR),
-                        "remote-logs-" + UUID.randomUUID());
+                Paths.get(conf.get(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR), "remote-logs-" + UUID.randomUUID());
         this.downloadThread = new DownloadRemoteLogThread(tablePath);
     }
 
@@ -163,32 +160,28 @@ public class RemoteLogDownloader implements Closeable {
             // download the remote file to local
             remoteFileDownloader
                     .downloadFileAsync(fsPathAndFileName, localLogDir)
-                    .whenComplete(
-                            (bytes, throwable) -> {
-                                if (throwable != null) {
-                                    LOG.error(
-                                            "Failed to download remote log segment file {}.",
-                                            fsPathAndFileName.getFileName(),
-                                            ExceptionUtils.stripExecutionException(throwable));
-                                    // release the semaphore for the failed request
-                                    prefetchSemaphore.release();
-                                    // add back the request to the queue,
-                                    // so we do not complete the request.future here
-                                    segmentsToFetch.add(request);
-                                    scannerMetricGroup.remoteFetchErrorCount().inc();
-                                } else {
-                                    LOG.info(
-                                            "Successfully downloaded remote log segment file {} to local cost {} ms.",
-                                            fsPathAndFileName.getFileName(),
-                                            System.currentTimeMillis() - startTime);
-                                    File localFile =
-                                            new File(
-                                                    localLogDir.toFile(),
-                                                    fsPathAndFileName.getFileName());
-                                    scannerMetricGroup.remoteFetchBytes().inc(bytes);
-                                    request.future.complete(localFile);
-                                }
-                            });
+                    .whenComplete((bytes, throwable) -> {
+                        if (throwable != null) {
+                            LOG.error(
+                                    "Failed to download remote log segment file {}.",
+                                    fsPathAndFileName.getFileName(),
+                                    ExceptionUtils.stripExecutionException(throwable));
+                            // release the semaphore for the failed request
+                            prefetchSemaphore.release();
+                            // add back the request to the queue,
+                            // so we do not complete the request.future here
+                            segmentsToFetch.add(request);
+                            scannerMetricGroup.remoteFetchErrorCount().inc();
+                        } else {
+                            LOG.info(
+                                    "Successfully downloaded remote log segment file {} to local cost {} ms.",
+                                    fsPathAndFileName.getFileName(),
+                                    System.currentTimeMillis() - startTime);
+                            File localFile = new File(localLogDir.toFile(), fsPathAndFileName.getFileName());
+                            scannerMetricGroup.remoteFetchBytes().inc(bytes);
+                            request.future.complete(localFile);
+                        }
+                    });
         } catch (Throwable t) {
             prefetchSemaphore.release();
             // add back the request to the queue
@@ -245,12 +238,9 @@ public class RemoteLogDownloader implements Closeable {
         return segmentsToFetch.size();
     }
 
-    protected static FsPathAndFileName getFsPathAndFileName(
-            FsPath remoteLogTabletDir, RemoteLogSegment segment) {
-        FsPath remotePath =
-                remoteLogSegmentFile(
-                        remoteLogSegmentDir(remoteLogTabletDir, segment.remoteLogSegmentId()),
-                        segment.remoteLogStartOffset());
+    protected static FsPathAndFileName getFsPathAndFileName(FsPath remoteLogTabletDir, RemoteLogSegment segment) {
+        FsPath remotePath = remoteLogSegmentFile(
+                remoteLogSegmentDir(remoteLogTabletDir, segment.remoteLogSegmentId()), segment.remoteLogStartOffset());
         return new FsPathAndFileName(remotePath, getLocalFileNameOfRemoteSegment(segment));
     }
 
@@ -305,8 +295,7 @@ public class RemoteLogDownloader implements Closeable {
         public int compareTo(RemoteLogDownloadRequest o) {
             if (segment.tableBucket().equals(o.segment.tableBucket())) {
                 // strictly download in the offset order if they belong to the same bucket
-                return Long.compare(
-                        segment.remoteLogStartOffset(), o.segment.remoteLogStartOffset());
+                return Long.compare(segment.remoteLogStartOffset(), o.segment.remoteLogStartOffset());
             } else {
                 // download segment from old to new across buckets
                 return Long.compare(segment.maxTimestamp(), o.segment.maxTimestamp());

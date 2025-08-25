@@ -65,14 +65,13 @@ final class NettyServerHandlerTest {
     void beforeEach() throws Exception {
         this.requestChannel = new TestingRequestChannel(100);
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
-        this.serverHandler =
-                new NettyServerHandler(
-                        requestChannel,
-                        new ApiManager(ServerType.TABLET_SERVER),
-                        "FLUSS",
-                        true,
-                        RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup),
-                        new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
+        this.serverHandler = new NettyServerHandler(
+                requestChannel,
+                new ApiManager(ServerType.TABLET_SERVER),
+                "FLUSS",
+                true,
+                RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup),
+                new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
         this.ctx = mockChannelHandlerContext();
         serverHandler.channelActive(ctx);
     }
@@ -84,18 +83,16 @@ final class NettyServerHandlerTest {
         for (int i = 0; i < 10; i++) {
             ApiVersionsRequest request = new ApiVersionsRequest();
             request.setClientSoftwareName("test").setClientSoftwareVersion("1.0.0");
-            ByteBuf byteBuf =
-                    MessageCodec.encodeRequest(
-                            ByteBufAllocator.DEFAULT,
-                            ApiKeys.API_VERSIONS.id,
-                            ApiKeys.API_VERSIONS.highestSupportedVersion,
-                            1001,
-                            request);
+            ByteBuf byteBuf = MessageCodec.encodeRequest(
+                    ByteBufAllocator.DEFAULT,
+                    ApiKeys.API_VERSIONS.id,
+                    ApiKeys.API_VERSIONS.highestSupportedVersion,
+                    1001,
+                    request);
             serverHandler.channelRead(ctx, byteBuf);
         }
 
-        Deque<FlussRequest> inflightResponses =
-                serverHandler.inflightResponses(ApiKeys.API_VERSIONS.id);
+        Deque<FlussRequest> inflightResponses = serverHandler.inflightResponses(ApiKeys.API_VERSIONS.id);
         assertThat(requestChannel.requestsCount()).isEqualTo(10);
         assertThat(inflightResponses.size()).isEqualTo(10);
 
@@ -134,9 +131,8 @@ final class NettyServerHandlerTest {
             request.setRequestDequeTimeMs(System.currentTimeMillis());
             request.complete(makeApiVersionResponse());
             final int size = 8 - i;
-            retry(
-                    Duration.ofSeconds(20),
-                    () -> assertThat(inflightResponses.size()).isEqualTo(size));
+            retry(Duration.ofSeconds(20), () -> assertThat(inflightResponses.size())
+                    .isEqualTo(size));
         }
 
         // 4. try to finish 5th request, 6th, 7th, 8th requests will also return as it has been done
@@ -155,13 +151,12 @@ final class NettyServerHandlerTest {
         for (int i = 0; i < 5; i++) {
             ApiVersionsRequest request = new ApiVersionsRequest();
             request.setClientSoftwareName("test").setClientSoftwareVersion("1.0.0");
-            ByteBuf byteBuf =
-                    MessageCodec.encodeRequest(
-                            ByteBufAllocator.DEFAULT,
-                            ApiKeys.API_VERSIONS.id,
-                            ApiKeys.API_VERSIONS.highestSupportedVersion,
-                            1001,
-                            request);
+            ByteBuf byteBuf = MessageCodec.encodeRequest(
+                    ByteBufAllocator.DEFAULT,
+                    ApiKeys.API_VERSIONS.id,
+                    ApiKeys.API_VERSIONS.highestSupportedVersion,
+                    1001,
+                    request);
             serverHandler.channelRead(ctx, byteBuf);
         }
 
@@ -172,23 +167,20 @@ final class NettyServerHandlerTest {
         pbLookupReqForBucket.addKey("key".getBytes());
         lookupRequest.addAllBucketsReqs(Collections.singleton(pbLookupReqForBucket));
         for (int i = 0; i < 5; i++) {
-            ByteBuf byteBuf =
-                    MessageCodec.encodeRequest(
-                            ByteBufAllocator.DEFAULT,
-                            ApiKeys.LOOKUP.id,
-                            ApiKeys.LOOKUP.highestSupportedVersion,
-                            1001,
-                            lookupRequest);
+            ByteBuf byteBuf = MessageCodec.encodeRequest(
+                    ByteBufAllocator.DEFAULT,
+                    ApiKeys.LOOKUP.id,
+                    ApiKeys.LOOKUP.highestSupportedVersion,
+                    1001,
+                    lookupRequest);
             serverHandler.channelRead(ctx, byteBuf);
         }
 
         assertThat(requestChannel.requestsCount()).isEqualTo(10);
-        Deque<FlussRequest> inflightApiVersionResponses =
-                serverHandler.inflightResponses(ApiKeys.API_VERSIONS.id);
+        Deque<FlussRequest> inflightApiVersionResponses = serverHandler.inflightResponses(ApiKeys.API_VERSIONS.id);
         assertThat(inflightApiVersionResponses.size()).isEqualTo(5);
 
-        Deque<FlussRequest> inflightLookupResponses =
-                serverHandler.inflightResponses(ApiKeys.LOOKUP.id);
+        Deque<FlussRequest> inflightLookupResponses = serverHandler.inflightResponses(ApiKeys.LOOKUP.id);
         assertThat(inflightLookupResponses.size()).isEqualTo(5);
 
         // 3. try to finish one Lookup request, return immediately not to wait the previous five
@@ -197,9 +189,8 @@ final class NettyServerHandlerTest {
         request.setRequestCompletedTimeMs(System.currentTimeMillis());
         request.setRequestDequeTimeMs(System.currentTimeMillis());
         request.complete(makeLookupResponse());
-        retry(
-                Duration.ofSeconds(20),
-                () -> assertThat(inflightLookupResponses.size()).isEqualTo(4));
+        retry(Duration.ofSeconds(20), () -> assertThat(inflightLookupResponses.size())
+                .isEqualTo(4));
         assertThat(inflightApiVersionResponses.size()).isEqualTo(5);
     }
 
@@ -229,11 +220,10 @@ final class NettyServerHandlerTest {
 
     private LookupResponse makeLookupResponse() {
         LookupResponse response = new LookupResponse();
-        PbLookupRespForBucket pbLookupRespForBucket =
-                new PbLookupRespForBucket()
-                        .setPartitionId(1)
-                        .setBucketId(1)
-                        .addAllValues(Collections.singleton(new PbValue()));
+        PbLookupRespForBucket pbLookupRespForBucket = new PbLookupRespForBucket()
+                .setPartitionId(1)
+                .setBucketId(1)
+                .addAllValues(Collections.singleton(new PbValue()));
         response.addAllBucketsResps(Collections.singletonList(pbLookupRespForBucket));
         return response;
     }

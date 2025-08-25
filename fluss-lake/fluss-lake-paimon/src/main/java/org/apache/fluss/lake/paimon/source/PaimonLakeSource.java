@@ -94,8 +94,7 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
 
     @Override
     public Planner<PaimonSplit> createPlanner(PlannerContext plannerContext) {
-        return new PaimonSplitPlanner(
-                paimonConfig, tablePath, predicate, plannerContext.snapshotId());
+        return new PaimonSplitPlanner(paimonConfig, tablePath, predicate, plannerContext.snapshotId());
     }
 
     @Override
@@ -103,11 +102,9 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
         try (Catalog catalog = getCatalog()) {
             FileStoreTable fileStoreTable = getTable(catalog, tablePath);
             if (fileStoreTable.primaryKeys().isEmpty()) {
-                return new PaimonRecordReader(
-                        fileStoreTable, context.lakeSplit(), project, predicate);
+                return new PaimonRecordReader(fileStoreTable, context.lakeSplit(), project, predicate);
             } else {
-                return new PaimonSortedRecordReader(
-                        fileStoreTable, context.lakeSplit(), project, predicate);
+                return new PaimonSortedRecordReader(fileStoreTable, context.lakeSplit(), project, predicate);
             }
         } catch (Exception e) {
             throw new IOException("Fail to create record reader.", e);
@@ -120,8 +117,7 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
     }
 
     private Catalog getCatalog() {
-        return CatalogFactory.createCatalog(
-                CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
+        return CatalogFactory.createCatalog(CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
     }
 
     private FileStoreTable getTable(Catalog catalog, TablePath tablePath) throws Exception {

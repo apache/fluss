@@ -55,8 +55,7 @@ public class IndexedRowReader {
 
     public IndexedRowReader(DataType[] types) {
         this.nullBitsSizeInBytes = IndexedRow.calculateBitSetWidthInBytes(types.length);
-        this.variableColumnLengthListInBytes =
-                IndexedRow.calculateVariableColumnLengthListSize(types);
+        this.variableColumnLengthListInBytes = IndexedRow.calculateVariableColumnLengthListSize(types);
         this.headerSizeInBytes = nullBitsSizeInBytes + variableColumnLengthListInBytes;
         // init variable length position.
         this.variableLengthPosition = nullBitsSizeInBytes;
@@ -177,8 +176,7 @@ public class IndexedRowReader {
     }
 
     private BinaryString readStringInternal(int length) {
-        BinaryString string =
-                BinaryString.fromAddress(new MemorySegment[] {segment}, position, length);
+        BinaryString string = BinaryString.fromAddress(new MemorySegment[] {segment}, position, length);
         position += length;
         return string;
     }

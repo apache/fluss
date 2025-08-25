@@ -35,8 +35,7 @@ public class AdjustIsrResultForBucket extends ResultForBucket {
         this(tableBucket, new LeaderAndIsr(-1, 0), error);
     }
 
-    private AdjustIsrResultForBucket(
-            TableBucket tableBucket, LeaderAndIsr leaderAndIsr, ApiError error) {
+    private AdjustIsrResultForBucket(TableBucket tableBucket, LeaderAndIsr leaderAndIsr, ApiError error) {
         super(tableBucket, error);
         this.leaderAndIsr = leaderAndIsr;
     }

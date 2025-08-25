@@ -66,60 +66,35 @@ public class ApiManagerTest {
 
     @Test
     void testInvalidRpcMethods() {
-        assertThatThrownBy(
-                        () ->
-                                registerApiMethods(
-                                        InvalidRpcGateway1.class,
-                                        ServerType.COORDINATOR,
-                                        new HashMap<>()))
+        assertThatThrownBy(() -> registerApiMethods(InvalidRpcGateway1.class, ServerType.COORDINATOR, new HashMap<>()))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(
-                        "RPC method [public abstract void "
-                                + InvalidRpcGateway1.class.getName()
-                                + ".testMethod()] must have exactly one parameter of type ApiMessage");
+                .hasMessageContaining("RPC method [public abstract void "
+                        + InvalidRpcGateway1.class.getName()
+                        + ".testMethod()] must have exactly one parameter of type ApiMessage");
 
-        assertThatThrownBy(
-                        () ->
-                                registerApiMethods(
-                                        InvalidResponseRpcGateway.class,
-                                        ServerType.COORDINATOR,
-                                        new HashMap<>()))
+        assertThatThrownBy(() ->
+                        registerApiMethods(InvalidResponseRpcGateway.class, ServerType.COORDINATOR, new HashMap<>()))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(
-                        "RPC method [public abstract java.util.concurrent.CompletableFuture "
-                                + InvalidResponseRpcGateway.class.getName()
-                                + ".getTableInfo("
-                                + GetTableInfoRequest.class.getName()
-                                + ")] must have a return type of CompletableFuture<T extends ApiMessage>");
+                .hasMessageContaining("RPC method [public abstract java.util.concurrent.CompletableFuture "
+                        + InvalidResponseRpcGateway.class.getName()
+                        + ".getTableInfo("
+                        + GetTableInfoRequest.class.getName()
+                        + ")] must have a return type of CompletableFuture<T extends ApiMessage>");
 
-        assertThatThrownBy(
-                        () ->
-                                registerApiMethods(
-                                        InvalidResponseNamingRpcGateway.class,
-                                        ServerType.COORDINATOR,
-                                        new HashMap<>()))
+        assertThatThrownBy(() -> registerApiMethods(
+                        InvalidResponseNamingRpcGateway.class, ServerType.COORDINATOR, new HashMap<>()))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(
-                        "RPC method [getTableInfo] expects to have a response return class "
-                                + "of type GetTableInfoResponse, but is GetTableSchemaResponse");
+                .hasMessageContaining("RPC method [getTableInfo] expects to have a response return class "
+                        + "of type GetTableInfoResponse, but is GetTableSchemaResponse");
 
-        assertThatThrownBy(
-                        () ->
-                                registerApiMethods(
-                                        InvalidRequestNamingRpcGateway.class,
-                                        ServerType.COORDINATOR,
-                                        new HashMap<>()))
+        assertThatThrownBy(() -> registerApiMethods(
+                        InvalidRequestNamingRpcGateway.class, ServerType.COORDINATOR, new HashMap<>()))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(
-                        "RPC method [getTableInfo] expects to have a request parameter "
-                                + "of type GetTableInfoRequest, but is GetTableSchemaRequest");
+                .hasMessageContaining("RPC method [getTableInfo] expects to have a request parameter "
+                        + "of type GetTableInfoRequest, but is GetTableSchemaRequest");
 
-        assertThatThrownBy(
-                        () ->
-                                registerApiMethods(
-                                        InvalidDuplicatedRpcGateway.class,
-                                        ServerType.COORDINATOR,
-                                        new HashMap<>()))
+        assertThatThrownBy(() ->
+                        registerApiMethods(InvalidDuplicatedRpcGateway.class, ServerType.COORDINATOR, new HashMap<>()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(
                         "Different RPC methods are registered with the same API key [GET_TABLE_INFO(1007)]");

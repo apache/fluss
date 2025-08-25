@@ -36,8 +36,7 @@ class DefaultSecurityTokenManagerTest {
 
     @Test
     void startTokensUpdateShouldScheduleRenewal() {
-        TestingSecurityTokenProvider testingSecurityTokenProvider =
-                new TestingSecurityTokenProvider("token1");
+        TestingSecurityTokenProvider testingSecurityTokenProvider = new TestingSecurityTokenProvider("token1");
 
         // set small token renew backoff
         Configuration configuration = new Configuration();
@@ -50,27 +49,18 @@ class DefaultSecurityTokenManagerTest {
         securityTokenManager.startTokensUpdate();
 
         // token history should be token1
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(testingSecurityTokenProvider.getHistoryTokens())
-                                .containsExactly("token1"));
+        retry(Duration.ofMinutes(1), () -> assertThat(testingSecurityTokenProvider.getHistoryTokens())
+                .containsExactly("token1"));
 
         //  token history should be token1, token2
         testingSecurityTokenProvider.setCurrentToken("token2");
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(testingSecurityTokenProvider.getHistoryTokens())
-                                .containsExactly("token1", "token2"));
+        retry(Duration.ofMinutes(1), () -> assertThat(testingSecurityTokenProvider.getHistoryTokens())
+                .containsExactly("token1", "token2"));
 
         //  token history should be token1, token2, token3
         testingSecurityTokenProvider.setCurrentToken("token3");
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(testingSecurityTokenProvider.getHistoryTokens())
-                                .containsExactly("token1", "token2", "token3"));
+        retry(Duration.ofMinutes(1), () -> assertThat(testingSecurityTokenProvider.getHistoryTokens())
+                .containsExactly("token1", "token2", "token3"));
 
         securityTokenManager.stopTokensUpdate();
 
@@ -81,10 +71,10 @@ class DefaultSecurityTokenManagerTest {
     void calculateRenewalDelayShouldConsiderRenewalRatio() {
         Configuration configuration = new Configuration();
         configuration.set(ConfigOptions.FILESYSTEM_SECURITY_TOKEN_RENEWAL_TIME_RATIO, 0.5);
-        DefaultSecurityTokenManager securityTokenManager =
-                new DefaultSecurityTokenManager(configuration, null);
+        DefaultSecurityTokenManager securityTokenManager = new DefaultSecurityTokenManager(configuration, null);
 
         Clock constantClock = Clock.fixed(ofEpochMilli(100), ZoneId.systemDefault());
-        assertThat(securityTokenManager.calculateRenewalDelay(constantClock, 200)).isEqualTo(50);
+        assertThat(securityTokenManager.calculateRenewalDelay(constantClock, 200))
+                .isEqualTo(50);
     }
 }

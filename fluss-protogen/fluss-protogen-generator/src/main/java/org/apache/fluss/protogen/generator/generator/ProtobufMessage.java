@@ -45,20 +45,16 @@ public class ProtobufMessage {
         this.message = message;
         this.isNested = isNested;
         this.enums =
-                message.getNestedEnumGroups().stream()
-                        .map(ProtobufEnum::new)
-                        .collect(Collectors.toList());
-        this.nestedMessages =
-                message.getNestedMessages().stream()
-                        .map(m -> new ProtobufMessage(m, true))
-                        .collect(Collectors.toList());
+                message.getNestedEnumGroups().stream().map(ProtobufEnum::new).collect(Collectors.toList());
+        this.nestedMessages = message.getNestedMessages().stream()
+                .map(m -> new ProtobufMessage(m, true))
+                .collect(Collectors.toList());
 
         this.fields = new ArrayList<>();
         this.hasErrorFields = hasErrorFields(message);
         for (int i = 0; i < message.getFields().size(); i++) {
             Field<?> field = message.getFields().get(i);
-            boolean isErrorField =
-                    hasErrorFields && (isErrorCodeField(field) || isErrorMessageField(field));
+            boolean isErrorField = hasErrorFields && (isErrorCodeField(field) || isErrorMessageField(field));
             fields.add(ProtobufField.create(message.getFields().get(i), i, isErrorField));
         }
     }
@@ -76,21 +72,20 @@ public class ProtobufMessage {
 
         enums.forEach(e -> e.generate(w));
         nestedMessages.forEach(nm -> nm.generate(w));
-        fields.forEach(
-                field -> {
-                    field.docs(w);
-                    field.declaration(w);
-                    field.tags(w);
-                    w.println();
-                    field.has(w);
-                    w.println();
-                    field.getter(w);
-                    w.println();
-                    field.setter(w, message.getName());
-                    w.println();
-                    field.fieldClear(w, message.getName());
-                    w.println();
-                });
+        fields.forEach(field -> {
+            field.docs(w);
+            field.declaration(w);
+            field.tags(w);
+            w.println();
+            field.has(w);
+            w.println();
+            field.getter(w);
+            w.println();
+            field.setter(w, message.getName());
+            w.println();
+            field.fieldClear(w, message.getName());
+            w.println();
+        });
 
         generateBitFields(w);
         generateSerialize(w);
@@ -139,9 +134,7 @@ public class ProtobufMessage {
         for (ProtobufField field : fields) {
             w.format("                case %s:\n", field.tagName());
             if (!field.isRepeated() && !field.isEnum()) {
-                w.format(
-                        "                    _bitField%d |= %s;\n",
-                        field.bitFieldIndex(), field.fieldMask());
+                w.format("                    _bitField%d |= %s;\n", field.bitFieldIndex(), field.fieldMask());
             }
             field.parse(w);
             w.format("                    break;\n");
@@ -170,9 +163,7 @@ public class ProtobufMessage {
         w.println();
         w.println("       @Override");
         w.format("        public boolean isLazilyParsed() {\n");
-        w.format(
-                "            return %s;\n",
-                RecordsFieldFinder.hasRecordsField(message) ? "true" : "false");
+        w.format("            return %s;\n", RecordsFieldFinder.hasRecordsField(message) ? "true" : "false");
         w.format("        }\n");
     }
 
@@ -243,9 +234,7 @@ public class ProtobufMessage {
                 // If required, skip the has() check
                 f.serialize(w);
             } else {
-                w.format(
-                        "            if (%s()) {\n",
-                        ProtoGenUtil.camelCase("has", f.field.getName()));
+                w.format("            if (%s()) {\n", ProtoGenUtil.camelCase("has", f.field.getName()));
                 f.serialize(w);
                 w.format("            }\n");
             }
@@ -266,18 +255,15 @@ public class ProtobufMessage {
         w.format("\n");
 
         w.format("    int _size = 0;\n");
-        fields.forEach(
-                field -> {
-                    if (field.isRequired() || field.isRepeated()) {
-                        field.totalSize(w);
-                    } else {
-                        w.format(
-                                "        if (%s()) {\n",
-                                ProtoGenUtil.camelCase("has", field.field.getName()));
-                        field.totalSize(w);
-                        w.format("        }\n");
-                    }
-                });
+        fields.forEach(field -> {
+            if (field.isRequired() || field.isRepeated()) {
+                field.totalSize(w);
+            } else {
+                w.format("        if (%s()) {\n", ProtoGenUtil.camelCase("has", field.field.getName()));
+                field.totalSize(w);
+                w.format("        }\n");
+            }
+        });
 
         w.format("            _cachedSize = _size;\n");
         w.format("            return _size;\n");
@@ -299,12 +285,11 @@ public class ProtobufMessage {
             w.format("private int _bitField%d;\n", i);
             w.format("private static final int _REQUIRED_FIELDS_MASK%d = 0", i);
             int idx = i;
-            fields.forEach(
-                    f -> {
-                        if (f.isRequired() && f.index() / 32 == idx) {
-                            w.format(" | %s", f.fieldMask());
-                        }
-                    });
+            fields.forEach(f -> {
+                if (f.isRequired() && f.index() / 32 == idx) {
+                    w.format(" | %s", f.fieldMask());
+                }
+            });
             w.println(";");
         }
     }
@@ -363,14 +348,10 @@ public class ProtobufMessage {
     }
 
     private static boolean isErrorCodeField(Field<?> field) {
-        return field.getName().equals("error_code")
-                && field.getJavaType().equals("int")
-                && !field.isRepeated();
+        return field.getName().equals("error_code") && field.getJavaType().equals("int") && !field.isRepeated();
     }
 
     private static boolean isErrorMessageField(Field<?> field) {
-        return field.getName().equals("error_message")
-                && field.getJavaType().equals("String")
-                && !field.isRepeated();
+        return field.getName().equals("error_message") && field.getJavaType().equals("String") && !field.isRepeated();
     }
 }

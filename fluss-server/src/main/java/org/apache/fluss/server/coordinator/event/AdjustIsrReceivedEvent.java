@@ -30,8 +30,7 @@ public class AdjustIsrReceivedEvent implements CoordinatorEvent {
     private final CompletableFuture<AdjustIsrResponse> respCallback;
 
     public AdjustIsrReceivedEvent(
-            Map<TableBucket, LeaderAndIsr> leaderAndIsrMap,
-            CompletableFuture<AdjustIsrResponse> respCallback) {
+            Map<TableBucket, LeaderAndIsr> leaderAndIsrMap, CompletableFuture<AdjustIsrResponse> respCallback) {
         this.leaderAndIsrMap = leaderAndIsrMap;
         this.respCallback = respCallback;
     }

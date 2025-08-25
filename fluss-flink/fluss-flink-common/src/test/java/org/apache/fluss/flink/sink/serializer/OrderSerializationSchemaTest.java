@@ -48,36 +48,31 @@ public class OrderSerializationSchemaTest {
     private RowType extendedRowType;
     private OrderSerializationSchema serializer;
 
-    @Mock private FlussSerializationSchema.InitializationContext context;
+    @Mock
+    private FlussSerializationSchema.InitializationContext context;
 
     @BeforeEach
     public void setUp() throws Exception {
         MockitoAnnotations.openMocks(this);
 
         // Create standard schema matching the Order class
-        standardRowType =
-                new RowType(
-                        true,
-                        Arrays.asList(
-                                new DataField("orderId", new BigIntType(false), "Order ID"),
-                                new DataField("itemId", new BigIntType(false), "Item ID"),
-                                new DataField("amount", new IntType(false), "Order amount"),
-                                new DataField(
-                                        "address", new StringType(true), "Shipping address")));
+        standardRowType = new RowType(
+                true,
+                Arrays.asList(
+                        new DataField("orderId", new BigIntType(false), "Order ID"),
+                        new DataField("itemId", new BigIntType(false), "Item ID"),
+                        new DataField("amount", new IntType(false), "Order amount"),
+                        new DataField("address", new StringType(true), "Shipping address")));
 
         // Create extended schema with an extra field
-        extendedRowType =
-                new RowType(
-                        true,
-                        Arrays.asList(
-                                new DataField("orderId", new BigIntType(false), "Order ID"),
-                                new DataField("itemId", new BigIntType(false), "Item ID"),
-                                new DataField("amount", new IntType(false), "Order amount"),
-                                new DataField("address", new StringType(true), "Shipping address"),
-                                new DataField(
-                                        "nonExistentField",
-                                        new StringType(true),
-                                        "A field that doesn't exist")));
+        extendedRowType = new RowType(
+                true,
+                Arrays.asList(
+                        new DataField("orderId", new BigIntType(false), "Order ID"),
+                        new DataField("itemId", new BigIntType(false), "Item ID"),
+                        new DataField("amount", new IntType(false), "Order amount"),
+                        new DataField("address", new StringType(true), "Shipping address"),
+                        new DataField("nonExistentField", new StringType(true), "A field that doesn't exist")));
 
         // Set up the context to return the standard schema
         when(context.getRowSchema()).thenReturn(standardRowType);
@@ -144,11 +139,7 @@ public class OrderSerializationSchemaTest {
     public void testIncompatibleSchema() {
 
         RowType incompatibleRowType =
-                new RowType(
-                        true,
-                        Arrays.asList(
-                                new DataField(
-                                        "singleField", new BigIntType(false), "Single Field")));
+                new RowType(true, Arrays.asList(new DataField("singleField", new BigIntType(false), "Single Field")));
 
         when(context.getRowSchema()).thenReturn(incompatibleRowType);
 

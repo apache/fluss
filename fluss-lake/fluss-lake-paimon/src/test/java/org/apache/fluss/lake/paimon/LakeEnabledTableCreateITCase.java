@@ -63,11 +63,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class LakeEnabledTableCreateITCase {
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(initConfig())
+            .build();
 
     private static final String DATABASE = "fluss";
 
@@ -102,17 +101,15 @@ class LakeEnabledTableCreateITCase {
         conf.setString("datalake.paimon.metastore", "filesystem");
         String warehousePath;
         try {
-            warehousePath =
-                    Files.createTempDirectory("fluss-testing-datalake-enabled")
-                            .resolve("warehouse")
-                            .toString();
+            warehousePath = Files.createTempDirectory("fluss-testing-datalake-enabled")
+                    .resolve("warehouse")
+                    .toString();
         } catch (Exception e) {
             throw new FlussRuntimeException("Failed to create warehouse path");
         }
         conf.setString("datalake.paimon.warehouse", warehousePath);
         paimonCatalog =
-                CatalogFactory.createCatalog(
-                        CatalogContext.create(Options.fromMap(extractLakeProperties(conf))));
+                CatalogFactory.createCatalog(CatalogContext.create(Options.fromMap(extractLakeProperties(conf))));
 
         return conf;
     }
@@ -124,21 +121,18 @@ class LakeEnabledTableCreateITCase {
         customProperties.put("paimon.file.format", "parquet");
 
         // test bucket key log table
-        TableDescriptor logTable =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("log_c1", DataTypes.INT())
-                                        .column("log_c2", DataTypes.STRING())
-                                        .build())
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .customProperties(customProperties)
-                        .distributedBy(BUCKET_NUM, "log_c1", "log_c2")
-                        .build();
+        TableDescriptor logTable = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("log_c1", DataTypes.INT())
+                        .column("log_c2", DataTypes.STRING())
+                        .build())
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .customProperties(customProperties)
+                .distributedBy(BUCKET_NUM, "log_c1", "log_c2")
+                .build();
         TablePath logTablePath = TablePath.of(DATABASE, "log_table");
         admin.createTable(logTablePath, logTable, false).get();
-        Table paimonLogTable =
-                paimonCatalog.getTable(Identifier.create(DATABASE, logTablePath.getTableName()));
+        Table paimonLogTable = paimonCatalog.getTable(Identifier.create(DATABASE, logTablePath.getTableName()));
         // check the gotten log table
         verifyPaimonTable(
                 paimonLogTable,
@@ -152,32 +146,23 @@ class LakeEnabledTableCreateITCase {
                             org.apache.paimon.types.DataTypes.BIGINT(),
                             org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
                         },
-                        new String[] {
-                            "log_c1",
-                            "log_c2",
-                            BUCKET_COLUMN_NAME,
-                            OFFSET_COLUMN_NAME,
-                            TIMESTAMP_COLUMN_NAME
+                        new String[] {"log_c1", "log_c2", BUCKET_COLUMN_NAME, OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME
                         }),
                 "log_c1,log_c2",
                 BUCKET_NUM);
 
-        TableDescriptor logNoBucketKeyTable =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("log_c1", DataTypes.INT())
-                                        .column("log_c2", DataTypes.STRING())
-                                        .build())
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .customProperties(customProperties)
-                        .distributedBy(BUCKET_NUM)
-                        .build();
+        TableDescriptor logNoBucketKeyTable = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("log_c1", DataTypes.INT())
+                        .column("log_c2", DataTypes.STRING())
+                        .build())
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .customProperties(customProperties)
+                .distributedBy(BUCKET_NUM)
+                .build();
         TablePath logNoBucketKeyTablePath = TablePath.of(DATABASE, "log_un_bucket_key_table");
         admin.createTable(logNoBucketKeyTablePath, logNoBucketKeyTable, false).get();
-        paimonLogTable =
-                paimonCatalog.getTable(
-                        Identifier.create(DATABASE, logNoBucketKeyTablePath.getTableName()));
+        paimonLogTable = paimonCatalog.getTable(Identifier.create(DATABASE, logNoBucketKeyTablePath.getTableName()));
         verifyPaimonTable(
                 paimonLogTable,
                 logNoBucketKeyTable,
@@ -190,33 +175,25 @@ class LakeEnabledTableCreateITCase {
                             org.apache.paimon.types.DataTypes.BIGINT(),
                             org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
                         },
-                        new String[] {
-                            "log_c1",
-                            "log_c2",
-                            BUCKET_COLUMN_NAME,
-                            OFFSET_COLUMN_NAME,
-                            TIMESTAMP_COLUMN_NAME
+                        new String[] {"log_c1", "log_c2", BUCKET_COLUMN_NAME, OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME
                         }),
                 null,
                 BUCKET_NUM);
 
         // test pk table
-        TableDescriptor pkTable =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("pk_c1", DataTypes.INT())
-                                        .column("pk_c2", DataTypes.STRING())
-                                        .primaryKey("pk_c1")
-                                        .build())
-                        .distributedBy(BUCKET_NUM)
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .customProperties(customProperties)
-                        .build();
+        TableDescriptor pkTable = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("pk_c1", DataTypes.INT())
+                        .column("pk_c2", DataTypes.STRING())
+                        .primaryKey("pk_c1")
+                        .build())
+                .distributedBy(BUCKET_NUM)
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .customProperties(customProperties)
+                .build();
         TablePath pkTablePath = TablePath.of(DATABASE, "pk_table");
         admin.createTable(pkTablePath, pkTable, false).get();
-        Table paimonPkTable =
-                paimonCatalog.getTable(Identifier.create(DATABASE, pkTablePath.getTableName()));
+        Table paimonPkTable = paimonCatalog.getTable(Identifier.create(DATABASE, pkTablePath.getTableName()));
         verifyPaimonTable(
                 paimonPkTable,
                 pkTable,
@@ -229,36 +206,28 @@ class LakeEnabledTableCreateITCase {
                             org.apache.paimon.types.DataTypes.BIGINT(),
                             org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
                         },
-                        new String[] {
-                            "pk_c1",
-                            "pk_c2",
-                            BUCKET_COLUMN_NAME,
-                            OFFSET_COLUMN_NAME,
-                            TIMESTAMP_COLUMN_NAME
-                        }),
+                        new String[] {"pk_c1", "pk_c2", BUCKET_COLUMN_NAME, OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME}),
                 "pk_c1",
                 BUCKET_NUM);
 
         // test partitioned table
         TablePath partitionedTablePath = TablePath.of(DATABASE, "partitioned_table");
-        TableDescriptor partitionedTableDescriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("c1", DataTypes.INT())
-                                        .column("c2", DataTypes.STRING())
-                                        .column("c3", DataTypes.STRING())
-                                        .primaryKey("c1", "c3")
-                                        .build())
-                        .distributedBy(BUCKET_NUM)
-                        .partitionedBy("c3")
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .customProperties(customProperties)
-                        .build();
-        admin.createTable(partitionedTablePath, partitionedTableDescriptor, false).get();
+        TableDescriptor partitionedTableDescriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("c1", DataTypes.INT())
+                        .column("c2", DataTypes.STRING())
+                        .column("c3", DataTypes.STRING())
+                        .primaryKey("c1", "c3")
+                        .build())
+                .distributedBy(BUCKET_NUM)
+                .partitionedBy("c3")
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .customProperties(customProperties)
+                .build();
+        admin.createTable(partitionedTablePath, partitionedTableDescriptor, false)
+                .get();
         Table paimonPartitionedTable =
-                paimonCatalog.getTable(
-                        Identifier.create(DATABASE, partitionedTablePath.getTableName()));
+                paimonCatalog.getTable(Identifier.create(DATABASE, partitionedTablePath.getTableName()));
         verifyPaimonTable(
                 paimonPartitionedTable,
                 partitionedTableDescriptor,
@@ -272,47 +241,37 @@ class LakeEnabledTableCreateITCase {
                             org.apache.paimon.types.DataTypes.BIGINT(),
                             org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
                         },
-                        new String[] {
-                            "c1",
-                            "c2",
-                            "c3",
-                            BUCKET_COLUMN_NAME,
-                            OFFSET_COLUMN_NAME,
-                            TIMESTAMP_COLUMN_NAME
-                        }),
+                        new String[] {"c1", "c2", "c3", BUCKET_COLUMN_NAME, OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME}),
                 "c1",
                 BUCKET_NUM);
     }
 
     @Test
     void testCreateLakeEnabledTableWithAllTypes() throws Exception {
-        TableDescriptor logTable =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("log_c1", DataTypes.BOOLEAN())
-                                        .column("log_c2", DataTypes.TINYINT())
-                                        .column("log_c3", DataTypes.SMALLINT())
-                                        .column("log_c4", DataTypes.INT())
-                                        .column("log_c5", DataTypes.BIGINT())
-                                        .column("log_c6", DataTypes.FLOAT())
-                                        .column("log_c7", DataTypes.DOUBLE())
-                                        .column("log_c8", DataTypes.DECIMAL(10, 2))
-                                        .column("log_c9", DataTypes.CHAR(10))
-                                        .column("log_c10", DataTypes.STRING())
-                                        .column("log_c11", DataTypes.BYTES())
-                                        .column("log_c12", DataTypes.BINARY(5))
-                                        .column("log_c13", DataTypes.DATE())
-                                        .column("log_c14", DataTypes.TIME())
-                                        .column("log_c15", DataTypes.TIMESTAMP())
-                                        .column("log_c16", DataTypes.TIMESTAMP_LTZ())
-                                        .build())
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .build();
+        TableDescriptor logTable = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("log_c1", DataTypes.BOOLEAN())
+                        .column("log_c2", DataTypes.TINYINT())
+                        .column("log_c3", DataTypes.SMALLINT())
+                        .column("log_c4", DataTypes.INT())
+                        .column("log_c5", DataTypes.BIGINT())
+                        .column("log_c6", DataTypes.FLOAT())
+                        .column("log_c7", DataTypes.DOUBLE())
+                        .column("log_c8", DataTypes.DECIMAL(10, 2))
+                        .column("log_c9", DataTypes.CHAR(10))
+                        .column("log_c10", DataTypes.STRING())
+                        .column("log_c11", DataTypes.BYTES())
+                        .column("log_c12", DataTypes.BINARY(5))
+                        .column("log_c13", DataTypes.DATE())
+                        .column("log_c14", DataTypes.TIME())
+                        .column("log_c15", DataTypes.TIMESTAMP())
+                        .column("log_c16", DataTypes.TIMESTAMP_LTZ())
+                        .build())
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .build();
         TablePath logTablePath = TablePath.of(DATABASE, "log_all_type_table");
         admin.createTable(logTablePath, logTable, false).get();
-        Table paimonLogTable =
-                paimonCatalog.getTable(Identifier.create(DATABASE, logTablePath.getTableName()));
+        Table paimonLogTable = paimonCatalog.getTable(Identifier.create(DATABASE, logTablePath.getTableName()));
         verifyPaimonTable(
                 paimonLogTable,
                 logTable,
@@ -366,25 +325,22 @@ class LakeEnabledTableCreateITCase {
 
     @Test
     void testThrowExceptionWhenConflictWithSystemColumn() {
-        for (String systemColumn :
-                Arrays.asList(BUCKET_COLUMN_NAME, OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME)) {
-            TableDescriptor logTable =
-                    TableDescriptor.builder()
-                            .schema(
-                                    Schema.newBuilder()
-                                            .column("log_c1", DataTypes.INT())
-                                            .column(systemColumn, DataTypes.STRING())
-                                            .build())
-                            .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                            .build();
+        for (String systemColumn : Arrays.asList(BUCKET_COLUMN_NAME, OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME)) {
+            TableDescriptor logTable = TableDescriptor.builder()
+                    .schema(Schema.newBuilder()
+                            .column("log_c1", DataTypes.INT())
+                            .column(systemColumn, DataTypes.STRING())
+                            .build())
+                    .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                    .build();
             TablePath logTablePath = TablePath.of(DATABASE, "log_conflict_table");
-            assertThatThrownBy(() -> admin.createTable(logTablePath, logTable, false).get())
+            assertThatThrownBy(() ->
+                            admin.createTable(logTablePath, logTable, false).get())
                     .cause()
                     .isInstanceOf(InvalidTableException.class)
-                    .hasMessage(
-                            "Column "
-                                    + systemColumn
-                                    + " conflicts with a system column name of paimon table, please rename the column.");
+                    .hasMessage("Column "
+                            + systemColumn
+                            + " conflicts with a system column name of paimon table, please rename the column.");
         }
     }
 
@@ -419,16 +375,15 @@ class LakeEnabledTableCreateITCase {
         Stream.concat(
                         flussTable.getProperties().entrySet().stream(),
                         flussTable.getCustomProperties().entrySet().stream())
-                .forEach(
-                        e -> {
-                            String k = e.getKey();
-                            String v = e.getValue();
-                            if (k.startsWith("paimon.")) {
-                                expectedProperties.put(k.substring("paimon.".length()), v);
-                            } else {
-                                expectedProperties.put("fluss." + k, v);
-                            }
-                        });
+                .forEach(e -> {
+                    String k = e.getKey();
+                    String v = e.getValue();
+                    if (k.startsWith("paimon.")) {
+                        expectedProperties.put(k.substring("paimon.".length()), v);
+                    } else {
+                        expectedProperties.put("fluss." + k, v);
+                    }
+                });
         assertThat(paimonTable.options()).containsAllEntriesOf(expectedProperties);
 
         // now, check schema

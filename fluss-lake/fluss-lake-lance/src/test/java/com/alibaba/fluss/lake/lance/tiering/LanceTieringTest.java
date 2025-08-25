@@ -88,12 +88,8 @@ class LanceTieringTest {
         TablePath tablePath = TablePath.of("lance", "logTable");
         Map<String, String> customProperties = new HashMap<>();
         customProperties.put("lance.batch_size", "256");
-        LanceConfig config =
-                LanceConfig.from(
-                        configuration.toMap(),
-                        customProperties,
-                        tablePath.getDatabaseName(),
-                        tablePath.getTableName());
+        LanceConfig config = LanceConfig.from(
+                configuration.toMap(), customProperties, tablePath.getDatabaseName(), tablePath.getTableName());
         Schema schema = createTable(config);
 
         List<LanceWriteResult> lanceWriteResults = new ArrayList<>();
@@ -102,23 +98,21 @@ class LanceTieringTest {
         SimpleVersionedSerializer<LanceCommittable> committableSerializer =
                 lanceLakeTieringFactory.getCommittableSerializer();
 
-        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
-                createLakeCommitter(tablePath)) {
+        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter = createLakeCommitter(tablePath)) {
             // should no any missing snapshot
             assertThat(lakeCommitter.getMissingLakeSnapshot(2L)).isNull();
         }
 
         Map<Tuple2<String, Integer>, List<LogRecord>> recordsByBucket = new HashMap<>();
-        Map<Long, String> partitionIdAndName =
-                isPartitioned
-                        ? new HashMap<Long, String>() {
-                            {
-                                put(1L, "p1");
-                                put(2L, "p2");
-                                put(3L, "p3");
-                            }
-                        }
-                        : Collections.singletonMap(null, null);
+        Map<Long, String> partitionIdAndName = isPartitioned
+                ? new HashMap<Long, String>() {
+                    {
+                        put(1L, "p1");
+                        put(2L, "p2");
+                        put(3L, "p3");
+                    }
+                }
+                : Collections.singletonMap(null, null);
         List<String> partitionKeys = isPartitioned ? Arrays.asList("c3") : null;
         Map<TableBucket, Long> tableBucketOffsets = new HashMap<>();
         // first, write data
@@ -141,35 +135,25 @@ class LanceTieringTest {
                     LanceWriteResult lanceWriteResult = lakeWriter.complete();
                     byte[] serialized = writeResultSerializer.serialize(lanceWriteResult);
                     lanceWriteResults.add(
-                            writeResultSerializer.deserialize(
-                                    writeResultSerializer.getVersion(), serialized));
+                            writeResultSerializer.deserialize(writeResultSerializer.getVersion(), serialized));
                 }
             }
         }
 
         // second, commit data
-        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
-                createLakeCommitter(tablePath)) {
+        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter = createLakeCommitter(tablePath)) {
             // serialize/deserialize committable
             LanceCommittable lanceCommittable = lakeCommitter.toCommittable(lanceWriteResults);
             byte[] serialized = committableSerializer.serialize(lanceCommittable);
-            lanceCommittable =
-                    committableSerializer.deserialize(
-                            committableSerializer.getVersion(), serialized);
-            long snapshot =
-                    lakeCommitter.commit(
-                            lanceCommittable,
-                            toBucketOffsetsProperty(
-                                    tableBucketOffsets, partitionIdAndName, partitionKeys));
+            lanceCommittable = committableSerializer.deserialize(committableSerializer.getVersion(), serialized);
+            long snapshot = lakeCommitter.commit(
+                    lanceCommittable, toBucketOffsetsProperty(tableBucketOffsets, partitionIdAndName, partitionKeys));
             // lance dataset version starts from 1
             assertThat(snapshot).isEqualTo(2);
         }
 
-        try (Dataset dataset =
-                Dataset.open(
-                        new RootAllocator(),
-                        config.getDatasetUri(),
-                        LanceConfig.genReadOptionFromConfig(config))) {
+        try (Dataset dataset = Dataset.open(
+                new RootAllocator(), config.getDatasetUri(), LanceConfig.genReadOptionFromConfig(config))) {
             ArrowReader reader = dataset.newScan().scanBatches();
             VectorSchemaRoot readerRoot = reader.getVectorSchemaRoot();
 
@@ -179,16 +163,14 @@ class LanceTieringTest {
                     reader.loadNextBatch();
                     Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
                     List<LogRecord> expectRecords = recordsByBucket.get(partitionBucket);
-                    verifyLogTableRecords(
-                            readerRoot, expectRecords, bucket, isPartitioned, partition);
+                    verifyLogTableRecords(readerRoot, expectRecords, bucket, isPartitioned, partition);
                 }
             }
             assertThat(reader.loadNextBatch()).isFalse();
         }
 
         // then, let's verify getMissingLakeSnapshot works
-        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter =
-                createLakeCommitter(tablePath)) {
+        try (LakeCommitter<LanceWriteResult, LanceCommittable> lakeCommitter = createLakeCommitter(tablePath)) {
             // use snapshot id 1 as the known snapshot id
             CommittedLakeSnapshot committedLakeSnapshot = lakeCommitter.getMissingLakeSnapshot(1L);
             assertThat(committedLakeSnapshot).isNotNull();
@@ -202,8 +184,7 @@ class LanceTieringTest {
             assertThat(committedLakeSnapshot.getLakeSnapshotId()).isEqualTo(2L);
 
             // use null as the known snapshot id
-            CommittedLakeSnapshot committedLakeSnapshot2 =
-                    lakeCommitter.getMissingLakeSnapshot(null);
+            CommittedLakeSnapshot committedLakeSnapshot2 = lakeCommitter.getMissingLakeSnapshot(null);
             assertThat(committedLakeSnapshot2).isEqualTo(committedLakeSnapshot);
 
             // use snapshot id 2 as the known snapshot id
@@ -233,8 +214,8 @@ class LanceTieringTest {
         }
     }
 
-    private LakeCommitter<LanceWriteResult, LanceCommittable> createLakeCommitter(
-            TablePath tablePath) throws IOException {
+    private LakeCommitter<LanceWriteResult, LanceCommittable> createLakeCommitter(TablePath tablePath)
+            throws IOException {
         return lanceLakeTieringFactory.createLakeCommitter(() -> tablePath);
     }
 
@@ -245,35 +226,34 @@ class LanceTieringTest {
             Schema schema,
             Map<String, String> customProperties)
             throws IOException {
-        return lanceLakeTieringFactory.createLakeWriter(
-                new WriterInitContext() {
-                    @Override
-                    public TablePath tablePath() {
-                        return tablePath;
-                    }
+        return lanceLakeTieringFactory.createLakeWriter(new WriterInitContext() {
+            @Override
+            public TablePath tablePath() {
+                return tablePath;
+            }
 
-                    @Override
-                    public TableBucket tableBucket() {
-                        // don't care about tableId & partitionId
-                        return new TableBucket(0, 0L, bucket);
-                    }
+            @Override
+            public TableBucket tableBucket() {
+                // don't care about tableId & partitionId
+                return new TableBucket(0, 0L, bucket);
+            }
 
-                    @Nullable
-                    @Override
-                    public String partition() {
-                        return partition;
-                    }
+            @Nullable
+            @Override
+            public String partition() {
+                return partition;
+            }
 
-                    @Override
-                    public org.apache.fluss.metadata.Schema schema() {
-                        return schema;
-                    }
+            @Override
+            public org.apache.fluss.metadata.Schema schema() {
+                return schema;
+            }
 
-                    @Override
-                    public Map<String, String> customProperties() {
-                        return customProperties;
-                    }
-                });
+            @Override
+            public Map<String, String> customProperties() {
+                return customProperties;
+            }
+        });
     }
 
     private Tuple2<List<LogRecord>, List<LogRecord>> genLogTableRecords(
@@ -294,9 +274,7 @@ class LanceTieringTest {
                 genericRow.setField(1, BinaryString.fromString("bucket" + bucket + "_" + i));
                 genericRow.setField(2, BinaryString.fromString("bucket" + bucket));
             }
-            LogRecord logRecord =
-                    new GenericRecord(
-                            i, System.currentTimeMillis(), ChangeType.APPEND_ONLY, genericRow);
+            LogRecord logRecord = new GenericRecord(i, System.currentTimeMillis(), ChangeType.APPEND_ONLY, genericRow);
             logRecords.add(logRecord);
         }
         return Tuple2.of(logRecords, logRecords);

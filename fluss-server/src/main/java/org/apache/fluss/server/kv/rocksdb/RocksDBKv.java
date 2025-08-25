@@ -160,9 +160,7 @@ public class RocksDBKv implements AutoCloseable {
     public void checkIfRocksDBClosed() {
         if (this.closed) {
             throw new FlussRuntimeException(
-                    "The RocksDb for kv in "
-                            + optionsContainer.getInstanceRocksDBPath()
-                            + " is already closed");
+                    "The RocksDb for kv in " + optionsContainer.getInstanceRocksDBPath() + " is already closed");
         }
     }
 
@@ -189,8 +187,7 @@ public class RocksDBKv implements AutoCloseable {
             // https://github.com/facebook/rocksdb/wiki/RocksJava-Basics#opening-a-database-with-column-families
             // Start with default CF ...
             List<ColumnFamilyOptions> columnFamilyOptions = new ArrayList<>();
-            RocksDBOperationUtils.addColumnFamilyOptionsToCloseLater(
-                    columnFamilyOptions, defaultColumnFamilyHandle);
+            RocksDBOperationUtils.addColumnFamilyOptionsToCloseLater(columnFamilyOptions, defaultColumnFamilyHandle);
             IOUtils.closeQuietly(defaultColumnFamilyHandle);
 
             // ... and finally close the DB instance ...

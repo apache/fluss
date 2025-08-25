@@ -166,8 +166,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 // TODO: we should also authorize for follower, otherwise, users can mock follower
                 //  to skip the authorization.
                 authorizer != null && request.getFollowerServerId() < 0
-                        ? authorizeRequestData(
-                                READ, fetchLogData, errorResponseMap, FetchLogResultForBucket::new)
+                        ? authorizeRequestData(READ, fetchLogData, errorResponseMap, FetchLogResultForBucket::new)
                         : fetchLogData;
         if (interesting.isEmpty()) {
             return CompletableFuture.completedFuture(makeFetchLogResponse(errorResponseMap));
@@ -178,23 +177,18 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         replicaManager.fetchLogRecords(
                 fetchParams,
                 interesting,
-                fetchResponseMap ->
-                        response.complete(
-                                makeFetchLogResponse(fetchResponseMap, errorResponseMap)));
+                fetchResponseMap -> response.complete(makeFetchLogResponse(fetchResponseMap, errorResponseMap)));
         return response;
     }
 
     private static FetchParams getFetchParams(FetchLogRequest request) {
         FetchParams fetchParams;
         if (request.hasMinBytes()) {
-            fetchParams =
-                    new FetchParams(
-                            request.getFollowerServerId(),
-                            request.getMaxBytes(),
-                            request.getMinBytes(),
-                            request.hasMaxWaitMs()
-                                    ? request.getMaxWaitMs()
-                                    : DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE);
+            fetchParams = new FetchParams(
+                    request.getFollowerServerId(),
+                    request.getMaxBytes(),
+                    request.getMinBytes(),
+                    request.hasMaxWaitMs() ? request.getMaxWaitMs() : DEFAULT_MAX_WAIT_MS_WHEN_MIN_BYTES_ENABLE);
         } else {
             fetchParams = new FetchParams(request.getFollowerServerId(), request.getMaxBytes());
         }
@@ -221,16 +215,13 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         Map<TableBucket, List<byte[]>> lookupData = toLookupData(request);
         Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
         Map<TableBucket, List<byte[]>> interesting =
-                authorizeRequestData(
-                        READ, lookupData, errorResponseMap, LookupResultForBucket::new);
+                authorizeRequestData(READ, lookupData, errorResponseMap, LookupResultForBucket::new);
         if (interesting.isEmpty()) {
             return CompletableFuture.completedFuture(makeLookupResponse(errorResponseMap));
         }
 
         CompletableFuture<LookupResponse> response = new CompletableFuture<>();
-        replicaManager.lookups(
-                lookupData,
-                value -> response.complete(makeLookupResponse(value, errorResponseMap)));
+        replicaManager.lookups(lookupData, value -> response.complete(makeLookupResponse(value, errorResponseMap)));
         return response;
     }
 
@@ -239,16 +230,14 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         Map<TableBucket, List<byte[]>> prefixLookupData = toPrefixLookupData(request);
         Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap = new HashMap<>();
         Map<TableBucket, List<byte[]>> interesting =
-                authorizeRequestData(
-                        READ, prefixLookupData, errorResponseMap, PrefixLookupResultForBucket::new);
+                authorizeRequestData(READ, prefixLookupData, errorResponseMap, PrefixLookupResultForBucket::new);
         if (interesting.isEmpty()) {
             return CompletableFuture.completedFuture(makePrefixLookupResponse(errorResponseMap));
         }
 
         CompletableFuture<PrefixLookupResponse> response = new CompletableFuture<>();
         replicaManager.prefixLookups(
-                prefixLookupData,
-                value -> response.complete(makePrefixLookupResponse(value, errorResponseMap)));
+                prefixLookupData, value -> response.complete(makePrefixLookupResponse(value, errorResponseMap)));
         return response;
     }
 
@@ -282,32 +271,27 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
-        return CompletableFuture.completedFuture(
-                makeMetadataResponse(
-                        request,
-                        currentListenerName(),
-                        currentSession(),
-                        authorizer,
-                        metadataCache,
-                        metadataCache::getTableMetadata,
-                        metadataCache::getPhysicalTablePath,
-                        metadataCache::getPartitionMetadata));
+        return CompletableFuture.completedFuture(makeMetadataResponse(
+                request,
+                currentListenerName(),
+                currentSession(),
+                authorizer,
+                metadataCache,
+                metadataCache::getTableMetadata,
+                metadataCache::getPhysicalTablePath,
+                metadataCache::getPartitionMetadata));
     }
 
     @Override
     public CompletableFuture<UpdateMetadataResponse> updateMetadata(UpdateMetadataRequest request) {
         int coordinatorEpoch =
-                request.hasCoordinatorEpoch()
-                        ? request.getCoordinatorEpoch()
-                        : INITIAL_COORDINATOR_EPOCH;
-        replicaManager.maybeUpdateMetadataCache(
-                coordinatorEpoch, getUpdateMetadataRequestData(request));
+                request.hasCoordinatorEpoch() ? request.getCoordinatorEpoch() : INITIAL_COORDINATOR_EPOCH;
+        replicaManager.maybeUpdateMetadataCache(coordinatorEpoch, getUpdateMetadataRequestData(request));
         return CompletableFuture.completedFuture(new UpdateMetadataResponse());
     }
 
     @Override
-    public CompletableFuture<StopReplicaResponse> stopReplica(
-            StopReplicaRequest stopReplicaRequest) {
+    public CompletableFuture<StopReplicaResponse> stopReplica(StopReplicaRequest stopReplicaRequest) {
         CompletableFuture<StopReplicaResponse> response = new CompletableFuture<>();
         replicaManager.stopReplicas(
                 stopReplicaRequest.getCoordinatorEpoch(),
@@ -333,10 +317,9 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<InitWriterResponse> initWriter(InitWriterRequest request) {
-        List<TablePath> tablePathsList =
-                request.getTablePathsList().stream()
-                        .map(ServerRpcMessageUtils::toTablePath)
-                        .collect(Collectors.toList());
+        List<TablePath> tablePathsList = request.getTablePathsList().stream()
+                .map(ServerRpcMessageUtils::toTablePath)
+                .collect(Collectors.toList());
         authorizeAnyTable(WRITE, tablePathsList);
         CompletableFuture<InitWriterResponse> response = new CompletableFuture<>();
         response.complete(makeInitWriterResponse(metadataManager.initWriterId()));
@@ -347,8 +330,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     public CompletableFuture<NotifyRemoteLogOffsetsResponse> notifyRemoteLogOffsets(
             NotifyRemoteLogOffsetsRequest request) {
         CompletableFuture<NotifyRemoteLogOffsetsResponse> response = new CompletableFuture<>();
-        replicaManager.notifyRemoteLogOffsets(
-                getNotifyRemoteLogOffsetsData(request), response::complete);
+        replicaManager.notifyRemoteLogOffsets(getNotifyRemoteLogOffsetsData(request), response::complete);
         return response;
     }
 
@@ -356,8 +338,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     public CompletableFuture<NotifyKvSnapshotOffsetResponse> notifyKvSnapshotOffset(
             NotifyKvSnapshotOffsetRequest request) {
         CompletableFuture<NotifyKvSnapshotOffsetResponse> response = new CompletableFuture<>();
-        replicaManager.notifyKvSnapshotOffset(
-                getNotifySnapshotOffsetData(request), response::complete);
+        replicaManager.notifyKvSnapshotOffset(getNotifySnapshotOffsetData(request), response::complete);
         return response;
     }
 
@@ -373,20 +354,15 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         if (authorizer != null) {
             TablePath tablePath = metadataCache.getTablePath(tableId).orElse(null);
             if (tablePath == null) {
-                throw new UnknownTableOrBucketException(
-                        String.format(
-                                "This server %s does not know this table ID %s. This may happen when the table "
-                                        + "metadata cache in the server is not updated yet.",
-                                serviceName, tableId));
+                throw new UnknownTableOrBucketException(String.format(
+                        "This server %s does not know this table ID %s. This may happen when the table "
+                                + "metadata cache in the server is not updated yet.",
+                        serviceName, tableId));
             }
-            if (!authorizer.isAuthorized(
-                    currentSession(), operationType, Resource.table(tablePath))) {
-                throw new AuthorizationException(
-                        String.format(
-                                "No permission to %s table %s in database %s",
-                                operationType,
-                                tablePath.getTableName(),
-                                tablePath.getDatabaseName()));
+            if (!authorizer.isAuthorized(currentSession(), operationType, Resource.table(tablePath))) {
+                throw new AuthorizationException(String.format(
+                        "No permission to %s table %s in database %s",
+                        operationType, tablePath.getTableName(), tablePath.getDatabaseName()));
             }
         }
     }
@@ -406,9 +382,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                 }
             }
             throw new AuthorizationException(
-                    String.format(
-                            "No %s permission among all the tables: %s",
-                            operationType, tablePaths));
+                    String.format("No %s permission among all the tables: %s", operationType, tablePaths));
         }
     }
 
@@ -428,56 +402,51 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
         Map<TableBucket, T> interesting = new HashMap<>();
         Set<Long> filteredTableIds = filterAuthorizedTables(requestData.keySet(), operationType);
-        requestData.forEach(
-                (tableBucket, bucketData) -> {
-                    long tableId = tableBucket.getTableId();
-                    Optional<TablePath> tablePathOpt = metadataCache.getTablePath(tableId);
-                    if (!tablePathOpt.isPresent()) {
-                        errorResponseMap.put(
+        requestData.forEach((tableBucket, bucketData) -> {
+            long tableId = tableBucket.getTableId();
+            Optional<TablePath> tablePathOpt = metadataCache.getTablePath(tableId);
+            if (!tablePathOpt.isPresent()) {
+                errorResponseMap.put(
+                        tableBucket,
+                        resultCreator.apply(
                                 tableBucket,
-                                resultCreator.apply(
-                                        tableBucket,
-                                        new ApiError(
-                                                Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION,
-                                                String.format(
-                                                        "This server %s does not know this table ID %s. "
-                                                                + "This may happen when the table metadata cache in the server is not updated yet.",
-                                                        serviceName, tableId))));
-                    } else if (!filteredTableIds.contains(tableId)) {
-                        TablePath tablePath = tablePathOpt.get();
-                        errorResponseMap.put(
+                                new ApiError(
+                                        Errors.UNKNOWN_TABLE_OR_BUCKET_EXCEPTION,
+                                        String.format(
+                                                "This server %s does not know this table ID %s. "
+                                                        + "This may happen when the table metadata cache in the server is not updated yet.",
+                                                serviceName, tableId))));
+            } else if (!filteredTableIds.contains(tableId)) {
+                TablePath tablePath = tablePathOpt.get();
+                errorResponseMap.put(
+                        tableBucket,
+                        resultCreator.apply(
                                 tableBucket,
-                                resultCreator.apply(
-                                        tableBucket,
-                                        new ApiError(
-                                                Errors.AUTHORIZATION_EXCEPTION,
-                                                String.format(
-                                                        "No permission to %s table %s in database %s",
-                                                        operationType,
-                                                        tablePath.getTableName(),
-                                                        tablePath.getDatabaseName()))));
-                    } else {
-                        interesting.put(tableBucket, bucketData);
-                    }
-                });
+                                new ApiError(
+                                        Errors.AUTHORIZATION_EXCEPTION,
+                                        String.format(
+                                                "No permission to %s table %s in database %s",
+                                                operationType,
+                                                tablePath.getTableName(),
+                                                tablePath.getDatabaseName()))));
+            } else {
+                interesting.put(tableBucket, bucketData);
+            }
+        });
         return interesting;
     }
 
-    private Set<Long> filterAuthorizedTables(
-            Collection<TableBucket> tableBuckets, OperationType operationType) {
+    private Set<Long> filterAuthorizedTables(Collection<TableBucket> tableBuckets, OperationType operationType) {
         return tableBuckets.stream()
                 .map(TableBucket::getTableId)
                 .distinct()
-                .filter(
-                        tableId -> {
-                            Optional<TablePath> tablePathOpt = metadataCache.getTablePath(tableId);
-                            return tablePathOpt.isPresent()
-                                    && authorizer != null
-                                    && authorizer.isAuthorized(
-                                            currentSession(),
-                                            operationType,
-                                            Resource.table(tablePathOpt.get()));
-                        })
+                .filter(tableId -> {
+                    Optional<TablePath> tablePathOpt = metadataCache.getTablePath(tableId);
+                    return tablePathOpt.isPresent()
+                            && authorizer != null
+                            && authorizer.isAuthorized(
+                                    currentSession(), operationType, Resource.table(tablePathOpt.get()));
+                })
                 .collect(Collectors.toSet());
     }
 }

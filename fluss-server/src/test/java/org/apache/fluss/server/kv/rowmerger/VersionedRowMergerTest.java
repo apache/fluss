@@ -47,16 +47,11 @@ class VersionedRowMergerTest {
         return Stream.of(
                 Arguments.of(
                         DataTypes.INT(),
-                        Arrays.asList(
-                                TestSpec.of(1, 2, "new"),
-                                TestSpec.of(2, 1, "old"),
-                                TestSpec.of(1, 1, "new"))),
+                        Arrays.asList(TestSpec.of(1, 2, "new"), TestSpec.of(2, 1, "old"), TestSpec.of(1, 1, "new"))),
                 Arguments.of(
                         DataTypes.BIGINT(),
                         Arrays.asList(
-                                TestSpec.of(1L, 2L, "new"),
-                                TestSpec.of(2L, 1L, "old"),
-                                TestSpec.of(1L, 1L, "new"))),
+                                TestSpec.of(1L, 2L, "new"), TestSpec.of(2L, 1L, "old"), TestSpec.of(1L, 1L, "new"))),
                 Arguments.of(
                         DataTypes.TIMESTAMP(),
                         Arrays.asList(
@@ -122,12 +117,11 @@ class VersionedRowMergerTest {
     @ParameterizedTest
     @MethodSource("parameters")
     void testAllTypes(DataType type, List<TestSpec> testSpecs) {
-        RowType schema =
-                Schema.newBuilder()
-                        .column("a", type)
-                        .column("b", DataTypes.STRING())
-                        .build()
-                        .getRowType();
+        RowType schema = Schema.newBuilder()
+                .column("a", type)
+                .column("b", DataTypes.STRING())
+                .build()
+                .getRowType();
         VersionedRowMerger merger = new VersionedRowMerger(schema, "a");
 
         for (TestSpec testSpec : testSpecs) {
@@ -146,12 +140,11 @@ class VersionedRowMergerTest {
 
     @Test
     void testNormal() {
-        RowType schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .build()
-                        .getRowType();
+        RowType schema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.STRING())
+                .build()
+                .getRowType();
         VersionedRowMerger merger = new VersionedRowMerger(schema, "a");
 
         assertThat(merger.supportsDelete()).isFalse();

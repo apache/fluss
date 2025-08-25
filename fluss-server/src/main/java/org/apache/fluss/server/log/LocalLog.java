@@ -108,7 +108,8 @@ public final class LocalLog {
         flushCount = new SimpleCounter();
         // consider won't flush frequently, we set a small window size
         flushLatencyHistogram = new DescriptiveStatisticsHistogram(5);
-        localLogStartOffset = segments.isEmpty() ? 0L : segments.firstSegmentBaseOffset().get();
+        localLogStartOffset =
+                segments.isEmpty() ? 0L : segments.firstSegmentBaseOffset().get();
         localMaxTimestamp =
                 segments.isEmpty() ? 0L : segments.lastSegment().get().maxTimestampSoFar();
     }
@@ -215,8 +216,7 @@ public final class LocalLog {
 
             // If there are any new segments, we need to flush the parent directory for crash
             // consistency.
-            if (segmentsToFlush.stream()
-                    .anyMatch(logSegment -> logSegment.getBaseOffset() >= currentRecoverPoint)) {
+            if (segmentsToFlush.stream().anyMatch(logSegment -> logSegment.getBaseOffset() >= currentRecoverPoint)) {
                 flushDirIfExists(logTabletDir.toPath());
             }
         }
@@ -228,11 +228,10 @@ public final class LocalLog {
      * @param logEndOffset the new end offset of the log
      */
     private void updateLogEndOffset(long logEndOffset) {
-        nextOffsetMetadata =
-                new LogOffsetMetadata(
-                        logEndOffset,
-                        segments.activeSegment().getBaseOffset(),
-                        segments.activeSegment().getSizeInBytes());
+        nextOffsetMetadata = new LogOffsetMetadata(
+                logEndOffset,
+                segments.activeSegment().getBaseOffset(),
+                segments.activeSegment().getSizeInBytes());
         if (recoveryPoint > logEndOffset) {
             updateRecoveryPoint(logEndOffset);
         }
@@ -257,15 +256,11 @@ public final class LocalLog {
     void deleteEmptyDir() throws IOException {
         if (!segments.isEmpty()) {
             throw new IllegalStateException(
-                    "Cannot delete directory when "
-                            + segments.numberOfSegments()
-                            + " segments are still present");
+                    "Cannot delete directory when " + segments.numberOfSegments() + " segments are still present");
         }
         if (!isMemoryMappedBufferClosed) {
             throw new IllegalStateException(
-                    "Cannot delete directory when memory mapped buffer for log of "
-                            + tableBucket
-                            + " is still open.");
+                    "Cannot delete directory when memory mapped buffer for log of " + tableBucket + " is still open.");
         }
 
         FileUtils.deleteDirectory(logTabletDir);
@@ -294,8 +289,7 @@ public final class LocalLog {
      * @param segmentsToDelete The log segments to schedule for deletion
      * @param reason The reason for the segment deletion
      */
-    void removeAndDeleteSegments(List<LogSegment> segmentsToDelete, SegmentDeletionReason reason)
-            throws IOException {
+    void removeAndDeleteSegments(List<LogSegment> segmentsToDelete, SegmentDeletionReason reason) throws IOException {
         if (!segmentsToDelete.isEmpty()) {
             // Most callers hold an iterator into the `segments` collection and
             // `removeAndDeleteSegment` mutates it by removing the deleted segment, we should force
@@ -307,7 +301,8 @@ public final class LocalLog {
                 segments.remove(segment.getBaseOffset());
             }
             deleteSegmentFiles(toDelete, reason);
-            localLogStartOffset = segments.isEmpty() ? 0L : segments.firstSegmentBaseOffset().get();
+            localLogStartOffset =
+                    segments.isEmpty() ? 0L : segments.firstSegmentBaseOffset().get();
         }
     }
 
@@ -322,8 +317,7 @@ public final class LocalLog {
      * @param segmentToDelete The old active segment to schedule for deletion
      * @param reason The reason for the segment deletion
      */
-    LogSegment createAndDeleteSegment(
-            long newOffset, LogSegment segmentToDelete, SegmentDeletionReason reason)
+    LogSegment createAndDeleteSegment(long newOffset, LogSegment segmentToDelete, SegmentDeletionReason reason)
             throws IOException {
         // delete the old segment.
         if (newOffset == segmentToDelete.getBaseOffset()) {
@@ -383,16 +377,15 @@ public final class LocalLog {
         Optional<LogSegment> segmentOpt = segments.floorSegment(readOffset);
         // return error on attempt to read beyond the log start and end offset
         if (readOffset < startOffset || readOffset > endOffset || !segmentOpt.isPresent()) {
-            throw new LogOffsetOutOfRangeException(
-                    "Received request for offset "
-                            + readOffset
-                            + " for table bucket "
-                            + tableBucket
-                            + ", but we only have log segments from offset "
-                            + startOffset
-                            + " up to "
-                            + endOffset
-                            + ".");
+            throw new LogOffsetOutOfRangeException("Received request for offset "
+                    + readOffset
+                    + " for table bucket "
+                    + tableBucket
+                    + ", but we only have log segments from offset "
+                    + startOffset
+                    + " up to "
+                    + endOffset
+                    + ".");
         }
         if (readOffset == maxOffsetMetadata.getMessageOffset()) {
             return emptyFetchDataInfo(maxOffsetMetadata);
@@ -413,8 +406,7 @@ public final class LocalLog {
                         (maxOffsetMetadata.getSegmentBaseOffset() == segment.getBaseOffset())
                                 ? maxOffsetMetadata.getRelativePositionInSegment()
                                 : segment.getSizeInBytes();
-                fetchDataInfo =
-                        segment.read(readOffset, maxLength, maxPosition, minOneMessage, projection);
+                fetchDataInfo = segment.read(readOffset, maxLength, maxPosition, minOneMessage, projection);
                 if (fetchDataInfo == null) {
                     segmentOpt = segments.higherSegment(baseOffset);
                 }
@@ -431,14 +423,9 @@ public final class LocalLog {
         }
     }
 
-    void append(
-            long lastOffset,
-            long maxTimestamp,
-            long startOffsetOfMaxTimestamp,
-            MemoryLogRecords records)
+    void append(long lastOffset, long maxTimestamp, long startOffsetOfMaxTimestamp, MemoryLogRecords records)
             throws IOException {
-        segments.activeSegment()
-                .append(lastOffset, maxTimestamp, startOffsetOfMaxTimestamp, records);
+        segments.activeSegment().append(lastOffset, maxTimestamp, startOffsetOfMaxTimestamp, records);
         if (maxTimestamp > localMaxTimestamp) {
             localMaxTimestamp = maxTimestamp;
         }
@@ -449,10 +436,7 @@ public final class LocalLog {
         for (LogSegment segment : segments.values()) {
             if (segment.maxTimestampSoFar() >= startTimestamp) {
                 return segment.findOffsetByTimestamp(startTimestamp, 0)
-                        .orElseThrow(
-                                () ->
-                                        new IllegalStateException(
-                                                "No offset found for timestamp " + startTimestamp))
+                        .orElseThrow(() -> new IllegalStateException("No offset found for timestamp " + startTimestamp))
                         .getOffset();
             }
         }
@@ -479,59 +463,54 @@ public final class LocalLog {
                 // We have seen this happen (see KAFKA-6388) after shouldRoll() returns
                 // true for an active segment of size zero because one of the indexes is
                 // "full" (due to _maxEntries == 0).
-                LOG.warn(
-                        "Trying to roll a new log segment with start offset "
-                                + newOffset
-                                + " =max(provided offset = "
-                                + expectedNextOffset
-                                + ", LEO = "
-                                + getLocalLogEndOffset()
-                                + ") while it already exists and is active with size 0."
-                                + ", size of offset index: "
-                                + activeSegment.offsetIndex().entries()
-                                + ".");
+                LOG.warn("Trying to roll a new log segment with start offset "
+                        + newOffset
+                        + " =max(provided offset = "
+                        + expectedNextOffset
+                        + ", LEO = "
+                        + getLocalLogEndOffset()
+                        + ") while it already exists and is active with size 0."
+                        + ", size of offset index: "
+                        + activeSegment.offsetIndex().entries()
+                        + ".");
                 LogSegment newSegment =
-                        createAndDeleteSegment(
-                                newOffset, activeSegment, SegmentDeletionReason.LOG_ROLL);
+                        createAndDeleteSegment(newOffset, activeSegment, SegmentDeletionReason.LOG_ROLL);
                 updateLogEndOffset(getLocalLogEndOffset());
                 LOG.info("Rolled new log segment at offset " + newOffset);
                 return newSegment;
             } else {
-                throw new FlussRuntimeException(
-                        "Trying to roll a new log segment for table bucket "
-                                + tableBucket
-                                + " with start offset "
-                                + newOffset
-                                + " =max(provided offset = "
-                                + expectedNextOffset
-                                + ", LEO = "
-                                + getLocalLogEndOffset()
-                                + ") while it already exists. Existing segment is "
-                                + segments.get(newOffset)
-                                + ".");
+                throw new FlussRuntimeException("Trying to roll a new log segment for table bucket "
+                        + tableBucket
+                        + " with start offset "
+                        + newOffset
+                        + " =max(provided offset = "
+                        + expectedNextOffset
+                        + ", LEO = "
+                        + getLocalLogEndOffset()
+                        + ") while it already exists. Existing segment is "
+                        + segments.get(newOffset)
+                        + ".");
             }
         } else if (!segments.isEmpty() && newOffset < activeSegment.getBaseOffset()) {
-            throw new FlussRuntimeException(
-                    "Trying to roll a new log segment for table bucket "
-                            + tableBucket
-                            + " with start offset "
-                            + newOffset
-                            + " =max(provided offset = "
-                            + expectedNextOffset
-                            + ", LEO = "
-                            + getLocalLogEndOffset()
-                            + ") lower than start offset of the active segment "
-                            + activeSegment
-                            + ".");
+            throw new FlussRuntimeException("Trying to roll a new log segment for table bucket "
+                    + tableBucket
+                    + " with start offset "
+                    + newOffset
+                    + " =max(provided offset = "
+                    + expectedNextOffset
+                    + ", LEO = "
+                    + getLocalLogEndOffset()
+                    + ") lower than start offset of the active segment "
+                    + activeSegment
+                    + ".");
         } else {
             File offsetIdxFile = FlussPaths.offsetIndexFile(logTabletDir, newOffset);
             File timeIndexFile = FlussPaths.timeIndexFile(logTabletDir, newOffset);
             for (File file : Arrays.asList(logFile, offsetIdxFile, timeIndexFile)) {
                 if (file.exists()) {
-                    LOG.warn(
-                            "Newly rolled segment file "
-                                    + file.getAbsolutePath()
-                                    + " already exists; deleting it first");
+                    LOG.warn("Newly rolled segment file "
+                            + file.getAbsolutePath()
+                            + " already exists; deleting it first");
                     Files.delete(file.toPath());
                 }
             }
@@ -562,14 +541,11 @@ public final class LocalLog {
         List<LogSegment> segmentsToDelete = segments.values();
         if (!segmentsToDelete.isEmpty()) {
             removeAndDeleteSegments(
-                    segmentsToDelete.subList(0, segmentsToDelete.size() - 1),
-                    SegmentDeletionReason.LOG_TRUNCATION);
+                    segmentsToDelete.subList(0, segmentsToDelete.size() - 1), SegmentDeletionReason.LOG_TRUNCATION);
             // Use createAndDeleteSegment() to create new segment first and then delete the old last
             // segment to prevent missing active segment during the deletion process
             createAndDeleteSegment(
-                    newOffset,
-                    segmentsToDelete.get(segmentsToDelete.size() - 1),
-                    SegmentDeletionReason.LOG_TRUNCATION);
+                    newOffset, segmentsToDelete.get(segmentsToDelete.size() - 1), SegmentDeletionReason.LOG_TRUNCATION);
         }
         localLogStartOffset = newOffset;
         updateLogEndOffset(newOffset);
@@ -584,10 +560,9 @@ public final class LocalLog {
      * @return the list of segments that were scheduled for deletion
      */
     List<LogSegment> truncateTo(long targetOffset) throws IOException {
-        List<LogSegment> deletableSegments =
-                segments.values().stream()
-                        .filter(segment -> segment.getBaseOffset() > targetOffset)
-                        .collect(Collectors.toList());
+        List<LogSegment> deletableSegments = segments.values().stream()
+                .filter(segment -> segment.getBaseOffset() > targetOffset)
+                .collect(Collectors.toList());
         removeAndDeleteSegments(deletableSegments, SegmentDeletionReason.LOG_TRUNCATION);
         segments.activeSegment().truncateTo(targetOffset);
         updateLogEndOffset(targetOffset);
@@ -604,16 +579,14 @@ public final class LocalLog {
 
     static boolean isIndexFile(File file) {
         String fileName = file.getName();
-        return fileName.endsWith(FlussPaths.INDEX_FILE_SUFFIX)
-                || fileName.endsWith(FlussPaths.TIME_INDEX_FILE_SUFFIX);
+        return fileName.endsWith(FlussPaths.INDEX_FILE_SUFFIX) || fileName.endsWith(FlussPaths.TIME_INDEX_FILE_SUFFIX);
     }
 
     private static FetchDataInfo emptyFetchDataInfo(LogOffsetMetadata fetchOffsetMetadata) {
         return new FetchDataInfo(fetchOffsetMetadata, MemoryLogRecords.EMPTY);
     }
 
-    static void deleteSegmentFiles(List<LogSegment> segmentsToDelete, SegmentDeletionReason reason)
-            throws IOException {
+    static void deleteSegmentFiles(List<LogSegment> segmentsToDelete, SegmentDeletionReason reason) throws IOException {
         reason.logReason(segmentsToDelete);
         for (LogSegment segment : segmentsToDelete) {
             segment.deleteIfExists();

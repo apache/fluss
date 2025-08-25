@@ -34,8 +34,7 @@ public class TabletServerRegistration {
     private final List<Endpoint> endpoints;
     private final long registerTimestamp;
 
-    public TabletServerRegistration(
-            @Nullable String rack, List<Endpoint> endpoints, long registerTimestamp) {
+    public TabletServerRegistration(@Nullable String rack, List<Endpoint> endpoints, long registerTimestamp) {
         this.rack = rack;
         this.endpoints = endpoints;
         this.registerTimestamp = registerTimestamp;

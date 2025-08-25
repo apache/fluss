@@ -89,12 +89,11 @@ public class LogScannerStatus {
         // Since this is in the hot-path for fetching, we do this instead of using java.util.stream
         // API
         List<TableBucket> result = new ArrayList<>();
-        bucketStatusMap.forEach(
-                ((tableBucket, bucketScanStatus) -> {
-                    if (isAvailable.test(tableBucket)) {
-                        result.add(tableBucket);
-                    }
-                }));
+        bucketStatusMap.forEach(((tableBucket, bucketScanStatus) -> {
+            if (isAvailable.test(tableBucket)) {
+                result.add(tableBucket);
+            }
+        }));
         return result;
     }
 

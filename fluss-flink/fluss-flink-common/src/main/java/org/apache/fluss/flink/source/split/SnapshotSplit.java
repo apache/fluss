@@ -32,11 +32,7 @@ public abstract class SnapshotSplit extends SourceSplitBase {
     /** The snapshot id. It's used to identify the snapshot for a kv bucket. */
     protected final long snapshotId;
 
-    public SnapshotSplit(
-            TableBucket tableBucket,
-            @Nullable String partitionName,
-            long snapshotId,
-            long recordsToSkip) {
+    public SnapshotSplit(TableBucket tableBucket, @Nullable String partitionName, long snapshotId, long recordsToSkip) {
         super(tableBucket, partitionName);
         this.snapshotId = snapshotId;
         this.recordsToSkip = recordsToSkip;

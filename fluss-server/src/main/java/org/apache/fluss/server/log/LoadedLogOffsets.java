@@ -29,8 +29,7 @@ final class LoadedLogOffsets {
 
     public LoadedLogOffsets(final long recoveryPoint, final LogOffsetMetadata nextOffsetMetadata) {
         this.recoveryPoint = recoveryPoint;
-        this.nextOffsetMetadata =
-                Objects.requireNonNull(nextOffsetMetadata, "nextOffsetMetadata should not be null");
+        this.nextOffsetMetadata = Objects.requireNonNull(nextOffsetMetadata, "nextOffsetMetadata should not be null");
     }
 
     public long getRecoveryPoint() {
@@ -50,8 +49,7 @@ final class LoadedLogOffsets {
             return false;
         }
         final LoadedLogOffsets that = (LoadedLogOffsets) o;
-        return recoveryPoint == that.recoveryPoint
-                && nextOffsetMetadata.equals(that.nextOffsetMetadata);
+        return recoveryPoint == that.recoveryPoint && nextOffsetMetadata.equals(that.nextOffsetMetadata);
     }
 
     @Override

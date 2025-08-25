@@ -46,8 +46,7 @@ public class TabletServerChangeWatcher {
     private final EventManager eventManager;
 
     public TabletServerChangeWatcher(ZooKeeperClient zooKeeperClient, EventManager eventManager) {
-        this.curatorCache =
-                CuratorCache.build(zooKeeperClient.getCuratorClient(), ServerIdsZNode.path());
+        this.curatorCache = CuratorCache.build(zooKeeperClient.getCuratorClient(), ServerIdsZNode.path());
         this.eventManager = eventManager;
         this.curatorCache.listenable().addListener(new TabletServerChangeListener());
     }
@@ -77,32 +76,27 @@ public class TabletServerChangeWatcher {
             }
 
             switch (type) {
-                case NODE_CREATED:
-                    {
-                        if (newData != null && newData.getData().length > 0) {
-                            int serverId = getServerIdFromEvent(newData);
-                            TabletServerRegistration registration =
-                                    ServerIdZNode.decode(newData.getData());
-                            LOG.info("Received CHILD_ADDED event for server {}.", serverId);
-                            eventManager.put(
-                                    new NewTabletServerEvent(
-                                            new ServerInfo(
-                                                    serverId,
-                                                    registration.getRack(),
-                                                    registration.getEndpoints(),
-                                                    ServerType.TABLET_SERVER)));
-                        }
-                        break;
+                case NODE_CREATED: {
+                    if (newData != null && newData.getData().length > 0) {
+                        int serverId = getServerIdFromEvent(newData);
+                        TabletServerRegistration registration = ServerIdZNode.decode(newData.getData());
+                        LOG.info("Received CHILD_ADDED event for server {}.", serverId);
+                        eventManager.put(new NewTabletServerEvent(new ServerInfo(
+                                serverId,
+                                registration.getRack(),
+                                registration.getEndpoints(),
+                                ServerType.TABLET_SERVER)));
                     }
-                case NODE_DELETED:
-                    {
-                        if (oldData != null && oldData.getData().length > 0) {
-                            int serverId = getServerIdFromEvent(oldData);
-                            LOG.info("Received CHILD_REMOVED event for server {}.", serverId);
-                            eventManager.put(new DeadTabletServerEvent(serverId));
-                        }
-                        break;
+                    break;
+                }
+                case NODE_DELETED: {
+                    if (oldData != null && oldData.getData().length > 0) {
+                        int serverId = getServerIdFromEvent(oldData);
+                        LOG.info("Received CHILD_REMOVED event for server {}.", serverId);
+                        eventManager.put(new DeadTabletServerEvent(serverId));
                     }
+                    break;
+                }
                 default:
                     break;
             }
@@ -113,8 +107,7 @@ public class TabletServerChangeWatcher {
         try {
             return Integer.parseInt(ZKPaths.getNodeFromPath(data.getPath()));
         } catch (NumberFormatException e) {
-            throw new FlussRuntimeException(
-                    "Invalid server id in zookeeper path: " + data.getPath(), e);
+            throw new FlussRuntimeException("Invalid server id in zookeeper path: " + data.getPath(), e);
         }
     }
 }

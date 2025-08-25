@@ -48,11 +48,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 class RemoveOfflineReplicaFromIsrITCase {
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(initConfig())
+            .build();
 
     private ZooKeeperClient zkClient;
 
@@ -82,10 +81,7 @@ class RemoveOfflineReplicaFromIsrITCase {
         TableBucket tb = new TableBucket(tableId, 0);
 
         LeaderAndIsr currentLeaderAndIsr =
-                waitValue(
-                        () -> zkClient.getLeaderAndIsr(tb),
-                        Duration.ofSeconds(20),
-                        "Leader and isr not found");
+                waitValue(() -> zkClient.getLeaderAndIsr(tb), Duration.ofSeconds(20), "Leader and isr not found");
         List<Integer> isr = currentLeaderAndIsr.isr();
         assertThat(isr).containsExactlyInAnyOrder(0, 1, 2);
 
@@ -99,29 +95,19 @@ class RemoveOfflineReplicaFromIsrITCase {
         isr.remove(follower);
 
         // send one batch data to check the stop follower will become out of sync replica.
-        TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        TabletServerGateway leaderGateWay = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
 
         // Wait the stop follower to be removed from ISR since the follower is offline
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(zkClient.getLeaderAndIsr(tb))
-                                .isPresent()
-                                .hasValueSatisfying(
-                                        leaderAndIsr ->
-                                                assertThat(leaderAndIsr.isr())
-                                                        .containsExactlyInAnyOrderElementsOf(isr)));
+        retry(Duration.ofMinutes(1), () -> assertThat(zkClient.getLeaderAndIsr(tb))
+                .isPresent()
+                .hasValueSatisfying(
+                        leaderAndIsr -> assertThat(leaderAndIsr.isr()).containsExactlyInAnyOrderElementsOf(isr)));
 
         // produce logs should be successful
         assertProduceLogResponse(
                 leaderGateWay
                         .produceLog(
-                                newProduceLogRequest(
-                                        tableId,
-                                        tb.getBucket(),
-                                        -1,
-                                        genMemoryLogRecordsByObject(DATA1)))
+                                newProduceLogRequest(tableId, tb.getBucket(), -1, genMemoryLogRecordsByObject(DATA1)))
                         .get(),
                 0,
                 0L);
@@ -131,22 +117,18 @@ class RemoveOfflineReplicaFromIsrITCase {
         isr.add(follower);
 
         // make sure the stopped follower can add back to isr after restart
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(zkClient.getLeaderAndIsr(tb))
-                                .isPresent()
-                                .hasValueSatisfying(
-                                        leaderAndIsr ->
-                                                assertThat(leaderAndIsr.isr())
-                                                        .containsExactlyInAnyOrderElementsOf(isr)));
+        retry(Duration.ofMinutes(1), () -> assertThat(zkClient.getLeaderAndIsr(tb))
+                .isPresent()
+                .hasValueSatisfying(
+                        leaderAndIsr -> assertThat(leaderAndIsr.isr()).containsExactlyInAnyOrderElementsOf(isr)));
     }
 
     private long createLogTable() throws Exception {
         // Set bucket to 1 to easy for debug.
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1, "a").build();
-        return RpcMessageTestUtils.createTable(
-                FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(DATA1_SCHEMA)
+                .distributedBy(1, "a")
+                .build();
+        return RpcMessageTestUtils.createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
     }
 }

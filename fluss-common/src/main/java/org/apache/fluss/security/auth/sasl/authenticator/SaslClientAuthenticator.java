@@ -55,11 +55,9 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
             String password = configuration.get(CLIENT_SASL_JAAS_PASSWORD);
             if (username != null || password != null) {
                 if (username == null || password == null) {
-                    throw new AuthenticationException(
-                            String.format(
-                                    "Configuration '%s' and '%s' must be set together for SASL JAAS authentication",
-                                    CLIENT_SASL_JAAS_USERNAME.key(),
-                                    CLIENT_SASL_JAAS_PASSWORD.key()));
+                    throw new AuthenticationException(String.format(
+                            "Configuration '%s' and '%s' must be set together for SASL JAAS authentication",
+                            CLIENT_SASL_JAAS_USERNAME.key(), CLIENT_SASL_JAAS_PASSWORD.key()));
                 }
                 jaasConfigStr = String.format(JAAS_CONF_FORMAT, username, password);
             }
@@ -111,8 +109,7 @@ public class SaslClientAuthenticator implements ClientAuthenticator {
         }
 
         if (saslClient == null) {
-            throw new AuthenticationException(
-                    "Unable to find a matching SASL mechanism for " + mechanism);
+            throw new AuthenticationException("Unable to find a matching SASL mechanism for " + mechanism);
         }
     }
 

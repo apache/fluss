@@ -51,20 +51,12 @@ public class In extends LeafFunction {
     }
 
     @Override
-    public boolean test(
-            DataType type,
-            long rowCount,
-            Object min,
-            Object max,
-            Long nullCount,
-            List<Object> literals) {
+    public boolean test(DataType type, long rowCount, Object min, Object max, Long nullCount, List<Object> literals) {
         if (nullCount != null && rowCount == nullCount) {
             return false;
         }
         for (Object literal : literals) {
-            if (literal != null
-                    && compareLiteral(type, literal, min) >= 0
-                    && compareLiteral(type, literal, max) <= 0) {
+            if (literal != null && compareLiteral(type, literal, min) >= 0 && compareLiteral(type, literal, max) <= 0) {
                 return true;
             }
         }

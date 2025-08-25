@@ -50,8 +50,7 @@ public class TestProcessBuilder {
     private boolean withCleanEnvironment = false;
 
     public TestProcessBuilder(String mainClass) throws IOException {
-        File tempLogFile =
-                File.createTempFile(getClass().getSimpleName() + "-", "-log4j.properties");
+        File tempLogFile = File.createTempFile(getClass().getSimpleName() + "-", "-log4j.properties");
         tempLogFile.deleteOnExit();
         CommonTestUtils.printLog4jDebugConfig(tempLogFile);
 

@@ -30,8 +30,7 @@ public class RemoteLogDownloadFuture {
     private final CompletableFuture<File> logFileFuture;
     private final Runnable recycleCallback;
 
-    public RemoteLogDownloadFuture(
-            CompletableFuture<File> logFileFuture, Runnable recycleCallback) {
+    public RemoteLogDownloadFuture(CompletableFuture<File> logFileFuture, Runnable recycleCallback) {
         this.logFileFuture = logFileFuture;
         this.recycleCallback = recycleCallback;
     }

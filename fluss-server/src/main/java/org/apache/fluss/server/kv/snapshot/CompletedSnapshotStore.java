@@ -95,9 +95,7 @@ public class CompletedSnapshotStore {
      */
     @VisibleForTesting
     CompletedSnapshot addSnapshotAndSubsumeOldestOne(
-            final CompletedSnapshot snapshot,
-            SnapshotsCleaner snapshotsCleaner,
-            Runnable postCleanup)
+            final CompletedSnapshot snapshot, SnapshotsCleaner snapshotsCleaner, Runnable postCleanup)
             throws Exception {
         checkNotNull(snapshot, "Snapshot");
 
@@ -105,33 +103,24 @@ public class CompletedSnapshotStore {
         snapshot.registerSharedKvFilesAfterRestored(sharedKvFileRegistry);
 
         CompletedSnapshotHandle completedSnapshotHandle = store(snapshot);
-        completedSnapshotHandleStore.add(
-                snapshot.getTableBucket(), snapshot.getSnapshotID(), completedSnapshotHandle);
+        completedSnapshotHandleStore.add(snapshot.getTableBucket(), snapshot.getSnapshotID(), completedSnapshotHandle);
 
         // Now add the new one. If it fails, we don't want to lose existing data.
         completedSnapshots.addLast(snapshot);
 
         // Remove completed snapshot from queue and snapshotStateHandleStore, not discard.
         Optional<CompletedSnapshot> subsume =
-                subsume(
-                        completedSnapshots,
-                        maxNumberOfSnapshotsToRetain,
-                        completedSnapshot -> {
-                            remove(
-                                    completedSnapshot.getTableBucket(),
-                                    completedSnapshot.getSnapshotID());
-                            snapshotsCleaner.addSubsumedSnapshot(completedSnapshot);
-                        });
+                subsume(completedSnapshots, maxNumberOfSnapshotsToRetain, completedSnapshot -> {
+                    remove(completedSnapshot.getTableBucket(), completedSnapshot.getSnapshotID());
+                    snapshotsCleaner.addSubsumedSnapshot(completedSnapshot);
+                });
 
-        findLowest(completedSnapshots)
-                .ifPresent(
-                        id -> {
-                            // unregister the unused kv file, which will then cause the kv file
-                            // deletion
-                            sharedKvFileRegistry.unregisterUnusedKvFile(id);
-                            snapshotsCleaner.cleanSubsumedSnapshots(
-                                    id, Collections.emptySet(), postCleanup, ioExecutor);
-                        });
+        findLowest(completedSnapshots).ifPresent(id -> {
+            // unregister the unused kv file, which will then cause the kv file
+            // deletion
+            sharedKvFileRegistry.unregisterUnusedKvFile(id);
+            snapshotsCleaner.cleanSubsumedSnapshots(id, Collections.emptySet(), postCleanup, ioExecutor);
+        });
         return subsume.orElse(null);
     }
 
@@ -220,16 +209,13 @@ public class CompletedSnapshotStore {
         FileSystem fs = filePath.getFileSystem();
         byte[] jsonBytes = CompletedSnapshotJsonSerde.toJson(snapshot);
         for (int attempt = 0; attempt < 10; attempt++) {
-            try (FSDataOutputStream outStream =
-                    fs.create(filePath, FileSystem.WriteMode.OVERWRITE)) {
+            try (FSDataOutputStream outStream = fs.create(filePath, FileSystem.WriteMode.OVERWRITE)) {
                 outStream.write(jsonBytes);
                 return new CompletedSnapshotHandle(filePath, snapshot.getLogOffset());
             } catch (Exception e) {
                 latestException = e;
             }
         }
-        throw new Exception(
-                "Could not open output stream for storing kv to a retrievable kv handle.",
-                latestException);
+        throw new Exception("Could not open output stream for storing kv to a retrievable kv handle.", latestException);
     }
 }

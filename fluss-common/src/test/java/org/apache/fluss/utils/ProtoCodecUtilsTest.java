@@ -71,8 +71,7 @@ public class ProtoCodecUtilsTest {
         res = ProtoCodecUtils.readVarInt(bb);
         assertThat(res).isEqualTo(i);
 
-        assertThat(ProtoCodecUtils.computeVarIntSize(i))
-                .isEqualTo(CodedOutputStream.computeInt32SizeNoTag(i));
+        assertThat(ProtoCodecUtils.computeVarIntSize(i)).isEqualTo(CodedOutputStream.computeInt32SizeNoTag(i));
     }
 
     @ParameterizedTest
@@ -104,13 +103,11 @@ public class ProtoCodecUtilsTest {
         res = ProtoCodecUtils.readVarInt64(bb);
         assertThat(res).isEqualTo(i);
 
-        assertThat(ProtoCodecUtils.computeVarInt64Size(i))
-                .isEqualTo(CodedOutputStream.computeInt64SizeNoTag(i));
+        assertThat(ProtoCodecUtils.computeVarInt64Size(i)).isEqualTo(CodedOutputStream.computeInt64SizeNoTag(i));
     }
 
     @ParameterizedTest
-    @ValueSource(
-            ints = {Integer.MIN_VALUE, -1000, -100, -2, -1, 0, 1, 10, 100, 1000, Integer.MAX_VALUE})
+    @ValueSource(ints = {Integer.MIN_VALUE, -1000, -100, -2, -1, 0, 1, 10, 100, 1000, Integer.MAX_VALUE})
     public void testSignedVarInt(int i) throws Exception {
         ProtoCodecUtils.writeSignedVarInt(bb, i);
 
@@ -121,25 +118,11 @@ public class ProtoCodecUtilsTest {
         res = ProtoCodecUtils.readSignedVarInt(bb);
         assertThat(res).isEqualTo(i);
 
-        assertThat(ProtoCodecUtils.computeSignedVarIntSize(i))
-                .isEqualTo(CodedOutputStream.computeSInt32SizeNoTag(i));
+        assertThat(ProtoCodecUtils.computeSignedVarIntSize(i)).isEqualTo(CodedOutputStream.computeSInt32SizeNoTag(i));
     }
 
     @ParameterizedTest
-    @ValueSource(
-            longs = {
-                Long.MIN_VALUE,
-                -10000000,
-                -100,
-                -2,
-                -1,
-                0,
-                1,
-                10,
-                100,
-                10000000,
-                Long.MAX_VALUE
-            })
+    @ValueSource(longs = {Long.MIN_VALUE, -10000000, -100, -2, -1, 0, 1, 10, 100, 10000000, Long.MAX_VALUE})
     public void testSignedVarInt64(long i) throws Exception {
         ProtoCodecUtils.writeSignedVarInt64(bb, i);
 
@@ -150,13 +133,11 @@ public class ProtoCodecUtilsTest {
         res = ProtoCodecUtils.readSignedVarInt64(bb);
         assertThat(res).isEqualTo(i);
 
-        assertThat(ProtoCodecUtils.computeSignedVarInt64Size(i))
-                .isEqualTo(CodedOutputStream.computeSInt64SizeNoTag(i));
+        assertThat(ProtoCodecUtils.computeSignedVarInt64Size(i)).isEqualTo(CodedOutputStream.computeSInt64SizeNoTag(i));
     }
 
     @ParameterizedTest
-    @ValueSource(
-            ints = {Integer.MIN_VALUE, -1000, -100, -2, -1, 0, 1, 10, 100, 1000, Integer.MAX_VALUE})
+    @ValueSource(ints = {Integer.MIN_VALUE, -1000, -100, -2, -1, 0, 1, 10, 100, 1000, Integer.MAX_VALUE})
     public void testFixedInt32(int i) throws Exception {
         ProtoCodecUtils.writeFixedInt32(bb, i);
 
@@ -169,20 +150,7 @@ public class ProtoCodecUtilsTest {
     }
 
     @ParameterizedTest
-    @ValueSource(
-            longs = {
-                Long.MIN_VALUE,
-                -10000000,
-                -100,
-                -2,
-                -1,
-                0,
-                1,
-                10,
-                100,
-                10000000,
-                Long.MAX_VALUE
-            })
+    @ValueSource(longs = {Long.MIN_VALUE, -10000000, -100, -2, -1, 0, 1, 10, 100, 10000000, Long.MAX_VALUE})
     public void testFixedInt64(long i) throws Exception {
         ProtoCodecUtils.writeFixedInt64(bb, i);
 
@@ -195,20 +163,7 @@ public class ProtoCodecUtilsTest {
     }
 
     @ParameterizedTest
-    @ValueSource(
-            floats = {
-                Float.MIN_VALUE,
-                -1000.0f,
-                -100.0f,
-                -2.f,
-                -1.f,
-                0f,
-                1f,
-                10f,
-                100f,
-                1000f,
-                Float.MAX_VALUE
-            })
+    @ValueSource(floats = {Float.MIN_VALUE, -1000.0f, -100.0f, -2.f, -1.f, 0f, 1f, 10f, 100f, 1000f, Float.MAX_VALUE})
     public void testFloat(float i) throws Exception {
         ProtoCodecUtils.writeFloat(bb, i);
 
@@ -247,12 +202,7 @@ public class ProtoCodecUtilsTest {
     }
 
     @ParameterizedTest
-    @ValueSource(
-            strings = {
-                "hello",
-                "UTF16 Ελληνικά Русский 日本語",
-                "Neque porro quisquam est qui dolorem ipsum"
-            })
+    @ValueSource(strings = {"hello", "UTF16 Ελληνικά Русский 日本語", "Neque porro quisquam est qui dolorem ipsum"})
     public void testString(String s) throws Exception {
         byte[] sb = s.getBytes(StandardCharsets.UTF_8);
         assertThat(ProtoCodecUtils.computeStringUTF8Size(s)).isEqualTo(sb.length);
@@ -267,9 +217,7 @@ public class ProtoCodecUtilsTest {
         assertThat(ProtoCodecUtils.readVarInt(bb)).isEqualTo(sb.length);
         assertThat(ProtoCodecUtils.readString(bb, idx, sb.length)).isEqualTo(s);
 
-        assertThat(
-                        ProtoCodecUtils.computeVarIntSize(sb.length)
-                                + ProtoCodecUtils.computeStringUTF8Size(s))
+        assertThat(ProtoCodecUtils.computeVarIntSize(sb.length) + ProtoCodecUtils.computeStringUTF8Size(s))
                 .isEqualTo(CodedOutputStream.computeStringSizeNoTag(s));
     }
 }

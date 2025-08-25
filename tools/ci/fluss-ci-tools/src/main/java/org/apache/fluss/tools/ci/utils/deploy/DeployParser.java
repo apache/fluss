@@ -42,8 +42,7 @@ public class DeployParser {
     // [INFO] --- maven-deploy-plugin:2.8.2:deploy (default-deploy) @ fluss-parent ---
     // [INFO] Skipping artifact deployment
     private static final Pattern DEPLOY_MODULE_PATTERN =
-            Pattern.compile(
-                    ".maven-deploy-plugin:.*:deploy .* @ (?<module>[^ _]+)(?:_[0-9.]+)? --.*");
+            Pattern.compile(".maven-deploy-plugin:.*:deploy .* @ (?<module>[^ _]+)(?:_[0-9.]+)? --.*");
 
     /**
      * Parses the output of a Maven build where {@code deploy:deploy} was used, and returns a set of
@@ -56,8 +55,7 @@ public class DeployParser {
     }
 
     static Set<String> parseDeployOutput(Stream<String> lines) {
-        return ParserUtils.parsePluginOutput(
-                        lines, DEPLOY_MODULE_PATTERN, DeployParser::parseDeployBlock)
+        return ParserUtils.parsePluginOutput(lines, DEPLOY_MODULE_PATTERN, DeployParser::parseDeployBlock)
                 .entrySet()
                 .stream()
                 .filter(Map.Entry::getValue)

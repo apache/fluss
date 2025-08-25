@@ -61,17 +61,8 @@ public class SaslServerFactory {
             }
 
             callbackHandler.configure(mechanism, configurationEntries);
-            SaslServer saslServer =
-                    Subject.doAs(
-                            loginManager.subject(),
-                            (PrivilegedExceptionAction<SaslServer>)
-                                    () ->
-                                            Sasl.createSaslServer(
-                                                    mechanism,
-                                                    "fluss",
-                                                    hostName,
-                                                    props,
-                                                    callbackHandler));
+            SaslServer saslServer = Subject.doAs(loginManager.subject(), (PrivilegedExceptionAction<SaslServer>)
+                    () -> Sasl.createSaslServer(mechanism, "fluss", hostName, props, callbackHandler));
             if (saslServer == null) {
                 throw new SaslException(
                         "Fluss Server failed to create a SaslServer to interact with a client during session authentication with server mechanism "
@@ -91,24 +82,12 @@ public class SaslServerFactory {
             String mechanism, String hostAddress, Map<String, ?> props, LoginManager loginManager)
             throws PrivilegedActionException {
 
-        return Subject.doAs(
-                loginManager.subject(),
-                (PrivilegedExceptionAction<SaslClient>)
-                        () -> {
-                            String[] mechs = {mechanism};
-                            String serviceName = loginManager.serviceName();
-                            LOG.debug(
-                                    "Creating SaslClient: service={};mechs={}",
-                                    serviceName,
-                                    Arrays.toString(mechs));
+        return Subject.doAs(loginManager.subject(), (PrivilegedExceptionAction<SaslClient>) () -> {
+            String[] mechs = {mechanism};
+            String serviceName = loginManager.serviceName();
+            LOG.debug("Creating SaslClient: service={};mechs={}", serviceName, Arrays.toString(mechs));
 
-                            return Sasl.createSaslClient(
-                                    mechs,
-                                    null,
-                                    serviceName,
-                                    hostAddress,
-                                    props,
-                                    new SaslClientCallbackHandler());
-                        });
+            return Sasl.createSaslClient(mechs, null, serviceName, hostAddress, props, new SaslClientCallbackHandler());
+        });
     }
 }

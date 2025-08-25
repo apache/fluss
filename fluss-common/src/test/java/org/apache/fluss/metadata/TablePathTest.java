@@ -52,10 +52,7 @@ class TablePathTest {
         assertInvalidName("..", "'..' is not allowed");
         String invalidLongName = StringUtils.repeat("a", 201);
         assertInvalidName(
-                invalidLongName,
-                "the length of '"
-                        + invalidLongName
-                        + "' is longer than the max allowed length 200");
+                invalidLongName, "the length of '" + invalidLongName + "' is longer than the max allowed length 200");
     }
 
     private static void assertInvalidName(String name, String expectedMessage) {

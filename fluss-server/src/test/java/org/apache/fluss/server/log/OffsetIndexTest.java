@@ -54,9 +54,7 @@ final class OffsetIndexTest {
         int base = (int) index.baseOffset() + 1;
         int size = index.maxEntries();
         List<Long> randomOffset =
-                monotonicList(base, size).stream()
-                        .map(Integer::longValue)
-                        .collect(Collectors.toList());
+                monotonicList(base, size).stream().map(Integer::longValue).collect(Collectors.toList());
         List<Integer> position = monotonicList(0, size);
         for (int i = 0; i < randomOffset.size(); i++) {
             index.append(randomOffset.get(i), position.get(i));
@@ -71,19 +69,15 @@ final class OffsetIndexTest {
 
     @Test
     void lookupExtremeCases() {
-        assertThat(index.lookup(index.baseOffset()))
-                .isEqualTo(new OffsetPosition(index.baseOffset(), 0));
+        assertThat(index.lookup(index.baseOffset())).isEqualTo(new OffsetPosition(index.baseOffset(), 0));
 
         for (int i = 0; i < index.maxEntries(); i++) {
             index.append(index.baseOffset() + i + 1, i);
         }
         // check first and last entry
-        assertThat(index.lookup(index.baseOffset()))
-                .isEqualTo(new OffsetPosition(index.baseOffset(), 0));
+        assertThat(index.lookup(index.baseOffset())).isEqualTo(new OffsetPosition(index.baseOffset(), 0));
         assertThat(index.lookup(index.baseOffset() + index.maxEntries()))
-                .isEqualTo(
-                        new OffsetPosition(
-                                index.baseOffset() + index.maxEntries(), index.maxEntries() - 1));
+                .isEqualTo(new OffsetPosition(index.baseOffset() + index.maxEntries(), index.maxEntries() - 1));
     }
 
     @Test

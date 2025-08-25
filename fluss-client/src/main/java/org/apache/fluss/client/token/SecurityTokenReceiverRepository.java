@@ -35,8 +35,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 @Internal
 class SecurityTokenReceiverRepository {
 
-    private static final Logger LOG =
-            LoggerFactory.getLogger(SecurityTokenReceiverRepository.class);
+    private static final Logger LOG = LoggerFactory.getLogger(SecurityTokenReceiverRepository.class);
 
     private final Map<String, SecurityTokenReceiver> securityTokenReceivers;
 
@@ -49,20 +48,16 @@ class SecurityTokenReceiverRepository {
 
         Map<String, SecurityTokenReceiver> receivers = new HashMap<>();
 
-        Consumer<SecurityTokenReceiver> loadReceiver =
-                (receiver) -> {
-                    checkState(
-                            !receivers.containsKey(receiver.scheme()),
-                            "Security token receiver with scheme name {} has multiple implementations",
-                            receiver.scheme());
-                    receivers.put(receiver.scheme(), receiver);
-                    LOG.info(
-                            "Security token receiver '{}' loaded and initialized",
-                            receiver.scheme());
-                };
+        Consumer<SecurityTokenReceiver> loadReceiver = (receiver) -> {
+            checkState(
+                    !receivers.containsKey(receiver.scheme()),
+                    "Security token receiver with scheme name {} has multiple implementations",
+                    receiver.scheme());
+            receivers.put(receiver.scheme(), receiver);
+            LOG.info("Security token receiver '{}' loaded and initialized", receiver.scheme());
+        };
 
-        ServiceLoader.load(
-                        SecurityTokenReceiver.class, SecurityTokenReceiver.class.getClassLoader())
+        ServiceLoader.load(SecurityTokenReceiver.class, SecurityTokenReceiver.class.getClassLoader())
                 .iterator()
                 .forEachRemaining(loadReceiver);
 
@@ -80,8 +75,7 @@ class SecurityTokenReceiverRepository {
         String schemeName = token.getScheme();
         LOG.info("New security tokens arrived, sending them to receiver");
         if (!securityTokenReceivers.containsKey(schemeName)) {
-            throw new IllegalStateException(
-                    "Token arrived for service but no receiver found for it: " + schemeName);
+            throw new IllegalStateException("Token arrived for service but no receiver found for it: " + schemeName);
         }
         try {
             securityTokenReceivers.get(schemeName).onNewTokensObtained(token);

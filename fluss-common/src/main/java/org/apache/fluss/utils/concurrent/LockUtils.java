@@ -25,8 +25,7 @@ import java.util.concurrent.locks.ReadWriteLock;
 
 /** Utils for {@link Lock}. */
 public class LockUtils {
-    public static <E extends Exception> void inLock(Lock lock, ThrowingRunnable<E> runnable)
-            throws E {
+    public static <E extends Exception> void inLock(Lock lock, ThrowingRunnable<E> runnable) throws E {
         lock.lock();
         try {
             runnable.run();
@@ -35,8 +34,7 @@ public class LockUtils {
         }
     }
 
-    public static <T, E extends Exception> T inLock(Lock lock, SupplierWithException<T, E> action)
-            throws E {
+    public static <T, E extends Exception> T inLock(Lock lock, SupplierWithException<T, E> action) throws E {
         lock.lock();
         try {
             return action.get();
@@ -45,23 +43,21 @@ public class LockUtils {
         }
     }
 
-    public static <E extends Exception> void inReadLock(
-            ReadWriteLock lock, ThrowingRunnable<E> runnable) throws E {
+    public static <E extends Exception> void inReadLock(ReadWriteLock lock, ThrowingRunnable<E> runnable) throws E {
         inLock(lock.readLock(), runnable);
     }
 
-    public static <T, E extends Exception> T inReadLock(
-            ReadWriteLock lock, SupplierWithException<T, E> action) throws E {
+    public static <T, E extends Exception> T inReadLock(ReadWriteLock lock, SupplierWithException<T, E> action)
+            throws E {
         return inLock(lock.readLock(), action);
     }
 
-    public static <E extends Exception> void inWriteLock(
-            ReadWriteLock lock, ThrowingRunnable<E> runnable) throws E {
+    public static <E extends Exception> void inWriteLock(ReadWriteLock lock, ThrowingRunnable<E> runnable) throws E {
         inLock(lock.writeLock(), runnable);
     }
 
-    public static <T, E extends Exception> T inWriteLock(
-            ReadWriteLock lock, SupplierWithException<T, E> action) throws E {
+    public static <T, E extends Exception> T inWriteLock(ReadWriteLock lock, SupplierWithException<T, E> action)
+            throws E {
         return inLock(lock.writeLock(), action);
     }
 }

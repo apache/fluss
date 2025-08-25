@@ -34,10 +34,7 @@ public class PlainSaslServerProvider extends Provider {
 
     @SuppressWarnings("this-escape")
     protected PlainSaslServerProvider() {
-        super(
-                "Simple SASL/PLAIN Server Provider",
-                1.0,
-                "Simple SASL/PLAIN Server Provider for Fluss");
+        super("Simple SASL/PLAIN Server Provider", 1.0, "Simple SASL/PLAIN Server Provider for Fluss");
         put(
                 "SaslServerFactory." + PlainSaslServer.PLAIN_MECHANISM,
                 PlainSaslServer.PlainSaslServerFactory.class.getName());

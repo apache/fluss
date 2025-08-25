@@ -99,8 +99,7 @@ public class DefaultValueRecordBatch implements ValueRecordBatch {
 
             @Override
             protected ValueRecord readNext() {
-                ValueRecord valueRecord =
-                        DefaultValueRecord.readFrom(segment, position, readContext);
+                ValueRecord valueRecord = DefaultValueRecord.readFrom(segment, position, readContext);
                 iteratorNumber++;
                 position += valueRecord.getSizeInBytes();
                 return valueRecord;
@@ -128,8 +127,7 @@ public class DefaultValueRecordBatch implements ValueRecordBatch {
         }
         DefaultValueRecordBatch that = (DefaultValueRecordBatch) o;
         int sizeInBytes = sizeInBytes();
-        return sizeInBytes == that.sizeInBytes()
-                && segment.equalTo(that.segment, position, that.position, sizeInBytes);
+        return sizeInBytes == that.sizeInBytes() && segment.equalTo(that.segment, position, that.position, sizeInBytes);
     }
 
     // ------------------------------------------------------------------------------------------
@@ -142,11 +140,7 @@ public class DefaultValueRecordBatch implements ValueRecordBatch {
             int numRecords = getRecordCount();
             if (numRecords < 0) {
                 throw new IllegalArgumentException(
-                        "Found invalid record count "
-                                + numRecords
-                                + " in magic v"
-                                + magic()
-                                + " batch");
+                        "Found invalid record count " + numRecords + " in magic v" + magic() + " batch");
             }
             this.numRecords = numRecords;
         }

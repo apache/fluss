@@ -39,7 +39,8 @@ public class ConfigOptionTest {
 
         assertThat(option.description()).isEqualTo("hello key");
 
-        final ConfigOption<Integer> option2 = ConfigBuilder.key("key2").intType().defaultValue(0);
+        final ConfigOption<Integer> option2 =
+                ConfigBuilder.key("key2").intType().defaultValue(0);
         assertThat(option2.description()).isEqualTo("");
     }
 
@@ -48,7 +49,8 @@ public class ConfigOptionTest {
         final ConfigOption<Integer> option = ConfigBuilder.key("key").intType().noDefaultValue();
         assertThat(option.hasDefaultValue()).isFalse();
 
-        final ConfigOption<Integer> option2 = ConfigBuilder.key("key2").intType().defaultValue(1);
+        final ConfigOption<Integer> option2 =
+                ConfigBuilder.key("key2").intType().defaultValue(1);
         assertThat(option2.hasDefaultValue()).isTrue();
         assertThat(option2.defaultValue()).isEqualTo(1);
     }
@@ -56,10 +58,7 @@ public class ConfigOptionTest {
     @Test
     void testDeprecationFlagForDeprecatedKeys() {
         final ConfigOption<Integer> optionWithDeprecatedKeys =
-                ConfigBuilder.key("key")
-                        .intType()
-                        .defaultValue(0)
-                        .withDeprecatedKeys("deprecated1", "deprecated2");
+                ConfigBuilder.key("key").intType().defaultValue(0).withDeprecatedKeys("deprecated1", "deprecated2");
 
         assertThat(optionWithDeprecatedKeys.hasFallbackKeys()).isTrue();
         for (final FallbackKey fallbackKey : optionWithDeprecatedKeys.fallbackKeys()) {
@@ -70,10 +69,7 @@ public class ConfigOptionTest {
     @Test
     void testDeprecationFlagForFallbackKeys() {
         final ConfigOption<Integer> optionWithFallbackKeys =
-                ConfigBuilder.key("key")
-                        .intType()
-                        .defaultValue(0)
-                        .withFallbackKeys("fallback1", "fallback2");
+                ConfigBuilder.key("key").intType().defaultValue(0).withFallbackKeys("fallback1", "fallback2");
 
         assertThat(optionWithFallbackKeys.hasFallbackKeys()).isTrue();
         assertThat(optionWithFallbackKeys.fallbackKeys()).allMatch(f -> !f.isDeprecated());
@@ -81,12 +77,11 @@ public class ConfigOptionTest {
 
     @Test
     void testDeprecationFlagForMixedAlternativeKeys() {
-        final ConfigOption<Integer> optionWithMixedKeys =
-                ConfigBuilder.key("key")
-                        .intType()
-                        .defaultValue(0)
-                        .withDeprecatedKeys("deprecated1", "deprecated2")
-                        .withFallbackKeys("fallback1", "fallback2");
+        final ConfigOption<Integer> optionWithMixedKeys = ConfigBuilder.key("key")
+                .intType()
+                .defaultValue(0)
+                .withDeprecatedKeys("deprecated1", "deprecated2")
+                .withFallbackKeys("fallback1", "fallback2");
 
         final List<String> fallbackKeys = new ArrayList<>(2);
         final List<String> deprecatedKeys = new ArrayList<>(2);
@@ -109,19 +104,17 @@ public class ConfigOptionTest {
 
     @Test
     void testOptionComparison() {
-        ConfigOption<Integer> opt1 =
-                ConfigBuilder.key("key")
-                        .intType()
-                        .defaultValue(0)
-                        .withDeprecatedKeys("deprecated1", "deprecated2")
-                        .withFallbackKeys("fallback1", "fallback2");
+        ConfigOption<Integer> opt1 = ConfigBuilder.key("key")
+                .intType()
+                .defaultValue(0)
+                .withDeprecatedKeys("deprecated1", "deprecated2")
+                .withFallbackKeys("fallback1", "fallback2");
 
-        ConfigOption<Integer> opt2 =
-                ConfigBuilder.key("key")
-                        .intType()
-                        .defaultValue(0)
-                        .withDeprecatedKeys("deprecated1", "deprecated2")
-                        .withFallbackKeys("fallback1", "fallback2");
+        ConfigOption<Integer> opt2 = ConfigBuilder.key("key")
+                .intType()
+                .defaultValue(0)
+                .withDeprecatedKeys("deprecated1", "deprecated2")
+                .withFallbackKeys("fallback1", "fallback2");
 
         assertThat(opt1).isEqualTo(opt2);
         assertThat(opt1.hashCode()).isEqualTo(opt2.hashCode());

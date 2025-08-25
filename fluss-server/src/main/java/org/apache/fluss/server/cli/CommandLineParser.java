@@ -30,7 +30,8 @@ import javax.annotation.Nonnull;
 /** Command line parser which produces a result from the given command line arguments. */
 public class CommandLineParser<T> {
 
-    @Nonnull private final ParserResultFactory<T> parserResultFactory;
+    @Nonnull
+    private final ParserResultFactory<T> parserResultFactory;
 
     public CommandLineParser(@Nonnull ParserResultFactory<T> parserResultFactory) {
         this.parserResultFactory = parserResultFactory;

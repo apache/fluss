@@ -66,13 +66,6 @@ public class FsPathAndFileName {
 
     @Override
     public String toString() {
-        return "FsPathAndFileName{"
-                + "path='"
-                + path
-                + '\''
-                + ", fileName='"
-                + fileName
-                + '\''
-                + '}';
+        return "FsPathAndFileName{" + "path='" + path + '\'' + ", fileName='" + fileName + '\'' + '}';
     }
 }

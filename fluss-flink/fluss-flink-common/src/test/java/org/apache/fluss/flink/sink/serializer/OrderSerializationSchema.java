@@ -60,8 +60,7 @@ public class OrderSerializationSchema implements FlussSerializationSchema<Order>
 
         // Validate schema compatibility with Order class
         if (rowType.getFieldCount() < 4) {
-            throw new IllegalStateException(
-                    "Schema must have at least 4 fields to serialize Order objects");
+            throw new IllegalStateException("Schema must have at least 4 fields to serialize Order objects");
         }
     }
 

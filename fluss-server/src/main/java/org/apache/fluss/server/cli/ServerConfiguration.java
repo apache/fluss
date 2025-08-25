@@ -27,16 +27,17 @@ import java.util.Properties;
  */
 public class ServerConfiguration {
 
-    @Nonnull private final String configDir;
+    @Nonnull
+    private final String configDir;
 
-    @Nonnull private final Properties dynamicProperties;
+    @Nonnull
+    private final Properties dynamicProperties;
 
-    @Nonnull private final String[] args;
+    @Nonnull
+    private final String[] args;
 
     public ServerConfiguration(
-            @Nonnull String configDir,
-            @Nonnull Properties dynamicProperties,
-            @Nonnull String[] args) {
+            @Nonnull String configDir, @Nonnull Properties dynamicProperties, @Nonnull String[] args) {
         this.configDir = configDir;
         this.dynamicProperties = dynamicProperties;
         this.args = args;

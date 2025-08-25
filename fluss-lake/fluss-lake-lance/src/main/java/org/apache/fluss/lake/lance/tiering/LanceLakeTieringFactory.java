@@ -28,8 +28,7 @@ import org.apache.fluss.lake.writer.WriterInitContext;
 import java.io.IOException;
 
 /** Implementation of {@link LakeTieringFactory} for Lance . */
-public class LanceLakeTieringFactory
-        implements LakeTieringFactory<LanceWriteResult, LanceCommittable> {
+public class LanceLakeTieringFactory implements LakeTieringFactory<LanceWriteResult, LanceCommittable> {
     private final Configuration config;
 
     public LanceLakeTieringFactory(Configuration config) {
@@ -37,8 +36,7 @@ public class LanceLakeTieringFactory
     }
 
     @Override
-    public LakeWriter<LanceWriteResult> createLakeWriter(WriterInitContext writerInitContext)
-            throws IOException {
+    public LakeWriter<LanceWriteResult> createLakeWriter(WriterInitContext writerInitContext) throws IOException {
         return new LanceLakeWriter(config, writerInitContext);
     }
 

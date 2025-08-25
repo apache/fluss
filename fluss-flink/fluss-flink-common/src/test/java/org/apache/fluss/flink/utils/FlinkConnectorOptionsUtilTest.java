@@ -32,26 +32,17 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class FlinkConnectorOptionsUtilTest {
     @Test
     void testParseTimestamp() {
-        assertThat(
-                        parseTimestamp(
-                                "1702134552000",
-                                SCAN_STARTUP_TIMESTAMP.key(),
-                                ZoneId.systemDefault()))
+        assertThat(parseTimestamp("1702134552000", SCAN_STARTUP_TIMESTAMP.key(), ZoneId.systemDefault()))
                 .isEqualTo(1702134552000L);
 
-        assertThat(
-                        parseTimestamp(
-                                "2023-12-09 23:09:12",
-                                SCAN_STARTUP_TIMESTAMP.key(),
-                                TimeZone.getTimeZone("Asia/Shanghai").toZoneId()))
+        assertThat(parseTimestamp(
+                        "2023-12-09 23:09:12",
+                        SCAN_STARTUP_TIMESTAMP.key(),
+                        TimeZone.getTimeZone("Asia/Shanghai").toZoneId()))
                 .isEqualTo(1702134552000L);
 
-        assertThatThrownBy(
-                        () ->
-                                parseTimestamp(
-                                        "2023-12-09T23:09:12",
-                                        SCAN_STARTUP_TIMESTAMP.key(),
-                                        ZoneId.systemDefault()))
+        assertThatThrownBy(() ->
+                        parseTimestamp("2023-12-09T23:09:12", SCAN_STARTUP_TIMESTAMP.key(), ZoneId.systemDefault()))
                 .isInstanceOf(ValidationException.class)
                 .hasMessage(
                         "Invalid properties 'scan.startup.timestamp' should follow the format 'yyyy-MM-dd HH:mm:ss' "

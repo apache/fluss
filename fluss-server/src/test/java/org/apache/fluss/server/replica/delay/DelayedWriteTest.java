@@ -52,22 +52,15 @@ final class DelayedWriteTest extends ReplicaTestBase {
 
         // try to append records directly into logTablet instead of replica.appendRecordsToLeader
         // because we want to increase the highWatermark by ourselves.
-        DelayedWrite<?> delayedWrite =
-                createDelayedWrite(
-                        replica,
-                        tb,
-                        10000,
-                        resultList -> {
-                            assertThat(resultList.size()).isEqualTo(1);
-                            assertThat(resultList.get(0).getWriteLogEndOffset()).isEqualTo(10);
-                        });
+        DelayedWrite<?> delayedWrite = createDelayedWrite(replica, tb, 10000, resultList -> {
+            assertThat(resultList.size()).isEqualTo(1);
+            assertThat(resultList.get(0).getWriteLogEndOffset()).isEqualTo(10);
+        });
 
-        DelayedOperationManager<DelayedWrite<?>> delayedWriteManager =
-                replicaManager.getDelayedWriteManager();
+        DelayedOperationManager<DelayedWrite<?>> delayedWriteManager = replicaManager.getDelayedWriteManager();
         DelayedTableBucketKey delayedTableBucketKey = new DelayedTableBucketKey(tb);
-        boolean completed =
-                delayedWriteManager.tryCompleteElseWatch(
-                        delayedWrite, Collections.singletonList(delayedTableBucketKey));
+        boolean completed = delayedWriteManager.tryCompleteElseWatch(
+                delayedWrite, Collections.singletonList(delayedTableBucketKey));
         assertThat(completed).isFalse();
         assertThat(delayedWriteManager.numDelayed()).isEqualTo(1);
         assertThat(delayedWriteManager.watched()).isEqualTo(1);
@@ -93,18 +86,12 @@ final class DelayedWriteTest extends ReplicaTestBase {
 
         DelayedTableBucketKey delayedTableBucketKey = new DelayedTableBucketKey(tb);
         assertThat(delayedTableBucketKey.getTableBucket()).isEqualTo(tb);
-        DelayedOperationManager<DelayedWrite<?>> delayedWriteManager =
-                replicaManager.getDelayedWriteManager();
+        DelayedOperationManager<DelayedWrite<?>> delayedWriteManager = replicaManager.getDelayedWriteManager();
 
-        DelayedWrite<?> delayedWrite =
-                createDelayedWrite(
-                        replica,
-                        tb,
-                        10000,
-                        resultList -> {
-                            assertThat(resultList.size()).isEqualTo(1);
-                            assertThat(resultList.get(0).getWriteLogEndOffset()).isEqualTo(10);
-                        });
+        DelayedWrite<?> delayedWrite = createDelayedWrite(replica, tb, 10000, resultList -> {
+            assertThat(resultList.size()).isEqualTo(1);
+            assertThat(resultList.get(0).getWriteLogEndOffset()).isEqualTo(10);
+        });
         // Directly watch for the delayedWrite.
         delayedWriteManager.watchForOperation(delayedTableBucketKey, delayedWrite);
         assertThat(delayedWriteManager.watched()).isEqualTo(1);
@@ -131,23 +118,15 @@ final class DelayedWriteTest extends ReplicaTestBase {
         makeLogTableAsLeader(tb.getBucket());
         Replica replica = replicaManager.getReplicaOrException(tb);
 
-        DelayedWrite<?> delayedWrite =
-                createDelayedWrite(
-                        replica,
-                        tb,
-                        delayMs,
-                        resultList -> {
-                            assertThat(resultList.size()).isEqualTo(1);
-                            assertThat(resultList.get(0).getErrorCode())
-                                    .isEqualTo(Errors.REQUEST_TIME_OUT.code());
-                        });
+        DelayedWrite<?> delayedWrite = createDelayedWrite(replica, tb, delayMs, resultList -> {
+            assertThat(resultList.size()).isEqualTo(1);
+            assertThat(resultList.get(0).getErrorCode()).isEqualTo(Errors.REQUEST_TIME_OUT.code());
+        });
 
-        DelayedOperationManager<DelayedWrite<?>> delayedWriteManager =
-                replicaManager.getDelayedWriteManager();
+        DelayedOperationManager<DelayedWrite<?>> delayedWriteManager = replicaManager.getDelayedWriteManager();
         DelayedTableBucketKey delayedTableBucketKey = new DelayedTableBucketKey(tb);
-        boolean completed =
-                delayedWriteManager.tryCompleteElseWatch(
-                        delayedWrite, Collections.singletonList(delayedTableBucketKey));
+        boolean completed = delayedWriteManager.tryCompleteElseWatch(
+                delayedWrite, Collections.singletonList(delayedTableBucketKey));
         assertThat(completed).isFalse();
         assertThat(delayedWriteManager.numDelayed()).isEqualTo(1);
         assertThat(delayedWriteManager.watched()).isEqualTo(1);
@@ -158,24 +137,18 @@ final class DelayedWriteTest extends ReplicaTestBase {
         assertThat(delayedWriteManager.watched()).isEqualTo(1);
 
         // make sure the delayedWrite timeout.
-        retry(
-                Duration.ofMillis(delayMs + 3000),
-                () -> assertThat(delayedWriteManager.numDelayed()).isEqualTo(0));
+        retry(Duration.ofMillis(delayMs + 3000), () -> assertThat(delayedWriteManager.numDelayed())
+                .isEqualTo(0));
 
         assertThat(delayedWriteManager.watched()).isEqualTo(1);
     }
 
     private DelayedWrite<ProduceLogResultForBucket> createDelayedWrite(
-            Replica replica,
-            TableBucket tb,
-            int delayMs,
-            Consumer<List<ProduceLogResultForBucket>> callback)
+            Replica replica, TableBucket tb, int delayMs, Consumer<List<ProduceLogResultForBucket>> callback)
             throws Exception {
-        LogAppendInfo appendInfo =
-                replica.getLogTablet().appendAsLeader(genMemoryLogRecordsByObject(DATA1));
+        LogAppendInfo appendInfo = replica.getLogTablet().appendAsLeader(genMemoryLogRecordsByObject(DATA1));
         ProduceLogResultForBucket appendResult =
-                new ProduceLogResultForBucket(
-                        tb, appendInfo.firstOffset(), appendInfo.lastOffset() + 1);
+                new ProduceLogResultForBucket(tb, appendInfo.firstOffset(), appendInfo.lastOffset() + 1);
         Map<TableBucket, DelayedBucketStatus<ProduceLogResultForBucket>> bucketStatusMap =
                 Collections.singletonMap(tb, new DelayedBucketStatus<>(10, appendResult));
 

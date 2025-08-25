@@ -150,42 +150,28 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.coordinatorChannelManager = coordinatorChannelManager;
         this.coordinatorContext = coordinatorContext;
         this.coordinatorEventManager = new CoordinatorEventManager(this, coordinatorMetricGroup);
-        this.replicaStateMachine =
-                new ReplicaStateMachine(
-                        coordinatorContext,
-                        new CoordinatorRequestBatch(
-                                coordinatorChannelManager,
-                                coordinatorEventManager,
-                                coordinatorContext),
-                        zooKeeperClient);
-        this.tableBucketStateMachine =
-                new TableBucketStateMachine(
-                        coordinatorContext,
-                        new CoordinatorRequestBatch(
-                                coordinatorChannelManager,
-                                coordinatorEventManager,
-                                coordinatorContext),
-                        zooKeeperClient);
+        this.replicaStateMachine = new ReplicaStateMachine(
+                coordinatorContext,
+                new CoordinatorRequestBatch(coordinatorChannelManager, coordinatorEventManager, coordinatorContext),
+                zooKeeperClient);
+        this.tableBucketStateMachine = new TableBucketStateMachine(
+                coordinatorContext,
+                new CoordinatorRequestBatch(coordinatorChannelManager, coordinatorEventManager, coordinatorContext),
+                zooKeeperClient);
         this.metadataManager = new MetadataManager(zooKeeperClient, conf);
 
-        this.tableManager =
-                new TableManager(
-                        metadataManager,
-                        coordinatorContext,
-                        replicaStateMachine,
-                        tableBucketStateMachine,
-                        new RemoteStorageCleaner(conf, ioExecutor));
+        this.tableManager = new TableManager(
+                metadataManager,
+                coordinatorContext,
+                replicaStateMachine,
+                tableBucketStateMachine,
+                new RemoteStorageCleaner(conf, ioExecutor));
         this.tableChangeWatcher = new TableChangeWatcher(zooKeeperClient, coordinatorEventManager);
-        this.tabletServerChangeWatcher =
-                new TabletServerChangeWatcher(zooKeeperClient, coordinatorEventManager);
+        this.tabletServerChangeWatcher = new TabletServerChangeWatcher(zooKeeperClient, coordinatorEventManager);
         this.coordinatorRequestBatch =
-                new CoordinatorRequestBatch(
-                        coordinatorChannelManager, coordinatorEventManager, coordinatorContext);
-        this.completedSnapshotStoreManager =
-                new CompletedSnapshotStoreManager(
-                        conf.getInt(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS),
-                        ioExecutor,
-                        zooKeeperClient);
+                new CoordinatorRequestBatch(coordinatorChannelManager, coordinatorEventManager, coordinatorContext);
+        this.completedSnapshotStoreManager = new CompletedSnapshotStoreManager(
+                conf.getInt(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS), ioExecutor, zooKeeperClient);
         this.autoPartitionManager = autoPartitionManager;
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
@@ -216,8 +202,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // update coordinator metadata cache when CoordinatorServer start.
         HashSet<ServerInfo> tabletServerInfoList =
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values());
-        serverMetadataCache.updateMetadata(
-                coordinatorContext.getCoordinatorServerInfo(), tabletServerInfoList);
+        serverMetadataCache.updateMetadata(coordinatorContext.getCoordinatorServerInfo(), tabletServerInfoList);
         updateTabletServerMetadataCacheWhenStartup(tabletServerInfoList);
 
         // start table manager
@@ -237,22 +222,19 @@ public class CoordinatorEventProcessor implements EventProcessor {
         try {
             return zooKeeperClient
                     .getCoordinatorAddress()
-                    .map(
-                            coordinatorAddress ->
-                                    // TODO we set id to 0 as that CoordinatorServer don't support
-                                    // HA, if we support HA, we need to set id to the config
-                                    // CoordinatorServer id to avoid node drift.
-                                    new ServerInfo(
-                                            0,
-                                            null, // For coordinatorServer, no rack info
-                                            coordinatorAddress.getEndpoints(),
-                                            ServerType.COORDINATOR))
-                    .orElseGet(
-                            () -> {
-                                LOG.error("Coordinator server address is empty in zookeeper.");
-                                throw new FlussRuntimeException(
-                                        "Coordinator server address is empty in zookeeper.");
-                            });
+                    .map(coordinatorAddress ->
+                            // TODO we set id to 0 as that CoordinatorServer don't support
+                            // HA, if we support HA, we need to set id to the config
+                            // CoordinatorServer id to avoid node drift.
+                            new ServerInfo(
+                                    0,
+                                    null, // For coordinatorServer, no rack info
+                                    coordinatorAddress.getEndpoints(),
+                                    ServerType.COORDINATOR))
+                    .orElseGet(() -> {
+                        LOG.error("Coordinator server address is empty in zookeeper.");
+                        throw new FlussRuntimeException("Coordinator server address is empty in zookeeper.");
+                    });
         } catch (Exception e) {
             throw new FlussRuntimeException("Get coordinator address failed.", e);
         }
@@ -269,13 +251,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
         List<ServerInfo> tabletServerInfos = new ArrayList<>();
         List<ServerNode> internalServerNodes = new ArrayList<>();
         for (int server : currentServers) {
-            TabletServerRegistration registration = zooKeeperClient.getTabletServer(server).get();
-            ServerInfo serverInfo =
-                    new ServerInfo(
-                            server,
-                            registration.getRack(),
-                            registration.getEndpoints(),
-                            ServerType.TABLET_SERVER);
+            TabletServerRegistration registration =
+                    zooKeeperClient.getTabletServer(server).get();
+            ServerInfo serverInfo = new ServerInfo(
+                    server, registration.getRack(), registration.getEndpoints(), ServerType.TABLET_SERVER);
             // Get internal listener endpoint to send request to tablet server.
             Endpoint internalEndpoint = serverInfo.endpoint(internalListenerName);
             if (internalEndpoint == null) {
@@ -286,12 +265,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 continue;
             }
             tabletServerInfos.add(serverInfo);
-            internalServerNodes.add(
-                    new ServerNode(
-                            server,
-                            internalEndpoint.getHost(),
-                            internalEndpoint.getPort(),
-                            ServerType.TABLET_SERVER));
+            internalServerNodes.add(new ServerNode(
+                    server, internalEndpoint.getHost(), internalEndpoint.getPort(), ServerType.TABLET_SERVER));
         }
 
         coordinatorContext.setLiveTabletServers(tabletServerInfos);
@@ -313,8 +288,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     lakeTables.add(Tuple2.of(tableInfo, System.currentTimeMillis()));
                 }
                 if (tableInfo.isPartitioned()) {
-                    Map<String, Long> partitions =
-                            zooKeeperClient.getPartitionNameAndIds(tablePath);
+                    Map<String, Long> partitions = zooKeeperClient.getPartitionNameAndIds(tablePath);
                     for (Map.Entry<String, Long> partition : partitions.entrySet()) {
                         // put partition info to coordinator context
                         coordinatorContext.putPartition(
@@ -322,10 +296,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                 PhysicalTablePath.of(tableInfo.getTablePath(), partition.getKey()));
                     }
                     // if the table is auto partition, put the partitions info
-                    if (tableInfo
-                            .getTableConfig()
-                            .getAutoPartitionStrategy()
-                            .isAutoPartitionEnabled()) {
+                    if (tableInfo.getTableConfig().getAutoPartitionStrategy().isAutoPartitionEnabled()) {
                         autoPartitionTables.add(tableInfo);
                     }
                 }
@@ -338,7 +309,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
         loadTableAssignment();
         loadPartitionAssignment();
         long end = System.currentTimeMillis();
-        LOG.info("Current total {} tables in the cluster.", coordinatorContext.allTables().size());
+        LOG.info(
+                "Current total {} tables in the cluster.",
+                coordinatorContext.allTables().size());
         LOG.info(
                 "Detect tables {} to be deleted after initializing coordinator context. ",
                 coordinatorContext.getTablesToBeDeleted());
@@ -374,13 +347,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private void loadPartitionAssignment() throws Exception {
         // load all assignment
-        List<String> partitionAssignmentNodes =
-                zooKeeperClient.getChildren(PartitionIdsZNode.path());
+        List<String> partitionAssignmentNodes = zooKeeperClient.getChildren(PartitionIdsZNode.path());
         Set<TablePartition> deletedPartitions = new HashSet<>();
         for (String partitionIdStr : partitionAssignmentNodes) {
             long partitionId = Long.parseLong(partitionIdStr);
-            Optional<PartitionAssignment> optAssignment =
-                    zooKeeperClient.getPartitionAssignment(partitionId);
+            Optional<PartitionAssignment> optAssignment = zooKeeperClient.getPartitionAssignment(partitionId);
             if (!optAssignment.isPresent()) {
                 LOG.warn("Can't get the assignment for table partition {}.", partitionId);
                 continue;
@@ -396,8 +367,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorContext.queuePartitionDeletion(deletedPartitions);
     }
 
-    private void loadAssignment(
-            long tableId, TableAssignment tableAssignment, @Nullable Long partitionId)
+    private void loadAssignment(long tableId, TableAssignment tableAssignment, @Nullable Long partitionId)
             throws Exception {
         for (Map.Entry<Integer, BucketAssignment> entry :
                 tableAssignment.getBucketAssignments().entrySet()) {
@@ -405,13 +375,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
             BucketAssignment bucketAssignment = entry.getValue();
             // put the assignment information to context
             TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
-            coordinatorContext.updateBucketReplicaAssignment(
-                    tableBucket, bucketAssignment.getReplicas());
+            coordinatorContext.updateBucketReplicaAssignment(tableBucket, bucketAssignment.getReplicas());
             Optional<LeaderAndIsr> optLeaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket);
             // update bucket LeaderAndIsr info
             optLeaderAndIsr.ifPresent(
-                    leaderAndIsr ->
-                            coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr));
+                    leaderAndIsr -> coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr));
         }
     }
 
@@ -435,8 +403,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         } else if (event instanceof DropPartitionEvent) {
             processDropPartition((DropPartitionEvent) event);
         } else if (event instanceof NotifyLeaderAndIsrResponseReceivedEvent) {
-            processNotifyLeaderAndIsrResponseReceivedEvent(
-                    (NotifyLeaderAndIsrResponseReceivedEvent) event);
+            processNotifyLeaderAndIsrResponseReceivedEvent((NotifyLeaderAndIsrResponseReceivedEvent) event);
         } else if (event instanceof DeleteReplicaResponseReceivedEvent) {
             processDeleteReplicaResponseReceived((DeleteReplicaResponseReceivedEvent) event);
         } else if (event instanceof NewTabletServerEvent) {
@@ -445,28 +412,21 @@ public class CoordinatorEventProcessor implements EventProcessor {
             processDeadTabletServer((DeadTabletServerEvent) event);
         } else if (event instanceof AdjustIsrReceivedEvent) {
             AdjustIsrReceivedEvent adjustIsrReceivedEvent = (AdjustIsrReceivedEvent) event;
-            CompletableFuture<AdjustIsrResponse> callback =
-                    adjustIsrReceivedEvent.getRespCallback();
+            CompletableFuture<AdjustIsrResponse> callback = adjustIsrReceivedEvent.getRespCallback();
             completeFromCallable(
                     callback,
-                    () ->
-                            makeAdjustIsrResponse(
-                                    tryProcessAdjustIsr(
-                                            adjustIsrReceivedEvent.getLeaderAndIsrMap())));
+                    () -> makeAdjustIsrResponse(tryProcessAdjustIsr(adjustIsrReceivedEvent.getLeaderAndIsrMap())));
         } else if (event instanceof CommitKvSnapshotEvent) {
             CommitKvSnapshotEvent commitKvSnapshotEvent = (CommitKvSnapshotEvent) event;
-            CompletableFuture<CommitKvSnapshotResponse> callback =
-                    commitKvSnapshotEvent.getRespCallback();
+            CompletableFuture<CommitKvSnapshotResponse> callback = commitKvSnapshotEvent.getRespCallback();
             completeFromCallable(callback, () -> tryProcessCommitKvSnapshot(commitKvSnapshotEvent));
         } else if (event instanceof CommitRemoteLogManifestEvent) {
-            CommitRemoteLogManifestEvent commitRemoteLogManifestEvent =
-                    (CommitRemoteLogManifestEvent) event;
+            CommitRemoteLogManifestEvent commitRemoteLogManifestEvent = (CommitRemoteLogManifestEvent) event;
             completeFromCallable(
                     commitRemoteLogManifestEvent.getRespCallback(),
                     () -> tryProcessCommitRemoteLogManifest(commitRemoteLogManifestEvent));
         } else if (event instanceof CommitLakeTableSnapshotEvent) {
-            CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent =
-                    (CommitLakeTableSnapshotEvent) event;
+            CommitLakeTableSnapshotEvent commitLakeTableSnapshotEvent = (CommitLakeTableSnapshotEvent) event;
             completeFromCallable(
                     commitLakeTableSnapshotEvent.getRespCallback(),
                     () -> tryProcessCommitLakeTableSnapshot(commitLakeTableSnapshotEvent));
@@ -487,8 +447,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         TableInfo tableInfo = createTableEvent.getTableInfo();
         coordinatorContext.putTableInfo(tableInfo);
         TableAssignment tableAssignment = createTableEvent.getTableAssignment();
-        tableManager.onCreateNewTable(
-                tableInfo.getTablePath(), tableInfo.getTableId(), tableAssignment);
+        tableManager.onCreateNewTable(tableInfo.getTablePath(), tableInfo.getTableId(), tableAssignment);
         if (createTableEvent.isAutoPartitionTable()) {
             autoPartitionManager.addAutoPartitionTable(tableInfo, true);
         }
@@ -503,10 +462,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     .keySet()
                     .forEach(bucketId -> tableBuckets.add(new TableBucket(tableId, bucketId)));
             updateTabletServerMetadataCache(
-                    new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
-                    null,
-                    null,
-                    tableBuckets);
+                    new HashSet<>(coordinatorContext.getLiveTabletServers().values()), null, null, tableBuckets);
         } else {
             updateTabletServerMetadataCache(
                     new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
@@ -538,14 +494,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
         partitionAssignment
                 .getBucketAssignments()
                 .keySet()
-                .forEach(
-                        bucketId ->
-                                tableBuckets.add(new TableBucket(tableId, partitionId, bucketId)));
+                .forEach(bucketId -> tableBuckets.add(new TableBucket(tableId, partitionId, bucketId)));
         updateTabletServerMetadataCache(
-                new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
-                null,
-                null,
-                tableBuckets);
+                new HashSet<>(coordinatorContext.getLiveTabletServers().values()), null, null, tableBuckets);
     }
 
     private void processDropTable(DropTableEvent dropTableEvent) {
@@ -554,8 +505,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         TableInfo dropTableInfo = coordinatorContext.getTableInfoById(tableId);
         if (dropTableInfo.hasPrimaryKey()) {
             Set<TableBucket> deleteTableBuckets = coordinatorContext.getAllBucketsForTable(tableId);
-            completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(
-                    deleteTableBuckets);
+            completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(deleteTableBuckets);
         }
 
         coordinatorContext.queueTableDeletion(Collections.singleton(tableId));
@@ -577,17 +527,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private void processDropPartition(DropPartitionEvent dropPartitionEvent) {
         long tableId = dropPartitionEvent.getTableId();
-        TablePartition tablePartition =
-                new TablePartition(tableId, dropPartitionEvent.getPartitionId());
+        TablePartition tablePartition = new TablePartition(tableId, dropPartitionEvent.getPartitionId());
 
         // If this is a primary key table partition, drop the kv snapshot store.
         TableInfo dropTableInfo = coordinatorContext.getTableInfoById(tableId);
         if (dropTableInfo.hasPrimaryKey()) {
             Set<TableBucket> deleteTableBuckets =
-                    coordinatorContext.getAllBucketsForPartition(
-                            tableId, dropPartitionEvent.getPartitionId());
-            completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(
-                    deleteTableBuckets);
+                    coordinatorContext.getAllBucketsForPartition(tableId, dropPartitionEvent.getPartitionId());
+            completedSnapshotStoreManager.removeCompletedSnapshotStoreByTableBuckets(deleteTableBuckets);
         }
 
         coordinatorContext.queuePartitionDeletion(Collections.singleton(tablePartition));
@@ -609,10 +556,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         Set<TableBucketReplica> failDeletedReplicas = new HashSet<>();
         Set<TableBucketReplica> successDeletedReplicas = new HashSet<>();
-        for (DeleteReplicaResultForBucket deleteReplicaResultForBucket :
-                deleteReplicaResultForBuckets) {
-            TableBucketReplica tableBucketReplica =
-                    deleteReplicaResultForBucket.getTableBucketReplica();
+        for (DeleteReplicaResultForBucket deleteReplicaResultForBucket : deleteReplicaResultForBuckets) {
+            TableBucketReplica tableBucketReplica = deleteReplicaResultForBucket.getTableBucketReplica();
             if (deleteReplicaResultForBucket.succeeded()) {
                 successDeletedReplicas.add(tableBucketReplica);
             } else {
@@ -623,13 +568,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorContext.clearFailDeleteNumbers(successDeletedReplicas);
 
         // pick up the replicas to retry delete and replicas that considered as success delete
-        Tuple2<Set<TableBucketReplica>, Set<TableBucketReplica>>
-                retryDeleteAndSuccessDeleteReplicas =
-                        coordinatorContext.retryDeleteAndSuccessDeleteReplicas(failDeletedReplicas);
+        Tuple2<Set<TableBucketReplica>, Set<TableBucketReplica>> retryDeleteAndSuccessDeleteReplicas =
+                coordinatorContext.retryDeleteAndSuccessDeleteReplicas(failDeletedReplicas);
 
         // transmit to deletion started for retry delete replicas
-        replicaStateMachine.handleStateChanges(
-                retryDeleteAndSuccessDeleteReplicas.f0, ReplicaDeletionStarted);
+        replicaStateMachine.handleStateChanges(retryDeleteAndSuccessDeleteReplicas.f0, ReplicaDeletionStarted);
 
         // add all the replicas that considered as success delete to success deleted replicas
         successDeletedReplicas.addAll(retryDeleteAndSuccessDeleteReplicas.f1);
@@ -649,13 +592,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // get all the results for each bucket
         List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets =
                 notifyLeaderAndIsrResponseReceivedEvent.getNotifyLeaderAndIsrResultForBuckets();
-        for (NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket :
-                notifyLeaderAndIsrResultForBuckets) {
+        for (NotifyLeaderAndIsrResultForBucket notifyLeaderAndIsrResultForBucket : notifyLeaderAndIsrResultForBuckets) {
             // if the error code is not none, we will consider it as offline
             if (notifyLeaderAndIsrResultForBucket.failed()) {
                 offlineReplicas.add(
-                        new TableBucketReplica(
-                                notifyLeaderAndIsrResultForBucket.getTableBucket(), serverId));
+                        new TableBucketReplica(notifyLeaderAndIsrResultForBucket.getTableBucket(), serverId));
             }
         }
         if (!offlineReplicas.isEmpty()) {
@@ -667,8 +608,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private void onReplicaBecomeOffline(Set<TableBucketReplica> offlineReplicas) {
         LOG.info("The replica {} become offline.", offlineReplicas);
         for (TableBucketReplica offlineReplica : offlineReplicas) {
-            coordinatorContext.addOfflineBucketInServer(
-                    offlineReplica.getTableBucket(), offlineReplica.getReplica());
+            coordinatorContext.addOfflineBucketInServer(offlineReplica.getTableBucket(), offlineReplica.getReplica());
         }
 
         Set<TableBucket> bucketWithOfflineLeader = new HashSet<>();
@@ -677,12 +617,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         for (TableBucketReplica offlineReplica : offlineReplicas) {
             coordinatorContext
                     .getBucketLeaderAndIsr(offlineReplica.getTableBucket())
-                    .ifPresent(
-                            leaderAndIsr -> {
-                                if (leaderAndIsr.leader() == offlineReplica.getReplica()) {
-                                    bucketWithOfflineLeader.add(offlineReplica.getTableBucket());
-                                }
-                            });
+                    .ifPresent(leaderAndIsr -> {
+                        if (leaderAndIsr.leader() == offlineReplica.getReplica()) {
+                            bucketWithOfflineLeader.add(offlineReplica.getTableBucket());
+                        }
+                    });
         }
         // for the bucket with offline leader, we set it to offline and
         // then try to transmit to Online
@@ -739,10 +678,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()));
         // update server info for all tablet servers.
         updateTabletServerMetadataCache(
-                new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
-                null,
-                null,
-                Collections.emptySet());
+                new HashSet<>(coordinatorContext.getLiveTabletServers().values()), null, null, Collections.emptySet());
         // update table info for the new added table server.
         updateTabletServerMetadataCache(
                 Collections.singleton(serverInfo),
@@ -752,14 +688,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // when a new tablet server comes up, we need to get all replicas of the server
         // and transmit them to online
-        Set<TableBucketReplica> replicas =
-                coordinatorContext.replicasOnTabletServer(tabletServerId).stream()
-                        .filter(
-                                // don't consider replicas to be deleted
-                                tableBucketReplica ->
-                                        !coordinatorContext.isToBeDeleted(
-                                                tableBucketReplica.getTableBucket()))
-                        .collect(Collectors.toSet());
+        Set<TableBucketReplica> replicas = coordinatorContext.replicasOnTabletServer(tabletServerId).stream()
+                .filter(
+                        // don't consider replicas to be deleted
+                        tableBucketReplica -> !coordinatorContext.isToBeDeleted(tableBucketReplica.getTableBucket()))
+                .collect(Collectors.toSet());
 
         replicaStateMachine.handleStateChanges(replicas, OnlineReplica);
 
@@ -791,18 +724,16 @@ public class CoordinatorEventProcessor implements EventProcessor {
         Set<ServerInfo> serverInfos =
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values());
         // update coordinatorServer metadata cache.
-        serverMetadataCache.updateMetadata(
-                coordinatorContext.getCoordinatorServerInfo(), serverInfos);
+        serverMetadataCache.updateMetadata(coordinatorContext.getCoordinatorServerInfo(), serverInfos);
         updateTabletServerMetadataCache(serverInfos, null, null, Collections.emptySet());
 
         TableBucketStateMachine tableBucketStateMachine = tableManager.getTableBucketStateMachine();
         // get all table bucket whose leader is in this server and it not to be deleted
-        Set<TableBucket> bucketsWithOfflineLeader =
-                coordinatorContext.getBucketsWithLeaderIn(tabletServerId).stream()
-                        .filter(
-                                // don't consider buckets to be deleted
-                                tableBucket -> !coordinatorContext.isToBeDeleted(tableBucket))
-                        .collect(Collectors.toSet());
+        Set<TableBucket> bucketsWithOfflineLeader = coordinatorContext.getBucketsWithLeaderIn(tabletServerId).stream()
+                .filter(
+                        // don't consider buckets to be deleted
+                        tableBucket -> !coordinatorContext.isToBeDeleted(tableBucket))
+                .collect(Collectors.toSet());
         // trigger offline state for all the table buckets whose current leader
         // is the failed tablet server
         tableBucketStateMachine.handleStateChange(bucketsWithOfflineLeader, OfflineBucket);
@@ -811,14 +742,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         tableBucketStateMachine.triggerOnlineBucketStateChange();
 
         // get all replicas in this server and is not to be deleted
-        Set<TableBucketReplica> replicas =
-                coordinatorContext.replicasOnTabletServer(tabletServerId).stream()
-                        .filter(
-                                // don't consider replicas to be deleted
-                                tableBucketReplica ->
-                                        !coordinatorContext.isToBeDeleted(
-                                                tableBucketReplica.getTableBucket()))
-                        .collect(Collectors.toSet());
+        Set<TableBucketReplica> replicas = coordinatorContext.replicasOnTabletServer(tabletServerId).stream()
+                .filter(
+                        // don't consider replicas to be deleted
+                        tableBucketReplica -> !coordinatorContext.isToBeDeleted(tableBucketReplica.getTableBucket()))
+                .collect(Collectors.toSet());
 
         // trigger OfflineReplica state change for those newly offline replicas
         replicaStateMachine.handleStateChanges(replicas, OfflineReplica);
@@ -827,8 +755,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         updateTabletServerMetadataCache(serverInfos, null, null, bucketsWithOfflineLeader);
     }
 
-    private List<AdjustIsrResultForBucket> tryProcessAdjustIsr(
-            Map<TableBucket, LeaderAndIsr> leaderAndIsrList) {
+    private List<AdjustIsrResultForBucket> tryProcessAdjustIsr(Map<TableBucket, LeaderAndIsr> leaderAndIsrList) {
         // TODO verify leader epoch.
 
         List<AdjustIsrResultForBucket> result = new ArrayList<>();
@@ -845,34 +772,27 @@ public class CoordinatorEventProcessor implements EventProcessor {
             }
 
             // Do the updates in ZK.
-            LeaderAndIsr currentLeaderAndIsr =
-                    coordinatorContext
-                            .getBucketLeaderAndIsr(tableBucket)
-                            .orElseThrow(
-                                    () ->
-                                            new FlussRuntimeException(
-                                                    "Leader not found for table bucket "
-                                                            + tableBucket));
-            LeaderAndIsr newLeaderAndIsr =
-                    new LeaderAndIsr(
-                            // the leaderEpoch in request has been validated to be equal to current
-                            // leaderEpoch, which means the leader is still the same, so we use
-                            // leader and leaderEpoch in currentLeaderAndIsr.
-                            currentLeaderAndIsr.leader(),
-                            currentLeaderAndIsr.leaderEpoch(),
-                            // TODO: reject the request if there is a replica in ISR is not online,
-                            //  see KIP-841.
-                            tryAdjustLeaderAndIsr.isr(),
-                            coordinatorContext.getCoordinatorEpoch(),
-                            currentLeaderAndIsr.bucketEpoch() + 1);
+            LeaderAndIsr currentLeaderAndIsr = coordinatorContext
+                    .getBucketLeaderAndIsr(tableBucket)
+                    .orElseThrow(() -> new FlussRuntimeException("Leader not found for table bucket " + tableBucket));
+            LeaderAndIsr newLeaderAndIsr = new LeaderAndIsr(
+                    // the leaderEpoch in request has been validated to be equal to current
+                    // leaderEpoch, which means the leader is still the same, so we use
+                    // leader and leaderEpoch in currentLeaderAndIsr.
+                    currentLeaderAndIsr.leader(),
+                    currentLeaderAndIsr.leaderEpoch(),
+                    // TODO: reject the request if there is a replica in ISR is not online,
+                    //  see KIP-841.
+                    tryAdjustLeaderAndIsr.isr(),
+                    coordinatorContext.getCoordinatorEpoch(),
+                    currentLeaderAndIsr.bucketEpoch() + 1);
             newLeaderAndIsrList.put(tableBucket, newLeaderAndIsr);
         }
 
         try {
             zooKeeperClient.batchUpdateLeaderAndIsr(newLeaderAndIsrList);
-            newLeaderAndIsrList.forEach(
-                    (tableBucket, newLeaderAndIsr) ->
-                            result.add(new AdjustIsrResultForBucket(tableBucket, newLeaderAndIsr)));
+            newLeaderAndIsrList.forEach((tableBucket, newLeaderAndIsr) ->
+                    result.add(new AdjustIsrResultForBucket(tableBucket, newLeaderAndIsr)));
         } catch (Exception batchException) {
             LOG.error("Error when batch update leader and isr. Try one by one.", batchException);
 
@@ -883,8 +803,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     zooKeeperClient.updateLeaderAndIsr(tableBucket, newLeaderAndIsr);
                 } catch (Exception e) {
                     LOG.error("Error when register leader and isr.", e);
-                    result.add(
-                            new AdjustIsrResultForBucket(tableBucket, ApiError.fromThrowable(e)));
+                    result.add(new AdjustIsrResultForBucket(tableBucket, ApiError.fromThrowable(e)));
                 }
                 // Successful return.
                 result.add(new AdjustIsrResultForBucket(tableBucket, newLeaderAndIsr));
@@ -910,20 +829,17 @@ public class CoordinatorEventProcessor implements EventProcessor {
             throw new UnknownTableOrBucketException("Unknown table id " + tableBucket.getTableId());
         }
 
-        Optional<LeaderAndIsr> leaderAndIsrOpt =
-                coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+        Optional<LeaderAndIsr> leaderAndIsrOpt = coordinatorContext.getBucketLeaderAndIsr(tableBucket);
         if (!leaderAndIsrOpt.isPresent()) {
             throw new UnknownTableOrBucketException("Unknown table or bucket " + tableBucket);
         } else {
             LeaderAndIsr currentLeaderAndIsr = leaderAndIsrOpt.get();
             if (newLeaderAndIsr.leaderEpoch() > currentLeaderAndIsr.leaderEpoch()
                     || newLeaderAndIsr.bucketEpoch() > currentLeaderAndIsr.bucketEpoch()
-                    || newLeaderAndIsr.coordinatorEpoch()
-                            > coordinatorContext.getCoordinatorEpoch()) {
+                    || newLeaderAndIsr.coordinatorEpoch() > coordinatorContext.getCoordinatorEpoch()) {
                 // If the replica leader has a higher replica epoch, then it is likely
                 // that this node is no longer the active coordinator.
-                throw new InvalidCoordinatorException(
-                        "The coordinator is no longer the active coordinator.");
+                throw new InvalidCoordinatorException("The coordinator is no longer the active coordinator.");
             } else if (newLeaderAndIsr.leaderEpoch() < currentLeaderAndIsr.leaderEpoch()) {
                 throw new FencedLeaderEpochException(
                         "The request leader epoch in adjust isr request is lower than current leader epoch in coordinator.");
@@ -936,8 +852,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
     }
 
-    private CommitKvSnapshotResponse tryProcessCommitKvSnapshot(CommitKvSnapshotEvent event)
-            throws Exception {
+    private CommitKvSnapshotResponse tryProcessCommitKvSnapshot(CommitKvSnapshotEvent event) throws Exception {
         // validate
         validateFencedEvent(event);
 
@@ -954,21 +869,15 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorRequestBatch.newBatch();
         coordinatorContext
                 .getBucketLeaderAndIsr(tb)
-                .ifPresent(
-                        leaderAndIsr ->
-                                coordinatorRequestBatch
-                                        .addNotifyKvSnapshotOffsetRequestForTabletServers(
-                                                coordinatorContext.getFollowers(
-                                                        tb, leaderAndIsr.leader()),
-                                                tb,
-                                                completedSnapshot.getLogOffset()));
-        coordinatorRequestBatch.sendNotifyKvSnapshotOffsetRequest(
-                coordinatorContext.getCoordinatorEpoch());
+                .ifPresent(leaderAndIsr -> coordinatorRequestBatch.addNotifyKvSnapshotOffsetRequestForTabletServers(
+                        coordinatorContext.getFollowers(tb, leaderAndIsr.leader()),
+                        tb,
+                        completedSnapshot.getLogOffset()));
+        coordinatorRequestBatch.sendNotifyKvSnapshotOffsetRequest(coordinatorContext.getCoordinatorEpoch());
         return new CommitKvSnapshotResponse();
     }
 
-    private CommitRemoteLogManifestResponse tryProcessCommitRemoteLogManifest(
-            CommitRemoteLogManifestEvent event) {
+    private CommitRemoteLogManifestResponse tryProcessCommitRemoteLogManifest(CommitRemoteLogManifestEvent event) {
         CommitRemoteLogManifestData manifestData = event.getCommitRemoteLogManifestData();
         CommitRemoteLogManifestResponse response = new CommitRemoteLogManifestResponse();
         TableBucket tb = event.getTableBucket();
@@ -978,12 +887,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
             zooKeeperClient.upsertRemoteLogManifestHandle(
                     tb,
                     new RemoteLogManifestHandle(
-                            manifestData.getRemoteLogManifestPath(),
-                            manifestData.getRemoteLogEndOffset()));
+                            manifestData.getRemoteLogManifestPath(), manifestData.getRemoteLogEndOffset()));
         } catch (Exception e) {
-            LOG.error(
-                    "Error when commit remote log manifest, the leader need to revert the commit.",
-                    e);
+            LOG.error("Error when commit remote log manifest, the leader need to revert the commit.", e);
             response.setCommitSuccess(false);
             return response;
         }
@@ -993,17 +899,12 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorRequestBatch.newBatch();
         coordinatorContext
                 .getBucketLeaderAndIsr(tb)
-                .ifPresent(
-                        leaderAndIsr ->
-                                coordinatorRequestBatch
-                                        .addNotifyRemoteLogOffsetsRequestForTabletServers(
-                                                coordinatorContext.getFollowers(
-                                                        tb, leaderAndIsr.leader()),
-                                                tb,
-                                                manifestData.getRemoteLogStartOffset(),
-                                                manifestData.getRemoteLogEndOffset()));
-        coordinatorRequestBatch.sendNotifyRemoteLogOffsetsRequest(
-                coordinatorContext.getCoordinatorEpoch());
+                .ifPresent(leaderAndIsr -> coordinatorRequestBatch.addNotifyRemoteLogOffsetsRequestForTabletServers(
+                        coordinatorContext.getFollowers(tb, leaderAndIsr.leader()),
+                        tb,
+                        manifestData.getRemoteLogStartOffset(),
+                        manifestData.getRemoteLogEndOffset()));
+        coordinatorRequestBatch.sendNotifyRemoteLogOffsetsRequest(coordinatorContext.getCoordinatorEpoch());
         return response;
     }
 
@@ -1021,10 +922,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         CommitLakeTableSnapshotData commitLakeTableSnapshotData =
                 commitLakeTableSnapshotEvent.getCommitLakeTableSnapshotData();
         CommitLakeTableSnapshotResponse response = new CommitLakeTableSnapshotResponse();
-        Map<Long, LakeTableSnapshot> lakeTableSnapshots =
-                commitLakeTableSnapshotData.getLakeTableSnapshot();
-        for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
-                lakeTableSnapshots.entrySet()) {
+        Map<Long, LakeTableSnapshot> lakeTableSnapshots = commitLakeTableSnapshotData.getLakeTableSnapshot();
+        for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry : lakeTableSnapshots.entrySet()) {
             Long tableId = lakeTableSnapshotEntry.getKey();
 
             PbCommitLakeTableSnapshotRespForTable tableResp = response.addTableResp();
@@ -1040,8 +939,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // send notify lakehouse data request to all replicas.
         coordinatorRequestBatch.newBatch();
-        for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry :
-                lakeTableSnapshots.entrySet()) {
+        for (Map.Entry<Long, LakeTableSnapshot> lakeTableSnapshotEntry : lakeTableSnapshots.entrySet()) {
             LakeTableSnapshot lakeTableSnapshot = lakeTableSnapshotEntry.getValue();
             for (Map.Entry<TableBucket, Long> bucketLogEndOffsetEntry :
                     lakeTableSnapshot.getBucketLogEndOffset().entrySet()) {
@@ -1049,16 +947,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 coordinatorContext
                         .getBucketLeaderAndIsr(bucketLogEndOffsetEntry.getKey())
                         .ifPresent(
-                                leaderAndIsr ->
-                                        coordinatorRequestBatch
-                                                .addNotifyLakeTableOffsetRequestForTableServers(
-                                                        coordinatorContext.getAssignment(tb),
-                                                        tb,
-                                                        lakeTableSnapshot));
+                                leaderAndIsr -> coordinatorRequestBatch.addNotifyLakeTableOffsetRequestForTableServers(
+                                        coordinatorContext.getAssignment(tb), tb, lakeTableSnapshot));
             }
         }
-        coordinatorRequestBatch.sendNotifyLakeTableOffsetRequest(
-                coordinatorContext.getCoordinatorEpoch());
+        coordinatorRequestBatch.sendNotifyLakeTableOffsetRequest(coordinatorContext.getCoordinatorEpoch());
         return response;
     }
 
@@ -1084,15 +977,13 @@ public class CoordinatorEventProcessor implements EventProcessor {
             // If the replica leader has a higher replica epoch,
             // or the request has a higher coordinator epoch,
             // then it is likely that this node is no longer the active coordinator.
-            throw new InvalidCoordinatorException(
-                    "The coordinator is no longer the active coordinator.");
+            throw new InvalidCoordinatorException("The coordinator is no longer the active coordinator.");
         }
 
         if (bucketLeaderEpoch < currentLeaderAndIsr.leaderEpoch()) {
-            throw new FencedLeaderEpochException(
-                    "The request leader epoch in coordinator event: "
-                            + event.getClass().getSimpleName()
-                            + " is lower than current leader epoch in coordinator.");
+            throw new FencedLeaderEpochException("The request leader epoch in coordinator event: "
+                    + event.getClass().getSimpleName()
+                    + " is lower than current leader epoch in coordinator.");
         }
 
         if (tb.getPartitionId() != null) {
@@ -1109,35 +1000,27 @@ public class CoordinatorEventProcessor implements EventProcessor {
     /** Update metadata cache for all remote tablet servers when coordinator startup. */
     private void updateTabletServerMetadataCacheWhenStartup(Set<ServerInfo> aliveTabletServers) {
         coordinatorRequestBatch.newBatch();
-        Set<Integer> serverIds =
-                aliveTabletServers.stream().map(ServerInfo::id).collect(Collectors.toSet());
+        Set<Integer> serverIds = aliveTabletServers.stream().map(ServerInfo::id).collect(Collectors.toSet());
 
         Set<Long> tablesToBeDeleted = coordinatorContext.getTablesToBeDeleted();
-        tablesToBeDeleted.forEach(
-                tableId ->
-                        coordinatorRequestBatch.addUpdateMetadataRequestForTabletServers(
-                                serverIds, tableId, null, Collections.emptySet()));
+        tablesToBeDeleted.forEach(tableId -> coordinatorRequestBatch.addUpdateMetadataRequestForTabletServers(
+                serverIds, tableId, null, Collections.emptySet()));
 
         Set<TablePartition> partitionsToBeDeleted = coordinatorContext.getPartitionsToBeDeleted();
         partitionsToBeDeleted.forEach(
-                tablePartition ->
-                        coordinatorRequestBatch.addUpdateMetadataRequestForTabletServers(
-                                serverIds,
-                                tablePartition.getTableId(),
-                                tablePartition.getPartitionId(),
-                                Collections.emptySet()));
+                tablePartition -> coordinatorRequestBatch.addUpdateMetadataRequestForTabletServers(
+                        serverIds,
+                        tablePartition.getTableId(),
+                        tablePartition.getPartitionId(),
+                        Collections.emptySet()));
 
         Set<TableBucket> tableBuckets = new HashSet<>();
-        coordinatorContext
-                .bucketLeaderAndIsr()
-                .forEach(
-                        (tableBucket, leaderAndIsr) -> {
-                            if (!coordinatorContext.isToBeDeleted(tableBucket)) {
-                                tableBuckets.add(tableBucket);
-                            }
-                        });
-        coordinatorRequestBatch.addUpdateMetadataRequestForTabletServers(
-                serverIds, null, null, tableBuckets);
+        coordinatorContext.bucketLeaderAndIsr().forEach((tableBucket, leaderAndIsr) -> {
+            if (!coordinatorContext.isToBeDeleted(tableBucket)) {
+                tableBuckets.add(tableBucket);
+            }
+        });
+        coordinatorRequestBatch.addUpdateMetadataRequestForTabletServers(serverIds, null, null, tableBuckets);
 
         coordinatorRequestBatch.sendUpdateMetadataRequest();
     }
@@ -1149,10 +1032,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             @Nullable Long partitionId,
             Set<TableBucket> tableBuckets) {
         coordinatorRequestBatch.newBatch();
-        Set<Integer> serverIds =
-                aliveTabletServers.stream().map(ServerInfo::id).collect(Collectors.toSet());
-        coordinatorRequestBatch.addUpdateMetadataRequestForTabletServers(
-                serverIds, tableId, partitionId, tableBuckets);
+        Set<Integer> serverIds = aliveTabletServers.stream().map(ServerInfo::id).collect(Collectors.toSet());
+        coordinatorRequestBatch.addUpdateMetadataRequestForTabletServers(serverIds, tableId, partitionId, tableBuckets);
         coordinatorRequestBatch.sendUpdateMetadataRequest();
     }
 

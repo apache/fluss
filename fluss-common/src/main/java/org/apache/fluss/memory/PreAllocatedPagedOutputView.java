@@ -39,9 +39,7 @@ public class PreAllocatedPagedOutputView extends AbstractPagedOutputView {
 
     public PreAllocatedPagedOutputView(List<MemorySegment> allocatedSegments) {
         super(allocatedSegments.get(0), allocatedSegments.get(0).size());
-        checkArgument(
-                !allocatedSegments.isEmpty(),
-                "The pre-allocated memory segments should not be empty.");
+        checkArgument(!allocatedSegments.isEmpty(), "The pre-allocated memory segments should not be empty.");
         this.allocatedSegments = allocatedSegments;
         this.preAllocatedSize = getPageSize() * allocatedSegments.size();
         this.nextSegmentIndex = 1;

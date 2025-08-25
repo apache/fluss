@@ -71,68 +71,67 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
         long t1Id = createPkTable(t1);
         TableBucket t1Bucket = new TableBucket(t1Id, 0);
         // write records
-        List<InternalRow> rows =
-                Arrays.asList(
-                        row(
-                                true,
-                                (byte) 100,
-                                (short) 200,
-                                1,
-                                1 + 400L,
-                                500.1f,
-                                600.0d,
-                                "v1",
-                                Decimal.fromUnscaledLong(900, 5, 2),
-                                Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
-                                TimestampLtz.fromEpochMillis(1698235273400L),
-                                TimestampLtz.fromEpochMillis(1698235273400L, 7000),
-                                TimestampNtz.fromMillis(1698235273501L),
-                                TimestampNtz.fromMillis(1698235273501L, 8000),
-                                new byte[] {5, 6, 7, 8},
-                                TypeUtils.castFromString("2023-10-25", DataTypes.DATE()),
-                                TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
-                                BinaryString.fromString("abc"),
-                                new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}),
-                        row(
-                                true,
-                                (byte) 100,
-                                (short) 200,
-                                2,
-                                2 + 400L,
-                                500.1f,
-                                600.0d,
-                                "v2",
-                                Decimal.fromUnscaledLong(900, 5, 2),
-                                Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
-                                TimestampLtz.fromEpochMillis(1698235273400L),
-                                TimestampLtz.fromEpochMillis(1698235273400L, 7000),
-                                TimestampNtz.fromMillis(1698235273501L),
-                                TimestampNtz.fromMillis(1698235273501L, 8000),
-                                new byte[] {5, 6, 7, 8},
-                                TypeUtils.castFromString("2023-10-25", DataTypes.DATE()),
-                                TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
-                                BinaryString.fromString("abc"),
-                                new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}),
-                        row(
-                                true,
-                                (byte) 100,
-                                (short) 200,
-                                3,
-                                3 + 400L,
-                                500.1f,
-                                600.0d,
-                                "v3",
-                                Decimal.fromUnscaledLong(900, 5, 2),
-                                Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
-                                TimestampLtz.fromEpochMillis(1698235273400L),
-                                TimestampLtz.fromEpochMillis(1698235273400L, 7000),
-                                TimestampNtz.fromMillis(1698235273501L),
-                                TimestampNtz.fromMillis(1698235273501L, 8000),
-                                new byte[] {5, 6, 7, 8},
-                                TypeUtils.castFromString("2023-10-25", DataTypes.DATE()),
-                                TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
-                                BinaryString.fromString("abc"),
-                                new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}));
+        List<InternalRow> rows = Arrays.asList(
+                row(
+                        true,
+                        (byte) 100,
+                        (short) 200,
+                        1,
+                        1 + 400L,
+                        500.1f,
+                        600.0d,
+                        "v1",
+                        Decimal.fromUnscaledLong(900, 5, 2),
+                        Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                        TimestampLtz.fromEpochMillis(1698235273400L),
+                        TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                        TimestampNtz.fromMillis(1698235273501L),
+                        TimestampNtz.fromMillis(1698235273501L, 8000),
+                        new byte[] {5, 6, 7, 8},
+                        TypeUtils.castFromString("2023-10-25", DataTypes.DATE()),
+                        TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
+                        BinaryString.fromString("abc"),
+                        new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}),
+                row(
+                        true,
+                        (byte) 100,
+                        (short) 200,
+                        2,
+                        2 + 400L,
+                        500.1f,
+                        600.0d,
+                        "v2",
+                        Decimal.fromUnscaledLong(900, 5, 2),
+                        Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                        TimestampLtz.fromEpochMillis(1698235273400L),
+                        TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                        TimestampNtz.fromMillis(1698235273501L),
+                        TimestampNtz.fromMillis(1698235273501L, 8000),
+                        new byte[] {5, 6, 7, 8},
+                        TypeUtils.castFromString("2023-10-25", DataTypes.DATE()),
+                        TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
+                        BinaryString.fromString("abc"),
+                        new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}),
+                row(
+                        true,
+                        (byte) 100,
+                        (short) 200,
+                        3,
+                        3 + 400L,
+                        500.1f,
+                        600.0d,
+                        "v3",
+                        Decimal.fromUnscaledLong(900, 5, 2),
+                        Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                        TimestampLtz.fromEpochMillis(1698235273400L),
+                        TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                        TimestampNtz.fromMillis(1698235273501L),
+                        TimestampNtz.fromMillis(1698235273501L, 8000),
+                        new byte[] {5, 6, 7, 8},
+                        TypeUtils.castFromString("2023-10-25", DataTypes.DATE()),
+                        TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
+                        BinaryString.fromString("abc"),
+                        new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}));
         writeRows(t1, rows, false);
         waitUntilSnapshot(t1Id, 1, 0);
 
@@ -144,14 +143,11 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
 
             checkDataInIcebergPrimaryKeyTable(t1, rows);
             // check snapshot property in iceberg
-            Map<String, String> properties =
-                    new HashMap<String, String>() {
-                        {
-                            put(
-                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                    "[{\"bucket_id\":0,\"log_offset\":3}]");
-                        }
-                    };
+            Map<String, String> properties = new HashMap<String, String>() {
+                {
+                    put(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "[{\"bucket_id\":0,\"log_offset\":3}]");
+                }
+            };
             checkSnapshotPropertyInIceberg(t1, properties);
 
             // test log table
@@ -159,68 +155,67 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
 
             // then write data to the pk tables
             // write records
-            rows =
-                    Arrays.asList(
-                            row(
-                                    true,
-                                    (byte) 100,
-                                    (short) 200,
-                                    1,
-                                    1 + 400L,
-                                    500.1f,
-                                    600.0d,
-                                    "v111",
-                                    Decimal.fromUnscaledLong(900, 5, 2),
-                                    Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
-                                    TimestampLtz.fromEpochMillis(1698235273400L),
-                                    TimestampLtz.fromEpochMillis(1698235273400L, 7000),
-                                    TimestampNtz.fromMillis(1698235273501L),
-                                    TimestampNtz.fromMillis(1698235273501L, 8000),
-                                    new byte[] {5, 6, 7, 8},
-                                    TypeUtils.castFromString("2023-10-25", DataTypes.DATE()),
-                                    TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
-                                    BinaryString.fromString("abc"),
-                                    new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}),
-                            row(
-                                    true,
-                                    (byte) 100,
-                                    (short) 200,
-                                    2,
-                                    2 + 400L,
-                                    500.1f,
-                                    600.0d,
-                                    "v222",
-                                    Decimal.fromUnscaledLong(900, 5, 2),
-                                    Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
-                                    TimestampLtz.fromEpochMillis(1698235273400L),
-                                    TimestampLtz.fromEpochMillis(1698235273400L, 7000),
-                                    TimestampNtz.fromMillis(1698235273501L),
-                                    TimestampNtz.fromMillis(1698235273501L, 8000),
-                                    new byte[] {5, 6, 7, 8},
-                                    TypeUtils.castFromString("2023-10-25", DataTypes.DATE()),
-                                    TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
-                                    BinaryString.fromString("abc"),
-                                    new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}),
-                            row(
-                                    true,
-                                    (byte) 100,
-                                    (short) 200,
-                                    3,
-                                    3 + 400L,
-                                    500.1f,
-                                    600.0d,
-                                    "v333",
-                                    Decimal.fromUnscaledLong(900, 5, 2),
-                                    Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
-                                    TimestampLtz.fromEpochMillis(1698235273400L),
-                                    TimestampLtz.fromEpochMillis(1698235273400L, 7000),
-                                    TimestampNtz.fromMillis(1698235273501L),
-                                    TimestampNtz.fromMillis(1698235273501L, 8000),
-                                    new byte[] {5, 6, 7, 8},
-                                    TypeUtils.castFromString("2023-10-25", DataTypes.DATE()),
-                                    TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
-                                    BinaryString.fromString("abc"),
-                                    new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}));
+            rows = Arrays.asList(
+                    row(
+                            true,
+                            (byte) 100,
+                            (short) 200,
+                            1,
+                            1 + 400L,
+                            500.1f,
+                            600.0d,
+                            "v111",
+                            Decimal.fromUnscaledLong(900, 5, 2),
+                            Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                            TimestampLtz.fromEpochMillis(1698235273400L),
+                            TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                            TimestampNtz.fromMillis(1698235273501L),
+                            TimestampNtz.fromMillis(1698235273501L, 8000),
+                            new byte[] {5, 6, 7, 8},
+                            TypeUtils.castFromString("2023-10-25", DataTypes.DATE()),
+                            TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
+                            BinaryString.fromString("abc"),
+                            new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}),
+                    row(
+                            true,
+                            (byte) 100,
+                            (short) 200,
+                            2,
+                            2 + 400L,
+                            500.1f,
+                            600.0d,
+                            "v222",
+                            Decimal.fromUnscaledLong(900, 5, 2),
+                            Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                            TimestampLtz.fromEpochMillis(1698235273400L),
+                            TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                            TimestampNtz.fromMillis(1698235273501L),
+                            TimestampNtz.fromMillis(1698235273501L, 8000),
+                            new byte[] {5, 6, 7, 8},
+                            TypeUtils.castFromString("2023-10-25", DataTypes.DATE()),
+                            TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
+                            BinaryString.fromString("abc"),
+                            new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}),
+                    row(
+                            true,
+                            (byte) 100,
+                            (short) 200,
+                            3,
+                            3 + 400L,
+                            500.1f,
+                            600.0d,
+                            "v333",
+                            Decimal.fromUnscaledLong(900, 5, 2),
+                            Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                            TimestampLtz.fromEpochMillis(1698235273400L),
+                            TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                            TimestampNtz.fromMillis(1698235273501L),
+                            TimestampNtz.fromMillis(1698235273501L, 8000),
+                            new byte[] {5, 6, 7, 8},
+                            TypeUtils.castFromString("2023-10-25", DataTypes.DATE()),
+                            TypeUtils.castFromString("09:30:00.0", DataTypes.TIME()),
+                            BinaryString.fromString("abc"),
+                            new byte[] {1, 2, 3, 4, 5, 6, 7, 8, 9, 10}));
             // write records
             writeRows(t1, rows, false);
 
@@ -239,27 +234,20 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
         }
     }
 
-    private Tuple2<Long, TableDescriptor> createPartitionedTable(TablePath partitionedTablePath)
-            throws Exception {
-        TableDescriptor partitionedTableDescriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("id", DataTypes.INT())
-                                        .column("name", DataTypes.STRING())
-                                        .column("date", DataTypes.STRING())
-                                        .build())
-                        .partitionedBy("date")
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                        .property(
-                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
-                                AutoPartitionTimeUnit.YEAR)
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
-                        .build();
-        return Tuple2.of(
-                createTable(partitionedTablePath, partitionedTableDescriptor),
-                partitionedTableDescriptor);
+    private Tuple2<Long, TableDescriptor> createPartitionedTable(TablePath partitionedTablePath) throws Exception {
+        TableDescriptor partitionedTableDescriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("date", DataTypes.STRING())
+                        .build())
+                .partitionedBy("date")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR)
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                .build();
+        return Tuple2.of(createTable(partitionedTablePath, partitionedTableDescriptor), partitionedTableDescriptor);
     }
 
     private void testLogTableTiering() throws Exception {
@@ -286,15 +274,13 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
 
     private void testPartitionedTableTiering() throws Exception {
         TablePath partitionedTablePath = TablePath.of(DEFAULT_DB, "partitionedTable");
-        Tuple2<Long, TableDescriptor> tableIdAndDescriptor =
-                createPartitionedTable(partitionedTablePath);
+        Tuple2<Long, TableDescriptor> tableIdAndDescriptor = createPartitionedTable(partitionedTablePath);
         Map<Long, String> partitionNameByIds = waitUntilPartitions(partitionedTablePath);
 
         // now, write rows into partitioned table
         TableDescriptor partitionedTableDescriptor = tableIdAndDescriptor.f1;
         Map<String, List<InternalRow>> writtenRowsByPartition =
-                writeRowsIntoPartitionedTable(
-                        partitionedTablePath, partitionedTableDescriptor, partitionNameByIds);
+                writeRowsIntoPartitionedTable(partitionedTablePath, partitionedTableDescriptor, partitionNameByIds);
         long tableId = tableIdAndDescriptor.f0;
 
         // wait until synced to iceberg
@@ -314,17 +300,16 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
                     0);
         }
 
-        Map<String, String> properties =
-                new HashMap<String, String>() {
-                    {
-                        put(
-                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                "["
-                                        + "{\"partition_id\":0,\"bucket_id\":0,\"partition_name\":\"date=2025\",\"log_offset\":3},"
-                                        + "{\"partition_id\":1,\"bucket_id\":0,\"partition_name\":\"date=2026\",\"log_offset\":3}"
-                                        + "]");
-                    }
-                };
+        Map<String, String> properties = new HashMap<String, String>() {
+            {
+                put(
+                        FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                        "["
+                                + "{\"partition_id\":0,\"bucket_id\":0,\"partition_name\":\"date=2025\",\"log_offset\":3},"
+                                + "{\"partition_id\":1,\"bucket_id\":0,\"partition_name\":\"date=2026\",\"log_offset\":3}"
+                                + "]");
+            }
+        };
 
         checkSnapshotPropertyInIceberg(partitionedTablePath, properties);
     }

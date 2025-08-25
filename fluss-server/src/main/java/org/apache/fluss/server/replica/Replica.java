@@ -182,8 +182,7 @@ public final class Replica {
      *
      * <p>followerId -> {@link FollowerReplica}.
      */
-    private final Map<Integer, FollowerReplica> followerReplicasMap =
-            MapUtils.newConcurrentHashMap();
+    private final Map<Integer, FollowerReplica> followerReplicasMap = MapUtils.newConcurrentHashMap();
 
     private volatile IsrState isrState = new IsrState.CommittedIsrState(Collections.emptyList());
     private volatile int leaderEpoch = LeaderAndIsr.INITIAL_LEADER_EPOCH - 1;
@@ -256,8 +255,7 @@ public final class Replica {
         isrShrinks = new SimpleCounter();
         bucketMetricGroup.meter(MetricNames.ISR_SHRINKS_RATE, new MeterView(isrShrinks));
         failedIsrUpdates = new SimpleCounter();
-        bucketMetricGroup.meter(
-                MetricNames.FAILED_ISR_UPDATES_RATE, new MeterView(failedIsrUpdates));
+        bucketMetricGroup.meter(MetricNames.FAILED_ISR_UPDATES_RATE, new MeterView(failedIsrUpdates));
     }
 
     public boolean isKvTable() {
@@ -353,50 +351,43 @@ public final class Replica {
     }
 
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {
-        boolean leaderHWIncremented =
-                inWriteLock(
-                        leaderIsrUpdateLock,
-                        () -> {
-                            int requestBucketEpoch = data.getBucketEpoch();
-                            validateBucketEpoch(requestBucketEpoch);
+        boolean leaderHWIncremented = inWriteLock(leaderIsrUpdateLock, () -> {
+            int requestBucketEpoch = data.getBucketEpoch();
+            validateBucketEpoch(requestBucketEpoch);
 
-                            coordinatorEpoch = data.getCoordinatorEpoch();
+            coordinatorEpoch = data.getCoordinatorEpoch();
 
-                            long currentTimeMs = clock.milliseconds();
-                            // Updating the assignment and ISR state is safe if the bucket epoch is
-                            // larger or equal to the current bucket epoch.
-                            updateAssignmentAndIsr(data.getReplicas(), true, data.getIsr());
+            long currentTimeMs = clock.milliseconds();
+            // Updating the assignment and ISR state is safe if the bucket epoch is
+            // larger or equal to the current bucket epoch.
+            updateAssignmentAndIsr(data.getReplicas(), true, data.getIsr());
 
-                            int requestLeaderEpoch = data.getLeaderEpoch();
-                            if (requestLeaderEpoch > leaderEpoch) {
-                                leaderEpoch = requestLeaderEpoch;
-                                onBecomeNewLeader();
-                                leaderReplicaIdOpt.set(localTabletServerId);
-                                LOG.info(
-                                        "TabletServer {} becomes leader for bucket {}",
-                                        localTabletServerId,
-                                        tableBucket);
-                            } else if (requestLeaderEpoch == leaderEpoch) {
-                                LOG.info(
-                                        "Skipped the become-leader state change for bucket {} since "
-                                                + "it's already the leader with leader epoch {}",
-                                        tableBucket,
-                                        leaderEpoch);
-                            } else {
-                                String errorMessage =
-                                        String.format(
-                                                "the leader epoch %s in notify leader and isr data is smaller than the "
-                                                        + "current leader epoch %s for table bucket %s",
-                                                requestLeaderEpoch, leaderEpoch, tableBucket);
-                                LOG.warn("Ignore make leader because {}", errorMessage);
-                                throw new FencedLeaderEpochException(errorMessage);
-                            }
+            int requestLeaderEpoch = data.getLeaderEpoch();
+            if (requestLeaderEpoch > leaderEpoch) {
+                leaderEpoch = requestLeaderEpoch;
+                onBecomeNewLeader();
+                leaderReplicaIdOpt.set(localTabletServerId);
+                LOG.info("TabletServer {} becomes leader for bucket {}", localTabletServerId, tableBucket);
+            } else if (requestLeaderEpoch == leaderEpoch) {
+                LOG.info(
+                        "Skipped the become-leader state change for bucket {} since "
+                                + "it's already the leader with leader epoch {}",
+                        tableBucket,
+                        leaderEpoch);
+            } else {
+                String errorMessage = String.format(
+                        "the leader epoch %s in notify leader and isr data is smaller than the "
+                                + "current leader epoch %s for table bucket %s",
+                        requestLeaderEpoch, leaderEpoch, tableBucket);
+                LOG.warn("Ignore make leader because {}", errorMessage);
+                throw new FencedLeaderEpochException(errorMessage);
+            }
 
-                            bucketEpoch = requestBucketEpoch;
+            bucketEpoch = requestBucketEpoch;
 
-                            // We may need to increment high watermark since ISR could be down to 1.
-                            return maybeIncrementLeaderHW(logTablet, currentTimeMs);
-                        });
+            // We may need to increment high watermark since ISR could be down to 1.
+            return maybeIncrementLeaderHW(logTablet, currentTimeMs);
+        });
 
         // Some delayed operations may be unblocked after HW changed.
         if (leaderHWIncremented) {
@@ -405,75 +396,69 @@ public final class Replica {
     }
 
     public boolean makeFollower(NotifyLeaderAndIsrData data) {
-        return inWriteLock(
-                leaderIsrUpdateLock,
-                () -> {
-                    int requestBucketEpoch = data.getBucketEpoch();
-                    validateBucketEpoch(requestBucketEpoch);
+        return inWriteLock(leaderIsrUpdateLock, () -> {
+            int requestBucketEpoch = data.getBucketEpoch();
+            validateBucketEpoch(requestBucketEpoch);
 
-                    coordinatorEpoch = data.getCoordinatorEpoch();
+            coordinatorEpoch = data.getCoordinatorEpoch();
 
-                    updateAssignmentAndIsr(Collections.emptyList(), false, Collections.emptyList());
+            updateAssignmentAndIsr(Collections.emptyList(), false, Collections.emptyList());
 
-                    int requestLeaderEpoch = data.getLeaderEpoch();
-                    boolean isNewLeaderEpoch = requestLeaderEpoch > leaderEpoch;
-                    if (isNewLeaderEpoch) {
-                        LOG.info(
-                                "Follower {} starts at leader epoch {} from end offset {}",
-                                tableBucket,
-                                requestLeaderEpoch,
-                                logTablet.localLogEndOffset());
-                        onBecomeNewFollower();
-                    } else if (requestLeaderEpoch == leaderEpoch) {
-                        LOG.info(
-                                "Skipped the become-follower state change for bucket {} since "
-                                        + "it's already the follower with leader epoch {}",
-                                tableBucket,
-                                leaderEpoch);
-                    } else {
-                        String errorMessage =
-                                String.format(
-                                        "the leader epoch %s in notify leader and isr data is smaller than the "
-                                                + "current leader epoch %s for table bucket %s",
-                                        requestLeaderEpoch, leaderEpoch, tableBucket);
-                        LOG.warn("Ignore make follower because {}", errorMessage);
-                        throw new FencedLeaderEpochException(errorMessage);
-                    }
+            int requestLeaderEpoch = data.getLeaderEpoch();
+            boolean isNewLeaderEpoch = requestLeaderEpoch > leaderEpoch;
+            if (isNewLeaderEpoch) {
+                LOG.info(
+                        "Follower {} starts at leader epoch {} from end offset {}",
+                        tableBucket,
+                        requestLeaderEpoch,
+                        logTablet.localLogEndOffset());
+                onBecomeNewFollower();
+            } else if (requestLeaderEpoch == leaderEpoch) {
+                LOG.info(
+                        "Skipped the become-follower state change for bucket {} since "
+                                + "it's already the follower with leader epoch {}",
+                        tableBucket,
+                        leaderEpoch);
+            } else {
+                String errorMessage = String.format(
+                        "the leader epoch %s in notify leader and isr data is smaller than the "
+                                + "current leader epoch %s for table bucket %s",
+                        requestLeaderEpoch, leaderEpoch, tableBucket);
+                LOG.warn("Ignore make follower because {}", errorMessage);
+                throw new FencedLeaderEpochException(errorMessage);
+            }
 
-                    leaderReplicaIdOpt.set(data.getLeader());
-                    leaderEpoch = requestLeaderEpoch;
-                    bucketEpoch = data.getBucketEpoch();
+            leaderReplicaIdOpt.set(data.getLeader());
+            leaderEpoch = requestLeaderEpoch;
+            bucketEpoch = data.getBucketEpoch();
 
-                    // We must restart the fetchers when the leader epoch changed regardless of
-                    // whether the leader changed as well.
-                    return isNewLeaderEpoch;
-                });
+            // We must restart the fetchers when the leader epoch changed regardless of
+            // whether the leader changed as well.
+            return isNewLeaderEpoch;
+        });
     }
 
     /** Delete the replica including drop the kv and log. */
     public void delete() {
         // need to hold the lock to prevent appendLog, putKv from hitting I/O exceptions due
         // to log/kv being deleted
-        inWriteLock(
-                leaderIsrUpdateLock,
-                () -> {
-                    if (isKvTable()) {
-                        dropKv();
-                    }
-                    // drop log then
-                    logManager.dropLog(tableBucket);
-                    // close the closeable registry
-                    IOUtils.closeQuietly(closeableRegistry);
-                });
+        inWriteLock(leaderIsrUpdateLock, () -> {
+            if (isKvTable()) {
+                dropKv();
+            }
+            // drop log then
+            logManager.dropLog(tableBucket);
+            // close the closeable registry
+            IOUtils.closeQuietly(closeableRegistry);
+        });
     }
 
     public void checkProjection(@Nullable int[] projectedFields) {
         if (projectedFields != null) {
             if (logFormat != LogFormat.ARROW) {
-                throw new InvalidColumnProjectionException(
-                        String.format(
-                                "Column projection is only supported for ARROW format, but the table %s is %s format.",
-                                physicalPath.getTablePath(), logFormat));
+                throw new InvalidColumnProjectionException(String.format(
+                        "Column projection is only supported for ARROW format, but the table %s is %s format.",
+                        physicalPath.getTablePath(), logFormat));
             }
             int fieldCount = schema.getColumns().size();
             int prev = -1;
@@ -484,12 +469,11 @@ public final class Replica {
                                     + Arrays.toString(projectedFields));
                 }
                 if (i >= fieldCount) {
-                    throw new InvalidColumnProjectionException(
-                            "Projected fields "
-                                    + Arrays.toString(projectedFields)
-                                    + " is out of bound for schema with "
-                                    + fieldCount
-                                    + " fields.");
+                    throw new InvalidColumnProjectionException("Projected fields "
+                            + Arrays.toString(projectedFields)
+                            + " is out of bound for schema with "
+                            + fieldCount
+                            + " fields.");
                 }
                 prev = i;
             }
@@ -497,12 +481,10 @@ public final class Replica {
     }
 
     public LogOffsetSnapshot fetchOffsetSnapshot(boolean fetchOnlyFromLeader) throws IOException {
-        return inReadLock(
-                leaderIsrUpdateLock,
-                () -> {
-                    LogTablet logTablet = localLogOrThrow(fetchOnlyFromLeader);
-                    return logTablet.fetchOffsetSnapshot();
-                });
+        return inReadLock(leaderIsrUpdateLock, () -> {
+            LogTablet logTablet = localLogOrThrow(fetchOnlyFromLeader);
+            return logTablet.fetchOffsetSnapshot();
+        });
     }
 
     // -------------------------------------------------------------------------------------------
@@ -617,15 +599,14 @@ public final class Replica {
                 LOG.info("No snapshot found, restore from log.");
                 // actually, kv manager always create a kv tablet since we will drop the kv
                 // if it exists before init kv tablet
-                kvTablet =
-                        kvManager.getOrCreateKv(
-                                physicalPath,
-                                tableBucket,
-                                logTablet,
-                                tableConfig.getKvFormat(),
-                                schema,
-                                tableConfig,
-                                arrowCompressionInfo);
+                kvTablet = kvManager.getOrCreateKv(
+                        physicalPath,
+                        tableBucket,
+                        logTablet,
+                        tableConfig.getKvFormat(),
+                        schema,
+                        tableConfig,
+                        arrowCompressionInfo);
             }
 
             kvTablet.registerMetrics(bucketMetricGroup);
@@ -634,29 +615,20 @@ public final class Replica {
             recoverKvTablet(restoreStartOffset);
         } catch (Exception e) {
             throw new KvStorageException(
-                    String.format(
-                            "Fail to init kv tablet for %s of table %s.",
-                            tableBucket, physicalPath),
-                    e);
+                    String.format("Fail to init kv tablet for %s of table %s.", tableBucket, physicalPath), e);
         }
         long endTime = clock.milliseconds();
-        LOG.info(
-                "Init kv tablet for {} of {} finish, cost {} ms.",
-                physicalPath,
-                tableBucket,
-                endTime - startTime);
+        LOG.info("Init kv tablet for {} of {} finish, cost {} ms.", physicalPath, tableBucket, endTime - startTime);
         return optCompletedSnapshot;
     }
 
-    private void downloadKvSnapshots(CompletedSnapshot completedSnapshot, Path kvTabletDir)
-            throws IOException {
+    private void downloadKvSnapshots(CompletedSnapshot completedSnapshot, Path kvTabletDir) throws IOException {
         Path kvDbPath = kvTabletDir.resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING);
         KvSnapshotDownloadSpec downloadSpec =
                 new KvSnapshotDownloadSpec(completedSnapshot.getKvSnapshotHandle(), kvDbPath);
         long start = clock.milliseconds();
         LOG.info("Start to download kv snapshot {} to directory {}.", completedSnapshot, kvDbPath);
-        KvSnapshotDataDownloader kvSnapshotDataDownloader =
-                snapshotContext.getSnapshotDataDownloader();
+        KvSnapshotDataDownloader kvSnapshotDataDownloader = snapshotContext.getSnapshotDataDownloader();
         try {
             kvSnapshotDataDownloader.transferAllDataToDirectory(downloadSpec, closeableRegistry);
         } catch (Exception e) {
@@ -675,11 +647,7 @@ public final class Replica {
             return Optional.ofNullable(
                     snapshotContext.getLatestCompletedSnapshotProvider().apply(tableBucket));
         } catch (Exception e) {
-            LOG.warn(
-                    "Get latest completed snapshot for {} of table {} failed.",
-                    tableBucket,
-                    physicalPath,
-                    e);
+            LOG.warn("Get latest completed snapshot for {} of table {} failed.", tableBucket, physicalPath, e);
         }
         return Optional.empty();
     }
@@ -688,25 +656,18 @@ public final class Replica {
         long start = clock.milliseconds();
         checkNotNull(kvTablet, "kv tablet should not be null.");
         try {
-            KvRecoverHelper.KvRecoverContext recoverContext =
-                    new KvRecoverHelper.KvRecoverContext(
-                            getTablePath(),
-                            tableBucket,
-                            snapshotContext.getZooKeeperClient(),
-                            snapshotContext.maxFetchLogSizeInRecoverKv());
-            KvRecoverHelper kvRecoverHelper =
-                    new KvRecoverHelper(
-                            kvTablet,
-                            logTablet,
-                            startRecoverLogOffset,
-                            recoverContext,
-                            tableConfig.getKvFormat());
+            KvRecoverHelper.KvRecoverContext recoverContext = new KvRecoverHelper.KvRecoverContext(
+                    getTablePath(),
+                    tableBucket,
+                    snapshotContext.getZooKeeperClient(),
+                    snapshotContext.maxFetchLogSizeInRecoverKv());
+            KvRecoverHelper kvRecoverHelper = new KvRecoverHelper(
+                    kvTablet, logTablet, startRecoverLogOffset, recoverContext, tableConfig.getKvFormat());
             kvRecoverHelper.recover();
         } catch (Exception e) {
             throw new KvStorageException(
                     String.format(
-                            "Fail to recover kv tablet %s of table %s from log offset.",
-                            tableBucket, physicalPath),
+                            "Fail to recover kv tablet %s of table %s from log offset.", tableBucket, physicalPath),
                     e);
         }
         long end = clock.milliseconds();
@@ -723,8 +684,7 @@ public final class Replica {
         KvTabletSnapshotTarget kvTabletSnapshotTarget;
         try {
             // get the snapshot reporter to report the completed snapshot
-            CompletedKvSnapshotCommitter completedKvSnapshotCommitter =
-                    snapshotContext.getCompletedSnapshotReporter();
+            CompletedKvSnapshotCommitter completedKvSnapshotCommitter = snapshotContext.getCompletedSnapshotReporter();
 
             // get latest completed snapshot
             ZooKeeperClient zkClient = snapshotContext.getZooKeeperClient();
@@ -741,17 +701,12 @@ public final class Replica {
                         completedSnapshot.getSnapshotID(),
                         completedSnapshot.getKvSnapshotHandle().getSharedKvFileHandles());
             }
-            rocksIncrementalSnapshot =
-                    kvTablet.createIncrementalSnapshot(
-                            uploadedSstFiles,
-                            snapshotContext.getSnapshotDataUploader(),
-                            lastCompletedSnapshotId);
+            rocksIncrementalSnapshot = kvTablet.createIncrementalSnapshot(
+                    uploadedSstFiles, snapshotContext.getSnapshotDataUploader(), lastCompletedSnapshotId);
 
             // create snapshot ID counter
-            SequenceIDCounter snapshotIDCounter =
-                    new ZkSequenceIDCounter(
-                            zkClient.getCuratorClient(),
-                            ZkData.BucketSnapshotSequenceIdZNode.path(tableBucket));
+            SequenceIDCounter snapshotIDCounter = new ZkSequenceIDCounter(
+                    zkClient.getCuratorClient(), ZkData.BucketSnapshotSequenceIdZNode.path(tableBucket));
 
             // todo: it's hack logic for snapshot target
             // to get bucket/coordinator leader epoch.
@@ -768,32 +723,29 @@ public final class Replica {
             Supplier<Integer> bucketLeaderEpochSupplier = () -> leaderEpoch;
             Supplier<Integer> coordinatorEpochSupplier = () -> coordinatorEpoch;
             FsPath remoteKvTabletDir =
-                    FlussPaths.remoteKvTabletDir(
-                            snapshotContext.getRemoteKvDir(), physicalPath, tableBucket);
+                    FlussPaths.remoteKvTabletDir(snapshotContext.getRemoteKvDir(), physicalPath, tableBucket);
 
-            kvTabletSnapshotTarget =
-                    new KvTabletSnapshotTarget(
-                            tableBucket,
-                            completedKvSnapshotCommitter,
-                            rocksIncrementalSnapshot,
-                            remoteKvTabletDir,
-                            snapshotContext.getSnapshotFsWriteBufferSize(),
-                            snapshotContext.getAsyncOperationsThreadPool(),
-                            closeableRegistryForKv,
-                            snapshotIDCounter,
-                            kvTablet::getFlushedLogOffset,
-                            logTablet::updateMinRetainOffset,
-                            bucketLeaderEpochSupplier,
-                            coordinatorEpochSupplier,
-                            lastCompletedSnapshotLogOffset,
-                            snapshotSize);
-            PeriodicSnapshotManager kvSnapshotManager =
-                    PeriodicSnapshotManager.create(
-                            tableBucket,
-                            kvTabletSnapshotTarget,
-                            snapshotContext,
-                            kvTablet.getGuardedExecutor(),
-                            bucketMetricGroup);
+            kvTabletSnapshotTarget = new KvTabletSnapshotTarget(
+                    tableBucket,
+                    completedKvSnapshotCommitter,
+                    rocksIncrementalSnapshot,
+                    remoteKvTabletDir,
+                    snapshotContext.getSnapshotFsWriteBufferSize(),
+                    snapshotContext.getAsyncOperationsThreadPool(),
+                    closeableRegistryForKv,
+                    snapshotIDCounter,
+                    kvTablet::getFlushedLogOffset,
+                    logTablet::updateMinRetainOffset,
+                    bucketLeaderEpochSupplier,
+                    coordinatorEpochSupplier,
+                    lastCompletedSnapshotLogOffset,
+                    snapshotSize);
+            PeriodicSnapshotManager kvSnapshotManager = PeriodicSnapshotManager.create(
+                    tableBucket,
+                    kvTabletSnapshotTarget,
+                    snapshotContext,
+                    kvTablet.getGuardedExecutor(),
+                    bucketMetricGroup);
             kvSnapshotManager.start();
             closeableRegistryForKv.registerCloseable(kvSnapshotManager);
         } catch (Exception e) {
@@ -805,89 +757,70 @@ public final class Replica {
         return logTablet.getLeaderEndOffsetSnapshot();
     }
 
-    public LogAppendInfo appendRecordsToLeader(MemoryLogRecords memoryLogRecords, int requiredAcks)
-            throws Exception {
-        return inReadLock(
-                leaderIsrUpdateLock,
-                () -> {
-                    if (!isLeader()) {
-                        throw new NotLeaderOrFollowerException(
-                                String.format(
-                                        "Leader not local for bucket %s on tabletServer %d",
-                                        tableBucket, localTabletServerId));
-                    }
+    public LogAppendInfo appendRecordsToLeader(MemoryLogRecords memoryLogRecords, int requiredAcks) throws Exception {
+        return inReadLock(leaderIsrUpdateLock, () -> {
+            if (!isLeader()) {
+                throw new NotLeaderOrFollowerException(String.format(
+                        "Leader not local for bucket %s on tabletServer %d", tableBucket, localTabletServerId));
+            }
 
-                    validateInSyncReplicaSize(requiredAcks);
+            validateInSyncReplicaSize(requiredAcks);
 
-                    // TODO WRITE a leader epoch.
-                    LogAppendInfo appendInfo;
-                    try {
-                        appendInfo = logTablet.appendAsLeader(memoryLogRecords);
-                    } catch (IOException e) {
-                        LOG.error("Error while appending records to {}", tableBucket, e);
-                        fatalErrorHandler.onFatalError(e);
-                        throw new LogStorageException(
-                                "Error while appending records to " + tableBucket, e);
-                    }
-                    maybeIncrementLeaderHW(logTablet, clock.milliseconds());
+            // TODO WRITE a leader epoch.
+            LogAppendInfo appendInfo;
+            try {
+                appendInfo = logTablet.appendAsLeader(memoryLogRecords);
+            } catch (IOException e) {
+                LOG.error("Error while appending records to {}", tableBucket, e);
+                fatalErrorHandler.onFatalError(e);
+                throw new LogStorageException("Error while appending records to " + tableBucket, e);
+            }
+            maybeIncrementLeaderHW(logTablet, clock.milliseconds());
 
-                    return appendInfo;
-                });
+            return appendInfo;
+        });
     }
 
-    public LogAppendInfo appendRecordsToFollower(MemoryLogRecords memoryLogRecords)
-            throws Exception {
+    public LogAppendInfo appendRecordsToFollower(MemoryLogRecords memoryLogRecords) throws Exception {
         return logTablet.appendAsFollower(memoryLogRecords);
     }
 
-    public LogAppendInfo putRecordsToLeader(
-            KvRecordBatch kvRecords, @Nullable int[] targetColumns, int requiredAcks)
+    public LogAppendInfo putRecordsToLeader(KvRecordBatch kvRecords, @Nullable int[] targetColumns, int requiredAcks)
             throws Exception {
-        return inReadLock(
-                leaderIsrUpdateLock,
-                () -> {
-                    if (!isLeader()) {
-                        throw new NotLeaderOrFollowerException(
-                                String.format(
-                                        "Leader not local for bucket %s on tabletServer %d",
-                                        tableBucket, localTabletServerId));
-                    }
+        return inReadLock(leaderIsrUpdateLock, () -> {
+            if (!isLeader()) {
+                throw new NotLeaderOrFollowerException(String.format(
+                        "Leader not local for bucket %s on tabletServer %d", tableBucket, localTabletServerId));
+            }
 
-                    validateInSyncReplicaSize(requiredAcks);
-                    KvTablet kv = this.kvTablet;
-                    checkNotNull(
-                            kv, "KvTablet for the replica to put kv records shouldn't be null.");
-                    LogAppendInfo logAppendInfo;
-                    try {
-                        logAppendInfo = kv.putAsLeader(kvRecords, targetColumns);
-                    } catch (IOException e) {
-                        LOG.error("Error while putting records to {}", tableBucket, e);
-                        fatalErrorHandler.onFatalError(e);
-                        throw new KvStorageException(
-                                "Error while putting records to " + tableBucket, e);
-                    }
-                    // we may need to increment high watermark.
-                    maybeIncrementLeaderHW(logTablet, clock.milliseconds());
-                    return logAppendInfo;
-                });
+            validateInSyncReplicaSize(requiredAcks);
+            KvTablet kv = this.kvTablet;
+            checkNotNull(kv, "KvTablet for the replica to put kv records shouldn't be null.");
+            LogAppendInfo logAppendInfo;
+            try {
+                logAppendInfo = kv.putAsLeader(kvRecords, targetColumns);
+            } catch (IOException e) {
+                LOG.error("Error while putting records to {}", tableBucket, e);
+                fatalErrorHandler.onFatalError(e);
+                throw new KvStorageException("Error while putting records to " + tableBucket, e);
+            }
+            // we may need to increment high watermark.
+            maybeIncrementLeaderHW(logTablet, clock.milliseconds());
+            return logAppendInfo;
+        });
     }
 
     public LogReadInfo fetchRecords(FetchParams fetchParams) throws IOException {
         if (fetchParams.projection() != null && logFormat != LogFormat.ARROW) {
-            throw new InvalidColumnProjectionException(
-                    String.format(
-                            "Table '%s' is not in ARROW log format and doesn't support column projection.",
-                            physicalPath));
+            throw new InvalidColumnProjectionException(String.format(
+                    "Table '%s' is not in ARROW log format and doesn't support column projection.", physicalPath));
         }
         if (fetchParams.isFromFollower()) {
             long followerFetchTimeMs = clock.milliseconds();
-            LogReadInfo logReadInfo =
-                    inReadLock(
-                            leaderIsrUpdateLock,
-                            () -> {
-                                LogTablet localLog = localLogOrThrow(fetchParams.fetchOnlyLeader());
-                                return readRecords(fetchParams, localLog);
-                            });
+            LogReadInfo logReadInfo = inReadLock(leaderIsrUpdateLock, () -> {
+                LogTablet localLog = localLogOrThrow(fetchParams.fetchOnlyLeader());
+                return readRecords(fetchParams, localLog);
+            });
 
             FollowerReplica followerReplica = getFollowerReplicaOrThrown(fetchParams.replicaId());
             updateFollowerFetchState(
@@ -897,12 +830,10 @@ public final class Replica {
                     logReadInfo.getLogEndOffset());
             return logReadInfo;
         } else {
-            return inReadLock(
-                    leaderIsrUpdateLock,
-                    () -> {
-                        LogTablet localLog = localLogOrThrow(fetchParams.fetchOnlyLeader());
-                        return readRecords(fetchParams, localLog);
-                    });
+            return inReadLock(leaderIsrUpdateLock, () -> {
+                LogTablet localLog = localLogOrThrow(fetchParams.fetchOnlyLeader());
+                return readRecords(fetchParams, localLog);
+            });
         }
     }
 
@@ -924,8 +855,7 @@ public final class Replica {
      *
      * @return true if the high watermark is incremented, and false otherwise.
      */
-    private boolean maybeIncrementLeaderHW(LogTablet leaderLog, long currentTimeMs)
-            throws IOException {
+    private boolean maybeIncrementLeaderHW(LogTablet leaderLog, long currentTimeMs) throws IOException {
         if (isUnderMinIsr()) {
             LOG.trace(
                     "Not increasing HighWatermark because bucket {} is under min ISR(ISR={})",
@@ -941,11 +871,9 @@ public final class Replica {
 
         for (FollowerReplica remoteFollowerReplica : followerReplicasMap.values()) {
             // Note here we are using the "maximal", see explanation above.
-            FollowerReplica.FollowerReplicaState replicaState =
-                    remoteFollowerReplica.stateSnapshot();
+            FollowerReplica.FollowerReplicaState replicaState = remoteFollowerReplica.stateSnapshot();
             int followerId = remoteFollowerReplica.getFollowerId();
-            if (replicaState.getLogEndOffsetMetadata().getMessageOffset()
-                            < newHighWatermark.getMessageOffset()
+            if (replicaState.getLogEndOffsetMetadata().getMessageOffset() < newHighWatermark.getMessageOffset()
                     && (isrState.maximalIsr().contains(followerId)
                             || shouldWaitForReplicaToJoinIsr(
                                     replicaState, leaderLogEndOffset, currentTimeMs, followerId))) {
@@ -959,8 +887,7 @@ public final class Replica {
         // https://github.com/apache/fluss/issues/513
         mayFlushKv(newHighWatermark.getMessageOffset());
 
-        Optional<LogOffsetMetadata> oldWatermark =
-                leaderLog.maybeIncrementHighWatermark(newHighWatermark);
+        Optional<LogOffsetMetadata> oldWatermark = leaderLog.maybeIncrementHighWatermark(newHighWatermark);
         if (oldWatermark.isPresent()) {
             LOG.debug("High watermark update from {} to {}.", oldWatermark.get(), newHighWatermark);
             return true;
@@ -974,22 +901,17 @@ public final class Replica {
             LogOffsetMetadata leaderLogEndOffset,
             long currentTimeMs,
             int followerId) {
-        return replicaState.isCaughtUp(
-                        leaderLogEndOffset.getMessageOffset(), currentTimeMs, replicaMaxLagTime)
+        return replicaState.isCaughtUp(leaderLogEndOffset.getMessageOffset(), currentTimeMs, replicaMaxLagTime)
                 && isReplicaIsrEligible(followerId);
     }
 
-    private void updateAssignmentAndIsr(
-            List<Integer> replicas, boolean isLeader, List<Integer> isr) {
+    private void updateAssignmentAndIsr(List<Integer> replicas, boolean isLeader, List<Integer> isr) {
         if (isLeader) {
             List<Integer> followers =
-                    replicas.stream()
-                            .filter(id -> id != localTabletServerId)
-                            .collect(Collectors.toList());
-            List<Integer> removedReplicas =
-                    followerReplicasMap.keySet().stream()
-                            .filter(id -> !followers.contains(id))
-                            .collect(Collectors.toList());
+                    replicas.stream().filter(id -> id != localTabletServerId).collect(Collectors.toList());
+            List<Integer> removedReplicas = followerReplicasMap.keySet().stream()
+                    .filter(id -> !followers.contains(id))
+                    .collect(Collectors.toList());
             // Due to code paths accessing followerReplicasMap without a lock, first add the new
             // replicas and then remove the old ones.
             for (Integer replica : followers) {
@@ -1018,11 +940,8 @@ public final class Replica {
         // rebooted follower. It could break the tablet server epoch checks in the ISR expansion.
         inReadLock(
                 leaderIsrUpdateLock,
-                () ->
-                        followerReplica.updateFetchState(
-                                followerFetchOffsetMetadata,
-                                followerFetchTimeMs,
-                                leaderLogEndOffset));
+                () -> followerReplica.updateFetchState(
+                        followerFetchOffsetMetadata, followerFetchTimeMs, leaderLogEndOffset));
 
         // Check if this in-sync replica needs to be added to the ISR.
         maybeExpandISr(followerReplica);
@@ -1053,40 +972,31 @@ public final class Replica {
                     followerId,
                     tableBucket);
             throw new NotLeaderOrFollowerException(
-                    String.format(
-                            "Replica %d is not recognized as a valid replica of %s",
-                            followerId, tableBucket));
+                    String.format("Replica %d is not recognized as a valid replica of %s", followerId, tableBucket));
         }
         return followerReplica;
     }
 
     public List<byte[]> lookups(List<byte[]> keys) {
         if (!isKvTable()) {
-            throw new NonPrimaryKeyTableException(
-                    "the primary key table not exists for " + tableBucket);
+            throw new NonPrimaryKeyTableException("the primary key table not exists for " + tableBucket);
         }
-        return inReadLock(
-                leaderIsrUpdateLock,
-                () -> {
-                    try {
-                        if (!isLeader()) {
-                            throw new NotLeaderOrFollowerException(
-                                    String.format(
-                                            "Leader not local for bucket %s on tabletServer %d",
-                                            tableBucket, localTabletServerId));
-                        }
-                        checkNotNull(
-                                kvTablet, "KvTablet for the replica to get key shouldn't be null.");
-                        return kvTablet.multiGet(keys);
-                    } catch (IOException e) {
-                        String errorMsg =
-                                String.format(
-                                        "Failed to lookup from local kv for table bucket %s, the cause is: %s",
-                                        tableBucket, e.getMessage());
-                        LOG.error(errorMsg, e);
-                        throw new KvStorageException(errorMsg, e);
-                    }
-                });
+        return inReadLock(leaderIsrUpdateLock, () -> {
+            try {
+                if (!isLeader()) {
+                    throw new NotLeaderOrFollowerException(String.format(
+                            "Leader not local for bucket %s on tabletServer %d", tableBucket, localTabletServerId));
+                }
+                checkNotNull(kvTablet, "KvTablet for the replica to get key shouldn't be null.");
+                return kvTablet.multiGet(keys);
+            } catch (IOException e) {
+                String errorMsg = String.format(
+                        "Failed to lookup from local kv for table bucket %s, the cause is: %s",
+                        tableBucket, e.getMessage());
+                LOG.error(errorMsg, e);
+                throw new KvStorageException(errorMsg, e);
+            }
+        });
     }
 
     public List<byte[]> prefixLookup(byte[] prefixKey) {
@@ -1095,102 +1005,75 @@ public final class Replica {
                     "Try to do prefix lookup on a non primary key table: " + getTablePath());
         }
 
-        return inReadLock(
-                leaderIsrUpdateLock,
-                () -> {
-                    try {
-                        if (!isLeader()) {
-                            throw new NotLeaderOrFollowerException(
-                                    String.format(
-                                            "Leader not local for bucket %s on tabletServer %d",
-                                            tableBucket, localTabletServerId));
-                        }
-                        checkNotNull(
-                                kvTablet, "KvTablet for the replica to get key shouldn't be null.");
-                        return kvTablet.prefixLookup(prefixKey);
-                    } catch (IOException e) {
-                        String errorMsg =
-                                String.format(
-                                        "Failed to do prefix lookup from local kv for table bucket %s, the cause is: %s",
-                                        tableBucket, e.getMessage());
-                        LOG.error(errorMsg, e);
-                        throw new KvStorageException(errorMsg, e);
-                    }
-                });
+        return inReadLock(leaderIsrUpdateLock, () -> {
+            try {
+                if (!isLeader()) {
+                    throw new NotLeaderOrFollowerException(String.format(
+                            "Leader not local for bucket %s on tabletServer %d", tableBucket, localTabletServerId));
+                }
+                checkNotNull(kvTablet, "KvTablet for the replica to get key shouldn't be null.");
+                return kvTablet.prefixLookup(prefixKey);
+            } catch (IOException e) {
+                String errorMsg = String.format(
+                        "Failed to do prefix lookup from local kv for table bucket %s, the cause is: %s",
+                        tableBucket, e.getMessage());
+                LOG.error(errorMsg, e);
+                throw new KvStorageException(errorMsg, e);
+            }
+        });
     }
 
     public DefaultValueRecordBatch limitKvScan(int limit) {
         if (!isKvTable()) {
-            throw new NonPrimaryKeyTableException(
-                    "the primary key table not exists for " + tableBucket);
+            throw new NonPrimaryKeyTableException("the primary key table not exists for " + tableBucket);
         }
 
-        return inReadLock(
-                leaderIsrUpdateLock,
-                () -> {
-                    try {
-                        if (!isLeader()) {
-                            throw new NotLeaderOrFollowerException(
-                                    String.format(
-                                            "Leader not local for bucket %s on tabletServer %d",
-                                            tableBucket, localTabletServerId));
-                        }
-                        checkNotNull(
-                                kvTablet,
-                                "KvTablet for the replica to limit scan shouldn't be null.");
-                        List<byte[]> bytes = kvTablet.limitScan(limit);
-                        DefaultValueRecordBatch.Builder builder = DefaultValueRecordBatch.builder();
-                        for (byte[] key : bytes) {
-                            builder.append(key);
-                        }
-                        return builder.build();
-                    } catch (IOException e) {
-                        String errorMsg =
-                                String.format(
-                                        "Failed to limit scan from local kv for table bucket %s, the cause is: %s",
-                                        tableBucket, e.getMessage());
-                        LOG.error(errorMsg, e);
-                        throw new KvStorageException(errorMsg, e);
-                    }
-                });
+        return inReadLock(leaderIsrUpdateLock, () -> {
+            try {
+                if (!isLeader()) {
+                    throw new NotLeaderOrFollowerException(String.format(
+                            "Leader not local for bucket %s on tabletServer %d", tableBucket, localTabletServerId));
+                }
+                checkNotNull(kvTablet, "KvTablet for the replica to limit scan shouldn't be null.");
+                List<byte[]> bytes = kvTablet.limitScan(limit);
+                DefaultValueRecordBatch.Builder builder = DefaultValueRecordBatch.builder();
+                for (byte[] key : bytes) {
+                    builder.append(key);
+                }
+                return builder.build();
+            } catch (IOException e) {
+                String errorMsg = String.format(
+                        "Failed to limit scan from local kv for table bucket %s, the cause is: %s",
+                        tableBucket, e.getMessage());
+                LOG.error(errorMsg, e);
+                throw new KvStorageException(errorMsg, e);
+            }
+        });
     }
 
     public LogRecords limitLogScan(int limit) {
-        return inReadLock(
-                leaderIsrUpdateLock,
-                () -> {
-                    try {
-                        if (!isLeader()) {
-                            throw new NotLeaderOrFollowerException(
-                                    String.format(
-                                            "Leader not local for bucket %s on tabletServer %d",
-                                            tableBucket, localTabletServerId));
-                        }
+        return inReadLock(leaderIsrUpdateLock, () -> {
+            try {
+                if (!isLeader()) {
+                    throw new NotLeaderOrFollowerException(String.format(
+                            "Leader not local for bucket %s on tabletServer %d", tableBucket, localTabletServerId));
+                }
 
-                        checkNotNull(
-                                logTablet,
-                                "LogTablet for the replica to limit scan shouldn't be null.");
-                        long highWatermark = logTablet.getHighWatermark();
-                        // client can only read under high watermark.
-                        long readOffset =
-                                Math.max(logTablet.logStartOffset(), highWatermark - limit);
-                        FetchDataInfo dataInfo =
-                                logTablet.read(
-                                        readOffset,
-                                        Integer.MAX_VALUE,
-                                        FetchIsolation.HIGH_WATERMARK,
-                                        true,
-                                        null);
-                        return dataInfo.getRecords();
-                    } catch (IOException e) {
-                        String errorMsg =
-                                String.format(
-                                        "Failed to limit scan from local log for table bucket %s, the cause is: %s",
-                                        tableBucket, e.getMessage());
-                        LOG.error(errorMsg, e);
-                        throw new LogStorageException(errorMsg, e);
-                    }
-                });
+                checkNotNull(logTablet, "LogTablet for the replica to limit scan shouldn't be null.");
+                long highWatermark = logTablet.getHighWatermark();
+                // client can only read under high watermark.
+                long readOffset = Math.max(logTablet.logStartOffset(), highWatermark - limit);
+                FetchDataInfo dataInfo =
+                        logTablet.read(readOffset, Integer.MAX_VALUE, FetchIsolation.HIGH_WATERMARK, true, null);
+                return dataInfo.getRecords();
+            } catch (IOException e) {
+                String errorMsg = String.format(
+                        "Failed to limit scan from local log for table bucket %s, the cause is: %s",
+                        tableBucket, e.getMessage());
+                LOG.error(errorMsg, e);
+                throw new LogStorageException(errorMsg, e);
+            }
+        });
     }
 
     /**
@@ -1224,39 +1107,33 @@ public final class Replica {
         }
     }
 
-    public long getOffset(RemoteLogManager remoteLogManager, ListOffsetsParam listOffsetsParam)
-            throws IOException {
-        return inReadLock(
-                leaderIsrUpdateLock,
-                () -> {
-                    int offsetType = listOffsetsParam.getOffsetType();
-                    if (offsetType == ListOffsetsParam.TIMESTAMP_OFFSET_TYPE) {
-                        return getOffsetByTimestamp(remoteLogManager, listOffsetsParam);
-                    } else if (offsetType == ListOffsetsParam.EARLIEST_OFFSET_TYPE) {
-                        if (listOffsetsParam.getFollowerServerId() < 0) {
-                            // the request is come from client, return available start offset
-                            return logTablet.logStartOffset();
-                        } else {
-                            return logTablet.localLogStartOffset();
-                        }
-                    } else if (offsetType == ListOffsetsParam.LATEST_OFFSET_TYPE) {
-                        return getLatestOffset(listOffsetsParam.getFollowerServerId());
-                    } else if (offsetType == ListOffsetsParam.LEADER_END_OFFSET_SNAPSHOT_TYPE) {
-                        return logTablet.getLeaderEndOffsetSnapshot();
-                    } else {
-                        throw new IllegalArgumentException(
-                                "Invalid list offset type: " + offsetType);
-                    }
-                });
+    public long getOffset(RemoteLogManager remoteLogManager, ListOffsetsParam listOffsetsParam) throws IOException {
+        return inReadLock(leaderIsrUpdateLock, () -> {
+            int offsetType = listOffsetsParam.getOffsetType();
+            if (offsetType == ListOffsetsParam.TIMESTAMP_OFFSET_TYPE) {
+                return getOffsetByTimestamp(remoteLogManager, listOffsetsParam);
+            } else if (offsetType == ListOffsetsParam.EARLIEST_OFFSET_TYPE) {
+                if (listOffsetsParam.getFollowerServerId() < 0) {
+                    // the request is come from client, return available start offset
+                    return logTablet.logStartOffset();
+                } else {
+                    return logTablet.localLogStartOffset();
+                }
+            } else if (offsetType == ListOffsetsParam.LATEST_OFFSET_TYPE) {
+                return getLatestOffset(listOffsetsParam.getFollowerServerId());
+            } else if (offsetType == ListOffsetsParam.LEADER_END_OFFSET_SNAPSHOT_TYPE) {
+                return logTablet.getLeaderEndOffsetSnapshot();
+            } else {
+                throw new IllegalArgumentException("Invalid list offset type: " + offsetType);
+            }
+        });
     }
 
-    private long getOffsetByTimestamp(
-            RemoteLogManager remoteLogManager, ListOffsetsParam listOffsetsParam)
+    private long getOffsetByTimestamp(RemoteLogManager remoteLogManager, ListOffsetsParam listOffsetsParam)
             throws IOException {
         OptionalLong startTimestampOpt = listOffsetsParam.startTimestamp();
         if (!startTimestampOpt.isPresent()) {
-            throw new IllegalArgumentException(
-                    "startTimestamp is not present while list offset by timestamp.");
+            throw new IllegalArgumentException("startTimestamp is not present while list offset by timestamp.");
         }
 
         long fetchTimestamp = startTimestampOpt.getAsLong();
@@ -1268,11 +1145,10 @@ public final class Replica {
         if (fetchTimestamp > localMaxTimestamp && fetchTimestamp <= currentTimestamp) {
             return getLatestOffset(listOffsetsParam.getFollowerServerId());
         } else if (fetchTimestamp > currentTimestamp) {
-            throw new InvalidTimestampException(
-                    String.format(
-                            "Get offset error for table bucket %s, "
-                                    + "the fetch timestamp %s is larger than the current timestamp %s",
-                            tableBucket, fetchTimestamp, currentTimestamp));
+            throw new InvalidTimestampException(String.format(
+                    "Get offset error for table bucket %s, "
+                            + "the fetch timestamp %s is larger than the current timestamp %s",
+                    tableBucket, fetchTimestamp, currentTimestamp));
         }
 
         // 2.  we will try to find offset from remote storage.
@@ -1306,31 +1182,26 @@ public final class Replica {
 
     /** Delete all data in the local log of this bucket and start the log at the new offset. */
     public void truncateFullyAndStartAt(long newOffset) {
-        inReadLock(
-                leaderIsrUpdateLock,
-                () -> logManager.truncateFullyAndStartAt(tableBucket, newOffset));
+        inReadLock(leaderIsrUpdateLock, () -> logManager.truncateFullyAndStartAt(tableBucket, newOffset));
     }
 
-    private LogReadInfo readRecords(FetchParams fetchParams, LogTablet logTablet)
-            throws IOException {
+    private LogReadInfo readRecords(FetchParams fetchParams, LogTablet logTablet) throws IOException {
         // Note we use the log end offset prior to the read. This ensures that any appends following
         // the fetch do not prevent a follower from coming into sync.
         long initialHighWatermark = logTablet.getHighWatermark();
         long initialLogEndOffset = logTablet.localLogEndOffset();
-        long readOffset =
-                fetchParams.fetchOffset() == FetchParams.FETCH_FROM_EARLIEST_OFFSET
-                        ? logTablet.logStartOffset()
-                        : fetchParams.fetchOffset();
+        long readOffset = fetchParams.fetchOffset() == FetchParams.FETCH_FROM_EARLIEST_OFFSET
+                ? logTablet.logStartOffset()
+                : fetchParams.fetchOffset();
 
         // todo validate fetched epoch.
 
-        FetchDataInfo fetchDataInfo =
-                logTablet.read(
-                        readOffset,
-                        fetchParams.maxFetchBytes(),
-                        fetchParams.isolation(),
-                        fetchParams.minOneMessage(),
-                        fetchParams.projection());
+        FetchDataInfo fetchDataInfo = logTablet.read(
+                readOffset,
+                fetchParams.maxFetchBytes(),
+                fetchParams.isolation(),
+                fetchParams.minOneMessage(),
+                fetchParams.projection());
         return new LogReadInfo(fetchDataInfo, initialHighWatermark, initialLogEndOffset);
     }
 
@@ -1342,11 +1213,10 @@ public final class Replica {
 
     private void validateBucketEpoch(int requestBucketEpoch) {
         if (requestBucketEpoch < bucketEpoch) {
-            String message =
-                    String.format(
-                            "Skipped the become-leader state change for %s with a lower bucket epoch %s"
-                                    + " since the leader is already at a newer bucket epoch %s",
-                            tableBucket, requestBucketEpoch, bucketEpoch);
+            String message = String.format(
+                    "Skipped the become-leader state change for %s with a lower bucket epoch %s"
+                            + " since the leader is already at a newer bucket epoch %s",
+                    tableBucket, requestBucketEpoch, bucketEpoch);
             LOG.info(message);
             throw new InvalidUpdateVersionException(message);
         }
@@ -1366,27 +1236,20 @@ public final class Replica {
     private void maybeExpandISr(FollowerReplica followerReplica) {
         IsrState currentIsrState = isrState;
         boolean needsIsrUpdate =
-                !currentIsrState.isInflight()
-                        && inReadLock(leaderIsrUpdateLock, () -> needsExpandIsr(followerReplica));
+                !currentIsrState.isInflight() && inReadLock(leaderIsrUpdateLock, () -> needsExpandIsr(followerReplica));
 
         if (needsIsrUpdate) {
-            Optional<IsrState.PendingExpandIsrState> adjustIsrUpdateOpt =
-                    inWriteLock(
-                            leaderIsrUpdateLock,
-                            () -> {
-                                // check if this replica needs to be added to the ISR.
-                                if (currentIsrState instanceof IsrState.CommittedIsrState) {
-                                    if (needsExpandIsr(followerReplica)) {
-                                        return Optional.of(
-                                                prepareIsrExpand(
-                                                        (IsrState.CommittedIsrState)
-                                                                currentIsrState,
-                                                        followerReplica.getFollowerId()));
-                                    }
-                                }
+            Optional<IsrState.PendingExpandIsrState> adjustIsrUpdateOpt = inWriteLock(leaderIsrUpdateLock, () -> {
+                // check if this replica needs to be added to the ISR.
+                if (currentIsrState instanceof IsrState.CommittedIsrState) {
+                    if (needsExpandIsr(followerReplica)) {
+                        return Optional.of(prepareIsrExpand(
+                                (IsrState.CommittedIsrState) currentIsrState, followerReplica.getFollowerId()));
+                    }
+                }
 
-                                return Optional.empty();
-                            });
+                return Optional.empty();
+            });
 
             // Send adjust isr request outside the leaderIsrUpdateLock since the completion
             // logic may increment the high watermark (and consequently complete delayed
@@ -1397,42 +1260,30 @@ public final class Replica {
 
     void maybeShrinkIsr() {
         IsrState currentIstState = isrState;
-        boolean needsIsrUpdate =
-                !currentIstState.isInflight()
-                        && inReadLock(leaderIsrUpdateLock, this::needsShrinkIsr);
+        boolean needsIsrUpdate = !currentIstState.isInflight() && inReadLock(leaderIsrUpdateLock, this::needsShrinkIsr);
 
         if (needsIsrUpdate) {
-            Optional<IsrState.PendingShrinkIsrState> adjustIsrUpdateOpt =
-                    inWriteLock(
-                            leaderIsrUpdateLock,
-                            () -> {
-                                if (isLeader()) {
-                                    List<Integer> outOfSyncFollowerReplicas =
-                                            getOutOfSyncFollowerReplicas(replicaMaxLagTime);
-                                    if (currentIstState instanceof IsrState.CommittedIsrState
-                                            && !outOfSyncFollowerReplicas.isEmpty()) {
-                                        List<Integer> newIsr =
-                                                new ArrayList<>(currentIstState.isr());
-                                        newIsr.removeAll(outOfSyncFollowerReplicas);
-                                        LOG.info(
-                                                "Shrink ISR From {} to {}. Leader: (high watermark: {}, "
-                                                        + "end offset: {}, out of sync replicas: {})",
-                                                currentIstState.isr(),
-                                                newIsr,
-                                                logTablet.getHighWatermark(),
-                                                logTablet.localLogEndOffset(),
-                                                outOfSyncFollowerReplicas);
-                                        return Optional.of(
-                                                prepareIsrShrink(
-                                                        (IsrState.CommittedIsrState)
-                                                                currentIstState,
-                                                        newIsr,
-                                                        outOfSyncFollowerReplicas));
-                                    }
-                                }
+            Optional<IsrState.PendingShrinkIsrState> adjustIsrUpdateOpt = inWriteLock(leaderIsrUpdateLock, () -> {
+                if (isLeader()) {
+                    List<Integer> outOfSyncFollowerReplicas = getOutOfSyncFollowerReplicas(replicaMaxLagTime);
+                    if (currentIstState instanceof IsrState.CommittedIsrState && !outOfSyncFollowerReplicas.isEmpty()) {
+                        List<Integer> newIsr = new ArrayList<>(currentIstState.isr());
+                        newIsr.removeAll(outOfSyncFollowerReplicas);
+                        LOG.info(
+                                "Shrink ISR From {} to {}. Leader: (high watermark: {}, "
+                                        + "end offset: {}, out of sync replicas: {})",
+                                currentIstState.isr(),
+                                newIsr,
+                                logTablet.getHighWatermark(),
+                                logTablet.localLogEndOffset(),
+                                outOfSyncFollowerReplicas);
+                        return Optional.of(prepareIsrShrink(
+                                (IsrState.CommittedIsrState) currentIstState, newIsr, outOfSyncFollowerReplicas));
+                    }
+                }
 
-                                return Optional.empty();
-                            });
+                return Optional.empty();
+            });
 
             // Send adjust isr request outside the leaderIsrUpdateLock since the completion
             // logic may increment the high watermark (and consequently complete delayed
@@ -1454,21 +1305,17 @@ public final class Replica {
         // TODO add server epoch to isr.
 
         LeaderAndIsr newLeaderAndIsr =
-                new LeaderAndIsr(
-                        localTabletServerId, leaderEpoch, isrToSend, coordinatorEpoch, bucketEpoch);
+                new LeaderAndIsr(localTabletServerId, leaderEpoch, isrToSend, coordinatorEpoch, bucketEpoch);
 
         IsrState.PendingExpandIsrState updatedState =
-                new IsrState.PendingExpandIsrState(
-                        newInSyncReplicaId, newLeaderAndIsr, currentState);
+                new IsrState.PendingExpandIsrState(newInSyncReplicaId, newLeaderAndIsr, currentState);
         isrState = updatedState;
         return updatedState;
     }
 
     @VisibleForTesting
     IsrState.PendingShrinkIsrState prepareIsrShrink(
-            IsrState.CommittedIsrState currentState,
-            List<Integer> isrToSend,
-            List<Integer> outOfSyncFollowerReplicas) {
+            IsrState.CommittedIsrState currentState, List<Integer> isrToSend, List<Integer> outOfSyncFollowerReplicas) {
         // When shrinking the ISR, we cannot assume that the update will succeed as this could
         // erroneously advance the HW if the `AdjustIsr` were to fail. Hence, the "maximal ISR"
         // for `PendingShrinkIsr` is the current ISR.
@@ -1476,11 +1323,9 @@ public final class Replica {
         // TODO add server epoch to isr.
 
         LeaderAndIsr newLeaderAndIsr =
-                new LeaderAndIsr(
-                        localTabletServerId, leaderEpoch, isrToSend, coordinatorEpoch, bucketEpoch);
+                new LeaderAndIsr(localTabletServerId, leaderEpoch, isrToSend, coordinatorEpoch, bucketEpoch);
         IsrState.PendingShrinkIsrState updatedState =
-                new IsrState.PendingShrinkIsrState(
-                        outOfSyncFollowerReplicas, newLeaderAndIsr, currentState);
+                new IsrState.PendingShrinkIsrState(outOfSyncFollowerReplicas, newLeaderAndIsr, currentState);
         isrState = updatedState;
         return updatedState;
     }
@@ -1495,54 +1340,46 @@ public final class Replica {
         LOG.debug("Submitting ISR state change {}.", proposedIsrState);
         adjustIsrManager
                 .submit(tableBucket, proposedIsrState.sentLeaderAndIsr())
-                .whenComplete(
-                        (leaderAndIsr, exception) -> {
-                            AtomicBoolean hwIncremented = new AtomicBoolean(false);
-                            AtomicBoolean shouldRetry = new AtomicBoolean(false);
+                .whenComplete((leaderAndIsr, exception) -> {
+                    AtomicBoolean hwIncremented = new AtomicBoolean(false);
+                    AtomicBoolean shouldRetry = new AtomicBoolean(false);
 
-                            inWriteLock(
-                                    leaderIsrUpdateLock,
-                                    () -> {
-                                        if (!Objects.equals(isrState, proposedIsrState)) {
-                                            // This means replicaState was updated through leader
-                                            // election or some other mechanism before we got the
-                                            // AdjustIsr response.
-                                            // We don't know what happened on the coordinator server
-                                            // exactly, but we do know this response is out of date,
-                                            // so we ignore it.
-                                            LOG.debug(
-                                                    "Ignoring failed ISR update to {} since we have already updated state to {}",
-                                                    proposedIsrState,
-                                                    isrState);
-                                        } else if (leaderAndIsr != null) {
-                                            hwIncremented.set(
-                                                    handleAdjustIsrUpdate(
-                                                            proposedIsrState, leaderAndIsr));
-                                        } else {
-                                            shouldRetry.set(
-                                                    handleAdjustIsrError(
-                                                            proposedIsrState,
-                                                            Errors.forException(exception)));
-                                        }
-                                    });
+                    inWriteLock(leaderIsrUpdateLock, () -> {
+                        if (!Objects.equals(isrState, proposedIsrState)) {
+                            // This means replicaState was updated through leader
+                            // election or some other mechanism before we got the
+                            // AdjustIsr response.
+                            // We don't know what happened on the coordinator server
+                            // exactly, but we do know this response is out of date,
+                            // so we ignore it.
+                            LOG.debug(
+                                    "Ignoring failed ISR update to {} since we have already updated state to {}",
+                                    proposedIsrState,
+                                    isrState);
+                        } else if (leaderAndIsr != null) {
+                            hwIncremented.set(handleAdjustIsrUpdate(proposedIsrState, leaderAndIsr));
+                        } else {
+                            shouldRetry.set(handleAdjustIsrError(proposedIsrState, Errors.forException(exception)));
+                        }
+                    });
 
-                            if (hwIncremented.get()) {
-                                tryCompleteDelayedOperations();
-                            }
+                    if (hwIncremented.get()) {
+                        tryCompleteDelayedOperations();
+                    }
 
-                            // Send the AdjustIsr request outside the leaderIsrUpdateLock since the
-                            // completion logic may increment the high watermark (and consequently
-                            // complete delayed operations).
-                            if (shouldRetry.get()) {
-                                submitAdjustIsr(proposedIsrState, result);
-                            } else {
-                                if (exception != null) {
-                                    result.completeExceptionally(exception);
-                                } else {
-                                    result.complete(leaderAndIsr);
-                                }
-                            }
-                        });
+                    // Send the AdjustIsr request outside the leaderIsrUpdateLock since the
+                    // completion logic may increment the high watermark (and consequently
+                    // complete delayed operations).
+                    if (shouldRetry.get()) {
+                        submitAdjustIsr(proposedIsrState, result);
+                    } else {
+                        if (exception != null) {
+                            result.completeExceptionally(exception);
+                        } else {
+                            result.complete(leaderAndIsr);
+                        }
+                    }
+                });
         return result;
     }
 
@@ -1553,14 +1390,10 @@ public final class Replica {
      * @param leaderAndIsr The updated LeaderAndIsr state
      * @return true if the high watermark was successfully incremented following, false otherwise
      */
-    private boolean handleAdjustIsrUpdate(
-            IsrState.PendingIsrState proposedIsrState, LeaderAndIsr leaderAndIsr) {
+    private boolean handleAdjustIsrUpdate(IsrState.PendingIsrState proposedIsrState, LeaderAndIsr leaderAndIsr) {
         // Success from coordinator, still need to check a few things.
         if (leaderAndIsr.bucketEpoch() < bucketEpoch) {
-            LOG.debug(
-                    "Ignoring new ISR {} since we have a newer replica epoch {}",
-                    leaderAndIsr,
-                    bucketEpoch);
+            LOG.debug("Ignoring new ISR {} since we have a newer replica epoch {}", leaderAndIsr, bucketEpoch);
             return false;
         } else {
             // This is one of two states:
@@ -1638,10 +1471,7 @@ public final class Replica {
                         proposedIsrState);
                 return false;
             default:
-                LOG.warn(
-                        "Failed to adjust isr to {} due to unexpected error {}. Retrying.",
-                        proposedIsrState,
-                        error);
+                LOG.warn("Failed to adjust isr to {} due to unexpected error {}. Retrying.", proposedIsrState, error);
                 return true;
         }
     }
@@ -1658,8 +1488,7 @@ public final class Replica {
     }
 
     private boolean needsExpandIsr(FollowerReplica followerReplica) {
-        return canAddFollowerReplicaToIsr(followerReplica.getFollowerId())
-                && isFollowerInSync(followerReplica);
+        return canAddFollowerReplicaToIsr(followerReplica.getFollowerId()) && isFollowerInSync(followerReplica);
     }
 
     private boolean needsShrinkIsr() {
@@ -1694,8 +1523,7 @@ public final class Replica {
             long currentTimeMillis = clock.milliseconds();
             long leaderEndOffset = logTablet.localLogEndOffset();
             for (int replicaId : candidateReplicas) {
-                if (isFollowerOutOfSync(
-                        replicaId, leaderEndOffset, currentTimeMillis, maxLagTime)) {
+                if (isFollowerOutOfSync(replicaId, leaderEndOffset, currentTimeMillis, maxLagTime)) {
                     outOfSyncReplicas.add(replicaId);
                 }
             }
@@ -1717,19 +1545,16 @@ public final class Replica {
         if (followerReplica == null) {
             return true;
         }
-        return !followerReplica
-                .stateSnapshot()
-                .isCaughtUp(leaderEndOffset, currentTimeMs, replicaMaxLagTime);
+        return !followerReplica.stateSnapshot().isCaughtUp(leaderEndOffset, currentTimeMs, replicaMaxLagTime);
     }
 
     private void validateInSyncReplicaSize(int requiredAcks) {
         int inSyncSize = isrState.isr().size();
         if (inSyncSize < minInSyncReplicas && requiredAcks == -1) {
-            throw new NotEnoughReplicasException(
-                    String.format(
-                            "The size of the current ISR %s is insufficient to satisfy "
-                                    + "the required acks %s for table bucket %s.",
-                            isrState.isr(), requiredAcks, tableBucket));
+            throw new NotEnoughReplicasException(String.format(
+                    "The size of the current ISR %s is insufficient to satisfy "
+                            + "the required acks %s for table bucket %s.",
+                    isrState.isr(), requiredAcks, tableBucket));
         }
     }
 
@@ -1745,10 +1570,8 @@ public final class Replica {
     private LogTablet localLogOrThrow(boolean requireLeader) {
         // TODO check leader epoch.
         if (requireLeader && !isLeader()) {
-            throw new NotLeaderOrFollowerException(
-                    String.format(
-                            "Leader not local for bucket %s on tabletServer %d",
-                            tableBucket, localTabletServerId));
+            throw new NotLeaderOrFollowerException(String.format(
+                    "Leader not local for bucket %s on tabletServer %d", tableBucket, localTabletServerId));
         }
 
         return logTablet;
@@ -1760,26 +1583,20 @@ public final class Replica {
         return leaderReplicaId != null && leaderReplicaId.equals(localTabletServerId);
     }
 
-    private LogTablet createLog(
-            OffsetCheckpointFile.LazyOffsetCheckpoints lazyHighWatermarkCheckpoint)
+    private LogTablet createLog(OffsetCheckpointFile.LazyOffsetCheckpoints lazyHighWatermarkCheckpoint)
             throws Exception {
-        LogTablet log =
-                logManager.getOrCreateLog(
-                        physicalPath,
-                        tableBucket,
-                        tableConfig.getLogFormat(),
-                        tableConfig.getTieredLogLocalSegments(),
-                        isKvTable());
+        LogTablet log = logManager.getOrCreateLog(
+                physicalPath,
+                tableBucket,
+                tableConfig.getLogFormat(),
+                tableConfig.getTieredLogLocalSegments(),
+                isKvTable());
         // update high watermark.
         Optional<Long> watermarkOpt = lazyHighWatermarkCheckpoint.fetch(tableBucket);
-        long watermark =
-                watermarkOpt.orElseGet(
-                        () -> {
-                            LOG.info(
-                                    "No local checkpoint high watermark found for table bucket {}",
-                                    tableBucket);
-                            return 0L;
-                        });
+        long watermark = watermarkOpt.orElseGet(() -> {
+            LOG.info("No local checkpoint high watermark found for table bucket {}", tableBucket);
+            return 0L;
+        });
         log.updateHighWatermark(watermark);
         log.registerMetrics(bucketMetricGroup);
         LOG.info("Log loaded for bucket {} with initial high watermark {}", tableBucket, watermark);
@@ -1788,36 +1605,31 @@ public final class Replica {
 
     private void traceAckInfo(List<Integer> curMaximalIsr, long requiredOffset) {
         List<Tuple2<Integer, Long>> followerReplicaInfo = new ArrayList<>();
-        curMaximalIsr.forEach(
-                replica -> {
-                    if (replica != localTabletServerId
-                            && followerReplicasMap.containsKey(replica)) {
-                        FollowerReplica rp = followerReplicasMap.get(replica);
-                        followerReplicaInfo.add(
-                                Tuple2.of(
-                                        rp.getFollowerId(), rp.stateSnapshot().getLogEndOffset()));
-                    }
-                });
+        curMaximalIsr.forEach(replica -> {
+            if (replica != localTabletServerId && followerReplicasMap.containsKey(replica)) {
+                FollowerReplica rp = followerReplicasMap.get(replica);
+                followerReplicaInfo.add(
+                        Tuple2.of(rp.getFollowerId(), rp.stateSnapshot().getLogEndOffset()));
+            }
+        });
 
         List<Tuple2<Integer, Long>> ackedReplicas = new ArrayList<>();
         List<Tuple2<Integer, Long>> awaitingReplicas = new ArrayList<>();
 
-        Tuple2<Integer, Long> localLogInfo =
-                Tuple2.of(localTabletServerId, logTablet.localLogEndOffset());
+        Tuple2<Integer, Long> localLogInfo = Tuple2.of(localTabletServerId, logTablet.localLogEndOffset());
         if (logTablet.localLogEndOffset() >= requiredOffset) {
             ackedReplicas.add(localLogInfo);
         } else {
             awaitingReplicas.add(localLogInfo);
         }
 
-        followerReplicaInfo.forEach(
-                replicaInfo -> {
-                    if (replicaInfo.f1 >= requiredOffset) {
-                        ackedReplicas.add(replicaInfo);
-                    } else {
-                        awaitingReplicas.add(replicaInfo);
-                    }
-                });
+        followerReplicaInfo.forEach(replicaInfo -> {
+            if (replicaInfo.f1 >= requiredOffset) {
+                ackedReplicas.add(replicaInfo);
+            } else {
+                awaitingReplicas.add(replicaInfo);
+            }
+        });
 
         LOG.trace(
                 "Progress awaiting ISR acks for offset {}, acked replicas: {}, awaiting replicas: {}",

@@ -31,8 +31,7 @@ class FunctionUtilsTest {
     void testUncheckedFunction() {
         // test a uncheckedFunction which will throw exception in apply method
         String exceptionMsg = "this is exception message.";
-        Function<String, String> uncheckedFunction =
-                FunctionUtils.uncheckedFunction(new TestFunctionWithException());
+        Function<String, String> uncheckedFunction = FunctionUtils.uncheckedFunction(new TestFunctionWithException());
         assertThatThrownBy(() -> uncheckedFunction.apply(exceptionMsg))
                 .isInstanceOf(RuntimeException.class)
                 .cause()
@@ -40,8 +39,7 @@ class FunctionUtilsTest {
                 .hasMessage(exceptionMsg);
     }
 
-    private static class TestFunctionWithException
-            implements FunctionWithException<String, String, IOException> {
+    private static class TestFunctionWithException implements FunctionWithException<String, String, IOException> {
 
         @Override
         public String apply(String value) throws IOException {

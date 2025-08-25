@@ -111,9 +111,7 @@ public class ByteBufChannel implements ChannelOutboundInvoker {
 
     @Override
     public ChannelFuture connect(
-            SocketAddress socketAddress,
-            SocketAddress socketAddress1,
-            ChannelPromise channelPromise) {
+            SocketAddress socketAddress, SocketAddress socketAddress1, ChannelPromise channelPromise) {
         throw new UnsupportedOperationException();
     }
 

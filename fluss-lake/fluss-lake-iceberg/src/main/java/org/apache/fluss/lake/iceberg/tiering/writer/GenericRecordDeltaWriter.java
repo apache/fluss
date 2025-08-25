@@ -48,14 +48,13 @@ class GenericRecordDeltaWriter extends BaseTaskWriter<Record> {
             long targetFileSize,
             WriterInitContext writerInitContext) {
         super(icebergTable.spec(), format, appenderFactory, fileFactory, io, targetFileSize);
-        this.deltaWriter =
-                new GenericEqualityDeltaWriter(
-                        toPartition(
-                                icebergTable,
-                                writerInitContext.partition(),
-                                writerInitContext.tableBucket().getBucket()),
-                        icebergTable.schema(),
-                        deleteSchema);
+        this.deltaWriter = new GenericEqualityDeltaWriter(
+                toPartition(
+                        icebergTable,
+                        writerInitContext.partition(),
+                        writerInitContext.tableBucket().getBucket()),
+                icebergTable.schema(),
+                deleteSchema);
     }
 
     @Override
@@ -73,8 +72,7 @@ class GenericRecordDeltaWriter extends BaseTaskWriter<Record> {
     }
 
     private class GenericEqualityDeltaWriter extends BaseEqualityDeltaWriter {
-        private GenericEqualityDeltaWriter(
-                PartitionKey partition, Schema schema, Schema eqDeleteSchema) {
+        private GenericEqualityDeltaWriter(PartitionKey partition, Schema schema, Schema eqDeleteSchema) {
             super(partition, schema, eqDeleteSchema);
         }
 

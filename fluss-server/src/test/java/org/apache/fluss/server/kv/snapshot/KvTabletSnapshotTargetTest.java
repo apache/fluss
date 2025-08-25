@@ -74,7 +74,8 @@ class KvTabletSnapshotTargetTest {
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
-    @RegisterExtension public RocksDBExtension rocksDBExtension = new RocksDBExtension();
+    @RegisterExtension
+    public RocksDBExtension rocksDBExtension = new RocksDBExtension();
 
     private static final TableBucket tableBucket = new TableBucket(1, 1);
     private static final long periodicMaterializeDelay = 10_000L;
@@ -95,9 +96,7 @@ class KvTabletSnapshotTargetTest {
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
         zooKeeperClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+                ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getZooKeeperClient(NOPErrorHandler.INSTANCE);
     }
 
     @BeforeEach
@@ -139,11 +138,8 @@ class KvTabletSnapshotTargetTest {
         TestRocksIncrementalSnapshot rocksIncrementalSnapshot =
                 (TestRocksIncrementalSnapshot) kvTabletSnapshotTarget.getRocksIncrementalSnapshot();
         // retry util the snapshot finish
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(rocksIncrementalSnapshot.completedSnapshots)
-                                .contains(snapshotId1));
+        retry(Duration.ofMinutes(1), () -> assertThat(rocksIncrementalSnapshot.completedSnapshots)
+                .contains(snapshotId1));
 
         // now retrieve the snapshot
         CompletedSnapshotHandle completedSnapshotHandle =
@@ -154,9 +150,8 @@ class KvTabletSnapshotTargetTest {
         assertThat(snapshot.getMetadataFilePath())
                 .isEqualTo(CompletedSnapshot.getMetadataFilePath(snapshot.getSnapshotLocation()));
         // rebuild from snapshot, and the check the rebuilt rocksdb
-        try (RocksDBKv rocksDBKv =
-                KvTestUtils.buildFromSnapshotHandle(
-                        snapshot.getKvSnapshotHandle(), temoRebuildPath.resolve("restore1"))) {
+        try (RocksDBKv rocksDBKv = KvTestUtils.buildFromSnapshotHandle(
+                snapshot.getKvSnapshotHandle(), temoRebuildPath.resolve("restore1"))) {
             assertThat(rocksDBKv.get("key1".getBytes())).isEqualTo("val1".getBytes());
         }
 
@@ -165,13 +160,11 @@ class KvTabletSnapshotTargetTest {
         // update log offset to do snapshot
         logOffsetGenerator.set(5);
         periodicSnapshotManager.triggerSnapshot();
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(rocksIncrementalSnapshot.completedSnapshots)
-                                .contains(snapshotId2));
+        retry(Duration.ofMinutes(1), () -> assertThat(rocksIncrementalSnapshot.completedSnapshots)
+                .contains(snapshotId2));
 
-        completedSnapshotHandle = completedSnapshotHandleStore.get(tableBucket, snapshotId2).get();
+        completedSnapshotHandle =
+                completedSnapshotHandleStore.get(tableBucket, snapshotId2).get();
         snapshot = completedSnapshotHandle.retrieveCompleteSnapshot();
         // rebuild from snapshot, and the check the rebuilt rocksdb
         // verify the metadata file path
@@ -179,9 +172,8 @@ class KvTabletSnapshotTargetTest {
                 .isEqualTo(CompletedSnapshot.getMetadataFilePath(snapshot.getSnapshotLocation()));
         assertThat(snapshot.getSnapshotID()).isEqualTo(snapshotId2);
         assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(5);
-        try (RocksDBKv rocksDBKv =
-                KvTestUtils.buildFromSnapshotHandle(
-                        snapshot.getKvSnapshotHandle(), temoRebuildPath.resolve("restore2"))) {
+        try (RocksDBKv rocksDBKv = KvTestUtils.buildFromSnapshotHandle(
+                snapshot.getKvSnapshotHandle(), temoRebuildPath.resolve("restore2"))) {
             assertThat(rocksDBKv.get("key1".getBytes())).isEqualTo("val1".getBytes());
             assertThat(rocksDBKv.get("key2".getBytes())).isEqualTo("val2".getBytes());
         }
@@ -194,10 +186,7 @@ class KvTabletSnapshotTargetTest {
         FsPath remoteKvTabletDir = FsPath.fromLocalFile(kvTabletDir.toFile());
         // test fail in the sync phase of snapshot
         KvTabletSnapshotTarget kvTabletSnapshotTarget =
-                createSnapshotTarget(
-                        remoteKvTabletDir,
-                        completedSnapshotHandleStore,
-                        SnapshotFailType.SYNC_PHASE);
+                createSnapshotTarget(remoteKvTabletDir, completedSnapshotHandleStore, SnapshotFailType.SYNC_PHASE);
         long snapshotId1 = 1;
 
         periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
@@ -210,10 +199,7 @@ class KvTabletSnapshotTargetTest {
 
         // test fail in the async phase of snapshot
         kvTabletSnapshotTarget =
-                createSnapshotTarget(
-                        remoteKvTabletDir,
-                        completedSnapshotHandleStore,
-                        SnapshotFailType.ASYNC_PHASE);
+                createSnapshotTarget(remoteKvTabletDir, completedSnapshotHandleStore, SnapshotFailType.ASYNC_PHASE);
         periodicSnapshotManager = createSnapshotManager(kvTabletSnapshotTarget);
         periodicSnapshotManager.start();
         periodicSnapshotManager.triggerSnapshot();
@@ -223,14 +209,12 @@ class KvTabletSnapshotTargetTest {
                 (TestRocksIncrementalSnapshot) kvTabletSnapshotTarget.getRocksIncrementalSnapshot();
         FsPath snapshotPath2 = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId2);
         // the snapshot1 will fail
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    assertThat(rocksIncrementalSnapshot.abortedSnapshots).contains(snapshotId2);
-                    // the snapshot dir should be discarded, the snapshotPath is disposed after
-                    // notify abort, so we have to assert the path doesn't exist in the retry
-                    assertThat(snapshotPath2.getFileSystem().exists(snapshotPath2)).isFalse();
-                });
+        retry(Duration.ofMinutes(1), () -> {
+            assertThat(rocksIncrementalSnapshot.abortedSnapshots).contains(snapshotId2);
+            // the snapshot dir should be discarded, the snapshotPath is disposed after
+            // notify abort, so we have to assert the path doesn't exist in the retry
+            assertThat(snapshotPath2.getFileSystem().exists(snapshotPath2)).isFalse();
+        });
         // minRetainOffset shouldn't updated
         assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(Long.MAX_VALUE);
     }
@@ -241,16 +225,14 @@ class KvTabletSnapshotTargetTest {
         AtomicBoolean shouldFail = new AtomicBoolean(true);
         // we use a store will fail when the variable shouldFail is true
         // add the snapshot to store will fail
-        CompletedSnapshotHandleStore completedSnapshotHandleStore =
-                TestCompletedSnapshotHandleStore.newBuilder()
-                        .setAddFunction(
-                                (snapshot) -> {
-                                    if (shouldFail.get()) {
-                                        throw new FlussException(errMsg);
-                                    }
-                                    return null;
-                                })
-                        .build();
+        CompletedSnapshotHandleStore completedSnapshotHandleStore = TestCompletedSnapshotHandleStore.newBuilder()
+                .setAddFunction((snapshot) -> {
+                    if (shouldFail.get()) {
+                        throw new FlussException(errMsg);
+                    }
+                    return null;
+                })
+                .build();
         FsPath remoteKvTabletDir = FsPath.fromLocalFile(kvTabletDir.toFile());
         KvTabletSnapshotTarget kvTabletSnapshotTarget =
                 createSnapshotTarget(remoteKvTabletDir, completedSnapshotHandleStore);
@@ -264,16 +246,15 @@ class KvTabletSnapshotTargetTest {
         long snapshotId1 = 1;
         FsPath snapshotPath1 = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId1);
 
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(snapshotPath1.getFileSystem().exists(snapshotPath1)).isTrue());
+        retry(Duration.ofMinutes(1), () -> assertThat(
+                        snapshotPath1.getFileSystem().exists(snapshotPath1))
+                .isTrue());
 
         TestRocksIncrementalSnapshot rocksIncrementalSnapshot =
                 (TestRocksIncrementalSnapshot) kvTabletSnapshotTarget.getRocksIncrementalSnapshot();
         // the snapshot1 will fail
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(rocksIncrementalSnapshot.abortedSnapshots).contains(snapshotId1));
+        retry(Duration.ofMinutes(1), () -> assertThat(rocksIncrementalSnapshot.abortedSnapshots)
+                .contains(snapshotId1));
         // the snapshot dir should be discarded
         assertThat(snapshotPath1.getFileSystem().exists(snapshotPath1)).isFalse();
         // minRetainOffset shouldn't be updated when the snapshot failed
@@ -284,11 +265,8 @@ class KvTabletSnapshotTargetTest {
         long snapshotId2 = 2;
         // trigger a snapshot again, it'll be success
         periodicSnapshotManager.triggerSnapshot();
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(rocksIncrementalSnapshot.completedSnapshots)
-                                .contains(snapshotId2));
+        retry(Duration.ofMinutes(1), () -> assertThat(rocksIncrementalSnapshot.completedSnapshots)
+                .contains(snapshotId2));
 
         FsPath snapshotPath2 = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId2);
         // the snapshot dir should exist again
@@ -297,8 +275,7 @@ class KvTabletSnapshotTargetTest {
         assertThat(updateMinRetainOffsetConsumer.get()).isEqualTo(1L);
     }
 
-    private PeriodicSnapshotManager createSnapshotManager(
-            PeriodicSnapshotManager.SnapshotTarget target) {
+    private PeriodicSnapshotManager createSnapshotManager(PeriodicSnapshotManager.SnapshotTarget target) {
         return new PeriodicSnapshotManager(
                 tableBucket,
                 target,
@@ -309,8 +286,7 @@ class KvTabletSnapshotTargetTest {
     }
 
     private KvTabletSnapshotTarget createSnapshotTarget(
-            FsPath remoteKvTabletDir, CompletedSnapshotHandleStore snapshotHandleStore)
-            throws IOException {
+            FsPath remoteKvTabletDir, CompletedSnapshotHandleStore snapshotHandleStore) throws IOException {
         return createSnapshotTarget(remoteKvTabletDir, snapshotHandleStore, SnapshotFailType.NONE);
     }
 
@@ -323,16 +299,10 @@ class KvTabletSnapshotTargetTest {
         SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
         Executor executor = Executors.directExecutor();
 
-        CompletedSnapshotStore completedSnapshotStore =
-                new CompletedSnapshotStore(
-                        1,
-                        sharedKvFileRegistry,
-                        Collections.emptyList(),
-                        snapshotHandleStore,
-                        executor);
+        CompletedSnapshotStore completedSnapshotStore = new CompletedSnapshotStore(
+                1, sharedKvFileRegistry, Collections.emptyList(), snapshotHandleStore, executor);
 
-        RocksIncrementalSnapshot rocksIncrementalSnapshot =
-                createIncrementalSnapshot(snapshotFailType);
+        RocksIncrementalSnapshot rocksIncrementalSnapshot = createIncrementalSnapshot(snapshotFailType);
 
         CloseableRegistry cancelStreamRegistry = new CloseableRegistry();
 
@@ -356,19 +326,16 @@ class KvTabletSnapshotTargetTest {
                 0L);
     }
 
-    private RocksIncrementalSnapshot createIncrementalSnapshot(SnapshotFailType snapshotFailType)
-            throws IOException {
+    private RocksIncrementalSnapshot createIncrementalSnapshot(SnapshotFailType snapshotFailType) throws IOException {
         long lastCompletedSnapshotId = -1L;
         Map<Long, Collection<KvFileHandleAndLocalPath>> uploadedSstFiles = new HashMap<>();
         ResourceGuard rocksDBResourceGuard = new ResourceGuard();
 
         RocksDB rocksDB = rocksDBExtension.getRocksDb();
 
-        ExecutorService downLoaderExecutor =
-                java.util.concurrent.Executors.newSingleThreadExecutor();
+        ExecutorService downLoaderExecutor = java.util.concurrent.Executors.newSingleThreadExecutor();
 
-        KvSnapshotDataUploader snapshotDataUploader =
-                new KvSnapshotDataUploader(downLoaderExecutor);
+        KvSnapshotDataUploader snapshotDataUploader = new KvSnapshotDataUploader(downLoaderExecutor);
         closeableRegistry.registerCloseable(downLoaderExecutor::shutdownNow);
         return new TestRocksIncrementalSnapshot(
                 uploadedSstFiles,
@@ -416,8 +383,7 @@ class KvTabletSnapshotTargetTest {
                     throw new FlussRuntimeException("Fail in snapshot async phase.");
                 };
             } else {
-                return super.asyncSnapshot(
-                        snapshotResources, snapshotId, logOffset, snapshotLocation);
+                return super.asyncSnapshot(snapshotResources, snapshotId, logOffset, snapshotLocation);
             }
         }
 
@@ -450,19 +416,16 @@ class KvTabletSnapshotTargetTest {
      * A {@link CompletedKvSnapshotCommitter} which will store the completed snapshot using {@link
      * CompletedSnapshotStore} when reporting a completed snapshot.
      */
-    private static class TestingStoreCompletedKvSnapshotCommitter
-            implements CompletedKvSnapshotCommitter {
+    private static class TestingStoreCompletedKvSnapshotCommitter implements CompletedKvSnapshotCommitter {
 
         private final CompletedSnapshotStore completedSnapshotStore;
 
-        public TestingStoreCompletedKvSnapshotCommitter(
-                CompletedSnapshotStore completedSnapshotStore) {
+        public TestingStoreCompletedKvSnapshotCommitter(CompletedSnapshotStore completedSnapshotStore) {
             this.completedSnapshotStore = completedSnapshotStore;
         }
 
         @Override
-        public void commitKvSnapshot(
-                CompletedSnapshot snapshot, int coordinatorEpoch, int bucketLeaderEpoch)
+        public void commitKvSnapshot(CompletedSnapshot snapshot, int coordinatorEpoch, int bucketLeaderEpoch)
                 throws Exception {
             completedSnapshotStore.add(snapshot);
         }

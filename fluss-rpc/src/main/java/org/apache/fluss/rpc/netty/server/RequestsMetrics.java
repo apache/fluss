@@ -63,19 +63,17 @@ public class RequestsMetrics {
     }
 
     public static RequestsMetrics createTabletServerRequestMetrics(MetricGroup serverMetricsGroup) {
-        List<ApiKeys> apiKeys =
-                Arrays.asList(
-                        ApiKeys.PRODUCE_LOG,
-                        ApiKeys.PUT_KV,
-                        ApiKeys.LOOKUP,
-                        ApiKeys.FETCH_LOG,
-                        ApiKeys.PREFIX_LOOKUP,
-                        ApiKeys.GET_METADATA);
+        List<ApiKeys> apiKeys = Arrays.asList(
+                ApiKeys.PRODUCE_LOG,
+                ApiKeys.PUT_KV,
+                ApiKeys.LOOKUP,
+                ApiKeys.FETCH_LOG,
+                ApiKeys.PREFIX_LOOKUP,
+                ApiKeys.GET_METADATA);
         return new RequestsMetrics(serverMetricsGroup, apiKeys);
     }
 
-    public static RequestsMetrics createCoordinatorServerRequestMetrics(
-            MetricGroup serverMetricsGroup) {
+    public static RequestsMetrics createCoordinatorServerRequestMetrics(MetricGroup serverMetricsGroup) {
         // now, no need to register any metrics of request for coordinator server
         return new RequestsMetrics(serverMetricsGroup, Collections.emptySet());
     }
@@ -87,8 +85,7 @@ public class RequestsMetrics {
 
     /** Add a metric group for given request name. */
     private void addMetrics(MetricGroup parentMetricGroup, String requestName) {
-        metricsByRequest.put(
-                requestName, new Metrics(parentMetricGroup.addGroup("request", requestName)));
+        metricsByRequest.put(requestName, new Metrics(parentMetricGroup.addGroup("request", requestName)));
     }
 
     private static String toRequestName(ApiKeys apiKeys, boolean isFromFollower) {
@@ -135,25 +132,15 @@ public class RequestsMetrics {
             metricGroup.meter(MetricNames.ERRORS_RATE, new MeterView(errorsCount));
 
             requestBytes =
-                    metricGroup.histogram(
-                            MetricNames.REQUEST_BYTES,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
-            requestQueueTimeMs =
-                    metricGroup.histogram(
-                            MetricNames.REQUEST_QUEUE_TIME_MS,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
-            requestProcessTimeMs =
-                    metricGroup.histogram(
-                            MetricNames.REQUEST_PROCESS_TIME_MS,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
-            responseSendTimeMs =
-                    metricGroup.histogram(
-                            MetricNames.RESPONSE_SEND_TIME_MS,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
-            totalTimeMs =
-                    metricGroup.histogram(
-                            MetricNames.REQUEST_TOTAL_TIME_MS,
-                            new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                    metricGroup.histogram(MetricNames.REQUEST_BYTES, new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+            requestQueueTimeMs = metricGroup.histogram(
+                    MetricNames.REQUEST_QUEUE_TIME_MS, new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+            requestProcessTimeMs = metricGroup.histogram(
+                    MetricNames.REQUEST_PROCESS_TIME_MS, new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+            responseSendTimeMs = metricGroup.histogram(
+                    MetricNames.RESPONSE_SEND_TIME_MS, new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+            totalTimeMs = metricGroup.histogram(
+                    MetricNames.REQUEST_TOTAL_TIME_MS, new DescriptiveStatisticsHistogram(WINDOW_SIZE));
         }
 
         public Counter getRequestsCount() {

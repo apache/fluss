@@ -34,16 +34,14 @@ public class InstantiationUtilTest {
         byte[] bytes = InstantiationUtils.serializeObject(testClass);
         // deserialize with classloader
         try (ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(bytes)) {
-            TestClass deserializedTestClass =
-                    InstantiationUtils.deserializeObject(
-                            byteArrayInputStream, this.getClass().getClassLoader());
+            TestClass deserializedTestClass = InstantiationUtils.deserializeObject(
+                    byteArrayInputStream, this.getClass().getClassLoader());
             assertThat(deserializedTestClass).isEqualTo(testClass);
         }
 
         // deserialize without classloader
         try (ByteArrayInputStream byteArrayInputStream = new ByteArrayInputStream(bytes)) {
-            TestClass deserializedTestClass =
-                    InstantiationUtils.deserializeObject(byteArrayInputStream, null);
+            TestClass deserializedTestClass = InstantiationUtils.deserializeObject(byteArrayInputStream, null);
             assertThat(deserializedTestClass).isEqualTo(testClass);
         }
     }
@@ -60,9 +58,7 @@ public class InstantiationUtilTest {
         String testString = "testString";
         assertThat(InstantiationUtils.clone(testString)).isEqualTo(testString);
         // test clone a string with classloader
-        assertThat(
-                        InstantiationUtils.clone(
-                                testString, Thread.currentThread().getContextClassLoader()))
+        assertThat(InstantiationUtils.clone(testString, Thread.currentThread().getContextClassLoader()))
                 .isEqualTo(testString);
     }
 

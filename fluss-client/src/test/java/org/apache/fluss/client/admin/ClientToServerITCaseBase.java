@@ -70,11 +70,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 public abstract class ClientToServerITCaseBase {
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(initConfig())
+            .build();
 
     protected Connection conn;
     protected Admin admin;
@@ -100,8 +99,7 @@ public abstract class ClientToServerITCaseBase {
         }
     }
 
-    protected long createTable(
-            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists)
+    protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists)
             throws Exception {
         admin.createDatabase(tablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, ignoreIfExists)
                 .get();
@@ -151,22 +149,19 @@ public abstract class ClientToServerITCaseBase {
         Map<Integer, Long> offsetsMap =
                 listOffsets(tablePath, partitionName, table, admin, new TimestampSpec(timestamp));
         if (partitionId != null) {
-            offsetsMap.forEach(
-                    (bucketId, offset) -> logScanner.subscribe(partitionId, bucketId, offset));
+            offsetsMap.forEach((bucketId, offset) -> logScanner.subscribe(partitionId, bucketId, offset));
         } else {
             offsetsMap.forEach(logScanner::subscribe);
         }
     }
 
     private static Map<Integer, Long> listOffsets(
-            TablePath tablePath,
-            String partitionName,
-            Table table,
-            Admin admin,
-            OffsetSpec offsetSpec)
+            TablePath tablePath, String partitionName, Table table, Admin admin, OffsetSpec offsetSpec)
             throws InterruptedException, ExecutionException {
         return partitionName == null
-                ? admin.listOffsets(tablePath, getAllBuckets(table), offsetSpec).all().get()
+                ? admin.listOffsets(tablePath, getAllBuckets(table), offsetSpec)
+                        .all()
+                        .get()
                 : admin.listOffsets(tablePath, partitionName, getAllBuckets(table), offsetSpec)
                         .all()
                         .get();
@@ -180,11 +175,9 @@ public abstract class ClientToServerITCaseBase {
             LogScanner logScanner,
             Admin admin)
             throws Exception {
-        Map<Integer, Long> offsetsMap =
-                listOffsets(tablePath, partitionName, table, admin, new LatestSpec());
+        Map<Integer, Long> offsetsMap = listOffsets(tablePath, partitionName, table, admin, new LatestSpec());
         if (partitionId != null) {
-            offsetsMap.forEach(
-                    (bucketId, offset) -> logScanner.subscribe(partitionId, bucketId, offset));
+            offsetsMap.forEach((bucketId, offset) -> logScanner.subscribe(partitionId, bucketId, offset));
         } else {
             offsetsMap.forEach(logScanner::subscribe);
         }
@@ -200,8 +193,7 @@ public abstract class ClientToServerITCaseBase {
     }
 
     public static void verifyPartitionLogs(
-            Table table, RowType rowType, Map<Long, List<InternalRow>> expectPartitionsRows)
-            throws Exception {
+            Table table, RowType rowType, Map<Long, List<InternalRow>> expectPartitionsRows) throws Exception {
         int totalRecords =
                 expectPartitionsRows.values().stream().map(List::size).reduce(0, Integer::sum);
         int scanRecordCount = 0;
@@ -216,8 +208,7 @@ public abstract class ClientToServerITCaseBase {
                     List<ScanRecord> records = scanRecords.records(scanBucket);
                     for (ScanRecord scanRecord : records) {
                         actualRows
-                                .computeIfAbsent(
-                                        scanBucket.getPartitionId(), k -> new ArrayList<>())
+                                .computeIfAbsent(scanBucket.getPartitionId(), k -> new ArrayList<>())
                                 .add(scanRecord.getRow());
                     }
                 }
@@ -236,9 +227,7 @@ public abstract class ClientToServerITCaseBase {
     }
 
     protected static void verifyRows(
-            RowType rowType,
-            Map<Long, List<InternalRow>> actualRows,
-            Map<Long, List<InternalRow>> expectedRows) {
+            RowType rowType, Map<Long, List<InternalRow>> actualRows, Map<Long, List<InternalRow>> expectedRows) {
         // verify rows size
         assertThat(actualRows.size()).isEqualTo(expectedRows.size());
         // verify each partition -> rows
@@ -266,7 +255,9 @@ public abstract class ClientToServerITCaseBase {
         Lookuper lookuper = table.newLookup().createLookuper();
         ProjectedRow keyRow = ProjectedRow.from(schema.getPrimaryKeyIndexes());
         keyRow.replaceRow(row);
-        assertThatRow(lookupRow(lookuper, keyRow)).withSchema(schema.getRowType()).isEqualTo(row);
+        assertThatRow(lookupRow(lookuper, keyRow))
+                .withSchema(schema.getRowType())
+                .isEqualTo(row);
     }
 
     protected static InternalRow lookupRow(Lookuper lookuper, InternalRow keyRow) throws Exception {
@@ -278,13 +269,11 @@ public abstract class ClientToServerITCaseBase {
         return new PartitionSpec(Collections.singletonMap(partitionKey, partitionValue));
     }
 
-    protected static PartitionSpec newPartitionSpec(
-            List<String> partitionKeys, List<String> partitionValues) {
+    protected static PartitionSpec newPartitionSpec(List<String> partitionKeys, List<String> partitionValues) {
         checkArgument(partitionKeys.size() == partitionValues.size());
-        Map<String, String> collectMap =
-                IntStream.range(0, partitionKeys.size())
-                        .boxed()
-                        .collect(Collectors.toMap(partitionKeys::get, partitionValues::get));
+        Map<String, String> collectMap = IntStream.range(0, partitionKeys.size())
+                .boxed()
+                .collect(Collectors.toMap(partitionKeys::get, partitionValues::get));
         return new PartitionSpec(collectMap);
     }
 }

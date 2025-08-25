@@ -36,10 +36,9 @@ public interface ServerAuthenticator extends Closeable {
 
     default void matchProtocol(String protocol) throws AuthenticationException {
         if (!protocol().equalsIgnoreCase(protocol)) {
-            throw new AuthenticationException(
-                    String.format(
-                            "Authenticate protocol not match: protocol of server is '%s' while protocol of client is '%s'",
-                            protocol(), protocol));
+            throw new AuthenticationException(String.format(
+                    "Authenticate protocol not match: protocol of server is '%s' while protocol of client is '%s'",
+                    protocol(), protocol));
         }
     }
 

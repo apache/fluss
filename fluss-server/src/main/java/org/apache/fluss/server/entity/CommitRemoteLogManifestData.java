@@ -118,10 +118,6 @@ public class CommitRemoteLogManifestData {
     @Override
     public int hashCode() {
         return Objects.hash(
-                tableBucket,
-                remoteLogManifestPath,
-                remoteLogEndOffset,
-                coordinatorEpoch,
-                bucketLeaderEpoch);
+                tableBucket, remoteLogManifestPath, remoteLogEndOffset, coordinatorEpoch, bucketLeaderEpoch);
     }
 }

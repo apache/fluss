@@ -86,7 +86,8 @@ public abstract class DataType implements Serializable {
      * @param typeFamilies The families to check against for equality
      */
     public boolean isAnyOf(DataTypeFamily... typeFamilies) {
-        return Arrays.stream(typeFamilies).anyMatch(tf -> this.typeRoot.getFamilies().contains(tf));
+        return Arrays.stream(typeFamilies)
+                .anyMatch(tf -> this.typeRoot.getFamilies().contains(tf));
     }
 
     /**

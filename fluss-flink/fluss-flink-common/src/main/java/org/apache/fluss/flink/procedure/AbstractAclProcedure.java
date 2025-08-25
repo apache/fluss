@@ -71,17 +71,12 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
             @Nullable String host)
             throws Exception {
         PermissionType permissionType =
-                permission == null
-                        ? PermissionType.ANY
-                        : PermissionType.valueOf(permission.toUpperCase());
+                permission == null ? PermissionType.ANY : PermissionType.valueOf(permission.toUpperCase());
         FlussPrincipal flussPrincipal = parsePrincipal(principal);
         OperationType operationType =
-                operation == null
-                        ? OperationType.ANY
-                        : OperationType.valueOf(operation.toUpperCase());
+                operation == null ? OperationType.ANY : OperationType.valueOf(operation.toUpperCase());
         Resource matchResource = parseResource(resource);
-        return aclOperation(
-                matchResource, permissionType, flussPrincipal, operationType, parseHost(host));
+        return aclOperation(matchResource, permissionType, flussPrincipal, operationType, parseHost(host));
     }
 
     protected abstract String[] aclOperation(
@@ -103,8 +98,7 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
 
         String[] principalTypeAndName = principalStr.split(":");
         if (principalTypeAndName.length != 2) {
-            throw new IllegalArgumentException(
-                    "principal must be in format PrincipalType:PrincipalName");
+            throw new IllegalArgumentException("principal must be in format PrincipalType:PrincipalName");
         }
         return new FlussPrincipal(principalTypeAndName[1], principalTypeAndName[0]);
     }
@@ -116,11 +110,8 @@ public abstract class AbstractAclProcedure extends ProcedureBase {
 
         Resource resource;
         String[] resourcePath = resourceStr.split(Resource.TABLE_SPLITTER);
-        if (resourcePath.length == 0
-                || resourcePath.length > 3
-                || !"cluster".equalsIgnoreCase(resourcePath[0])) {
-            throw new IllegalArgumentException(
-                    "resource must be in format cluster.${database}.${table}");
+        if (resourcePath.length == 0 || resourcePath.length > 3 || !"cluster".equalsIgnoreCase(resourcePath[0])) {
+            throw new IllegalArgumentException("resource must be in format cluster.${database}.${table}");
         } else if (resourcePath.length == 1) {
             resource = Resource.cluster();
         } else if (resourcePath.length == 2) {

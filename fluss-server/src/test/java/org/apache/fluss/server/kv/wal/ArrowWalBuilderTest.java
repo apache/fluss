@@ -75,8 +75,7 @@ class ArrowWalBuilderTest {
 
         int bucketId = 0;
         TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, bucketId);
-        LazyMemorySegmentPool memorySegmentPool =
-                LazyMemorySegmentPool.createWriterBufferPool(conf);
+        LazyMemorySegmentPool memorySegmentPool = LazyMemorySegmentPool.createWriterBufferPool(conf);
         WalBuilder walBuilder = createWalBuilder(tb, 1024, memorySegmentPool);
 
         List<Tuple2<ChangeType, Object[]>> expectedResult = new ArrayList<>();
@@ -117,8 +116,7 @@ class ArrowWalBuilderTest {
 
         int bucketId = 0;
         TableBucket tb = new TableBucket(DATA1_TABLE_ID_PK, bucketId);
-        LazyMemorySegmentPool memorySegmentPool =
-                LazyMemorySegmentPool.createWriterBufferPool(conf);
+        LazyMemorySegmentPool memorySegmentPool = LazyMemorySegmentPool.createWriterBufferPool(conf);
         WalBuilder walBuilder = createWalBuilder(tb, 1024, memorySegmentPool);
 
         List<Tuple2<ChangeType, Object[]>> expectedResult = new ArrayList<>();
@@ -150,17 +148,12 @@ class ArrowWalBuilderTest {
         assertThat(logRecords.batches().iterator().next().isValid()).isFalse();
     }
 
-    private WalBuilder createWalBuilder(
-            TableBucket tb, int maxSizeInBytes, MemorySegmentPool memorySegmentPool)
+    private WalBuilder createWalBuilder(TableBucket tb, int maxSizeInBytes, MemorySegmentPool memorySegmentPool)
             throws IOException {
         return new ArrowWalBuilder(
                 DEFAULT_SCHEMA_ID,
                 arrowWriterProvider.getOrCreateWriter(
-                        tb.getTableId(),
-                        DEFAULT_SCHEMA_ID,
-                        maxSizeInBytes,
-                        DATA1_ROW_TYPE,
-                        DEFAULT_COMPRESSION),
+                        tb.getTableId(), DEFAULT_SCHEMA_ID, maxSizeInBytes, DATA1_ROW_TYPE, DEFAULT_COMPRESSION),
                 memorySegmentPool);
     }
 }

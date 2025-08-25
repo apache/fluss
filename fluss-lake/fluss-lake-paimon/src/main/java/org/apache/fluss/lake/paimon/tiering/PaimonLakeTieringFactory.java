@@ -28,8 +28,7 @@ import org.apache.fluss.lake.writer.WriterInitContext;
 import java.io.IOException;
 
 /** Implementation of {@link LakeTieringFactory} for Paimon . */
-public class PaimonLakeTieringFactory
-        implements LakeTieringFactory<PaimonWriteResult, PaimonCommittable> {
+public class PaimonLakeTieringFactory implements LakeTieringFactory<PaimonWriteResult, PaimonCommittable> {
 
     private static final long serialVersionUID = 1L;
 
@@ -40,8 +39,7 @@ public class PaimonLakeTieringFactory
     }
 
     @Override
-    public LakeWriter<PaimonWriteResult> createLakeWriter(WriterInitContext writerInitContext)
-            throws IOException {
+    public LakeWriter<PaimonWriteResult> createLakeWriter(WriterInitContext writerInitContext) throws IOException {
         return new PaimonLakeWriter(paimonCatalogProvider, writerInitContext);
     }
 

@@ -51,38 +51,30 @@ public class ZkNodeChangeNotificationWatcherTest {
         String seqNodeRoot = ZkData.AclChangesNode.path();
         String seqNodePrefix = ZkData.AclChangeNotificationNode.prefix();
         ZooKeeperClient zookeeperClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+                ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getZooKeeperClient(NOPErrorHandler.INSTANCE);
         TestingNotificationHandler handler = new TestingNotificationHandler();
 
         long startTime = System.currentTimeMillis();
         ManualClock clock = new ManualClock(startTime);
         // Step 1: Insert initial notifications before starting the watcher
-        ArrayList<Resource> expectedRegistrations =
-                new ArrayList<>(
-                        Arrays.asList(
-                                Resource.cluster(),
-                                Resource.database("test_database1"),
-                                Resource.table("test_database2", "test_table")));
+        ArrayList<Resource> expectedRegistrations = new ArrayList<>(Arrays.asList(
+                Resource.cluster(),
+                Resource.database("test_database1"),
+                Resource.table("test_database2", "test_table")));
         for (Resource resource : expectedRegistrations) {
             zookeeperClient.insertAclChangeNotification(resource);
         }
 
-        ZkNodeChangeNotificationWatcher aclChangeWatcher =
-                new ZkNodeChangeNotificationWatcher(
-                        zookeeperClient,
-                        seqNodeRoot,
-                        seqNodePrefix,
-                        Duration.ofMinutes(5).toMillis(),
-                        handler,
-                        clock);
+        ZkNodeChangeNotificationWatcher aclChangeWatcher = new ZkNodeChangeNotificationWatcher(
+                zookeeperClient,
+                seqNodeRoot,
+                seqNodePrefix,
+                Duration.ofMinutes(5).toMillis(),
+                handler,
+                clock);
         aclChangeWatcher.start();
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(handler.resourceNotifications)
-                                .containsExactlyInAnyOrderElementsOf(expectedRegistrations));
+        retry(Duration.ofMinutes(1), () -> assertThat(handler.resourceNotifications)
+                .containsExactlyInAnyOrderElementsOf(expectedRegistrations));
         // Verify that all initial notifications are processed
         List<String> nodesBeforeStart = zookeeperClient.getChildren(seqNodeRoot);
         assertThat(nodesBeforeStart).hasSize(3);
@@ -91,11 +83,8 @@ public class ZkNodeChangeNotificationWatcherTest {
         Resource newNoticedResource = Resource.table("test_database3", "test_table");
         zookeeperClient.insertAclChangeNotification(newNoticedResource);
         expectedRegistrations.add(newNoticedResource);
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(handler.resourceNotifications)
-                                .containsExactlyInAnyOrderElementsOf(expectedRegistrations));
+        retry(Duration.ofMinutes(1), () -> assertThat(handler.resourceNotifications)
+                .containsExactlyInAnyOrderElementsOf(expectedRegistrations));
         // Verify that the new notification is processed
         List<String> nodesAfterStart = zookeeperClient.getChildren(ZkData.AclChangesNode.path());
         assertThat(nodesAfterStart).hasSize(4);
@@ -103,24 +92,19 @@ public class ZkNodeChangeNotificationWatcherTest {
         // Step 3: Test purging of obsolete notifications
         long maxCtimeBeforeStart = 0;
         for (String node : nodesBeforeStart) {
-            maxCtimeBeforeStart =
-                    Math.max(
-                            zookeeperClient.getStat(seqNodeRoot + "/" + node).get().getCtime(),
-                            maxCtimeBeforeStart);
+            maxCtimeBeforeStart = Math.max(
+                    zookeeperClient.getStat(seqNodeRoot + "/" + node).get().getCtime(), maxCtimeBeforeStart);
         }
         // Advance the clock to make the initial notifications obsolete
         clock.advanceTime(
-                maxCtimeBeforeStart - startTime + Duration.ofMinutes(5).toMillis(),
-                TimeUnit.MILLISECONDS);
+                maxCtimeBeforeStart - startTime + Duration.ofMinutes(5).toMillis(), TimeUnit.MILLISECONDS);
         // Insert a new notification to trigger the purging of obsolete notificatios.
         zookeeperClient.insertAclChangeNotification(newNoticedResource);
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(zookeeperClient.getChildren(seqNodeRoot)).hasSize(2));
+        retry(Duration.ofMinutes(1), () -> assertThat(zookeeperClient.getChildren(seqNodeRoot))
+                .hasSize(2));
     }
 
-    private static class TestingNotificationHandler
-            implements ZkNodeChangeNotificationWatcher.NotificationHandler {
+    private static class TestingNotificationHandler implements ZkNodeChangeNotificationWatcher.NotificationHandler {
         public BlockingQueue<Resource> resourceNotifications = new LinkedBlockingQueue<>();
 
         @Override

@@ -65,13 +65,9 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         delayedWriteExpireCount = new ThreadSafeSimpleCounter();
         meter(MetricNames.DELAYED_WRITE_EXPIRES_RATE, new MeterView(delayedWriteExpireCount));
         delayedFetchFromFollowerExpireCount = new ThreadSafeSimpleCounter();
-        meter(
-                MetricNames.DELAYED_FETCH_FROM_FOLLOWER_EXPIRES_RATE,
-                new MeterView(delayedFetchFromFollowerExpireCount));
+        meter(MetricNames.DELAYED_FETCH_FROM_FOLLOWER_EXPIRES_RATE, new MeterView(delayedFetchFromFollowerExpireCount));
         delayedFetchFromClientExpireCount = new ThreadSafeSimpleCounter();
-        meter(
-                MetricNames.DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE,
-                new MeterView(delayedFetchFromClientExpireCount));
+        meter(MetricNames.DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE, new MeterView(delayedFetchFromClientExpireCount));
     }
 
     @Override
@@ -117,19 +113,14 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     // ------------------------------------------------------------------------
     public BucketMetricGroup addPhysicalTableBucketMetricGroup(
             PhysicalTablePath physicalTablePath, int bucket, boolean isKvTable) {
-        PhysicalTableMetricGroup physicalTableMetricGroup =
-                metricGroupByPhysicalTable.computeIfAbsent(
-                        physicalTablePath,
-                        table ->
-                                new PhysicalTableMetricGroup(
-                                        registry, physicalTablePath, isKvTable, this));
+        PhysicalTableMetricGroup physicalTableMetricGroup = metricGroupByPhysicalTable.computeIfAbsent(
+                physicalTablePath, table -> new PhysicalTableMetricGroup(registry, physicalTablePath, isKvTable, this));
         return physicalTableMetricGroup.addBucketMetricGroup(bucket);
     }
 
     public void removeTableBucketMetricGroup(PhysicalTablePath physicalTablePath, int bucket) {
         // get the metric group of the physical table
-        PhysicalTableMetricGroup physicalTableMetricGroup =
-                metricGroupByPhysicalTable.get(physicalTablePath);
+        PhysicalTableMetricGroup physicalTableMetricGroup = metricGroupByPhysicalTable.get(physicalTablePath);
         // if get the physical table metric group
         if (physicalTableMetricGroup != null) {
             // remove the bucket metric group

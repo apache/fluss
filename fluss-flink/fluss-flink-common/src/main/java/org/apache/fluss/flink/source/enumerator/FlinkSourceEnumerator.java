@@ -85,8 +85,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  *       will be assigned to same reader.
  * </ul>
  */
-public class FlinkSourceEnumerator
-        implements SplitEnumerator<SourceSplitBase, SourceEnumeratorState> {
+public class FlinkSourceEnumerator implements SplitEnumerator<SourceSplitBase, SourceEnumeratorState> {
 
     private static final Logger LOG = LoggerFactory.getLogger(FlinkSourceEnumerator.class);
 
@@ -133,7 +132,8 @@ public class FlinkSourceEnumerator
 
     private final List<FieldEqual> partitionFilters;
 
-    @Nullable private final LakeSource<LakeSplit> lakeSource;
+    @Nullable
+    private final LakeSource<LakeSplit> lakeSource;
 
     public FlinkSourceEnumerator(
             TablePath tablePath,
@@ -209,8 +209,7 @@ public class FlinkSourceEnumerator
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.streaming = streaming;
         this.partitionFilters = checkNotNull(partitionFilters);
-        this.stoppingOffsetsInitializer =
-                streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest();
+        this.stoppingOffsetsInitializer = streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest();
         this.lakeSource = lakeSource;
     }
 
@@ -239,18 +238,13 @@ public class FlinkSourceEnumerator
                         scanPartitionDiscoveryIntervalMs);
                 // discover new partitions and handle new partitions
                 context.callAsync(
-                        this::listPartitions,
-                        this::checkPartitionChanges,
-                        0,
-                        scanPartitionDiscoveryIntervalMs);
+                        this::listPartitions, this::checkPartitionChanges, 0, scanPartitionDiscoveryIntervalMs);
             } else {
                 if (!streaming) {
                     startInBatchMode();
                 } else {
                     // just call once
-                    LOG.info(
-                            "Starting the FlussSourceEnumerator for table {} without partition discovery.",
-                            tablePath);
+                    LOG.info("Starting the FlussSourceEnumerator for table {} without partition discovery.", tablePath);
                     context.callAsync(this::listPartitions, this::checkPartitionChanges);
                 }
             }
@@ -269,10 +263,9 @@ public class FlinkSourceEnumerator
         if (lakeEnabled) {
             context.callAsync(this::getLakeSplit, this::handleSplitsAdd);
         } else {
-            throw new UnsupportedOperationException(
-                    String.format(
-                            "Batch only supports when table option '%s' is set to true.",
-                            ConfigOptions.TABLE_DATALAKE_ENABLED));
+            throw new UnsupportedOperationException(String.format(
+                    "Batch only supports when table option '%s' is set to true.",
+                    ConfigOptions.TABLE_DATALAKE_ENABLED));
         }
     }
 
@@ -295,7 +288,8 @@ public class FlinkSourceEnumerator
 
     private Set<PartitionInfo> listPartitions() {
         try {
-            List<PartitionInfo> partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
+            List<PartitionInfo> partitionInfos =
+                    flussAdmin.listPartitionInfos(tablePath).get();
             partitionInfos = applyPartitionFilter(partitionInfos);
             return new LinkedHashSet<>(partitionInfos);
         } catch (Exception e) {
@@ -309,25 +303,22 @@ public class FlinkSourceEnumerator
     private List<PartitionInfo> applyPartitionFilter(List<PartitionInfo> partitionInfos) {
         if (!partitionFilters.isEmpty()) {
             return partitionInfos.stream()
-                    .filter(
-                            partitionInfo -> {
-                                Map<String, String> specMap =
-                                        partitionInfo.getPartitionSpec().getSpecMap();
-                                // use getFields() instead of getFieldNames() to
-                                // avoid collection construction
-                                List<DataField> fields = tableInfo.getRowType().getFields();
-                                for (FieldEqual filter : partitionFilters) {
-                                    String fieldName = fields.get(filter.fieldIndex).getName();
-                                    String partitionValue = specMap.get(fieldName);
-                                    if (partitionValue == null
-                                            || !filter.equalValue
-                                                    .toString()
-                                                    .equals(partitionValue)) {
-                                        return false;
-                                    }
-                                }
-                                return true;
-                            })
+                    .filter(partitionInfo -> {
+                        Map<String, String> specMap =
+                                partitionInfo.getPartitionSpec().getSpecMap();
+                        // use getFields() instead of getFieldNames() to
+                        // avoid collection construction
+                        List<DataField> fields = tableInfo.getRowType().getFields();
+                        for (FieldEqual filter : partitionFilters) {
+                            String fieldName = fields.get(filter.fieldIndex).getName();
+                            String partitionValue = specMap.get(fieldName);
+                            if (partitionValue == null
+                                    || !filter.equalValue.toString().equals(partitionValue)) {
+                                return false;
+                            }
+                        }
+                        return true;
+                    })
                     .collect(Collectors.toList());
         }
         return partitionInfos;
@@ -352,44 +343,33 @@ public class FlinkSourceEnumerator
         handlePartitionsRemoved(partitionChange.removedPartitions);
 
         // handle new partitions
-        context.callAsync(
-                () -> initPartitionedSplits(partitionChange.newPartitions), this::handleSplitsAdd);
+        context.callAsync(() -> initPartitionedSplits(partitionChange.newPartitions), this::handleSplitsAdd);
     }
 
     private PartitionChange getPartitionChange(Set<PartitionInfo> fetchedPartitionInfos) {
-        final Set<Partition> newPartitions =
-                fetchedPartitionInfos.stream()
-                        .map(p -> new Partition(p.getPartitionId(), p.getPartitionName()))
-                        .collect(Collectors.toSet());
+        final Set<Partition> newPartitions = fetchedPartitionInfos.stream()
+                .map(p -> new Partition(p.getPartitionId(), p.getPartitionName()))
+                .collect(Collectors.toSet());
         final Set<Partition> removedPartitions = new HashSet<>();
 
         Set<Partition> assignedOrPendingPartitions = new HashSet<>();
-        assignedPartitions.forEach(
-                (partitionId, partitionName) ->
-                        assignedOrPendingPartitions.add(new Partition(partitionId, partitionName)));
+        assignedPartitions.forEach((partitionId, partitionName) ->
+                assignedOrPendingPartitions.add(new Partition(partitionId, partitionName)));
 
-        pendingSplitAssignment.values().stream()
-                .flatMap(Collection::stream)
-                .forEach(
-                        split -> {
-                            long partitionId =
-                                    checkNotNull(
-                                            split.getTableBucket().getPartitionId(),
-                                            "partition id shouldn't be null for the splits of partitioned table.");
-                            String partitionName =
-                                    checkNotNull(
-                                            split.getPartitionName(),
-                                            "partition name shouldn't be null for the splits of partitioned table.");
-                            assignedOrPendingPartitions.add(
-                                    new Partition(partitionId, partitionName));
-                        });
+        pendingSplitAssignment.values().stream().flatMap(Collection::stream).forEach(split -> {
+            long partitionId = checkNotNull(
+                    split.getTableBucket().getPartitionId(),
+                    "partition id shouldn't be null for the splits of partitioned table.");
+            String partitionName = checkNotNull(
+                    split.getPartitionName(), "partition name shouldn't be null for the splits of partitioned table.");
+            assignedOrPendingPartitions.add(new Partition(partitionId, partitionName));
+        });
 
-        assignedOrPendingPartitions.forEach(
-                p -> {
-                    if (!newPartitions.remove(p)) {
-                        removedPartitions.add(p);
-                    }
-                });
+        assignedOrPendingPartitions.forEach(p -> {
+            if (!newPartitions.remove(p)) {
+                removedPartitions.add(p);
+            }
+        });
 
         if (!removedPartitions.isEmpty()) {
             LOG.info("Discovered removed partitions: {}", removedPartitions);
@@ -417,20 +397,20 @@ public class FlinkSourceEnumerator
         return splits;
     }
 
-    private List<SourceSplitBase> initPrimaryKeyTablePartitionSplits(
-            Collection<Partition> newPartitions) {
+    private List<SourceSplitBase> initPrimaryKeyTablePartitionSplits(Collection<Partition> newPartitions) {
         List<SourceSplitBase> splits = new ArrayList<>();
         for (Partition partition : newPartitions) {
             String partitionName = partition.getPartitionName();
             // get the table snapshot info
             final KvSnapshots kvSnapshots;
             try {
-                kvSnapshots = flussAdmin.getLatestKvSnapshots(tablePath, partitionName).get();
+                kvSnapshots = flussAdmin
+                        .getLatestKvSnapshots(tablePath, partitionName)
+                        .get();
             } catch (Exception e) {
                 throw new FlinkRuntimeException(
                         String.format(
-                                "Failed to get table snapshot for table %s and partition %s",
-                                tablePath, partitionName),
+                                "Failed to get table snapshot for table %s and partition %s", tablePath, partitionName),
                         ExceptionUtils.stripCompletionException(e));
             }
             splits.addAll(getSnapshotAndLogSplits(kvSnapshots, partitionName));
@@ -438,8 +418,7 @@ public class FlinkSourceEnumerator
         return splits;
     }
 
-    private List<SourceSplitBase> getSnapshotAndLogSplits(
-            KvSnapshots snapshots, @Nullable String partitionName) {
+    private List<SourceSplitBase> getSnapshotAndLogSplits(KvSnapshots snapshots, @Nullable String partitionName) {
         long tableId = snapshots.getTableId();
         Long partitionId = snapshots.getPartitionId();
         List<SourceSplitBase> splits = new ArrayList<>();
@@ -456,11 +435,9 @@ public class FlinkSourceEnumerator
             if (snapshotId.isPresent()) {
                 // hybrid snapshot log split;
                 OptionalLong logOffset = snapshots.getLogOffset(bucketId);
-                checkState(
-                        logOffset.isPresent(), "Log offset should be present if snapshot id is.");
+                checkState(logOffset.isPresent(), "Log offset should be present if snapshot id is.");
                 splits.add(
-                        new HybridSnapshotLogSplit(
-                                tb, partitionName, snapshotId.getAsLong(), logOffset.getAsLong()));
+                        new HybridSnapshotLogSplit(tb, partitionName, snapshotId.getAsLong(), logOffset.getAsLong()));
             } else {
                 bucketsNeedInitOffset.add(bucketId);
             }
@@ -469,26 +446,19 @@ public class FlinkSourceEnumerator
         if (!bucketsNeedInitOffset.isEmpty()) {
             startingOffsetsInitializer
                     .getBucketOffsets(partitionName, bucketsNeedInitOffset, bucketOffsetsRetriever)
-                    .forEach(
-                            (bucketId, startingOffset) ->
-                                    splits.add(
-                                            new LogSplit(
-                                                    new TableBucket(tableId, partitionId, bucketId),
-                                                    partitionName,
-                                                    startingOffset)));
+                    .forEach((bucketId, startingOffset) -> splits.add(new LogSplit(
+                            new TableBucket(tableId, partitionId, bucketId), partitionName, startingOffset)));
         }
 
         return splits;
     }
 
-    private List<SourceSplitBase> getLogSplit(
-            @Nullable Long partitionId, @Nullable String partitionName) {
+    private List<SourceSplitBase> getLogSplit(@Nullable Long partitionId, @Nullable String partitionName) {
         // always assume the bucket is from 0 to bucket num
         List<SourceSplitBase> splits = new ArrayList<>();
         List<Integer> bucketsNeedInitOffset = new ArrayList<>();
         for (int bucketId = 0; bucketId < tableInfo.getNumBuckets(); bucketId++) {
-            TableBucket tableBucket =
-                    new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
+            TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
             if (ignoreTableBucket(tableBucket)) {
                 continue;
             }
@@ -498,30 +468,23 @@ public class FlinkSourceEnumerator
         if (!bucketsNeedInitOffset.isEmpty()) {
             startingOffsetsInitializer
                     .getBucketOffsets(partitionName, bucketsNeedInitOffset, bucketOffsetsRetriever)
-                    .forEach(
-                            (bucketId, startingOffset) ->
-                                    splits.add(
-                                            new LogSplit(
-                                                    new TableBucket(
-                                                            tableInfo.getTableId(),
-                                                            partitionId,
-                                                            bucketId),
-                                                    partitionName,
-                                                    startingOffset)));
+                    .forEach((bucketId, startingOffset) -> splits.add(new LogSplit(
+                            new TableBucket(tableInfo.getTableId(), partitionId, bucketId),
+                            partitionName,
+                            startingOffset)));
         }
         return splits;
     }
 
     private List<SourceSplitBase> getLakeSplit() throws Exception {
-        LakeSplitGenerator lakeSplitGenerator =
-                new LakeSplitGenerator(
-                        tableInfo,
-                        flussAdmin,
-                        lakeSource,
-                        bucketOffsetsRetriever,
-                        stoppingOffsetsInitializer,
-                        tableInfo.getNumBuckets(),
-                        this::listPartitions);
+        LakeSplitGenerator lakeSplitGenerator = new LakeSplitGenerator(
+                tableInfo,
+                flussAdmin,
+                lakeSource,
+                bucketOffsetsRetriever,
+                stoppingOffsetsInitializer,
+                tableInfo.getNumBuckets(),
+                this::listPartitions);
         return lakeSplitGenerator.generateHybridLakeSplits();
     }
 
@@ -536,19 +499,12 @@ public class FlinkSourceEnumerator
             return;
         }
 
-        Map<Long, String> removedPartitionsMap =
-                removedPartitionInfo.stream()
-                        .collect(
-                                Collectors.toMap(
-                                        Partition::getPartitionId, Partition::getPartitionName));
+        Map<Long, String> removedPartitionsMap = removedPartitionInfo.stream()
+                .collect(Collectors.toMap(Partition::getPartitionId, Partition::getPartitionName));
 
         // remove from the pending split assignment
-        pendingSplitAssignment.forEach(
-                (reader, splits) ->
-                        splits.removeIf(
-                                split ->
-                                        removedPartitionsMap.containsKey(
-                                                split.getTableBucket().getPartitionId())));
+        pendingSplitAssignment.forEach((reader, splits) -> splits.removeIf(
+                split -> removedPartitionsMap.containsKey(split.getTableBucket().getPartitionId())));
 
         // send partition removed event to all readers
         PartitionsRemovedEvent event = new PartitionsRemovedEvent(removedPartitionsMap);
@@ -566,8 +522,7 @@ public class FlinkSourceEnumerator
                 return;
             } else {
                 throw new FlinkRuntimeException(
-                        String.format("Failed to list splits for %s to read due to ", tablePath),
-                        t);
+                        String.format("Failed to list splits for %s to read due to ", tablePath), t);
             }
         }
         if (isPartitioned) {
@@ -592,7 +547,9 @@ public class FlinkSourceEnumerator
     private void addSplitToPendingAssignments(Collection<SourceSplitBase> newSplits) {
         for (SourceSplitBase sourceSplit : newSplits) {
             int task = getSplitOwner(sourceSplit);
-            pendingSplitAssignment.computeIfAbsent(task, k -> new LinkedList<>()).add(sourceSplit);
+            pendingSplitAssignment
+                    .computeIfAbsent(task, k -> new LinkedList<>())
+                    .add(sourceSplit);
         }
     }
 
@@ -604,8 +561,7 @@ public class FlinkSourceEnumerator
             checkReaderRegistered(pendingReader);
 
             // Remove pending assignment for the reader
-            final List<SourceSplitBase> pendingAssignmentForReader =
-                    pendingSplitAssignment.remove(pendingReader);
+            final List<SourceSplitBase> pendingAssignmentForReader = pendingSplitAssignment.remove(pendingReader);
 
             if (pendingAssignmentForReader != null && !pendingAssignmentForReader.isEmpty()) {
                 // Put pending assignment into incremental assignment
@@ -614,23 +570,20 @@ public class FlinkSourceEnumerator
                         .addAll(pendingAssignmentForReader);
 
                 // Mark pending bucket assignment as already assigned
-                pendingAssignmentForReader.forEach(
-                        split -> {
-                            TableBucket tableBucket = split.getTableBucket();
-                            assignedTableBuckets.add(tableBucket);
+                pendingAssignmentForReader.forEach(split -> {
+                    TableBucket tableBucket = split.getTableBucket();
+                    assignedTableBuckets.add(tableBucket);
 
-                            if (isPartitioned) {
-                                long partitionId =
-                                        checkNotNull(
-                                                tableBucket.getPartitionId(),
-                                                "partition id shouldn't be null for the splits of partitioned table.");
-                                String partitionName =
-                                        checkNotNull(
-                                                split.getPartitionName(),
-                                                "partition name shouldn't be null for the splits of partitioned table.");
-                                assignedPartitions.put(partitionId, partitionName);
-                            }
-                        });
+                    if (isPartitioned) {
+                        long partitionId = checkNotNull(
+                                tableBucket.getPartitionId(),
+                                "partition id shouldn't be null for the splits of partitioned table.");
+                        String partitionName = checkNotNull(
+                                split.getPartitionName(),
+                                "partition name shouldn't be null for the splits of partitioned table.");
+                        assignedPartitions.put(partitionId, partitionName);
+                    }
+                });
             }
         }
 
@@ -641,9 +594,7 @@ public class FlinkSourceEnumerator
         }
 
         if (noMoreNewSplits) {
-            LOG.info(
-                    "No more FlussSplits to assign. Sending NoMoreSplitsEvent to reader {}",
-                    pendingReaders);
+            LOG.info("No more FlussSplits to assign. Sending NoMoreSplitsEvent to reader {}", pendingReaders);
             pendingReaders.forEach(context::signalNoMoreSplits);
         }
     }
@@ -669,11 +620,9 @@ public class FlinkSourceEnumerator
     @VisibleForTesting
     protected int getSplitOwner(SourceSplitBase split) {
         TableBucket tableBucket = split.getTableBucket();
-        int startIndex =
-                tableBucket.getPartitionId() == null
-                        ? 0
-                        : ((tableBucket.getPartitionId().hashCode() * 31) & 0x7FFFFFFF)
-                                % context.currentParallelism();
+        int startIndex = tableBucket.getPartitionId() == null
+                ? 0
+                : ((tableBucket.getPartitionId().hashCode() * 31) & 0x7FFFFFFF) % context.currentParallelism();
 
         // super hack logic, if the bucket is -1, it means the split is
         // for bucket unaware, like paimon unaware bucket log table,
@@ -701,8 +650,7 @@ public class FlinkSourceEnumerator
     @Override
     public void handleSourceEvent(int subtaskId, SourceEvent sourceEvent) {
         if (sourceEvent instanceof PartitionBucketsUnsubscribedEvent) {
-            PartitionBucketsUnsubscribedEvent removedEvent =
-                    (PartitionBucketsUnsubscribedEvent) sourceEvent;
+            PartitionBucketsUnsubscribedEvent removedEvent = (PartitionBucketsUnsubscribedEvent) sourceEvent;
 
             Set<Long> partitionsPendingRemove = new HashSet<>();
             // remove from the assigned table buckets
@@ -781,8 +729,7 @@ public class FlinkSourceEnumerator
         private final Collection<Partition> newPartitions;
         private final Collection<Partition> removedPartitions;
 
-        PartitionChange(
-                Collection<Partition> newPartitions, Collection<Partition> removedPartitions) {
+        PartitionChange(Collection<Partition> newPartitions, Collection<Partition> removedPartitions) {
             this.newPartitions = newPartitions;
             this.removedPartitions = removedPartitions;
         }
@@ -816,8 +763,7 @@ public class FlinkSourceEnumerator
                 return false;
             }
             Partition partition = (Partition) o;
-            return partitionId == partition.partitionId
-                    && Objects.equals(partitionName, partition.partitionName);
+            return partitionId == partition.partitionId && Objects.equals(partitionName, partition.partitionName);
         }
 
         @Override

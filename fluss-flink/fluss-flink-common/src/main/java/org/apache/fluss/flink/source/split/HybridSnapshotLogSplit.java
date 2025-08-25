@@ -37,10 +37,7 @@ public class HybridSnapshotLogSplit extends SnapshotSplit {
     private final long logStartingOffset;
 
     public HybridSnapshotLogSplit(
-            TableBucket tableBucket,
-            @Nullable String partitionName,
-            long snapshotId,
-            long logStartingOffset) {
+            TableBucket tableBucket, @Nullable String partitionName, long snapshotId, long logStartingOffset) {
         this(tableBucket, partitionName, snapshotId, 0, false, logStartingOffset);
     }
 
@@ -81,8 +78,7 @@ public class HybridSnapshotLogSplit extends SnapshotSplit {
             return false;
         }
         HybridSnapshotLogSplit that = (HybridSnapshotLogSplit) o;
-        return isSnapshotFinished == that.isSnapshotFinished
-                && logStartingOffset == that.logStartingOffset;
+        return isSnapshotFinished == that.isSnapshotFinished && logStartingOffset == that.logStartingOffset;
     }
 
     @Override

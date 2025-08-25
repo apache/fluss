@@ -38,11 +38,7 @@ public class LogSplit extends SourceSplitBase {
         this(tableBucket, partitionName, startingOffset, NO_STOPPING_OFFSET);
     }
 
-    public LogSplit(
-            TableBucket tableBucket,
-            @Nullable String partitionName,
-            long startingOffset,
-            long stoppingOffset) {
+    public LogSplit(TableBucket tableBucket, @Nullable String partitionName, long startingOffset, long stoppingOffset) {
         super(tableBucket, partitionName);
         this.startingOffset = startingOffset;
         this.stoppingOffset = stoppingOffset;
@@ -78,8 +74,7 @@ public class LogSplit extends SourceSplitBase {
             return false;
         }
         LogSplit logSplit = (LogSplit) object;
-        return startingOffset == logSplit.startingOffset
-                && stoppingOffset == logSplit.stoppingOffset;
+        return startingOffset == logSplit.startingOffset && stoppingOffset == logSplit.stoppingOffset;
     }
 
     @Override

@@ -26,8 +26,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Simple forwarding wrapper around {@link FSDataInputStream}. */
 @Internal
-public class FSDataOutputStreamWrapper extends FSDataOutputStream
-        implements WrappingProxy<FSDataOutputStream> {
+public class FSDataOutputStreamWrapper extends FSDataOutputStream implements WrappingProxy<FSDataOutputStream> {
 
     protected final FSDataOutputStream outputStream;
 

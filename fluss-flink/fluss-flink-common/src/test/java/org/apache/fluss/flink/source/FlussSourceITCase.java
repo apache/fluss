@@ -66,10 +66,14 @@ public class FlussSourceITCase extends FlinkTestBase {
     private final TablePath ordersLogTablePath = new TablePath(DEFAULT_DB, logTableName);
     private final TablePath ordersPKTablePath = new TablePath(DEFAULT_DB, pkTableName);
 
-    private final TableDescriptor logTableDescriptor =
-            TableDescriptor.builder().schema(LOG_SCHEMA).distributedBy(1, "orderId").build();
-    private final TableDescriptor pkTableDescriptor =
-            TableDescriptor.builder().schema(PK_SCHEMA).distributedBy(1, "orderId").build();
+    private final TableDescriptor logTableDescriptor = TableDescriptor.builder()
+            .schema(LOG_SCHEMA)
+            .distributedBy(1, "orderId")
+            .build();
+    private final TableDescriptor pkTableDescriptor = TableDescriptor.builder()
+            .schema(PK_SCHEMA)
+            .distributedBy(1, "orderId")
+            .build();
 
     protected StreamExecutionEnvironment env;
 
@@ -84,18 +88,16 @@ public class FlussSourceITCase extends FlinkTestBase {
         createTable(ordersPKTablePath, pkTableDescriptor);
         writeRowsToTable(ordersPKTablePath);
         // Create a DataStream from the FlussSource
-        FlussSource<Order> flussSource =
-                FlussSource.<Order>builder()
-                        .setBootstrapServers(bootstrapServers)
-                        .setDatabase(DEFAULT_DB)
-                        .setTable(pkTableName)
-                        .setStartingOffsets(OffsetsInitializer.earliest())
-                        .setScanPartitionDiscoveryIntervalMs(1000L)
-                        .setDeserializationSchema(new MockDataUtils.OrderDeserializationSchema())
-                        .build();
+        FlussSource<Order> flussSource = FlussSource.<Order>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable(pkTableName)
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new MockDataUtils.OrderDeserializationSchema())
+                .build();
 
-        DataStreamSource<Order> stream =
-                env.fromSource(flussSource, WatermarkStrategy.noWatermarks(), "Fluss Source");
+        DataStreamSource<Order> stream = env.fromSource(flussSource, WatermarkStrategy.noWatermarks(), "Fluss Source");
 
         List<Order> collectedElements = stream.executeAndCollect(ORDERS.size());
 
@@ -107,25 +109,23 @@ public class FlussSourceITCase extends FlinkTestBase {
     public void testTablePKSourceWithProjectionPushdown() throws Exception {
         createTable(ordersPKTablePath, pkTableDescriptor);
         writeRowsToTable(ordersPKTablePath);
-        List<OrderPartial> expectedOutput =
-                Arrays.asList(
-                        new OrderPartial(600, 600),
-                        new OrderPartial(700, 601),
-                        new OrderPartial(800, 602),
-                        new OrderPartial(900, 603),
-                        new OrderPartial(1000, 604));
+        List<OrderPartial> expectedOutput = Arrays.asList(
+                new OrderPartial(600, 600),
+                new OrderPartial(700, 601),
+                new OrderPartial(800, 602),
+                new OrderPartial(900, 603),
+                new OrderPartial(1000, 604));
 
         // Create a DataStream from the FlussSource
-        FlussSource<OrderPartial> flussSource =
-                FlussSource.<OrderPartial>builder()
-                        .setBootstrapServers(bootstrapServers)
-                        .setDatabase(DEFAULT_DB)
-                        .setTable(pkTableName)
-                        .setStartingOffsets(OffsetsInitializer.earliest())
-                        .setScanPartitionDiscoveryIntervalMs(1000L)
-                        .setDeserializationSchema(new OrderPartialDeserializationSchema())
-                        .setProjectedFields("orderId", "amount")
-                        .build();
+        FlussSource<OrderPartial> flussSource = FlussSource.<OrderPartial>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable(pkTableName)
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new OrderPartialDeserializationSchema())
+                .setProjectedFields("orderId", "amount")
+                .build();
 
         DataStreamSource<OrderPartial> stream =
                 env.fromSource(flussSource, WatermarkStrategy.noWatermarks(), "Fluss Source");
@@ -144,42 +144,37 @@ public class FlussSourceITCase extends FlinkTestBase {
         RowType rowType = table.getTableInfo().getRowType();
 
         // Create a DataStream from the FlussSource
-        FlussSource<RowData> flussSource =
-                FlussSource.<RowData>builder()
-                        .setBootstrapServers(bootstrapServers)
-                        .setDatabase(DEFAULT_DB)
-                        .setTable(pkTableName)
-                        .setStartingOffsets(OffsetsInitializer.earliest())
-                        .setScanPartitionDiscoveryIntervalMs(1000L)
-                        .setDeserializationSchema(new RowDataDeserializationSchema())
-                        .build();
+        FlussSource<RowData> flussSource = FlussSource.<RowData>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable(pkTableName)
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new RowDataDeserializationSchema())
+                .build();
 
         DataStreamSource<RowData> stream =
                 env.fromSource(flussSource, WatermarkStrategy.noWatermarks(), "Fluss Source");
 
-        List<InternalRow> updatedRows =
-                Arrays.asList(row(600L, 20L, 800, "addr1"), row(700L, 22L, 801, "addr2"));
+        List<InternalRow> updatedRows = Arrays.asList(row(600L, 20L, 800, "addr1"), row(700L, 22L, 801, "addr2"));
 
         // send some row updates
         writeRows(conn, ordersPKTablePath, updatedRows, false);
 
-        List<RowData> expectedResult =
-                Arrays.asList(
-                        createRowData(600L, 20L, 600, "addr1", RowKind.INSERT),
-                        createRowData(700L, 22L, 601, "addr2", RowKind.INSERT),
-                        createRowData(800L, 23L, 602, "addr3", RowKind.INSERT),
-                        createRowData(900L, 24L, 603, "addr4", RowKind.INSERT),
-                        createRowData(1000L, 25L, 604, "addr5", RowKind.INSERT),
-                        createRowData(600L, 20L, 600, "addr1", RowKind.UPDATE_BEFORE),
-                        createRowData(600L, 20L, 800, "addr1", RowKind.UPDATE_AFTER),
-                        createRowData(700L, 22L, 601, "addr2", RowKind.UPDATE_BEFORE),
-                        createRowData(700L, 22L, 801, "addr2", RowKind.UPDATE_AFTER));
+        List<RowData> expectedResult = Arrays.asList(
+                createRowData(600L, 20L, 600, "addr1", RowKind.INSERT),
+                createRowData(700L, 22L, 601, "addr2", RowKind.INSERT),
+                createRowData(800L, 23L, 602, "addr3", RowKind.INSERT),
+                createRowData(900L, 24L, 603, "addr4", RowKind.INSERT),
+                createRowData(1000L, 25L, 604, "addr5", RowKind.INSERT),
+                createRowData(600L, 20L, 600, "addr1", RowKind.UPDATE_BEFORE),
+                createRowData(600L, 20L, 800, "addr1", RowKind.UPDATE_AFTER),
+                createRowData(700L, 22L, 601, "addr2", RowKind.UPDATE_BEFORE),
+                createRowData(700L, 22L, 801, "addr2", RowKind.UPDATE_AFTER));
 
         List<RowData> rawRows = stream.executeAndCollect(expectedResult.size());
         List<RowData> collectedRows =
-                rawRows.stream()
-                        .map(row -> binaryRowToGenericRow(row, rowType))
-                        .collect(Collectors.toList());
+                rawRows.stream().map(row -> binaryRowToGenericRow(row, rowType)).collect(Collectors.toList());
 
         // Assert result size and elements match
         assertThat(expectedResult).hasSameElementsAs(collectedRows);
@@ -193,41 +188,36 @@ public class FlussSourceITCase extends FlinkTestBase {
         RowType rowType = table.getTableInfo().getRowType();
 
         // Create a DataStream from the FlussSource
-        FlussSource<RowData> flussSource =
-                FlussSource.<RowData>builder()
-                        .setBootstrapServers(bootstrapServers)
-                        .setDatabase(DEFAULT_DB)
-                        .setTable(logTableName)
-                        .setStartingOffsets(OffsetsInitializer.earliest())
-                        .setScanPartitionDiscoveryIntervalMs(1000L)
-                        .setDeserializationSchema(new RowDataDeserializationSchema())
-                        .build();
+        FlussSource<RowData> flussSource = FlussSource.<RowData>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable(logTableName)
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new RowDataDeserializationSchema())
+                .build();
 
         DataStreamSource<RowData> stream =
                 env.fromSource(flussSource, WatermarkStrategy.noWatermarks(), "Fluss Source");
 
         // these rows should be interpreted as Inserts
-        List<InternalRow> updatedRows =
-                Arrays.asList(row(600L, 20L, 600, "addr1"), row(700L, 22L, 601, "addr2"));
+        List<InternalRow> updatedRows = Arrays.asList(row(600L, 20L, 600, "addr1"), row(700L, 22L, 601, "addr2"));
 
         // send some row updates
         writeRows(conn, ordersLogTablePath, updatedRows, true);
 
-        List<RowData> expectedResult =
-                Arrays.asList(
-                        createRowData(600L, 20L, 600, "addr1", RowKind.INSERT),
-                        createRowData(700L, 22L, 601, "addr2", RowKind.INSERT),
-                        createRowData(800L, 23L, 602, "addr3", RowKind.INSERT),
-                        createRowData(900L, 24L, 603, "addr4", RowKind.INSERT),
-                        createRowData(1000L, 25L, 604, "addr5", RowKind.INSERT),
-                        createRowData(600L, 20L, 600, "addr1", RowKind.INSERT),
-                        createRowData(700L, 22L, 601, "addr2", RowKind.INSERT));
+        List<RowData> expectedResult = Arrays.asList(
+                createRowData(600L, 20L, 600, "addr1", RowKind.INSERT),
+                createRowData(700L, 22L, 601, "addr2", RowKind.INSERT),
+                createRowData(800L, 23L, 602, "addr3", RowKind.INSERT),
+                createRowData(900L, 24L, 603, "addr4", RowKind.INSERT),
+                createRowData(1000L, 25L, 604, "addr5", RowKind.INSERT),
+                createRowData(600L, 20L, 600, "addr1", RowKind.INSERT),
+                createRowData(700L, 22L, 601, "addr2", RowKind.INSERT));
 
         List<RowData> rawRows = stream.executeAndCollect(expectedResult.size());
         List<RowData> collectedRows =
-                rawRows.stream()
-                        .map(row -> binaryRowToGenericRow(row, rowType))
-                        .collect(Collectors.toList());
+                rawRows.stream().map(row -> binaryRowToGenericRow(row, rowType)).collect(Collectors.toList());
 
         // Assert result size and elements match
         assertThat(expectedResult).hasSameElementsAs(collectedRows);
@@ -237,25 +227,23 @@ public class FlussSourceITCase extends FlinkTestBase {
     public void testTableLogSourceWithProjectionPushdown() throws Exception {
         createTable(ordersLogTablePath, logTableDescriptor);
         writeRowsToTable(ordersLogTablePath);
-        List<OrderPartial> expectedOutput =
-                Arrays.asList(
-                        new OrderPartial(600, 600),
-                        new OrderPartial(700, 601),
-                        new OrderPartial(800, 602),
-                        new OrderPartial(900, 603),
-                        new OrderPartial(1000, 604));
+        List<OrderPartial> expectedOutput = Arrays.asList(
+                new OrderPartial(600, 600),
+                new OrderPartial(700, 601),
+                new OrderPartial(800, 602),
+                new OrderPartial(900, 603),
+                new OrderPartial(1000, 604));
 
         // Create a DataStream from the FlussSource
-        FlussSource<OrderPartial> flussSource =
-                FlussSource.<OrderPartial>builder()
-                        .setBootstrapServers(bootstrapServers)
-                        .setDatabase(DEFAULT_DB)
-                        .setTable(logTableName)
-                        .setStartingOffsets(OffsetsInitializer.earliest())
-                        .setScanPartitionDiscoveryIntervalMs(1000L)
-                        .setDeserializationSchema(new OrderPartialDeserializationSchema())
-                        .setProjectedFields("orderId", "amount")
-                        .build();
+        FlussSource<OrderPartial> flussSource = FlussSource.<OrderPartial>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable(logTableName)
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new OrderPartialDeserializationSchema())
+                .setProjectedFields("orderId", "amount")
+                .build();
 
         DataStreamSource<OrderPartial> stream =
                 env.fromSource(flussSource, WatermarkStrategy.noWatermarks(), "Fluss Source");
@@ -266,8 +254,7 @@ public class FlussSourceITCase extends FlinkTestBase {
         assertThat(collectedElements).hasSameElementsAs(expectedOutput);
     }
 
-    private static RowData createRowData(
-            Long orderId, Long itemId, Integer amount, String address, RowKind rowKind) {
+    private static RowData createRowData(Long orderId, Long itemId, Integer amount, String address, RowKind rowKind) {
         GenericRowData row = new GenericRowData(4);
         row.setField(0, orderId);
         row.setField(1, itemId);
@@ -285,8 +272,7 @@ public class FlussSourceITCase extends FlinkTestBase {
 
             PojoToRowConverter<Order> converter = new PojoToRowConverter<>(Order.class, rowType);
 
-            List<GenericRow> rows =
-                    ORDERS.stream().map(converter::convert).collect(Collectors.toList());
+            List<GenericRow> rows = ORDERS.stream().map(converter::convert).collect(Collectors.toList());
 
             if (isLogTable) {
                 AppendWriter writer = table.newAppend().createWriter();

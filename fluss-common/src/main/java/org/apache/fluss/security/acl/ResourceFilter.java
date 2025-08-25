@@ -31,7 +31,9 @@ import java.util.Objects;
 @PublicEvolving
 public class ResourceFilter {
     private final ResourceType type;
-    @Nullable private final String name;
+
+    @Nullable
+    private final String name;
 
     public static final ResourceFilter ANY = new ResourceFilter(ResourceType.ANY, null);
 

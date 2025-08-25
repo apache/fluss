@@ -165,13 +165,12 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
         int coordinatorEpoch = coordinatorEpochSupplier.get();
         SnapshotLocation snapshotLocation = initSnapshotLocation(currentSnapshotId);
         try {
-            PeriodicSnapshotManager.SnapshotRunnable snapshotRunnable =
-                    new PeriodicSnapshotManager.SnapshotRunnable(
-                            snapshotRunner.snapshot(currentSnapshotId, logOffset, snapshotLocation),
-                            currentSnapshotId,
-                            coordinatorEpoch,
-                            bucketLeaderEpoch,
-                            snapshotLocation);
+            PeriodicSnapshotManager.SnapshotRunnable snapshotRunnable = new PeriodicSnapshotManager.SnapshotRunnable(
+                    snapshotRunner.snapshot(currentSnapshotId, logOffset, snapshotLocation),
+                    currentSnapshotId,
+                    coordinatorEpoch,
+                    bucketLeaderEpoch,
+                    snapshotLocation);
             return Optional.of(snapshotRunnable);
         } catch (Exception t) {
             // dispose the snapshot location
@@ -181,15 +180,11 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     }
 
     private SnapshotLocation initSnapshotLocation(long snapshotId) throws IOException {
-        final FsPath currentSnapshotDir =
-                FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId);
+        final FsPath currentSnapshotDir = FlussPaths.remoteKvSnapshotDir(remoteKvTabletDir, snapshotId);
         // create the snapshot exclusive directory
         remoteFileSystem.mkdirs(currentSnapshotDir);
         return new SnapshotLocation(
-                remoteFileSystem,
-                currentSnapshotDir,
-                remoteSnapshotSharedDir,
-                snapshotWriteBufferSize);
+                remoteFileSystem, currentSnapshotDir, remoteSnapshotSharedDir, snapshotWriteBufferSize);
     }
 
     @Override
@@ -200,17 +195,15 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
             SnapshotLocation snapshotLocation,
             SnapshotResult snapshotResult)
             throws Throwable {
-        CompletedSnapshot completedSnapshot =
-                new CompletedSnapshot(
-                        tableBucket,
-                        snapshotId,
-                        snapshotResult.getSnapshotPath(),
-                        snapshotResult.getKvSnapshotHandle(),
-                        snapshotResult.getLogOffset());
+        CompletedSnapshot completedSnapshot = new CompletedSnapshot(
+                tableBucket,
+                snapshotId,
+                snapshotResult.getSnapshotPath(),
+                snapshotResult.getKvSnapshotHandle(),
+                snapshotResult.getLogOffset());
         try {
             // commit the completed snapshot
-            completedKvSnapshotCommitter.commitKvSnapshot(
-                    completedSnapshot, coordinatorEpoch, bucketLeaderEpoch);
+            completedKvSnapshotCommitter.commitKvSnapshot(completedSnapshot, coordinatorEpoch, bucketLeaderEpoch);
             // notify the snapshot complete
             rocksIncrementalSnapshot.notifySnapshotComplete(snapshotId);
             logOffsetOfLatestSnapshot = snapshotResult.getLogOffset();
@@ -227,13 +220,8 @@ public class KvTabletSnapshotTarget implements PeriodicSnapshotManager.SnapshotT
     }
 
     @Override
-    public void handleSnapshotFailure(
-            long snapshotId, SnapshotLocation snapshotLocation, Throwable cause) {
-        LOG.warn(
-                "Snapshot {} failure or cancellation for TableBucket {}.",
-                snapshotId,
-                tableBucket,
-                cause);
+    public void handleSnapshotFailure(long snapshotId, SnapshotLocation snapshotLocation, Throwable cause) {
+        LOG.warn("Snapshot {} failure or cancellation for TableBucket {}.", snapshotId, tableBucket, cause);
         rocksIncrementalSnapshot.notifySnapshotAbort(snapshotId);
         // cleanup the target snapshot location at the end
         snapshotLocation.disposeOnFailure();

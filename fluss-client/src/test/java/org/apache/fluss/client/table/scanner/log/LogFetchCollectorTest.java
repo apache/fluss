@@ -53,8 +53,7 @@ public class LogFetchCollectorTest {
     @BeforeEach
     void setup() {
         MetadataUpdater metadataUpdater =
-                new TestingMetadataUpdater(
-                        Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
+                new TestingMetadataUpdater(Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
         Map<TableBucket, Long> scanBuckets = new HashMap<>();
         scanBuckets.put(new TableBucket(DATA1_TABLE_ID, 0), 0L);
         scanBuckets.put(new TableBucket(DATA1_TABLE_ID, 1), 0L);
@@ -63,10 +62,8 @@ public class LogFetchCollectorTest {
         logScannerStatus.assignScanBuckets(scanBuckets);
         logFetchBuffer = new LogFetchBuffer();
         logFetchCollector =
-                new LogFetchCollector(
-                        DATA1_TABLE_PATH, logScannerStatus, new Configuration(), metadataUpdater);
-        readContext =
-                LogRecordReadContext.createArrowReadContext(DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
+                new LogFetchCollector(DATA1_TABLE_PATH, logScannerStatus, new Configuration(), metadataUpdater);
+        readContext = LogRecordReadContext.createArrowReadContext(DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
     }
 
     @AfterEach
@@ -95,8 +92,7 @@ public class LogFetchCollectorTest {
         assertThat(completedFetch.isInitialized()).isFalse();
 
         // Fetch the data and validate that we get all the records we want back.
-        Map<TableBucket, List<ScanRecord>> bucketAndRecords =
-                logFetchCollector.collectFetch(logFetchBuffer);
+        Map<TableBucket, List<ScanRecord>> bucketAndRecords = logFetchCollector.collectFetch(logFetchBuffer);
         assertThat(bucketAndRecords.size()).isEqualTo(1);
         assertThat(bucketAndRecords.get(tb)).size().isEqualTo(10);
 
@@ -145,8 +141,7 @@ public class LogFetchCollectorTest {
         // unassign bucket 2
         logScannerStatus.unassignScanBuckets(Collections.singletonList(tb2));
 
-        Map<TableBucket, List<ScanRecord>> bucketAndRecords =
-                logFetchCollector.collectFetch(logFetchBuffer);
+        Map<TableBucket, List<ScanRecord>> bucketAndRecords = logFetchCollector.collectFetch(logFetchBuffer);
         // should only contain records for bucket 1
         assertThat(bucketAndRecords.keySet()).containsExactly(tb1);
 
@@ -157,7 +152,6 @@ public class LogFetchCollectorTest {
 
     private DefaultCompletedFetch makeCompletedFetch(
             TableBucket tableBucket, FetchLogResultForBucket resultForBucket, long offset) {
-        return new DefaultCompletedFetch(
-                tableBucket, resultForBucket, readContext, logScannerStatus, true, offset);
+        return new DefaultCompletedFetch(tableBucket, resultForBucket, readContext, logScannerStatus, true, offset);
     }
 }

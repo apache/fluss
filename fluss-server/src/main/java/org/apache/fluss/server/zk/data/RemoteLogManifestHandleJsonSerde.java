@@ -30,11 +30,9 @@ import static org.apache.fluss.server.zk.data.RemoteLogManifestHandle.fromRemote
 /** Json serializer and deserializer for {@link RemoteLogManifestHandle}. */
 @Internal
 public class RemoteLogManifestHandleJsonSerde
-        implements JsonSerializer<RemoteLogManifestHandle>,
-                JsonDeserializer<RemoteLogManifestHandle> {
+        implements JsonSerializer<RemoteLogManifestHandle>, JsonDeserializer<RemoteLogManifestHandle> {
 
-    public static final RemoteLogManifestHandleJsonSerde INSTANCE =
-            new RemoteLogManifestHandleJsonSerde();
+    public static final RemoteLogManifestHandleJsonSerde INSTANCE = new RemoteLogManifestHandleJsonSerde();
 
     private static final String VERSION_KEY = "version";
     private static final String REMOTE_LOG_MANIFEST_PATH = "remote_log_manifest_path";
@@ -42,8 +40,7 @@ public class RemoteLogManifestHandleJsonSerde
     private static final int VERSION = 1;
 
     @Override
-    public void serialize(RemoteLogManifestHandle remoteLogManifestHandle, JsonGenerator generator)
-            throws IOException {
+    public void serialize(RemoteLogManifestHandle remoteLogManifestHandle, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
 
         // serialize data version.
@@ -51,8 +48,7 @@ public class RemoteLogManifestHandleJsonSerde
         generator.writeStringField(
                 REMOTE_LOG_MANIFEST_PATH,
                 remoteLogManifestHandle.getRemoteLogManifestPath().toString());
-        generator.writeNumberField(
-                REMOTE_LOG_END_OFFSET, remoteLogManifestHandle.getRemoteLogEndOffset());
+        generator.writeNumberField(REMOTE_LOG_END_OFFSET, remoteLogManifestHandle.getRemoteLogEndOffset());
 
         generator.writeEndObject();
     }
@@ -61,7 +57,6 @@ public class RemoteLogManifestHandleJsonSerde
     public RemoteLogManifestHandle deserialize(JsonNode node) {
         String remoteLogManifestPath = node.get(REMOTE_LOG_MANIFEST_PATH).asText();
         long remoteLogEndOffset = node.get(REMOTE_LOG_END_OFFSET).asLong();
-        return new RemoteLogManifestHandle(
-                fromRemoteLogManifestPath(remoteLogManifestPath), remoteLogEndOffset);
+        return new RemoteLogManifestHandle(fromRemoteLogManifestPath(remoteLogManifestPath), remoteLogEndOffset);
     }
 }

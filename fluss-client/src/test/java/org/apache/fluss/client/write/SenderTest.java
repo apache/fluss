@@ -104,14 +104,11 @@ final class SenderTest {
     void testRetries() throws Exception {
         // create a sender with retries = 1.
         int maxRetries = 1;
-        Sender sender1 =
-                setupWithIdempotenceState(
-                        new IdempotenceManager(
-                                false,
-                                MAX_INFLIGHT_REQUEST_PER_BUCKET,
-                                metadataUpdater.newRandomTabletServerClient()),
-                        maxRetries,
-                        0);
+        Sender sender1 = setupWithIdempotenceState(
+                new IdempotenceManager(
+                        false, MAX_INFLIGHT_REQUEST_PER_BUCKET, metadataUpdater.newRandomTabletServerClient()),
+                maxRetries,
+                0);
         // do a successful retry.
         CompletableFuture<Exception> future = new CompletableFuture<>();
         appendToAccumulator(tb1, row(1, "a"), future::complete);
@@ -239,25 +236,24 @@ final class SenderTest {
         CompletableFuture<Exception> future = new CompletableFuture<>();
         appendToAccumulator(tb1, row(1, "a"), future::complete);
         sender1.runOnce();
-        assertThat(idempotenceManager.inflightBatchSize(tb1))
-                .isEqualTo(MAX_INFLIGHT_REQUEST_PER_BUCKET);
+        assertThat(idempotenceManager.inflightBatchSize(tb1)).isEqualTo(MAX_INFLIGHT_REQUEST_PER_BUCKET);
         assertThat(idempotenceManager.canSendMoreRequests(tb1)).isFalse();
 
         // add one more batch, it will not be drained from accumulator.
         CompletableFuture<Exception> future1 = new CompletableFuture<>();
         appendToAccumulator(tb1, row(1, "a"), future1::complete);
         sender1.runOnce();
-        assertThat(idempotenceManager.inflightBatchSize(tb1))
-                .isEqualTo(MAX_INFLIGHT_REQUEST_PER_BUCKET);
-        assertThat(accumulator.ready(metadataUpdater.getCluster()).readyNodes.size()).isEqualTo(1);
+        assertThat(idempotenceManager.inflightBatchSize(tb1)).isEqualTo(MAX_INFLIGHT_REQUEST_PER_BUCKET);
+        assertThat(accumulator.ready(metadataUpdater.getCluster()).readyNodes.size())
+                .isEqualTo(1);
 
         // finish the first batch, the latest batch will be drained from the accumulator.
         finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, 0L, 1L));
         sender1.runOnce(); // receive response 0.
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(0));
-        assertThat(idempotenceManager.inflightBatchSize(tb1))
-                .isEqualTo(MAX_INFLIGHT_REQUEST_PER_BUCKET);
-        assertThat(accumulator.ready(metadataUpdater.getCluster()).readyNodes.size()).isEqualTo(0);
+        assertThat(idempotenceManager.inflightBatchSize(tb1)).isEqualTo(MAX_INFLIGHT_REQUEST_PER_BUCKET);
+        assertThat(accumulator.ready(metadataUpdater.getCluster()).readyNodes.size())
+                .isEqualTo(0);
     }
 
     @Test
@@ -300,8 +296,7 @@ final class SenderTest {
 
         // 3. try to finish already send requests with retriable error.
         for (int i = 0; i < MAX_INFLIGHT_REQUEST_PER_BUCKET; i++) {
-            finishIdempotentProduceLogRequest(
-                    i, tb1, 0, createProduceLogResponse(tb1, Errors.STORAGE_EXCEPTION));
+            finishIdempotentProduceLogRequest(i, tb1, 0, createProduceLogResponse(tb1, Errors.STORAGE_EXCEPTION));
         }
         assertThat(pendingRequestSize(tb1)).isEqualTo(0);
 
@@ -318,8 +313,7 @@ final class SenderTest {
             assertThat(idempotenceManager.canSendMoreRequests(tb1)).isFalse();
             readyNodes = accumulator.ready(metadataUpdater.getCluster()).readyNodes;
             assertThat(readyNodes.isEmpty()).isFalse();
-            drained =
-                    accumulator.drain(metadataUpdater.getCluster(), readyNodes, Integer.MAX_VALUE);
+            drained = accumulator.drain(metadataUpdater.getCluster(), readyNodes, Integer.MAX_VALUE);
             if (i == 0) {
                 // for first batch (retried first batch), we can send.
                 assertThat(drained.isEmpty()).isFalse();
@@ -360,8 +354,7 @@ final class SenderTest {
         sender1.runOnce();
 
         // finish batch one with retriable error.
-        finishIdempotentProduceLogRequest(
-                0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
+        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
         sender1.runOnce(); // receive response 0
 
         // Queue the forth request, it shouldn't sent until the first 3 complete.
@@ -438,25 +431,19 @@ final class SenderTest {
         sender1.runOnce();
 
         // response 0 with retrievable error which will reEnqueue the batch.
-        finishIdempotentProduceLogRequest(
-                0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
+        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
         // response 1 with UnknownWriterIdException which will reset writer
-        finishIdempotentProduceLogRequest(
-                1, tb1, 0, createProduceLogResponse(tb1, Errors.UNKNOWN_WRITER_ID_EXCEPTION));
+        finishIdempotentProduceLogRequest(1, tb1, 0, createProduceLogResponse(tb1, Errors.UNKNOWN_WRITER_ID_EXCEPTION));
         retry(
                 Duration.ofMinutes(1),
                 () -> { // after response 1 is received, the writer will be reset
                     assertThat(idempotenceManager.hasInflightBatches(tb1)).isFalse();
-                    assertThat(
-                                    accumulator.getReadyDeque(
-                                            DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket()))
+                    assertThat(accumulator.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket()))
                             .hasSize(1);
-                    assertThat(
-                                    accumulator
-                                            .getReadyDeque(
-                                                    DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket())
-                                            .peek()
-                                            .batchSequence())
+                    assertThat(accumulator
+                                    .getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket())
+                                    .peek()
+                                    .batchSequence())
                             .isEqualTo(0);
                 });
         assertThat(future1.isDone()).isFalse();
@@ -499,8 +486,7 @@ final class SenderTest {
                 1, tb1, 1, createProduceLogResponse(tb1, Errors.OUT_OF_ORDER_SEQUENCE_EXCEPTION));
 
         sender1.runOnce(); // receive response 1.
-        Deque<WriteBatch> queuedBatches =
-                accumulator.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
+        Deque<WriteBatch> queuedBatches = accumulator.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
 
         // Make sure that we are queueing the second batch first.
         assertThat(queuedBatches.size()).isEqualTo(1);
@@ -508,8 +494,7 @@ final class SenderTest {
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isNotPresent();
 
         // receive response 0
-        finishIdempotentProduceLogRequest(
-                0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
+        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
         // Make sure we requeued both batches in the correct order.
         assertThat(queuedBatches.size()).isEqualTo(2);
         assertThat(queuedBatches.peek().batchSequence()).isEqualTo(0);
@@ -569,15 +554,13 @@ final class SenderTest {
         assertThat(future2.isDone()).isTrue();
         assertThat(future2.get()).isNull();
         assertThat(future1.isDone()).isFalse();
-        Deque<WriteBatch> queuedBatches =
-                accumulator.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
+        Deque<WriteBatch> queuedBatches = accumulator.getReadyDeque(DATA1_PHYSICAL_TABLE_PATH, tb1.getBucket());
 
         assertThat(queuedBatches.size()).isEqualTo(0);
         assertThat(idempotenceManager.lastAckedBatchSequence(tb1)).isEqualTo(Optional.of(1));
 
         // then finish second ProduceLogRequest with error.
-        finishIdempotentProduceLogRequest(
-                0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
+        finishIdempotentProduceLogRequest(0, tb1, 0, createProduceLogResponse(tb1, Errors.REQUEST_TIME_OUT));
         // Make sure we requeued both batches in the correct order.
         assertThat(queuedBatches.size()).isEqualTo(1);
         assertThat(queuedBatches.peek().batchSequence()).isEqualTo(0);
@@ -662,17 +645,15 @@ final class SenderTest {
         // now, remove leader node ,so that send destination
         // server node is null
         Cluster oldCluster = metadataUpdater.getCluster();
-        Map<Integer, ServerNode> aliveTabletServersById =
-                new HashMap<>(oldCluster.getAliveTabletServers());
+        Map<Integer, ServerNode> aliveTabletServersById = new HashMap<>(oldCluster.getAliveTabletServers());
         aliveTabletServersById.remove(leaderNode);
-        Cluster newCluster =
-                new Cluster(
-                        aliveTabletServersById,
-                        oldCluster.getCoordinatorServer(),
-                        oldCluster.getBucketLocationsByPath(),
-                        oldCluster.getTableIdByPath(),
-                        oldCluster.getPartitionIdByPath(),
-                        oldCluster.getTableInfoByPath());
+        Cluster newCluster = new Cluster(
+                aliveTabletServersById,
+                oldCluster.getCoordinatorServer(),
+                oldCluster.getBucketLocationsByPath(),
+                oldCluster.getTableIdByPath(),
+                oldCluster.getPartitionIdByPath(),
+                oldCluster.getTableInfoByPath());
 
         metadataUpdater.updateCluster(newCluster);
 
@@ -700,12 +681,10 @@ final class SenderTest {
     }
 
     private TestingMetadataUpdater initializeMetadataUpdater() {
-        return new TestingMetadataUpdater(
-                Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
+        return new TestingMetadataUpdater(Collections.singletonMap(DATA1_TABLE_PATH, DATA1_TABLE_INFO));
     }
 
-    private void appendToAccumulator(TableBucket tb, GenericRow row, WriteCallback writeCallback)
-            throws Exception {
+    private void appendToAccumulator(TableBucket tb, GenericRow row, WriteCallback writeCallback) throws Exception {
         accumulator.append(
                 WriteRecord.forArrowAppend(DATA1_PHYSICAL_TABLE_PATH, row, null),
                 writeCallback,
@@ -716,30 +695,26 @@ final class SenderTest {
 
     private ApiMessage getRequest(TableBucket tb, int index) {
         TestTabletServerGateway gateway =
-                (TestTabletServerGateway)
-                        metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
+                (TestTabletServerGateway) metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
         return gateway.getRequest(index);
     }
 
     private void finishProduceLogRequest(TableBucket tb, int index, ProduceLogResponse response) {
         TestTabletServerGateway gateway =
-                (TestTabletServerGateway)
-                        metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
+                (TestTabletServerGateway) metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
         gateway.response(index, response);
     }
 
     private int pendingRequestSize(TableBucket tb) {
         TestTabletServerGateway gateway =
-                (TestTabletServerGateway)
-                        metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
+                (TestTabletServerGateway) metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
         return gateway.pendingRequestSize();
     }
 
     private void finishIdempotentProduceLogRequest(
             int batchSequence, TableBucket tb, int index, ProduceLogResponse response) {
         TestTabletServerGateway gateway =
-                (TestTabletServerGateway)
-                        metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
+                (TestTabletServerGateway) metadataUpdater.newTabletServerClientForNode(metadataUpdater.leaderFor(tb));
         ApiMessage request = getRequest(tb1, index);
         assertThat(request).isInstanceOf(ProduceLogRequest.class);
         assertThat(hasIdempotentRecords(tb1, (ProduceLogRequest) request)).isTrue();
@@ -747,16 +722,13 @@ final class SenderTest {
         gateway.response(index, response);
     }
 
-    private ProduceLogResponse createProduceLogResponse(
-            TableBucket tb, long baseOffset, long endOffset) {
+    private ProduceLogResponse createProduceLogResponse(TableBucket tb, long baseOffset, long endOffset) {
         return makeProduceLogResponse(
-                Collections.singletonList(
-                        new ProduceLogResultForBucket(tb, baseOffset, endOffset)));
+                Collections.singletonList(new ProduceLogResultForBucket(tb, baseOffset, endOffset)));
     }
 
     private ProduceLogResponse createProduceLogResponse(TableBucket tb, Errors error) {
-        return makeProduceLogResponse(
-                Collections.singletonList(new ProduceLogResultForBucket(tb, error.toApiError())));
+        return makeProduceLogResponse(Collections.singletonList(new ProduceLogResultForBucket(tb, error.toApiError())));
     }
 
     private Sender setupWithIdempotenceState() {
@@ -767,16 +739,13 @@ final class SenderTest {
         return setupWithIdempotenceState(idempotenceManager, Integer.MAX_VALUE, 0);
     }
 
-    private Sender setupWithIdempotenceState(
-            IdempotenceManager idempotenceManager, int reties, int batchTimeoutMs) {
+    private Sender setupWithIdempotenceState(IdempotenceManager idempotenceManager, int reties, int batchTimeoutMs) {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, new MemorySize(TOTAL_MEMORY_SIZE));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(BATCH_SIZE));
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(PAGE_SIZE));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT, Duration.ofMillis(batchTimeoutMs));
-        accumulator =
-                new RecordAccumulator(
-                        conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
+        accumulator = new RecordAccumulator(conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
         return new Sender(
                 accumulator,
                 REQUEST_TIMEOUT,
@@ -790,9 +759,7 @@ final class SenderTest {
 
     private IdempotenceManager createIdempotenceManager(boolean idempotenceEnabled) {
         return new IdempotenceManager(
-                idempotenceEnabled,
-                MAX_INFLIGHT_REQUEST_PER_BUCKET,
-                metadataUpdater.newRandomTabletServerClient());
+                idempotenceEnabled, MAX_INFLIGHT_REQUEST_PER_BUCKET, metadataUpdater.newRandomTabletServerClient());
     }
 
     private static boolean hasIdempotentRecords(TableBucket tb, ProduceLogRequest request) {
@@ -803,7 +770,6 @@ final class SenderTest {
     private static void assertBatchSequenceEquals(
             TableBucket tb, ProduceLogRequest request, int expectedBatchSequence) {
         MemoryLogRecords memoryLogRecords = getProduceLogData(request).get(tb);
-        assertThat(memoryLogRecords.batchIterator().next().batchSequence())
-                .isEqualTo(expectedBatchSequence);
+        assertThat(memoryLogRecords.batchIterator().next().batchSequence()).isEqualTo(expectedBatchSequence);
     }
 }

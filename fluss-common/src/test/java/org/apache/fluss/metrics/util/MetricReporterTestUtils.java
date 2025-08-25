@@ -39,13 +39,11 @@ public class MetricReporterTestUtils {
      *
      * @param clazz class to load
      */
-    public static void testMetricReporterSetupViaSPI(
-            final Class<? extends MetricReporterPlugin> clazz) {
-        final Set<Class<? extends MetricReporterPlugin>> loadedFactories =
-                StreamSupport.stream(
-                                ServiceLoader.load(MetricReporterPlugin.class).spliterator(), false)
-                        .map(MetricReporterPlugin::getClass)
-                        .collect(Collectors.toSet());
+    public static void testMetricReporterSetupViaSPI(final Class<? extends MetricReporterPlugin> clazz) {
+        final Set<Class<? extends MetricReporterPlugin>> loadedFactories = StreamSupport.stream(
+                        ServiceLoader.load(MetricReporterPlugin.class).spliterator(), false)
+                .map(MetricReporterPlugin::getClass)
+                .collect(Collectors.toSet());
         assertThat(loadedFactories).contains(clazz);
     }
 }

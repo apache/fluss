@@ -78,8 +78,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test utils for rpc message. */
 public class RpcMessageTestUtils {
-    public static DropTableRequest newDropTableRequest(
-            String db, String tb, boolean ignoreIfNotExists) {
+    public static DropTableRequest newDropTableRequest(String db, String tb, boolean ignoreIfNotExists) {
         DropTableRequest dropTableRequest = new DropTableRequest();
         dropTableRequest
                 .setIgnoreIfNotExists(ignoreIfNotExists)
@@ -91,9 +90,7 @@ public class RpcMessageTestUtils {
 
     public static GetTableInfoRequest newGetTableInfoRequest(TablePath tablePath) {
         GetTableInfoRequest request = new GetTableInfoRequest();
-        request.setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
+        request.setTablePath().setDatabaseName(tablePath.getDatabaseName()).setTableName(tablePath.getTableName());
         return request;
     }
 
@@ -101,8 +98,7 @@ public class RpcMessageTestUtils {
         return new DatabaseExistsRequest().setDatabaseName(db);
     }
 
-    public static CreateDatabaseRequest newCreateDatabaseRequest(
-            String db, boolean ignoreIfExists) {
+    public static CreateDatabaseRequest newCreateDatabaseRequest(String db, boolean ignoreIfExists) {
         return new CreateDatabaseRequest().setDatabaseName(db).setIgnoreIfExists(ignoreIfExists);
     }
 
@@ -141,14 +137,11 @@ public class RpcMessageTestUtils {
 
     public static MetadataRequest newMetadataRequest(List<TablePath> tablePaths) {
         MetadataRequest metadataRequest = new MetadataRequest();
-        metadataRequest.addAllTablePaths(
-                tablePaths.stream()
-                        .map(
-                                tablePath ->
-                                        new PbTablePath()
-                                                .setDatabaseName(tablePath.getDatabaseName())
-                                                .setTableName(tablePath.getTableName()))
-                        .collect(Collectors.toList()));
+        metadataRequest.addAllTablePaths(tablePaths.stream()
+                .map(tablePath -> new PbTablePath()
+                        .setDatabaseName(tablePath.getDatabaseName())
+                        .setTableName(tablePath.getTableName()))
+                .collect(Collectors.toList()));
         return metadataRequest;
     }
 
@@ -159,49 +152,36 @@ public class RpcMessageTestUtils {
         PbProduceLogReqForBucket pbProduceLogReqForBucket = new PbProduceLogReqForBucket();
         pbProduceLogReqForBucket
                 .setBucketId(bucketId)
-                .setRecordsBytesView(
-                        new MemorySegmentBytesView(
-                                records.getMemorySegment(),
-                                records.getPosition(),
-                                records.sizeInBytes()));
+                .setRecordsBytesView(new MemorySegmentBytesView(
+                        records.getMemorySegment(), records.getPosition(), records.sizeInBytes()));
         produceRequest.addAllBucketsReqs(Collections.singletonList(pbProduceLogReqForBucket));
         return produceRequest;
     }
 
-    public static PutKvRequest newPutKvRequest(
-            long tableId, int bucketId, int acks, KvRecordBatch kvRecordBatch) {
+    public static PutKvRequest newPutKvRequest(long tableId, int bucketId, int acks, KvRecordBatch kvRecordBatch) {
         PutKvRequest putKvRequest = new PutKvRequest();
         putKvRequest.setTableId(tableId).setAcks(acks).setTimeoutMs(10000);
         PbPutKvReqForBucket pbPutKvReqForBucket = new PbPutKvReqForBucket();
         pbPutKvReqForBucket.setBucketId(bucketId);
         if (kvRecordBatch instanceof DefaultKvRecordBatch) {
             DefaultKvRecordBatch batch = (DefaultKvRecordBatch) kvRecordBatch;
-            pbPutKvReqForBucket.setRecords(
-                    batch.getMemorySegment(), batch.getPosition(), batch.sizeInBytes());
+            pbPutKvReqForBucket.setRecords(batch.getMemorySegment(), batch.getPosition(), batch.sizeInBytes());
         } else {
-            throw new IllegalArgumentException(
-                    "Unsupported KvRecordBatch type: " + kvRecordBatch.getClass().getName());
+            throw new IllegalArgumentException("Unsupported KvRecordBatch type: "
+                    + kvRecordBatch.getClass().getName());
         }
         putKvRequest.addAllBucketsReqs(Collections.singletonList(pbPutKvReqForBucket));
         return putKvRequest;
     }
 
-    public static FetchLogRequest newFetchLogRequest(
-            int followerId, long tableId, int bucketId, long fetchOffset) {
+    public static FetchLogRequest newFetchLogRequest(int followerId, long tableId, int bucketId, long fetchOffset) {
         return newFetchLogRequest(followerId, tableId, bucketId, fetchOffset, null);
     }
 
     public static FetchLogRequest newFetchLogRequest(
             int followerId, long tableId, int bucketId, long fetchOffset, int[] selectedFields) {
         return newFetchLogRequest(
-                followerId,
-                tableId,
-                bucketId,
-                fetchOffset,
-                selectedFields,
-                -1,
-                Integer.MAX_VALUE,
-                -1);
+                followerId, tableId, bucketId, fetchOffset, selectedFields, -1, Integer.MAX_VALUE, -1);
     }
 
     public static FetchLogRequest newFetchLogRequest(
@@ -221,18 +201,15 @@ public class RpcMessageTestUtils {
 
         PbFetchLogReqForTable fetchLogReqForTable = new PbFetchLogReqForTable().setTableId(tableId);
         if (selectedFields != null) {
-            fetchLogReqForTable
-                    .setProjectionPushdownEnabled(true)
-                    .setProjectedFields(selectedFields);
+            fetchLogReqForTable.setProjectionPushdownEnabled(true).setProjectedFields(selectedFields);
         } else {
             fetchLogReqForTable.setProjectionPushdownEnabled(false);
         }
         // TODO make the max fetch bytes configurable.
-        PbFetchLogReqForBucket fetchLogReqForBucket =
-                new PbFetchLogReqForBucket()
-                        .setBucketId(bucketId)
-                        .setFetchOffset(fetchOffset)
-                        .setMaxFetchBytes(1024 * 1024);
+        PbFetchLogReqForBucket fetchLogReqForBucket = new PbFetchLogReqForBucket()
+                .setBucketId(bucketId)
+                .setFetchOffset(fetchOffset)
+                .setMaxFetchBytes(1024 * 1024);
         fetchLogReqForTable.addAllBucketsReqs(Collections.singletonList(fetchLogReqForBucket));
         fetchLogRequest.addAllTablesReqs(Collections.singletonList(fetchLogReqForTable));
         return fetchLogRequest;
@@ -245,8 +222,7 @@ public class RpcMessageTestUtils {
         return lookupRequest;
     }
 
-    public static PrefixLookupRequest newPrefixLookupRequest(
-            long tableId, int bucketId, List<byte[]> prefixKeys) {
+    public static PrefixLookupRequest newPrefixLookupRequest(long tableId, int bucketId, List<byte[]> prefixKeys) {
         PrefixLookupRequest prefixLookupRequest = new PrefixLookupRequest().setTableId(tableId);
         PbPrefixLookupReqForBucket pbPrefixLookupReqForBucket = prefixLookupRequest.addBucketsReq();
         pbPrefixLookupReqForBucket.setBucketId(bucketId);
@@ -262,11 +238,10 @@ public class RpcMessageTestUtils {
 
     public static ListOffsetsRequest newListOffsetsRequest(
             int followerServerId, int offsetType, long tableId, int bucketId) {
-        ListOffsetsRequest listOffsetsRequest =
-                new ListOffsetsRequest()
-                        .setFollowerServerId(followerServerId)
-                        .setOffsetType(offsetType)
-                        .setTableId(tableId);
+        ListOffsetsRequest listOffsetsRequest = new ListOffsetsRequest()
+                .setFollowerServerId(followerServerId)
+                .setOffsetType(offsetType)
+                .setTableId(tableId);
         listOffsetsRequest.addBucketId(bucketId);
         return listOffsetsRequest;
     }
@@ -282,18 +257,15 @@ public class RpcMessageTestUtils {
         List<PbKeyValue> pbPartitionKeyAndValues = new ArrayList<>();
         partitionSpec
                 .getSpecMap()
-                .forEach(
-                        (partitionKey, value) ->
-                                pbPartitionKeyAndValues.add(
-                                        new PbKeyValue().setKey(partitionKey).setValue(value)));
+                .forEach((partitionKey, value) -> pbPartitionKeyAndValues.add(
+                        new PbKeyValue().setKey(partitionKey).setValue(value)));
         createPartitionRequest.setPartitionSpec().addAllPartitionKeyValues(pbPartitionKeyAndValues);
         return createPartitionRequest;
     }
 
     public static DropPartitionRequest newDropPartitionRequest(
             TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfNotExists) {
-        DropPartitionRequest dropPartitionRequest =
-                new DropPartitionRequest().setIgnoreIfNotExists(ignoreIfNotExists);
+        DropPartitionRequest dropPartitionRequest = new DropPartitionRequest().setIgnoreIfNotExists(ignoreIfNotExists);
         dropPartitionRequest
                 .setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
@@ -301,10 +273,8 @@ public class RpcMessageTestUtils {
         List<PbKeyValue> pbPartitionKeyAndValues = new ArrayList<>();
         partitionSpec
                 .getSpecMap()
-                .forEach(
-                        (partitionKey, value) ->
-                                pbPartitionKeyAndValues.add(
-                                        new PbKeyValue().setKey(partitionKey).setValue(value)));
+                .forEach((partitionKey, value) -> pbPartitionKeyAndValues.add(
+                        new PbKeyValue().setKey(partitionKey).setValue(value)));
         dropPartitionRequest.setPartitionSpec().addAllPartitionKeyValues(pbPartitionKeyAndValues);
         return dropPartitionRequest;
     }
@@ -317,14 +287,11 @@ public class RpcMessageTestUtils {
             throws Exception {
         CoordinatorGateway coordinatorGateway = extension.newCoordinatorClient();
         coordinatorGateway
-                .createPartition(
-                        newCreatePartitionRequest(tablePath, partitionSpec, ignoreIfNotExists))
+                .createPartition(newCreatePartitionRequest(tablePath, partitionSpec, ignoreIfNotExists))
                 .get();
 
         ListPartitionInfosRequest request = new ListPartitionInfosRequest();
-        request.setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
+        request.setTablePath().setDatabaseName(tablePath.getDatabaseName()).setTableName(tablePath.getTableName());
         return coordinatorGateway
                 .listPartitionInfos(request)
                 .get()
@@ -334,8 +301,7 @@ public class RpcMessageTestUtils {
     }
 
     public static long createTable(
-            FlussClusterExtension extension, TablePath tablePath, TableDescriptor tableDescriptor)
-            throws Exception {
+            FlussClusterExtension extension, TablePath tablePath, TableDescriptor tableDescriptor) throws Exception {
         CoordinatorGateway coordinatorGateway = extension.newCoordinatorClient();
         coordinatorGateway
                 .createDatabase(newCreateDatabaseRequest(tablePath.getDatabaseName(), true))
@@ -343,13 +309,13 @@ public class RpcMessageTestUtils {
         coordinatorGateway
                 .createTable(newCreateTableRequest(tablePath, tableDescriptor, false))
                 .get();
-        GetTableInfoResponse response =
-                coordinatorGateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
+        GetTableInfoResponse response = coordinatorGateway
+                .getTableInfo(newGetTableInfoRequest(tablePath))
+                .get();
         return response.getTableId();
     }
 
-    public static void assertProduceLogResponse(
-            ProduceLogResponse produceLogResponse, int bucketId, Long baseOffset) {
+    public static void assertProduceLogResponse(ProduceLogResponse produceLogResponse, int bucketId, Long baseOffset) {
         assertThat(produceLogResponse.getBucketsRespsCount()).isEqualTo(1);
         PbProduceLogRespForBucket produceLogRespForBucket =
                 produceLogResponse.getBucketsRespsList().get(0);
@@ -366,8 +332,7 @@ public class RpcMessageTestUtils {
             long bucketId,
             Long highWatermark,
             List<Object[]> expectedRecords) {
-        assertFetchLogResponse(
-                response, DATA1_ROW_TYPE, tableId, bucketId, highWatermark, expectedRecords);
+        assertFetchLogResponse(response, DATA1_ROW_TYPE, tableId, bucketId, highWatermark, expectedRecords);
     }
 
     public static void assertFetchLogResponse(
@@ -377,19 +342,11 @@ public class RpcMessageTestUtils {
             long bucketId,
             Long highWatermark,
             List<Object[]> expectedRecords) {
-        List<Tuple2<ChangeType, Object[]>> expectedFieldAndRowKind =
-                expectedRecords.stream()
-                        .map(val -> Tuple2.of(ChangeType.APPEND_ONLY, val))
-                        .collect(Collectors.toList());
+        List<Tuple2<ChangeType, Object[]>> expectedFieldAndRowKind = expectedRecords.stream()
+                .map(val -> Tuple2.of(ChangeType.APPEND_ONLY, val))
+                .collect(Collectors.toList());
         assertFetchLogResponse(
-                response,
-                rowType,
-                tableId,
-                bucketId,
-                highWatermark,
-                expectedFieldAndRowKind,
-                null,
-                null);
+                response, rowType, tableId, bucketId, highWatermark, expectedFieldAndRowKind, null, null);
     }
 
     public static void assertFetchLogResponseWithRowKind(
@@ -399,31 +356,13 @@ public class RpcMessageTestUtils {
             Long highWatermark,
             List<Tuple2<ChangeType, Object[]>> expectedFieldAndRowKind) {
         assertFetchLogResponse(
-                response,
-                DATA1_ROW_TYPE,
-                tableId,
-                bucketId,
-                highWatermark,
-                expectedFieldAndRowKind,
-                null,
-                null);
+                response, DATA1_ROW_TYPE, tableId, bucketId, highWatermark, expectedFieldAndRowKind, null, null);
     }
 
     public static void assertFetchLogResponse(
-            FetchLogResponse response,
-            long tableId,
-            long bucketId,
-            Integer errorCode,
-            @Nullable String errorMessage) {
+            FetchLogResponse response, long tableId, long bucketId, Integer errorCode, @Nullable String errorMessage) {
         assertFetchLogResponse(
-                response,
-                DATA1_ROW_TYPE,
-                tableId,
-                bucketId,
-                -1L,
-                Collections.emptyList(),
-                errorCode,
-                errorMessage);
+                response, DATA1_ROW_TYPE, tableId, bucketId, -1L, Collections.emptyList(), errorCode, errorMessage);
     }
 
     private static void assertFetchLogResponse(
@@ -436,7 +375,8 @@ public class RpcMessageTestUtils {
             Integer errorCode,
             @Nullable String errorMessage) {
         assertThat(response.getTablesRespsCount()).isEqualTo(1);
-        PbFetchLogRespForTable fetchLogRespForTable = response.getTablesRespsList().get(0);
+        PbFetchLogRespForTable fetchLogRespForTable =
+                response.getTablesRespsList().get(0);
         assertThat(fetchLogRespForTable.getTableId()).isEqualTo(tableId);
         assertThat(fetchLogRespForTable.getBucketsRespsCount()).isEqualTo(1);
         PbFetchLogRespForBucket protoFetchedBucket =
@@ -449,21 +389,17 @@ public class RpcMessageTestUtils {
             ApiError error = ApiError.fromErrorMessage(protoFetchedBucket);
             assertThat(error.isSuccess()).as(error.toString()).isTrue();
             assertThat(protoFetchedBucket.getHighWatermark()).isEqualTo(highWatermark);
-            MemoryLogRecords resultRecords =
-                    MemoryLogRecords.pointToBytes(protoFetchedBucket.getRecords());
-            assertMemoryRecordsEqualsWithRowKind(
-                    rowType, resultRecords, Collections.singletonList(expectedRecords));
+            MemoryLogRecords resultRecords = MemoryLogRecords.pointToBytes(protoFetchedBucket.getRecords());
+            assertMemoryRecordsEqualsWithRowKind(rowType, resultRecords, Collections.singletonList(expectedRecords));
         }
     }
 
     public static void assertLimitScanResponse(
             LimitScanResponse limitScanResponse, RowType rowType, List<Object[]> expectedRecords) {
-        List<Tuple2<ChangeType, Object[]>> expectedFieldAndRowKind =
-                expectedRecords.stream()
-                        .map(val -> Tuple2.of(ChangeType.APPEND_ONLY, val))
-                        .collect(Collectors.toList());
-        MemoryLogRecords resultRecords =
-                MemoryLogRecords.pointToBytes(limitScanResponse.getRecords());
+        List<Tuple2<ChangeType, Object[]>> expectedFieldAndRowKind = expectedRecords.stream()
+                .map(val -> Tuple2.of(ChangeType.APPEND_ONLY, val))
+                .collect(Collectors.toList());
+        MemoryLogRecords resultRecords = MemoryLogRecords.pointToBytes(limitScanResponse.getRecords());
         assertMemoryRecordsEqualsWithRowKind(
                 rowType, resultRecords, Collections.singletonList(expectedFieldAndRowKind));
     }
@@ -471,14 +407,12 @@ public class RpcMessageTestUtils {
     public static void assertLimitScanResponse(
             LimitScanResponse limitScanResponse, @Nullable DefaultValueRecordBatch expected) {
         if (limitScanResponse.hasErrorCode()) {
-            throw new AssertionError(
-                    "Error code: "
-                            + limitScanResponse.getErrorCode()
-                            + ", error message: "
-                            + limitScanResponse.getErrorMessage());
+            throw new AssertionError("Error code: "
+                    + limitScanResponse.getErrorCode()
+                    + ", error message: "
+                    + limitScanResponse.getErrorMessage());
         }
-        DefaultValueRecordBatch actual =
-                DefaultValueRecordBatch.pointToBytes(limitScanResponse.getRecords());
+        DefaultValueRecordBatch actual = DefaultValueRecordBatch.pointToBytes(limitScanResponse.getRecords());
         assertThat(actual).isEqualTo(expected);
     }
 }

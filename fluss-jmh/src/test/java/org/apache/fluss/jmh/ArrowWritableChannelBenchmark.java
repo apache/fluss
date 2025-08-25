@@ -119,8 +119,7 @@ public class ArrowWritableChannelBenchmark {
     @Benchmark
     public void testMemorySegmentChannel() throws IOException {
         MemorySegmentWritableChannel channel =
-                new MemorySegmentWritableChannel(
-                        MemorySegment.allocateHeapMemory(1024 * 1024 * 10));
+                new MemorySegmentWritableChannel(MemorySegment.allocateHeapMemory(1024 * 1024 * 10));
         WriteChannel writeChannel = new WriteChannel(channel);
         for (ArrowRecordBatch batch : batches) {
             channel.setPosition(0);
@@ -131,8 +130,7 @@ public class ArrowWritableChannelBenchmark {
     @Benchmark
     public void testDirectMemorySegmentChannel() throws IOException {
         MemorySegmentWritableChannel channel =
-                new MemorySegmentWritableChannel(
-                        MemorySegment.allocateOffHeapMemory(1024 * 1024 * 10));
+                new MemorySegmentWritableChannel(MemorySegment.allocateOffHeapMemory(1024 * 1024 * 10));
         WriteChannel writeChannel = new WriteChannel(channel);
         for (ArrowRecordBatch batch : batches) {
             channel.setPosition(0);
@@ -151,14 +149,10 @@ public class ArrowWritableChannelBenchmark {
     }
 
     public static void main(String[] args) throws RunnerException {
-        Options opt =
-                new OptionsBuilder()
-                        .verbosity(VerboseMode.NORMAL)
-                        .include(
-                                ".*"
-                                        + ArrowWritableChannelBenchmark.class.getCanonicalName()
-                                        + ".*")
-                        .build();
+        Options opt = new OptionsBuilder()
+                .verbosity(VerboseMode.NORMAL)
+                .include(".*" + ArrowWritableChannelBenchmark.class.getCanonicalName() + ".*")
+                .build();
 
         new Runner(opt).run();
     }

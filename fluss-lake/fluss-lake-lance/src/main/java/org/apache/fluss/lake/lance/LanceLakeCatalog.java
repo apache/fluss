@@ -44,23 +44,20 @@ public class LanceLakeCatalog implements LakeCatalog {
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor) {
         // currently, we don't support primary key table for lance
         if (tableDescriptor.hasPrimaryKey()) {
-            throw new InvalidTableException(
-                    "Currently, we don't support tiering a primary key table to Lance");
+            throw new InvalidTableException("Currently, we don't support tiering a primary key table to Lance");
         }
 
-        LanceConfig config =
-                LanceConfig.from(
-                        options.toMap(),
-                        tableDescriptor.getCustomProperties(),
-                        tablePath.getDatabaseName(),
-                        tablePath.getTableName());
+        LanceConfig config = LanceConfig.from(
+                options.toMap(),
+                tableDescriptor.getCustomProperties(),
+                tablePath.getDatabaseName(),
+                tablePath.getTableName());
         WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
 
         List<Field> fields = new ArrayList<>();
         // set schema
-        fields.addAll(
-                LanceArrowUtils.toArrowSchema(tableDescriptor.getSchema().getRowType())
-                        .getFields());
+        fields.addAll(LanceArrowUtils.toArrowSchema(tableDescriptor.getSchema().getRowType())
+                .getFields());
         try {
             LanceDatasetAdapter.createDataset(config.getDatasetUri(), new Schema(fields), params);
         } catch (RuntimeException e) {

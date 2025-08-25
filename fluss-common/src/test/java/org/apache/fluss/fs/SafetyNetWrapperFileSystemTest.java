@@ -31,7 +31,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Test for {@link SafetyNetWrapperFileSystem}. */
 public class SafetyNetWrapperFileSystemTest extends FileSystemBehaviorTestSuite {
 
-    @TempDir private Path tmp;
+    @TempDir
+    private Path tmp;
 
     @BeforeEach
     void prepare() throws Exception {
@@ -53,8 +54,7 @@ public class SafetyNetWrapperFileSystemTest extends FileSystemBehaviorTestSuite 
     @Test
     void testWrappedDelegate() {
         assertThat(fs).isInstanceOf(SafetyNetWrapperFileSystem.class);
-        assertThat(((SafetyNetWrapperFileSystem) fs).getWrappedDelegate())
-                .isInstanceOf(LocalFileSystem.class);
+        assertThat(((SafetyNetWrapperFileSystem) fs).getWrappedDelegate()).isInstanceOf(LocalFileSystem.class);
     }
 
     @Override

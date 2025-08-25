@@ -60,60 +60,54 @@ class FlinkConversionsTest {
     @Test
     void testTypeConversion() {
         // create a list with all fluss data types
-        List<DataType> flussTypes =
-                Arrays.asList(
-                        DataTypes.BOOLEAN().copy(false),
-                        DataTypes.TINYINT().copy(false),
-                        DataTypes.SMALLINT(),
-                        DataTypes.INT(),
-                        DataTypes.BIGINT(),
-                        DataTypes.FLOAT(),
-                        DataTypes.DOUBLE(),
-                        DataTypes.CHAR(1),
-                        DataTypes.STRING(),
-                        DataTypes.DECIMAL(10, 2),
-                        DataTypes.BINARY(10),
-                        DataTypes.BYTES(),
-                        DataTypes.DATE(),
-                        DataTypes.TIME(),
-                        DataTypes.TIMESTAMP(),
-                        DataTypes.TIMESTAMP_LTZ(),
-                        DataTypes.ARRAY(DataTypes.STRING()),
-                        DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
-                        DataTypes.ROW(
-                                DataTypes.FIELD("a", DataTypes.STRING().copy(false)),
-                                DataTypes.FIELD("b", DataTypes.INT())));
+        List<DataType> flussTypes = Arrays.asList(
+                DataTypes.BOOLEAN().copy(false),
+                DataTypes.TINYINT().copy(false),
+                DataTypes.SMALLINT(),
+                DataTypes.INT(),
+                DataTypes.BIGINT(),
+                DataTypes.FLOAT(),
+                DataTypes.DOUBLE(),
+                DataTypes.CHAR(1),
+                DataTypes.STRING(),
+                DataTypes.DECIMAL(10, 2),
+                DataTypes.BINARY(10),
+                DataTypes.BYTES(),
+                DataTypes.DATE(),
+                DataTypes.TIME(),
+                DataTypes.TIMESTAMP(),
+                DataTypes.TIMESTAMP_LTZ(),
+                DataTypes.ARRAY(DataTypes.STRING()),
+                DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
+                DataTypes.ROW(
+                        DataTypes.FIELD("a", DataTypes.STRING().copy(false)), DataTypes.FIELD("b", DataTypes.INT())));
 
         // flink types
-        List<org.apache.flink.table.types.DataType> flinkTypes =
-                Arrays.asList(
-                        org.apache.flink.table.api.DataTypes.BOOLEAN().notNull(),
-                        org.apache.flink.table.api.DataTypes.TINYINT().notNull(),
-                        org.apache.flink.table.api.DataTypes.SMALLINT(),
-                        org.apache.flink.table.api.DataTypes.INT(),
-                        org.apache.flink.table.api.DataTypes.BIGINT(),
-                        org.apache.flink.table.api.DataTypes.FLOAT(),
-                        org.apache.flink.table.api.DataTypes.DOUBLE(),
-                        org.apache.flink.table.api.DataTypes.CHAR(1),
-                        org.apache.flink.table.api.DataTypes.STRING(),
-                        org.apache.flink.table.api.DataTypes.DECIMAL(10, 2),
-                        org.apache.flink.table.api.DataTypes.BINARY(10),
-                        org.apache.flink.table.api.DataTypes.BYTES(),
-                        org.apache.flink.table.api.DataTypes.DATE(),
-                        org.apache.flink.table.api.DataTypes.TIME(),
-                        org.apache.flink.table.api.DataTypes.TIMESTAMP(),
-                        org.apache.flink.table.api.DataTypes.TIMESTAMP_LTZ(),
-                        org.apache.flink.table.api.DataTypes.ARRAY(
-                                org.apache.flink.table.api.DataTypes.STRING()),
-                        org.apache.flink.table.api.DataTypes.MAP(
-                                org.apache.flink.table.api.DataTypes.INT(),
-                                org.apache.flink.table.api.DataTypes.STRING()),
-                        org.apache.flink.table.api.DataTypes.ROW(
-                                org.apache.flink.table.api.DataTypes.FIELD(
-                                        "a",
-                                        org.apache.flink.table.api.DataTypes.STRING().notNull()),
-                                org.apache.flink.table.api.DataTypes.FIELD(
-                                        "b", org.apache.flink.table.api.DataTypes.INT())));
+        List<org.apache.flink.table.types.DataType> flinkTypes = Arrays.asList(
+                org.apache.flink.table.api.DataTypes.BOOLEAN().notNull(),
+                org.apache.flink.table.api.DataTypes.TINYINT().notNull(),
+                org.apache.flink.table.api.DataTypes.SMALLINT(),
+                org.apache.flink.table.api.DataTypes.INT(),
+                org.apache.flink.table.api.DataTypes.BIGINT(),
+                org.apache.flink.table.api.DataTypes.FLOAT(),
+                org.apache.flink.table.api.DataTypes.DOUBLE(),
+                org.apache.flink.table.api.DataTypes.CHAR(1),
+                org.apache.flink.table.api.DataTypes.STRING(),
+                org.apache.flink.table.api.DataTypes.DECIMAL(10, 2),
+                org.apache.flink.table.api.DataTypes.BINARY(10),
+                org.apache.flink.table.api.DataTypes.BYTES(),
+                org.apache.flink.table.api.DataTypes.DATE(),
+                org.apache.flink.table.api.DataTypes.TIME(),
+                org.apache.flink.table.api.DataTypes.TIMESTAMP(),
+                org.apache.flink.table.api.DataTypes.TIMESTAMP_LTZ(),
+                org.apache.flink.table.api.DataTypes.ARRAY(org.apache.flink.table.api.DataTypes.STRING()),
+                org.apache.flink.table.api.DataTypes.MAP(
+                        org.apache.flink.table.api.DataTypes.INT(), org.apache.flink.table.api.DataTypes.STRING()),
+                org.apache.flink.table.api.DataTypes.ROW(
+                        org.apache.flink.table.api.DataTypes.FIELD(
+                                "a",
+                                org.apache.flink.table.api.DataTypes.STRING().notNull()),
+                        org.apache.flink.table.api.DataTypes.FIELD("b", org.apache.flink.table.api.DataTypes.INT())));
 
         // test from fluss types to flink types
         List<org.apache.flink.table.types.DataType> actualFlinkTypes = new ArrayList<>();
@@ -143,64 +137,49 @@ class FlinkConversionsTest {
     void testTableConversion() {
         // test convert flink table to fluss table
         ResolvedExpression computeColExpr =
-                new ResolvedExpressionMock(
-                        org.apache.flink.table.api.DataTypes.TIMESTAMP(3), () -> "orig_ts");
+                new ResolvedExpressionMock(org.apache.flink.table.api.DataTypes.TIMESTAMP(3), () -> "orig_ts");
         ResolvedExpression watermarkExpr =
-                new ResolvedExpressionMock(
-                        org.apache.flink.table.api.DataTypes.TIMESTAMP(3), () -> "orig_ts");
-        ResolvedSchema schema =
-                new ResolvedSchema(
-                        Arrays.asList(
-                                Column.physical(
-                                        "order_id",
-                                        org.apache.flink.table.api.DataTypes.STRING().notNull()),
-                                Column.physical(
-                                        "orig_ts",
-                                        org.apache.flink.table.api.DataTypes.TIMESTAMP()),
-                                Column.computed("compute_ts", computeColExpr)),
-                        Collections.singletonList(WatermarkSpec.of("orig_ts", watermarkExpr)),
-                        UniqueConstraint.primaryKey(
-                                "PK_order_id", Collections.singletonList("order_id")));
+                new ResolvedExpressionMock(org.apache.flink.table.api.DataTypes.TIMESTAMP(3), () -> "orig_ts");
+        ResolvedSchema schema = new ResolvedSchema(
+                Arrays.asList(
+                        Column.physical(
+                                "order_id",
+                                org.apache.flink.table.api.DataTypes.STRING().notNull()),
+                        Column.physical("orig_ts", org.apache.flink.table.api.DataTypes.TIMESTAMP()),
+                        Column.computed("compute_ts", computeColExpr)),
+                Collections.singletonList(WatermarkSpec.of("orig_ts", watermarkExpr)),
+                UniqueConstraint.primaryKey("PK_order_id", Collections.singletonList("order_id")));
         Map<String, String> options = new HashMap<>();
         options.put("k1", "v1");
         options.put("k2", "v2");
-        CatalogTable flinkTable =
-                CatalogTable.of(
-                        Schema.newBuilder().fromResolvedSchema(schema).build(),
-                        "test comment",
-                        Collections.emptyList(),
-                        options);
+        CatalogTable flinkTable = CatalogTable.of(
+                Schema.newBuilder().fromResolvedSchema(schema).build(),
+                "test comment",
+                Collections.emptyList(),
+                options);
 
         // check the converted table
-        TableDescriptor flussTable =
-                FlinkConversions.toFlussTable(new ResolvedCatalogTable(flinkTable, schema));
-        String expectFlussTableString =
-                "TableDescriptor{schema=("
-                        + "order_id STRING NOT NULL,"
-                        + "orig_ts TIMESTAMP(6),"
-                        + "CONSTRAINT PK_order_id PRIMARY KEY (order_id)"
-                        + "), comment='test comment', partitionKeys=[], "
-                        + "tableDistribution={bucketKeys=[order_id] bucketCount=null}, "
-                        + "properties={}, "
-                        + "customProperties={schema.watermark.0.strategy.expr=orig_ts, "
-                        + "schema.2.expr=orig_ts, schema.2.data-type=TIMESTAMP(3), "
-                        + "schema.watermark.0.rowtime=orig_ts, "
-                        + "schema.watermark.0.strategy.data-type=TIMESTAMP(3), "
-                        + "k1=v1, k2=v2, "
-                        + "schema.2.name=compute_ts}}";
+        TableDescriptor flussTable = FlinkConversions.toFlussTable(new ResolvedCatalogTable(flinkTable, schema));
+        String expectFlussTableString = "TableDescriptor{schema=("
+                + "order_id STRING NOT NULL,"
+                + "orig_ts TIMESTAMP(6),"
+                + "CONSTRAINT PK_order_id PRIMARY KEY (order_id)"
+                + "), comment='test comment', partitionKeys=[], "
+                + "tableDistribution={bucketKeys=[order_id] bucketCount=null}, "
+                + "properties={}, "
+                + "customProperties={schema.watermark.0.strategy.expr=orig_ts, "
+                + "schema.2.expr=orig_ts, schema.2.data-type=TIMESTAMP(3), "
+                + "schema.watermark.0.rowtime=orig_ts, "
+                + "schema.watermark.0.strategy.data-type=TIMESTAMP(3), "
+                + "k1=v1, k2=v2, "
+                + "schema.2.name=compute_ts}}";
         assertThat(flussTable.toString()).isEqualTo(expectFlussTableString);
 
         // test convert fluss table to flink table
         TablePath tablePath = TablePath.of("db", "table");
         long currentMillis = System.currentTimeMillis();
         TableInfo tableInfo =
-                TableInfo.of(
-                        tablePath,
-                        1L,
-                        1,
-                        flussTable.withBucketCount(1),
-                        currentMillis,
-                        currentMillis);
+                TableInfo.of(tablePath, 1L, 1, flussTable.withBucketCount(1), currentMillis, currentMillis);
         // get the converted flink table
         CatalogTable convertedFlinkTable = FlinkConversions.toFlinkTable(tableInfo);
 
@@ -229,26 +208,21 @@ class FlinkConversionsTest {
         // forward client duration option
         options.put(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT.key(), "32s");
 
-        ResolvedSchema schema =
-                new ResolvedSchema(
-                        Collections.singletonList(
-                                Column.physical(
-                                        "order_id",
-                                        org.apache.flink.table.api.DataTypes.STRING().notNull())),
-                        Collections.emptyList(),
-                        null);
-        CatalogTable flinkTable =
-                CatalogTable.of(
-                        Schema.newBuilder().fromResolvedSchema(schema).build(),
-                        "test comment",
-                        Collections.emptyList(),
-                        options);
+        ResolvedSchema schema = new ResolvedSchema(
+                Collections.singletonList(Column.physical(
+                        "order_id",
+                        org.apache.flink.table.api.DataTypes.STRING().notNull())),
+                Collections.emptyList(),
+                null);
+        CatalogTable flinkTable = CatalogTable.of(
+                Schema.newBuilder().fromResolvedSchema(schema).build(),
+                "test comment",
+                Collections.emptyList(),
+                options);
 
-        TableDescriptor flussTable =
-                FlinkConversions.toFlussTable(new ResolvedCatalogTable(flinkTable, schema));
+        TableDescriptor flussTable = FlinkConversions.toFlussTable(new ResolvedCatalogTable(flinkTable, schema));
 
-        assertThat(flussTable.getProperties())
-                .containsEntry(ConfigOptions.TABLE_LOG_FORMAT.key(), "indexed");
+        assertThat(flussTable.getProperties()).containsEntry(ConfigOptions.TABLE_LOG_FORMAT.key(), "indexed");
         assertThat(flussTable.getCustomProperties())
                 .containsEntry(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE.key(), "64mb")
                 .containsEntry(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT.key(), "32s");
@@ -258,33 +232,24 @@ class FlinkConversionsTest {
     void testOptionConversions() {
         ConfigOption<?> flinkOption = FlinkConversions.toFlinkOption(ConfigOptions.TABLE_KV_FORMAT);
         assertThat(flinkOption)
-                .isEqualTo(
-                        org.apache.flink.configuration.ConfigOptions.key(
-                                        ConfigOptions.TABLE_KV_FORMAT.key())
-                                .enumType(KvFormat.class)
-                                .defaultValue(KvFormat.COMPACTED)
-                                .withDescription(ConfigOptions.TABLE_KV_FORMAT.description()));
+                .isEqualTo(org.apache.flink.configuration.ConfigOptions.key(ConfigOptions.TABLE_KV_FORMAT.key())
+                        .enumType(KvFormat.class)
+                        .defaultValue(KvFormat.COMPACTED)
+                        .withDescription(ConfigOptions.TABLE_KV_FORMAT.description()));
 
         flinkOption = FlinkConversions.toFlinkOption(ConfigOptions.CLIENT_REQUEST_TIMEOUT);
         assertThat(flinkOption)
-                .isEqualTo(
-                        org.apache.flink.configuration.ConfigOptions.key(
-                                        ConfigOptions.CLIENT_REQUEST_TIMEOUT.key())
-                                .stringType()
-                                .defaultValue("30 s")
-                                .withDescription(
-                                        ConfigOptions.CLIENT_REQUEST_TIMEOUT.description()));
+                .isEqualTo(org.apache.flink.configuration.ConfigOptions.key(ConfigOptions.CLIENT_REQUEST_TIMEOUT.key())
+                        .stringType()
+                        .defaultValue("30 s")
+                        .withDescription(ConfigOptions.CLIENT_REQUEST_TIMEOUT.description()));
 
-        flinkOption =
-                FlinkConversions.toFlinkOption(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE);
+        flinkOption = FlinkConversions.toFlinkOption(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE);
         assertThat(flinkOption)
-                .isEqualTo(
-                        org.apache.flink.configuration.ConfigOptions.key(
-                                        ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE.key())
-                                .stringType()
-                                .defaultValue("64 mb")
-                                .withDescription(
-                                        ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE
-                                                .description()));
+                .isEqualTo(org.apache.flink.configuration.ConfigOptions.key(
+                                ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE.key())
+                        .stringType()
+                        .defaultValue("64 mb")
+                        .withDescription(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE.description()));
     }
 }

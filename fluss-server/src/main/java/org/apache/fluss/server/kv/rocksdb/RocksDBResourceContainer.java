@@ -64,7 +64,8 @@ public class RocksDBResourceContainer implements AutoCloseable {
     // the filename length limit is 255 on most operating systems
     private static final int INSTANCE_PATH_LENGTH_LIMIT = 255 - "_LOG".length();
 
-    @Nullable private final File instanceRocksDBPath;
+    @Nullable
+    private final File instanceRocksDBPath;
 
     /** The configurations from file. */
     private final ReadableConfig configuration;
@@ -84,15 +85,11 @@ public class RocksDBResourceContainer implements AutoCloseable {
     }
 
     public RocksDBResourceContainer(
-            ReadableConfig configuration,
-            @Nullable File instanceBasePath,
-            boolean enableStatistics) {
+            ReadableConfig configuration, @Nullable File instanceBasePath, boolean enableStatistics) {
         this.configuration = configuration;
 
         this.instanceRocksDBPath =
-                instanceBasePath != null
-                        ? RocksDBKvBuilder.getInstanceRocksDBPath(instanceBasePath)
-                        : null;
+                instanceBasePath != null ? RocksDBKvBuilder.getInstanceRocksDBPath(instanceBasePath) : null;
         this.enableStatistics = enableStatistics;
 
         this.handlesToClose = new ArrayList<>();
@@ -176,26 +173,21 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
     @SuppressWarnings("ConstantConditions")
     private DBOptions setDBOptionsFromConfigurableOptions(DBOptions currentOptions) {
-        currentOptions.setMaxBackgroundJobs(
-                internalGetOption(ConfigOptions.KV_MAX_BACKGROUND_THREADS));
+        currentOptions.setMaxBackgroundJobs(internalGetOption(ConfigOptions.KV_MAX_BACKGROUND_THREADS));
 
         currentOptions.setMaxOpenFiles(internalGetOption(ConfigOptions.KV_MAX_OPEN_FILES));
 
-        currentOptions.setInfoLogLevel(
-                toRocksDbInfoLogLevel(internalGetOption(ConfigOptions.KV_LOG_LEVEL)));
+        currentOptions.setInfoLogLevel(toRocksDbInfoLogLevel(internalGetOption(ConfigOptions.KV_LOG_LEVEL)));
 
         String logDir = internalGetOption(ConfigOptions.KV_LOG_DIR);
         if (logDir == null || logDir.isEmpty()) {
             if (instanceRocksDBPath == null
-                    || instanceRocksDBPath.getAbsolutePath().length()
-                            <= INSTANCE_PATH_LENGTH_LIMIT) {
+                    || instanceRocksDBPath.getAbsolutePath().length() <= INSTANCE_PATH_LENGTH_LIMIT) {
                 relocateDefaultDbLogDir(currentOptions);
             } else {
                 // disable log relocate when instance path length exceeds limit to prevent rocksdb
                 // log file creation failure, details in FLINK-31743
-                LOG.warn(
-                        "RocksDB instance path length exceeds limit : {}, disable log relocate.",
-                        instanceRocksDBPath);
+                LOG.warn("RocksDB instance path length exceeds limit : {}, disable log relocate.", instanceRocksDBPath);
             }
         } else {
             currentOptions.setDbLogDir(logDir);
@@ -217,11 +209,9 @@ public class RocksDBResourceContainer implements AutoCloseable {
                 toRocksDbCompactionStyle(internalGetOption(ConfigOptions.KV_COMPACTION_STYLE)));
 
         currentOptions.setCompressionPerLevel(
-                toRocksDbCompressionTypes(
-                        internalGetOption(ConfigOptions.KV_COMPRESSION_PER_LEVEL)));
+                toRocksDbCompressionTypes(internalGetOption(ConfigOptions.KV_COMPRESSION_PER_LEVEL)));
 
-        currentOptions.setLevelCompactionDynamicLevelBytes(
-                internalGetOption(ConfigOptions.KV_USE_DYNAMIC_LEVEL_SIZE));
+        currentOptions.setLevelCompactionDynamicLevelBytes(internalGetOption(ConfigOptions.KV_USE_DYNAMIC_LEVEL_SIZE));
 
         currentOptions.setTargetFileSizeBase(
                 internalGetOption(ConfigOptions.KV_TARGET_FILE_SIZE_BASE).getBytes());
@@ -232,8 +222,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
         currentOptions.setWriteBufferSize(
                 internalGetOption(ConfigOptions.KV_WRITE_BUFFER_SIZE).getBytes());
 
-        currentOptions.setMaxWriteBufferNumber(
-                internalGetOption(ConfigOptions.KV_MAX_WRITE_BUFFER_NUMBER));
+        currentOptions.setMaxWriteBufferNumber(internalGetOption(ConfigOptions.KV_MAX_WRITE_BUFFER_NUMBER));
 
         currentOptions.setMinWriteBufferNumberToMerge(
                 internalGetOption(ConfigOptions.KV_MIN_WRITE_BUFFER_NUMBER_TO_MERGE));
@@ -264,8 +253,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
 
         if (internalGetOption(ConfigOptions.KV_USE_BLOOM_FILTER)) {
             final double bitsPerKey = internalGetOption(ConfigOptions.KV_BLOOM_FILTER_BITS_PER_KEY);
-            final boolean blockBasedMode =
-                    internalGetOption(ConfigOptions.KV_BLOOM_FILTER_BLOCK_BASED_MODE);
+            final boolean blockBasedMode = internalGetOption(ConfigOptions.KV_BLOOM_FILTER_BLOCK_BASED_MODE);
             BloomFilter bloomFilter = new BloomFilter(bitsPerKey, blockBasedMode);
             handlesToClose.add(bloomFilter);
             blockBasedTableConfig.setFilterPolicy(bloomFilter);
@@ -294,8 +282,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
         return instanceRocksDBPath;
     }
 
-    private List<CompressionType> toRocksDbCompressionTypes(
-            List<ConfigOptions.KvCompressionType> compressionTypes) {
+    private List<CompressionType> toRocksDbCompressionTypes(List<ConfigOptions.KvCompressionType> compressionTypes) {
         List<CompressionType> rocksdbCompressionTypes = new ArrayList<>();
         for (ConfigOptions.KvCompressionType compressionType : compressionTypes) {
             rocksdbCompressionTypes.add(toRocksDbCompressionType(compressionType));
@@ -303,8 +290,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
         return rocksdbCompressionTypes;
     }
 
-    private CompressionType toRocksDbCompressionType(
-            ConfigOptions.KvCompressionType compressionType) {
+    private CompressionType toRocksDbCompressionType(ConfigOptions.KvCompressionType compressionType) {
         switch (compressionType) {
             case NO:
                 return CompressionType.NO_COMPRESSION;
@@ -315,13 +301,11 @@ public class RocksDBResourceContainer implements AutoCloseable {
             case ZSTD:
                 return CompressionType.ZSTD_COMPRESSION;
             default:
-                throw new IllegalArgumentException(
-                        "Unsupported compression type: " + compressionType);
+                throw new IllegalArgumentException("Unsupported compression type: " + compressionType);
         }
     }
 
-    private CompactionStyle toRocksDbCompactionStyle(
-            ConfigOptions.CompactionStyle compactionStyle) {
+    private CompactionStyle toRocksDbCompactionStyle(ConfigOptions.CompactionStyle compactionStyle) {
         switch (compactionStyle) {
             case LEVEL:
                 return CompactionStyle.LEVEL;

@@ -30,13 +30,12 @@ class ShutdownableThreadTest {
     @Test
     void testShutdownAfterStartThread() throws Exception {
         CountDownLatch latch = new CountDownLatch(1);
-        ShutdownableThread thread =
-                new ShutdownableThread("shutdownable-thread-test") {
-                    @Override
-                    public void doWork() {
-                        latch.countDown();
-                    }
-                };
+        ShutdownableThread thread = new ShutdownableThread("shutdownable-thread-test") {
+            @Override
+            public void doWork() {
+                latch.countDown();
+            }
+        };
         thread.start();
         assertThat(latch.await(10, TimeUnit.SECONDS)).isTrue();
 

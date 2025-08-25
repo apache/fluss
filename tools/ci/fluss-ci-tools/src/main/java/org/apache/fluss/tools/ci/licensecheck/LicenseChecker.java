@@ -31,8 +31,7 @@ public class LicenseChecker {
 
     public static void main(String[] args) throws Exception {
         if (args.length < 2) {
-            System.out.println(
-                    "Usage: LicenseChecker <pathMavenBuildOutput> <pathFlussRoot> <pathFlussDeployed>");
+            System.out.println("Usage: LicenseChecker <pathMavenBuildOutput> <pathFlussRoot> <pathFlussDeployed>");
             System.exit(1);
         }
         LOG.warn(

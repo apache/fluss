@@ -60,13 +60,9 @@ public class ProtobufMessageField extends ProtobufField<MessageField> {
     }
 
     public void getter(PrintWriter w) {
-        w.format(
-                "public %s %s() {\n",
-                field.getJavaType(), ProtoGenUtil.camelCase("get", field.getName()));
+        w.format("public %s %s() {\n", field.getJavaType(), ProtoGenUtil.camelCase("get", field.getName()));
         w.format("    if (!%s()) {\n", ProtoGenUtil.camelCase("has", ccName));
-        w.format(
-                "        throw new IllegalStateException(\"Field '%s' is not set\");\n",
-                field.getName());
+        w.format("        throw new IllegalStateException(\"Field '%s' is not set\");\n", field.getName());
         w.format("    }\n");
         w.format("    return %s;\n", ccName);
         w.format("}\n");
@@ -75,9 +71,7 @@ public class ProtobufMessageField extends ProtobufField<MessageField> {
     @Override
     public void parse(PrintWriter w) {
         w.format("int %sSize = ProtoCodecUtils.readVarInt(_buffer);\n", ccName);
-        w.format(
-                "%s().parseFrom(_buffer, %sSize);\n",
-                ProtoGenUtil.camelCase("set", ccName), ccName);
+        w.format("%s().parseFrom(_buffer, %sSize);\n", ProtoGenUtil.camelCase("set", ccName), ccName);
     }
 
     @Override

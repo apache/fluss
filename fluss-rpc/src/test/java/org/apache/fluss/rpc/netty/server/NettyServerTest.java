@@ -37,13 +37,12 @@ public class NettyServerTest {
     void testPortAsZero() throws Exception {
         List<Endpoint> endpoints = Endpoint.fromListenersString("FLUSS://localhost:0");
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
-        try (RpcServer server =
-                RpcServer.create(
-                        new Configuration(),
-                        endpoints,
-                        new TestingGatewayService(),
-                        metricGroup,
-                        RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup))) {
+        try (RpcServer server = RpcServer.create(
+                new Configuration(),
+                endpoints,
+                new TestingGatewayService(),
+                metricGroup,
+                RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup))) {
             server.start();
             List<Endpoint> bindEndpoints = server.getBindEndpoints();
             assertThat(bindEndpoints).hasSize(1);

@@ -59,14 +59,9 @@ public class WriterMetricGroup extends AbstractMetricGroup {
         meter(MetricNames.WRITER_BYTES_SEND_RATE, new MeterView(bytesSendTotal));
         gauge(MetricNames.WRITER_SEND_LATENCY_MS, () -> sendLatencyInMs);
 
-        bytesPerBatch =
-                histogram(
-                        MetricNames.WRITER_BYTES_PER_BATCH,
-                        new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+        bytesPerBatch = histogram(MetricNames.WRITER_BYTES_PER_BATCH, new DescriptiveStatisticsHistogram(WINDOW_SIZE));
         recordPerBatch =
-                histogram(
-                        MetricNames.WRITER_RECORDS_PER_BATCH,
-                        new DescriptiveStatisticsHistogram(WINDOW_SIZE));
+                histogram(MetricNames.WRITER_RECORDS_PER_BATCH, new DescriptiveStatisticsHistogram(WINDOW_SIZE));
     }
 
     public void setBatchQueueTimeMs(long batchQueueTimeMs) {

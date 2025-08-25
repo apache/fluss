@@ -42,8 +42,7 @@ public class LogSegmentFiles {
     private final @Nullable Path writerIdIndex;
     // TODO add leader epoch index after introduce leader epoch.
 
-    public LogSegmentFiles(
-            Path logSegment, Path offsetIndex, Path timeIndex, @Nullable Path writerIdIndex) {
+    public LogSegmentFiles(Path logSegment, Path offsetIndex, Path timeIndex, @Nullable Path writerIdIndex) {
         this.logSegment = checkNotNull(logSegment, "logSegment can not be null");
         this.offsetIndex = checkNotNull(offsetIndex, "offsetIndex can not be null");
         this.timeIndex = checkNotNull(timeIndex, "timeIndex can not be null");

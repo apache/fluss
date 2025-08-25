@@ -88,31 +88,24 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
         assertReplicaStatus(t1Bucket, 30);
 
         LanceConfig config =
-                LanceConfig.from(
-                        lanceConf.toMap(),
-                        Collections.emptyMap(),
-                        t1.getDatabaseName(),
-                        t1.getTableName());
+                LanceConfig.from(lanceConf.toMap(), Collections.emptyMap(), t1.getDatabaseName(), t1.getTableName());
 
         // check data in lance
         checkDataInLanceAppendOnlyTable(config, flussRows);
         // check snapshot property in lance
-        Map<String, String> properties =
-                new HashMap<String, String>() {
-                    {
-                        put(
-                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                "[{\"bucket_id\":0,\"log_offset\":30}]");
-                        put("commit-user", FLUSS_LAKE_TIERING_COMMIT_USER);
-                    }
-                };
+        Map<String, String> properties = new HashMap<String, String>() {
+            {
+                put(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "[{\"bucket_id\":0,\"log_offset\":30}]");
+                put("commit-user", FLUSS_LAKE_TIERING_COMMIT_USER);
+            }
+        };
         checkSnapshotPropertyInLance(config, properties);
 
         jobClient.cancel().get();
     }
 
-    private void checkSnapshotPropertyInLance(
-            LanceConfig config, Map<String, String> expectedProperties) throws Exception {
+    private void checkSnapshotPropertyInLance(LanceConfig config, Map<String, String> expectedProperties)
+            throws Exception {
         ReadOptions.Builder builder = new ReadOptions.Builder();
         builder.setStorageOptions(LanceConfig.genStorageOptions(config));
         try (Dataset dataset = Dataset.open(allocator, config.getDatasetUri(), builder.build())) {
@@ -122,13 +115,9 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
         }
     }
 
-    private void checkDataInLanceAppendOnlyTable(LanceConfig config, List<InternalRow> expectedRows)
-            throws Exception {
+    private void checkDataInLanceAppendOnlyTable(LanceConfig config, List<InternalRow> expectedRows) throws Exception {
         try (Dataset dataset =
-                Dataset.open(
-                        allocator,
-                        config.getDatasetUri(),
-                        LanceConfig.genReadOptionFromConfig(config))) {
+                Dataset.open(allocator, config.getDatasetUri(), LanceConfig.genReadOptionFromConfig(config))) {
             ArrowReader reader = dataset.newScan().scanBatches();
             VectorSchemaRoot readerRoot = reader.getVectorSchemaRoot();
             reader.loadNextBatch();
@@ -136,9 +125,10 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
             int rowCount = readerRoot.getRowCount();
             for (int i = 0; i < rowCount; i++) {
                 InternalRow flussRow = flussRowIterator.next();
-                assertThat((int) (readerRoot.getVector(0).getObject(i)))
-                        .isEqualTo(flussRow.getInt(0));
-                assertThat(((VarCharVector) readerRoot.getVector(1)).getObject(i).toString())
+                assertThat((int) (readerRoot.getVector(0).getObject(i))).isEqualTo(flussRow.getInt(0));
+                assertThat(((VarCharVector) readerRoot.getVector(1))
+                                .getObject(i)
+                                .toString())
                         .isEqualTo(flussRow.getString(1).toString());
             }
             assertThat(reader.loadNextBatch()).isFalse();

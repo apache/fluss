@@ -30,12 +30,11 @@ public class TestingMetricGroups {
     public static final CoordinatorMetricGroup COORDINATOR_METRICS =
             new CoordinatorMetricGroup(NOPMetricRegistry.INSTANCE, "cluster1", "host", "0");
 
-    public static final PhysicalTableMetricGroup TABLE_METRICS =
-            new PhysicalTableMetricGroup(
-                    NOPMetricRegistry.INSTANCE,
-                    PhysicalTablePath.of(TablePath.of("mydb", "mytable"), null),
-                    false,
-                    TABLET_SERVER_METRICS);
+    public static final PhysicalTableMetricGroup TABLE_METRICS = new PhysicalTableMetricGroup(
+            NOPMetricRegistry.INSTANCE,
+            PhysicalTablePath.of(TablePath.of("mydb", "mytable"), null),
+            false,
+            TABLET_SERVER_METRICS);
 
     public static final BucketMetricGroup BUCKET_METRICS =
             new BucketMetricGroup(NOPMetricRegistry.INSTANCE, 0, TABLE_METRICS);

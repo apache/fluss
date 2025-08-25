@@ -90,14 +90,10 @@ public enum DataTypeRoot {
 
     TIME_WITHOUT_TIME_ZONE(DataTypeFamily.PREDEFINED, DataTypeFamily.DATETIME, DataTypeFamily.TIME),
 
-    TIMESTAMP_WITHOUT_TIME_ZONE(
-            DataTypeFamily.PREDEFINED, DataTypeFamily.DATETIME, DataTypeFamily.TIMESTAMP),
+    TIMESTAMP_WITHOUT_TIME_ZONE(DataTypeFamily.PREDEFINED, DataTypeFamily.DATETIME, DataTypeFamily.TIMESTAMP),
 
     TIMESTAMP_WITH_LOCAL_TIME_ZONE(
-            DataTypeFamily.PREDEFINED,
-            DataTypeFamily.DATETIME,
-            DataTypeFamily.TIMESTAMP,
-            DataTypeFamily.EXTENSION),
+            DataTypeFamily.PREDEFINED, DataTypeFamily.DATETIME, DataTypeFamily.TIMESTAMP, DataTypeFamily.EXTENSION),
 
     ARRAY(DataTypeFamily.CONSTRUCTED, DataTypeFamily.COLLECTION),
 

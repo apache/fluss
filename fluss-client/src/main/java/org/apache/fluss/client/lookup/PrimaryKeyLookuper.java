@@ -65,12 +65,8 @@ class PrimaryKeyLookuper implements Lookuper {
     /** Decode the lookup bytes to result row. */
     private final ValueDecoder kvValueDecoder;
 
-    public PrimaryKeyLookuper(
-            TableInfo tableInfo, MetadataUpdater metadataUpdater, LookupClient lookupClient) {
-        checkArgument(
-                tableInfo.hasPrimaryKey(),
-                "Log table %s doesn't support lookup",
-                tableInfo.getTablePath());
+    public PrimaryKeyLookuper(TableInfo tableInfo, MetadataUpdater metadataUpdater, LookupClient lookupClient) {
+        checkArgument(tableInfo.hasPrimaryKey(), "Log table %s doesn't support lookup", tableInfo.getTablePath());
         this.tableInfo = tableInfo;
         this.numBuckets = tableInfo.getNumBuckets();
         this.metadataUpdater = metadataUpdater;
@@ -78,26 +74,21 @@ class PrimaryKeyLookuper implements Lookuper {
 
         // the row type of the input lookup row
         RowType lookupRowType = tableInfo.getRowType().project(tableInfo.getPrimaryKeys());
-        DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
+        DataLakeFormat lakeFormat =
+                tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
 
         // the encoded primary key is the physical primary key
-        this.primaryKeyEncoder =
-                KeyEncoder.of(lookupRowType, tableInfo.getPhysicalPrimaryKeys(), lakeFormat);
-        this.bucketKeyEncoder =
-                tableInfo.isDefaultBucketKey()
-                        ? primaryKeyEncoder
-                        : KeyEncoder.of(lookupRowType, tableInfo.getBucketKeys(), lakeFormat);
+        this.primaryKeyEncoder = KeyEncoder.of(lookupRowType, tableInfo.getPhysicalPrimaryKeys(), lakeFormat);
+        this.bucketKeyEncoder = tableInfo.isDefaultBucketKey()
+                ? primaryKeyEncoder
+                : KeyEncoder.of(lookupRowType, tableInfo.getBucketKeys(), lakeFormat);
         this.bucketingFunction = BucketingFunction.of(lakeFormat);
 
         this.partitionGetter =
-                tableInfo.isPartitioned()
-                        ? new PartitionGetter(lookupRowType, tableInfo.getPartitionKeys())
-                        : null;
-        this.kvValueDecoder =
-                new ValueDecoder(
-                        RowDecoder.create(
-                                tableInfo.getTableConfig().getKvFormat(),
-                                tableInfo.getRowType().getChildren().toArray(new DataType[0])));
+                tableInfo.isPartitioned() ? new PartitionGetter(lookupRowType, tableInfo.getPartitionKeys()) : null;
+        this.kvValueDecoder = new ValueDecoder(RowDecoder.create(
+                tableInfo.getTableConfig().getKvFormat(),
+                tableInfo.getRowType().getChildren().toArray(new DataType[0])));
     }
 
     @Override
@@ -105,19 +96,11 @@ class PrimaryKeyLookuper implements Lookuper {
         // encoding the key row using a compacted way consisted with how the key is encoded when put
         // a row
         byte[] pkBytes = primaryKeyEncoder.encodeKey(lookupKey);
-        byte[] bkBytes =
-                bucketKeyEncoder == primaryKeyEncoder
-                        ? pkBytes
-                        : bucketKeyEncoder.encodeKey(lookupKey);
+        byte[] bkBytes = bucketKeyEncoder == primaryKeyEncoder ? pkBytes : bucketKeyEncoder.encodeKey(lookupKey);
         Long partitionId = null;
         if (partitionGetter != null) {
             try {
-                partitionId =
-                        getPartitionId(
-                                lookupKey,
-                                partitionGetter,
-                                tableInfo.getTablePath(),
-                                metadataUpdater);
+                partitionId = getPartitionId(lookupKey, partitionGetter, tableInfo.getTablePath(), metadataUpdater);
             } catch (PartitionNotExistException e) {
                 return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
             }
@@ -125,15 +108,9 @@ class PrimaryKeyLookuper implements Lookuper {
 
         int bucketId = bucketingFunction.bucketing(bkBytes, numBuckets);
         TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
-        return lookupClient
-                .lookup(tableBucket, pkBytes)
-                .thenApply(
-                        valueBytes -> {
-                            InternalRow row =
-                                    valueBytes == null
-                                            ? null
-                                            : kvValueDecoder.decodeValue(valueBytes).row;
-                            return new LookupResult(row);
-                        });
+        return lookupClient.lookup(tableBucket, pkBytes).thenApply(valueBytes -> {
+            InternalRow row = valueBytes == null ? null : kvValueDecoder.decodeValue(valueBytes).row;
+            return new LookupResult(row);
+        });
     }
 }

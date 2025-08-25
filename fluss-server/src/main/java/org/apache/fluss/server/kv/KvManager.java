@@ -102,17 +102,12 @@ public final class KvManager extends TabletManagerBase {
         this.remoteFileSystem = remoteKvDir.getFileSystem();
     }
 
-    public static KvManager create(
-            Configuration conf, ZooKeeperClient zkClient, LogManager logManager)
+    public static KvManager create(Configuration conf, ZooKeeperClient zkClient, LogManager logManager)
             throws IOException {
         String dataDirString = conf.getString(ConfigOptions.DATA_DIR);
         File dataDir = new File(dataDirString).getAbsoluteFile();
         return new KvManager(
-                dataDir,
-                conf,
-                zkClient,
-                conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
-                logManager);
+                dataDir, conf, zkClient, conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS), logManager);
     }
 
     public void startup() {
@@ -156,36 +151,30 @@ public final class KvManager extends TabletManagerBase {
             TableConfig tableConfig,
             ArrowCompressionInfo arrowCompressionInfo)
             throws Exception {
-        return inLock(
-                tabletCreationOrDeletionLock,
-                () -> {
-                    if (currentKvs.containsKey(tableBucket)) {
-                        return currentKvs.get(tableBucket);
-                    }
+        return inLock(tabletCreationOrDeletionLock, () -> {
+            if (currentKvs.containsKey(tableBucket)) {
+                return currentKvs.get(tableBucket);
+            }
 
-                    File tabletDir = getOrCreateTabletDir(tablePath, tableBucket);
+            File tabletDir = getOrCreateTabletDir(tablePath, tableBucket);
 
-                    RowMerger merger = RowMerger.create(tableConfig, schema, kvFormat);
-                    KvTablet tablet =
-                            KvTablet.create(
-                                    logTablet,
-                                    tabletDir,
-                                    conf,
-                                    arrowBufferAllocator,
-                                    memorySegmentPool,
-                                    kvFormat,
-                                    schema,
-                                    merger,
-                                    arrowCompressionInfo);
-                    currentKvs.put(tableBucket, tablet);
+            RowMerger merger = RowMerger.create(tableConfig, schema, kvFormat);
+            KvTablet tablet = KvTablet.create(
+                    logTablet,
+                    tabletDir,
+                    conf,
+                    arrowBufferAllocator,
+                    memorySegmentPool,
+                    kvFormat,
+                    schema,
+                    merger,
+                    arrowCompressionInfo);
+            currentKvs.put(tableBucket, tablet);
 
-                    LOG.info(
-                            "Created kv tablet for bucket {} in dir {}.",
-                            tableBucket,
-                            tabletDir.getAbsolutePath());
+            LOG.info("Created kv tablet for bucket {} in dir {}.", tableBucket, tabletDir.getAbsolutePath());
 
-                    return tablet;
-                });
+            return tablet;
+        });
     }
 
     /**
@@ -211,8 +200,7 @@ public final class KvManager extends TabletManagerBase {
     }
 
     public void dropKv(TableBucket tableBucket) {
-        KvTablet dropKvTablet =
-                inLock(tabletCreationOrDeletionLock, () -> currentKvs.remove(tableBucket));
+        KvTablet dropKvTablet = inLock(tabletCreationOrDeletionLock, () -> currentKvs.remove(tableBucket));
 
         if (dropKvTablet != null) {
             TablePath tablePath = dropKvTablet.getTablePath();
@@ -251,70 +239,56 @@ public final class KvManager extends TabletManagerBase {
         PhysicalTablePath physicalTablePath = pathAndBucket.f0;
         TableBucket tableBucket = pathAndBucket.f1;
         // get the log tablet for the kv tablet
-        LogTablet logTablet =
-                logManager
-                        .getLog(tableBucket)
-                        .orElseThrow(
-                                () ->
-                                        new IllegalStateException(
-                                                String.format(
-                                                        "Find a kv tablet for %s in dir %s to load, but can't find the log tablet for the bucket."
-                                                                + " It is recommended to delete the dir %s to make the loading other kv tablets can success.",
-                                                        tableBucket,
-                                                        tabletDir.getAbsolutePath(),
-                                                        tabletDir.getAbsolutePath())));
+        LogTablet logTablet = logManager
+                .getLog(tableBucket)
+                .orElseThrow(() -> new IllegalStateException(String.format(
+                        "Find a kv tablet for %s in dir %s to load, but can't find the log tablet for the bucket."
+                                + " It is recommended to delete the dir %s to make the loading other kv tablets can success.",
+                        tableBucket, tabletDir.getAbsolutePath(), tabletDir.getAbsolutePath())));
 
         // TODO: we should support recover schema from disk to decouple put and schema.
         TablePath tablePath = physicalTablePath.getTablePath();
         TableInfo tableInfo = getTableInfo(zkClient, tablePath);
-        RowMerger rowMerger =
-                RowMerger.create(
-                        tableInfo.getTableConfig(),
-                        tableInfo.getSchema(),
-                        tableInfo.getTableConfig().getKvFormat());
-        KvTablet kvTablet =
-                KvTablet.create(
-                        physicalTablePath,
-                        tableBucket,
-                        logTablet,
-                        tabletDir,
-                        conf,
-                        arrowBufferAllocator,
-                        memorySegmentPool,
-                        tableInfo.getTableConfig().getKvFormat(),
-                        tableInfo.getSchema(),
-                        rowMerger,
-                        tableInfo.getTableConfig().getArrowCompressionInfo());
+        RowMerger rowMerger = RowMerger.create(
+                tableInfo.getTableConfig(),
+                tableInfo.getSchema(),
+                tableInfo.getTableConfig().getKvFormat());
+        KvTablet kvTablet = KvTablet.create(
+                physicalTablePath,
+                tableBucket,
+                logTablet,
+                tabletDir,
+                conf,
+                arrowBufferAllocator,
+                memorySegmentPool,
+                tableInfo.getTableConfig().getKvFormat(),
+                tableInfo.getSchema(),
+                rowMerger,
+                tableInfo.getTableConfig().getArrowCompressionInfo());
         if (this.currentKvs.containsKey(tableBucket)) {
-            throw new IllegalStateException(
-                    String.format(
-                            "Duplicate kv tablet directories for bucket %s are found in both %s and %s. "
-                                    + "Recover server from this "
-                                    + "failure by manually deleting one of the two kv directories for this bucket. "
-                                    + "It is recommended to delete the bucket in the kv tablet directory that is "
-                                    + "known to have failed recently.",
-                            tableBucket,
-                            tabletDir.getAbsolutePath(),
-                            currentKvs.get(tableBucket).getKvTabletDir().getAbsolutePath()));
+            throw new IllegalStateException(String.format(
+                    "Duplicate kv tablet directories for bucket %s are found in both %s and %s. "
+                            + "Recover server from this "
+                            + "failure by manually deleting one of the two kv directories for this bucket. "
+                            + "It is recommended to delete the bucket in the kv tablet directory that is "
+                            + "known to have failed recently.",
+                    tableBucket,
+                    tabletDir.getAbsolutePath(),
+                    currentKvs.get(tableBucket).getKvTabletDir().getAbsolutePath()));
         }
         this.currentKvs.put(tableBucket, kvTablet);
         return kvTablet;
     }
 
-    public void deleteRemoteKvSnapshot(
-            PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
-        FsPath remoteKvTabletDir =
-                FlussPaths.remoteKvTabletDir(remoteKvDir, physicalTablePath, tableBucket);
+    public void deleteRemoteKvSnapshot(PhysicalTablePath physicalTablePath, TableBucket tableBucket) {
+        FsPath remoteKvTabletDir = FlussPaths.remoteKvTabletDir(remoteKvDir, physicalTablePath, tableBucket);
         try {
             if (remoteFileSystem.exists(remoteKvTabletDir)) {
                 remoteFileSystem.delete(remoteKvTabletDir, true);
                 LOG.info("Delete table's remote bucket snapshot dir of {} success.", tableBucket);
             }
         } catch (Exception e) {
-            LOG.error(
-                    "Delete table's remote bucket snapshot dir of {} failed.",
-                    remoteKvTabletDir,
-                    e);
+            LOG.error("Delete table's remote bucket snapshot dir of {} failed.", remoteKvTabletDir, e);
         }
     }
 }

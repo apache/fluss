@@ -74,8 +74,7 @@ public class PaimonConversions {
         return Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
     }
 
-    public static BinaryRow toPaimonPartitionBinaryRow(
-            List<String> partitionKeys, @Nullable String partitionName) {
+    public static BinaryRow toPaimonPartitionBinaryRow(List<String> partitionKeys, @Nullable String partitionName) {
         if (partitionName == null || partitionKeys.isEmpty()) {
             return BinaryRow.EMPTY_ROW;
         }
@@ -103,7 +102,6 @@ public class PaimonConversions {
         RowType rowType = RowType.of(dataType);
         InternalRow flussRow = GenericRow.of(flussLiteral);
         FlussRowAsPaimonRow flussRowAsPaimonRow = new FlussRowAsPaimonRow(flussRow, rowType);
-        return org.apache.paimon.data.InternalRow.createFieldGetter(dataType, 0)
-                .getFieldOrNull(flussRowAsPaimonRow);
+        return org.apache.paimon.data.InternalRow.createFieldGetter(dataType, 0).getFieldOrNull(flussRowAsPaimonRow);
     }
 }

@@ -32,8 +32,7 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
     protected final String hostname;
     protected final String serverId;
 
-    public CoordinatorMetricGroup(
-            MetricRegistry registry, String clusterId, String hostname, String serverId) {
+    public CoordinatorMetricGroup(MetricRegistry registry, String clusterId, String hostname, String serverId) {
         super(registry, new String[] {clusterId, hostname, NAME}, null);
         this.clusterId = clusterId;
         this.hostname = hostname;

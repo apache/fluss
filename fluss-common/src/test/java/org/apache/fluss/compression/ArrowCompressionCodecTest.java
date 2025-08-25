@@ -111,8 +111,7 @@ class ArrowCompressionCodecTest {
 
     @ParameterizedTest
     @MethodSource("codecs")
-    void testCompressVariableWidthBuffers(int vectorLength, CompressionCodec codec)
-            throws Exception {
+    void testCompressVariableWidthBuffers(int vectorLength, CompressionCodec codec) throws Exception {
         // prepare vector to compress
         VarCharVector origVec = new VarCharVector("vec", allocator);
         origVec.allocateNew();
@@ -144,8 +143,7 @@ class ArrowCompressionCodecTest {
             if (i % 10 == 0) {
                 assertThat(newVec.isNull(i)).isTrue();
             } else {
-                assertThat(newVec.get(i))
-                        .isEqualTo(String.valueOf(i).getBytes(StandardCharsets.UTF_8));
+                assertThat(newVec.get(i)).isEqualTo(String.valueOf(i).getBytes(StandardCharsets.UTF_8));
             }
         }
 
@@ -169,8 +167,7 @@ class ArrowCompressionCodecTest {
 
         // orchestrate new vector
         VarBinaryVector newVec = new VarBinaryVector("new vec", allocator);
-        newVec.loadFieldBuffers(
-                new ArrowFieldNode(vectorLength, vectorLength), decompressedBuffers);
+        newVec.loadFieldBuffers(new ArrowFieldNode(vectorLength, vectorLength), decompressedBuffers);
 
         // verify new vector.
         assertThat(newVec.getValueCount()).isEqualTo(vectorLength);
@@ -185,15 +182,12 @@ class ArrowCompressionCodecTest {
     @ParameterizedTest
     @MethodSource("codecTypes")
     void testUnloadCompressed(CompressionUtil.CodecType codec) {
-        final Schema schema =
-                new Schema(
-                        Arrays.asList(
-                                Field.nullable("ints", new ArrowType.Int(32, true)),
-                                Field.nullable("strings", ArrowType.Utf8.INSTANCE)));
-        CompressionCodec.Factory factory =
-                codec == CompressionUtil.CodecType.NO_COMPRESSION
-                        ? NoCompressionCodec.Factory.INSTANCE
-                        : ArrowCompressionFactory.INSTANCE;
+        final Schema schema = new Schema(Arrays.asList(
+                Field.nullable("ints", new ArrowType.Int(32, true)),
+                Field.nullable("strings", ArrowType.Utf8.INSTANCE)));
+        CompressionCodec.Factory factory = codec == CompressionUtil.CodecType.NO_COMPRESSION
+                ? NoCompressionCodec.Factory.INSTANCE
+                : ArrowCompressionFactory.INSTANCE;
         try (final VectorSchemaRoot root = VectorSchemaRoot.create(schema, allocator)) {
             final IntVector ints = (IntVector) root.getVector(0);
             final VarCharVector strings = (VarCharVector) root.getVector(1);
@@ -223,8 +217,7 @@ class ArrowCompressionCodecTest {
                 }
             }
 
-            final VectorUnloader vectorUnloader =
-                    new VectorUnloader(root, true, factory.createCodec(codec), true);
+            final VectorUnloader vectorUnloader = new VectorUnloader(root, true, factory.createCodec(codec), true);
             vectorUnloader.getRecordBatch().close();
 
             for (FieldVector fieldVector : fieldVectors) {

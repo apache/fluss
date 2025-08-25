@@ -53,25 +53,21 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
 
     private static final int DEFAULT_BUCKET_NUM = 3;
 
-    private static final Schema DEFAULT_SCHEMA =
-            Schema.newBuilder()
-                    .primaryKey("id")
-                    .column("id", DataTypes.INT())
-                    .column("name", DataTypes.STRING())
-                    .build();
+    private static final Schema DEFAULT_SCHEMA = Schema.newBuilder()
+            .primaryKey("id")
+            .column("id", DataTypes.INT())
+            .column("name", DataTypes.STRING())
+            .build();
 
-    private static final TableDescriptor DEFAULT_TABLE_DESCRIPTOR =
-            TableDescriptor.builder()
-                    .schema(DEFAULT_SCHEMA)
-                    .distributedBy(DEFAULT_BUCKET_NUM, "id")
-                    .build();
+    private static final TableDescriptor DEFAULT_TABLE_DESCRIPTOR = TableDescriptor.builder()
+            .schema(DEFAULT_SCHEMA)
+            .distributedBy(DEFAULT_BUCKET_NUM, "id")
+            .build();
 
     private static final CompactedKeyEncoder DEFAULT_KEY_ENCODER =
-            new CompactedKeyEncoder(
-                    DEFAULT_SCHEMA.getRowType(), DEFAULT_SCHEMA.getPrimaryKeyIndexes());
+            new CompactedKeyEncoder(DEFAULT_SCHEMA.getRowType(), DEFAULT_SCHEMA.getPrimaryKeyIndexes());
 
-    private static final HashBucketAssigner DEFAULT_BUCKET_ASSIGNER =
-            new HashBucketAssigner(DEFAULT_BUCKET_NUM);
+    private static final HashBucketAssigner DEFAULT_BUCKET_ASSIGNER = new HashBucketAssigner(DEFAULT_BUCKET_NUM);
 
     private static final String DEFAULT_DB = "test-snapshot-scan-db";
 
@@ -116,8 +112,7 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
         testSnapshotRead(tablePath, expectedRowByBuckets);
     }
 
-    private Map<TableBucket, List<InternalRow>> putRows(long tableId, TablePath tablePath, int rows)
-            throws Exception {
+    private Map<TableBucket, List<InternalRow>> putRows(long tableId, TablePath tablePath, int rows) throws Exception {
         Map<TableBucket, List<InternalRow>> rowsByBuckets = new HashMap<>();
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
@@ -125,26 +120,25 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
                 InternalRow row = compactedRow(DATA1_ROW_TYPE, new Object[] {i, "v" + i});
                 upsertWriter.upsert(row);
                 TableBucket tableBucket = new TableBucket(tableId, getBucketId(row));
-                rowsByBuckets.computeIfAbsent(tableBucket, k -> new ArrayList<>()).add(row);
+                rowsByBuckets
+                        .computeIfAbsent(tableBucket, k -> new ArrayList<>())
+                        .add(row);
             }
             upsertWriter.flush();
         }
         return rowsByBuckets;
     }
 
-    private void testSnapshotRead(
-            TablePath tablePath, Map<TableBucket, List<InternalRow>> bucketRows) throws Exception {
+    private void testSnapshotRead(TablePath tablePath, Map<TableBucket, List<InternalRow>> bucketRows)
+            throws Exception {
         Table table = conn.getTable(tablePath);
         KvSnapshots kvSnapshots = admin.getLatestKvSnapshots(tablePath).get();
         for (int bucketId : kvSnapshots.getBucketIds()) {
-            TableBucket tableBucket =
-                    new TableBucket(
-                            kvSnapshots.getTableId(), kvSnapshots.getPartitionId(), bucketId);
+            TableBucket tableBucket = new TableBucket(kvSnapshots.getTableId(), kvSnapshots.getPartitionId(), bucketId);
             assertThat(kvSnapshots.getSnapshotId(bucketId).isPresent()).isTrue();
-            BatchScanner scanner =
-                    table.newScan()
-                            .createBatchScanner(
-                                    tableBucket, kvSnapshots.getSnapshotId(bucketId).getAsLong());
+            BatchScanner scanner = table.newScan()
+                    .createBatchScanner(
+                            tableBucket, kvSnapshots.getSnapshotId(bucketId).getAsLong());
             List<InternalRow> actualRows = BatchScanUtils.collectRows(scanner);
             List<InternalRow> expectedRows = bucketRows.get(tableBucket);
             assertThat(actualRows).containsExactlyInAnyOrderElementsOf(expectedRows);
@@ -156,11 +150,8 @@ class KvSnapshotBatchScannerITCase extends ClientToServerITCaseBase {
     // -------- Utils method
 
     private static int getBucketId(InternalRow row) {
-        KeyEncoder keyEncoder =
-                KeyEncoder.of(
-                        DEFAULT_SCHEMA.getRowType(),
-                        DEFAULT_SCHEMA.getPrimaryKeyColumnNames(),
-                        DataLakeFormat.PAIMON);
+        KeyEncoder keyEncoder = KeyEncoder.of(
+                DEFAULT_SCHEMA.getRowType(), DEFAULT_SCHEMA.getPrimaryKeyColumnNames(), DataLakeFormat.PAIMON);
         BucketingFunction function = BucketingFunction.of(DataLakeFormat.PAIMON);
         byte[] key = keyEncoder.encodeKey(row);
         return function.bucketing(key, DEFAULT_BUCKET_NUM);

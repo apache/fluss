@@ -48,16 +48,15 @@ public class RemoteFileDownloader implements Closeable {
     protected final ExecutorService downloadThreadPool;
 
     public RemoteFileDownloader(int threadNum) {
-        downloadThreadPool =
-                Executors.newFixedThreadPool(
-                        threadNum,
-                        new ExecutorThreadFactory(
-                                "fluss-client-remote-file-downloader",
-                                // use the current classloader of the current thread as the given
-                                // classloader of the thread created by the ExecutorThreadFactory
-                                // to avoid use weird classloader provided by
-                                // CompletableFuture.runAsync of method #initReaderAsynchronously
-                                Thread.currentThread().getContextClassLoader()));
+        downloadThreadPool = Executors.newFixedThreadPool(
+                threadNum,
+                new ExecutorThreadFactory(
+                        "fluss-client-remote-file-downloader",
+                        // use the current classloader of the current thread as the given
+                        // classloader of the thread created by the ExecutorThreadFactory
+                        // to avoid use weird classloader provided by
+                        // CompletableFuture.runAsync of method #initReaderAsynchronously
+                        Thread.currentThread().getContextClassLoader()));
     }
 
     /**
@@ -65,21 +64,18 @@ public class RemoteFileDownloader implements Closeable {
      * returns a Future object of the number of downloaded bytes. The Future will fail if the
      * download fails after retrying for RETRY_COUNT times.
      */
-    public CompletableFuture<Long> downloadFileAsync(
-            FsPathAndFileName fsPathAndFileName, Path targetDirectory) {
+    public CompletableFuture<Long> downloadFileAsync(FsPathAndFileName fsPathAndFileName, Path targetDirectory) {
         CompletableFuture<Long> future = new CompletableFuture<>();
-        downloadThreadPool.submit(
-                () -> {
-                    try {
-                        Path targetFilePath =
-                                targetDirectory.resolve(fsPathAndFileName.getFileName());
-                        FsPath remoteFilePath = fsPathAndFileName.getPath();
-                        long downloadBytes = downloadFile(targetFilePath, remoteFilePath);
-                        future.complete(downloadBytes);
-                    } catch (Exception e) {
-                        future.completeExceptionally(e);
-                    }
-                });
+        downloadThreadPool.submit(() -> {
+            try {
+                Path targetFilePath = targetDirectory.resolve(fsPathAndFileName.getFileName());
+                FsPath remoteFilePath = fsPathAndFileName.getPath();
+                long downloadBytes = downloadFile(targetFilePath, remoteFilePath);
+                future.complete(downloadBytes);
+            } catch (Exception e) {
+                future.completeExceptionally(e);
+            }
+        });
         return future;
     }
 
@@ -112,12 +108,9 @@ public class RemoteFileDownloader implements Closeable {
     }
 
     public void transferAllToDirectory(
-            List<FsPathAndFileName> fsPathAndFileNames,
-            Path targetDirectory,
-            CloseableRegistry closeableRegistry)
+            List<FsPathAndFileName> fsPathAndFileNames, Path targetDirectory, CloseableRegistry closeableRegistry)
             throws IOException {
-        FileDownloadSpec fileDownloadSpec =
-                new FileDownloadSpec(fsPathAndFileNames, targetDirectory);
+        FileDownloadSpec fileDownloadSpec = new FileDownloadSpec(fsPathAndFileNames, targetDirectory);
         FileDownloadUtils.transferAllDataToDirectory(
                 Collections.singleton(fileDownloadSpec), closeableRegistry, downloadThreadPool);
     }

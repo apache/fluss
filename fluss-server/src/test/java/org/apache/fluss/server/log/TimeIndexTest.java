@@ -92,9 +92,8 @@ class TimeIndexTest {
                 .hasMessageContaining("Attempt to append to a full time index (size = 29).");
         assertThatThrownBy(() -> index.maybeAppend(10000L, (maxEntries - 2) * 10, true))
                 .isInstanceOf(InvalidOffsetException.class)
-                .hasMessageContaining(
-                        "Attempt to append an offset (280) to slot 29 no larger "
-                                + "than the last offset appended (335)");
+                .hasMessageContaining("Attempt to append an offset (280) to slot 29 no larger "
+                        + "than the last offset appended (335)");
         index.maybeAppend(10000L, 1000L, true);
     }
 
@@ -109,28 +108,21 @@ class TimeIndexTest {
         final AtomicBoolean shouldCorruptOffset = new AtomicBoolean(false);
         final AtomicBoolean shouldCorruptTimestamp = new AtomicBoolean(false);
         final AtomicBoolean shouldCorruptLength = new AtomicBoolean(false);
-        index =
-                new TimeIndex(index.file(), baseOffset, maxEntries * 12) {
-                    @Override
-                    public TimestampOffset lastEntry() {
-                        TimestampOffset superLastEntry = super.lastEntry();
-                        long offset =
-                                shouldCorruptOffset.get()
-                                        ? this.baseOffset() - 1
-                                        : superLastEntry.offset;
-                        long timestamp =
-                                shouldCorruptTimestamp.get()
-                                        ? firstEntry.timestamp - 1
-                                        : superLastEntry.timestamp;
-                        return new TimestampOffset(timestamp, offset);
-                    }
+        index = new TimeIndex(index.file(), baseOffset, maxEntries * 12) {
+            @Override
+            public TimestampOffset lastEntry() {
+                TimestampOffset superLastEntry = super.lastEntry();
+                long offset = shouldCorruptOffset.get() ? this.baseOffset() - 1 : superLastEntry.offset;
+                long timestamp = shouldCorruptTimestamp.get() ? firstEntry.timestamp - 1 : superLastEntry.timestamp;
+                return new TimestampOffset(timestamp, offset);
+            }
 
-                    @Override
-                    public long length() {
-                        long superLength = super.length();
-                        return shouldCorruptLength.get() ? superLength - 1 : superLength;
-                    }
-                };
+            @Override
+            public long length() {
+                long superLength = super.length();
+                return shouldCorruptLength.get() ? superLength - 1 : superLength;
+            }
+        };
 
         shouldCorruptLength.set(true);
         assertThatThrownBy(index::sanityCheck).isInstanceOf(CorruptIndexException.class);

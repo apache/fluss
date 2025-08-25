@@ -51,12 +51,8 @@ public class GatewayClientProxy implements InvocationHandler {
         ClassLoader classLoader = gatewayClass.getClassLoader();
 
         @SuppressWarnings("unchecked")
-        T proxy =
-                (T)
-                        Proxy.newProxyInstance(
-                                classLoader,
-                                new Class<?>[] {gatewayClass},
-                                new GatewayClientProxy(nodeSupplier, client));
+        T proxy = (T) Proxy.newProxyInstance(
+                classLoader, new Class<?>[] {gatewayClass}, new GatewayClientProxy(nodeSupplier, client));
         return proxy;
     }
 
@@ -68,8 +64,7 @@ public class GatewayClientProxy implements InvocationHandler {
                 return invokeRpc(method.getName(), (ApiMessage) arg);
             }
         }
-        throw new IllegalArgumentException(
-                "RpcGateway methods must have exactly one argument of type ApiMessage");
+        throw new IllegalArgumentException("RpcGateway methods must have exactly one argument of type ApiMessage");
     }
 
     private Object invokeRpc(String methodName, ApiMessage request) {

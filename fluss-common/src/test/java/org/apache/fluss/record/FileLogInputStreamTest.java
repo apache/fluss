@@ -37,12 +37,10 @@ public class FileLogInputStreamTest extends LogTestBase {
     void testWriteTo() throws Exception {
         try (FileLogRecords fileLogRecords = FileLogRecords.open(new File(tempDir, "test.tmp"))) {
             fileLogRecords.append(
-                    genMemoryLogRecordsWithBaseOffset(
-                            0L, Collections.singletonList(new Object[] {0, "abc"})));
+                    genMemoryLogRecordsWithBaseOffset(0L, Collections.singletonList(new Object[] {0, "abc"})));
             fileLogRecords.flush();
 
-            FileLogInputStream logInputStream =
-                    new FileLogInputStream(fileLogRecords, 0, fileLogRecords.sizeInBytes());
+            FileLogInputStream logInputStream = new FileLogInputStream(fileLogRecords, 0, fileLogRecords.sizeInBytes());
 
             FileLogInputStream.FileChannelLogRecordBatch batch = logInputStream.nextBatch();
             assertThat(batch).isNotNull();

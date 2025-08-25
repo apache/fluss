@@ -89,19 +89,15 @@ public class DefaultAuthorizerTest {
         configuration.setString(ConfigOptions.SUPER_USERS, "USER:" + ROOT_USER);
         configuration.set(ConfigOptions.AUTHORIZER_ENABLED, true);
         zooKeeperClient = ZooKeeperUtils.startZookeeperClient(configuration, new NOPErrorHandler());
-        authorizer =
-                (DefaultAuthorizer)
-                        AuthorizerLoader.createAuthorizer(configuration, zooKeeperClient, null);
-        authorizer2 =
-                (DefaultAuthorizer) AuthorizerLoader.createAuthorizer(configuration, null, null);
+        authorizer = (DefaultAuthorizer) AuthorizerLoader.createAuthorizer(configuration, zooKeeperClient, null);
+        authorizer2 = (DefaultAuthorizer) AuthorizerLoader.createAuthorizer(configuration, null, null);
         authorizer.startup();
         authorizer2.startup();
     }
 
     @AfterEach
     void tearDown() throws Exception {
-        authorizer.dropAcls(
-                createRootUserSession(), Collections.singletonList(AclBindingFilter.ANY));
+        authorizer.dropAcls(createRootUserSession(), Collections.singletonList(AclBindingFilter.ANY));
         authorizer.close();
         authorizer2.close();
         zooKeeperClient.close();
@@ -109,56 +105,39 @@ public class DefaultAuthorizerTest {
 
     @Test
     void testSimpleAclOperation() throws Exception {
-        assertThat(authorizer.listAcls(createRootUserSession(), AclBindingFilter.ANY)).isEmpty();
-        List<AclBinding> database1Acls =
-                Arrays.asList(
-                        createAclBinding(Resource.database("database1"), "user1", "host-1", CREATE),
-                        createAclBinding(Resource.database("database1"), "user2", "host-1", DROP));
+        assertThat(authorizer.listAcls(createRootUserSession(), AclBindingFilter.ANY))
+                .isEmpty();
+        List<AclBinding> database1Acls = Arrays.asList(
+                createAclBinding(Resource.database("database1"), "user1", "host-1", CREATE),
+                createAclBinding(Resource.database("database1"), "user2", "host-1", DROP));
 
-        List<AclBinding> database2Acls =
-                Arrays.asList(
-                        createAclBinding(Resource.database("database2"), "user1", "host-1", CREATE),
-                        createAclBinding(Resource.database("database2"), "user2", "host-1", DROP));
+        List<AclBinding> database2Acls = Arrays.asList(
+                createAclBinding(Resource.database("database2"), "user1", "host-1", CREATE),
+                createAclBinding(Resource.database("database2"), "user2", "host-1", DROP));
 
         authorizer.addAcls(createRootUserSession(), database1Acls);
         authorizer.addAcls(createRootUserSession(), database2Acls);
         // list by database
-        assertThat(
-                        authorizer.listAcls(
-                                createRootUserSession(),
-                                new AclBindingFilter(
-                                        new ResourceFilter(DATABASE, "database2"),
-                                        AccessControlEntryFilter.ANY)))
+        assertThat(authorizer.listAcls(
+                        createRootUserSession(),
+                        new AclBindingFilter(new ResourceFilter(DATABASE, "database2"), AccessControlEntryFilter.ANY)))
                 .containsExactlyInAnyOrderElementsOf(database2Acls);
         // list by user
-        assertThat(
-                        authorizer.listAcls(
-                                createRootUserSession(),
-                                createAclBindingFilter(
-                                        ResourceFilter.ANY,
-                                        new FlussPrincipal("user1", "USER"),
-                                        null,
-                                        OperationType.ANY)))
-                .containsExactlyInAnyOrderElementsOf(
-                        Arrays.asList(database1Acls.get(0), database2Acls.get(0)));
+        assertThat(authorizer.listAcls(
+                        createRootUserSession(),
+                        createAclBindingFilter(
+                                ResourceFilter.ANY, new FlussPrincipal("user1", "USER"), null, OperationType.ANY)))
+                .containsExactlyInAnyOrderElementsOf(Arrays.asList(database1Acls.get(0), database2Acls.get(0)));
         // list by operation
-        assertThat(
-                        authorizer.listAcls(
-                                createRootUserSession(),
-                                createAclBindingFilter(
-                                        ResourceFilter.ANY,
-                                        FlussPrincipal.ANY,
-                                        null,
-                                        OperationType.CREATE)))
-                .containsExactlyInAnyOrderElementsOf(
-                        Arrays.asList(database1Acls.get(0), database2Acls.get(0)));
+        assertThat(authorizer.listAcls(
+                        createRootUserSession(),
+                        createAclBindingFilter(ResourceFilter.ANY, FlussPrincipal.ANY, null, OperationType.CREATE)))
+                .containsExactlyInAnyOrderElementsOf(Arrays.asList(database1Acls.get(0), database2Acls.get(0)));
 
         authorizer.dropAcls(
                 createRootUserSession(),
                 Collections.singletonList(
-                        new AclBindingFilter(
-                                new ResourceFilter(DATABASE, "database2"),
-                                AccessControlEntryFilter.ANY)));
+                        new AclBindingFilter(new ResourceFilter(DATABASE, "database2"), AccessControlEntryFilter.ANY)));
         assertThat(authorizer.listAcls(createRootUserSession(), AclBindingFilter.ANY))
                 .containsExactlyInAnyOrderElementsOf(database1Acls);
     }
@@ -166,44 +145,33 @@ public class DefaultAuthorizerTest {
     @Test
     void testSimpleAuthorizations() throws Exception {
         Session session = createSession("user1", "192.168.1.1");
-        List<Action> actions =
-                Arrays.asList(
-                        new Action(Resource.table("database1", "foo"), READ),
-                        new Action(Resource.database("database2"), WRITE));
+        List<Action> actions = Arrays.asList(
+                new Action(Resource.table("database1", "foo"), READ),
+                new Action(Resource.database("database2"), WRITE));
         assertThat(authorizer.authorizeActions(session, actions)).containsExactly(false, false);
         authorizer.addAcls(
                 createRootUserSession(),
-                Collections.singletonList(
-                        new AclBinding(
-                                Resource.database("database2"),
-                                new AccessControlEntry(
-                                        session.getPrincipal(),
-                                        "192.168.1.1",
-                                        WRITE,
-                                        PermissionType.ALLOW))));
+                Collections.singletonList(new AclBinding(
+                        Resource.database("database2"),
+                        new AccessControlEntry(session.getPrincipal(), "192.168.1.1", WRITE, PermissionType.ALLOW))));
         assertThat(authorizer.authorizeActions(session, actions)).containsExactly(false, true);
         authorizer.addAcls(
                 createRootUserSession(),
-                Collections.singletonList(
-                        new AclBinding(
-                                Resource.table("database1", "foo"),
-                                new AccessControlEntry(
-                                        session.getPrincipal(), "*", READ, PermissionType.ALLOW))));
+                Collections.singletonList(new AclBinding(
+                        Resource.table("database1", "foo"),
+                        new AccessControlEntry(session.getPrincipal(), "*", READ, PermissionType.ALLOW))));
         assertThat(authorizer.authorizeActions(session, actions)).containsExactly(true, true);
         authorizer.dropAcls(
                 createRootUserSession(),
-                Collections.singletonList(
-                        new AclBindingFilter(
-                                new ResourceFilter(ResourceType.TABLE, "database1.foo"),
-                                new AccessControlEntryFilter(
-                                        null, null, READ, PermissionType.ANY))));
+                Collections.singletonList(new AclBindingFilter(
+                        new ResourceFilter(ResourceType.TABLE, "database1.foo"),
+                        new AccessControlEntryFilter(null, null, READ, PermissionType.ANY))));
         assertThat(authorizer.authorizeActions(session, actions)).containsExactly(false, true);
     }
 
     @Test
     void testAuthorizerNoZkConfig() {
-        Configuration configuration =
-                new Configuration().set(ConfigOptions.AUTHORIZER_ENABLED, true);
+        Configuration configuration = new Configuration().set(ConfigOptions.AUTHORIZER_ENABLED, true);
         assertThatThrownBy(() -> AuthorizerLoader.createAuthorizer(configuration, null, null))
                 .hasMessageContaining(
                         "No valid ZooKeeper quorum has been specified. You can specify the quorum via the configuration key 'zookeeper.address");
@@ -222,21 +190,15 @@ public class DefaultAuthorizerTest {
     @Test
     void testAclWithOperationAll() throws Exception {
         Session session = createSession("user1", "192.168.1.1");
-        List<Action> actions =
-                Arrays.asList(
-                        new Action(Resource.database("database1"), READ),
-                        new Action(Resource.database("database1"), WRITE));
+        List<Action> actions = Arrays.asList(
+                new Action(Resource.database("database1"), READ), new Action(Resource.database("database1"), WRITE));
         assertThat(authorizer.authorizeActions(session, actions)).containsExactly(false, false);
         authorizer.addAcls(
                 createRootUserSession(),
-                Collections.singletonList(
-                        new AclBinding(
-                                Resource.database("database1"),
-                                new AccessControlEntry(
-                                        session.getPrincipal(),
-                                        "192.168.1.1",
-                                        OperationType.ALL,
-                                        PermissionType.ALLOW))));
+                Collections.singletonList(new AclBinding(
+                        Resource.database("database1"),
+                        new AccessControlEntry(
+                                session.getPrincipal(), "192.168.1.1", OperationType.ALL, PermissionType.ALLOW))));
         assertThat(authorizer.authorizeActions(session, actions)).containsExactly(true, true);
     }
 
@@ -245,29 +207,22 @@ public class DefaultAuthorizerTest {
         FlussPrincipal principal = new FlussPrincipal("user1", "USER");
         Session session1 = createSession("user1", "192.168.1.1");
         Session session2 = createSession("user1", "192.168.1.2");
-        List<Action> actions =
-                Collections.singletonList(new Action(Resource.database("database1"), READ));
+        List<Action> actions = Collections.singletonList(new Action(Resource.database("database1"), READ));
         assertThat(authorizer.authorizeActions(session1, actions)).containsExactly(false);
         assertThat(authorizer.authorizeActions(session2, actions)).containsExactly(false);
         authorizer.addAcls(
                 createRootUserSession(),
-                Collections.singletonList(
-                        new AclBinding(
-                                Resource.database("database1"),
-                                new AccessControlEntry(
-                                        principal,
-                                        session1.getInetAddress().getHostAddress(),
-                                        READ,
-                                        PermissionType.ALLOW))));
+                Collections.singletonList(new AclBinding(
+                        Resource.database("database1"),
+                        new AccessControlEntry(
+                                principal, session1.getInetAddress().getHostAddress(), READ, PermissionType.ALLOW))));
         assertThat(authorizer.authorizeActions(session1, actions)).containsExactly(true);
         assertThat(authorizer.authorizeActions(session2, actions)).containsExactly(false);
         authorizer.addAcls(
                 createRootUserSession(),
-                Collections.singletonList(
-                        new AclBinding(
-                                Resource.database("database1"),
-                                new AccessControlEntry(
-                                        principal, "*", READ, PermissionType.ALLOW))));
+                Collections.singletonList(new AclBinding(
+                        Resource.database("database1"),
+                        new AccessControlEntry(principal, "*", READ, PermissionType.ALLOW))));
         assertThat(authorizer.authorizeActions(session1, actions)).containsExactly(true);
         assertThat(authorizer.authorizeActions(session2, actions)).containsExactly(true);
     }
@@ -286,17 +241,11 @@ public class DefaultAuthorizerTest {
                         OperationType.ALTER,
                         OperationType.DESCRIBE));
         testOperationTypeImplicationsOfAllow(
-                Resource.cluster(),
-                OperationType.CREATE,
-                Collections.singleton(OperationType.DESCRIBE));
+                Resource.cluster(), OperationType.CREATE, Collections.singleton(OperationType.DESCRIBE));
         testOperationTypeImplicationsOfAllow(
-                Resource.cluster(),
-                OperationType.DROP,
-                Collections.singleton(OperationType.DESCRIBE));
+                Resource.cluster(), OperationType.DROP, Collections.singleton(OperationType.DESCRIBE));
         testOperationTypeImplicationsOfAllow(
-                Resource.cluster(),
-                OperationType.ALTER,
-                Collections.singleton(OperationType.DESCRIBE));
+                Resource.cluster(), OperationType.ALTER, Collections.singleton(OperationType.DESCRIBE));
 
         // when we allow READ on any resource, we also allow DESCRIBE and FILESYSTEM_TOKEN on
         // cluster.
@@ -305,68 +254,51 @@ public class DefaultAuthorizerTest {
         testOperationTypeImplicationsOfAllow(
                 Resource.cluster(), WRITE, Collections.singletonList(OperationType.DESCRIBE));
         testOperationTypeImplicationsOfAllow(
-                Resource.database("database1"),
-                READ,
-                Collections.singletonList(OperationType.DESCRIBE));
+                Resource.database("database1"), READ, Collections.singletonList(OperationType.DESCRIBE));
         testOperationTypeImplicationsOfAllow(
-                Resource.table("database2", "table1"),
-                WRITE,
-                Collections.singletonList(OperationType.DESCRIBE));
+                Resource.table("database2", "table1"), WRITE, Collections.singletonList(OperationType.DESCRIBE));
     }
 
     private void testOperationTypeImplicationsOfAllow(
-            Resource resource, OperationType parentOp, Collection<OperationType> allowedOps)
-            throws Exception {
+            Resource resource, OperationType parentOp, Collection<OperationType> allowedOps) throws Exception {
         Session session = createSession("user1", "192.168.1.1");
         AccessControlEntry accessControlEntry =
                 new AccessControlEntry(session.getPrincipal(), "*", parentOp, PermissionType.ALLOW);
         addAcls(authorizer, resource, Collections.singleton(accessControlEntry));
-        Arrays.asList(OperationType.values())
-                .forEach(
-                        op -> {
-                            if (allowedOps.contains(op) || op == parentOp) {
-                                assertThat(authorizer.isAuthorized(session, op, resource)).isTrue();
-                            } else if (op != OperationType.ANY) {
-                                assertThat(authorizer.isAuthorized(session, op, resource))
-                                        .isFalse();
-                            }
-                        });
+        Arrays.asList(OperationType.values()).forEach(op -> {
+            if (allowedOps.contains(op) || op == parentOp) {
+                assertThat(authorizer.isAuthorized(session, op, resource)).isTrue();
+            } else if (op != OperationType.ANY) {
+                assertThat(authorizer.isAuthorized(session, op, resource)).isFalse();
+            }
+        });
         dropAcls(
                 authorizer,
                 resource,
-                Collections.singleton(
-                        createAclEntry(session.getPrincipal().getName(), "*", parentOp)));
+                Collections.singleton(createAclEntry(session.getPrincipal().getName(), "*", parentOp)));
     }
 
     @Test
     void testAclInheritanceOnResourceType() throws Exception {
-        testResourceTypeImplicationsOfAllow(
-                ResourceType.CLUSTER, Arrays.asList(DATABASE, ResourceType.TABLE));
+        testResourceTypeImplicationsOfAllow(ResourceType.CLUSTER, Arrays.asList(DATABASE, ResourceType.TABLE));
         testResourceTypeImplicationsOfAllow(DATABASE, Collections.singleton(ResourceType.TABLE));
     }
 
-    private void testResourceTypeImplicationsOfAllow(
-            ResourceType parentType, Collection<ResourceType> allowedTypes) throws Exception {
+    private void testResourceTypeImplicationsOfAllow(ResourceType parentType, Collection<ResourceType> allowedTypes)
+            throws Exception {
         FlussPrincipal user = new FlussPrincipal("user1", "USER");
         Session session = createSession("user1", "192.168.1.1");
-        AccessControlEntry accessControlEntry =
-                new AccessControlEntry(user, "*", READ, PermissionType.ALLOW);
+        AccessControlEntry accessControlEntry = new AccessControlEntry(user, "*", READ, PermissionType.ALLOW);
         addAcls(authorizer, mockResource(parentType), Collections.singleton(accessControlEntry));
-        Arrays.asList(ResourceType.values())
-                .forEach(
-                        resourceType -> {
-                            if (allowedTypes.contains(resourceType) || resourceType == parentType) {
-                                assertThat(
-                                                authorizer.isAuthorized(
-                                                        session, READ, mockResource(resourceType)))
-                                        .isTrue();
-                            } else if (resourceType != ResourceType.ANY) {
-                                assertThat(
-                                                authorizer.isAuthorized(
-                                                        session, READ, mockResource(resourceType)))
-                                        .isFalse();
-                            }
-                        });
+        Arrays.asList(ResourceType.values()).forEach(resourceType -> {
+            if (allowedTypes.contains(resourceType) || resourceType == parentType) {
+                assertThat(authorizer.isAuthorized(session, READ, mockResource(resourceType)))
+                        .isTrue();
+            } else if (resourceType != ResourceType.ANY) {
+                assertThat(authorizer.isAuthorized(session, READ, mockResource(resourceType)))
+                        .isFalse();
+            }
+        });
         dropAcls(authorizer, mockResource(parentType), Collections.singleton(accessControlEntry));
     }
 
@@ -386,47 +318,29 @@ public class DefaultAuthorizerTest {
     @Test
     void testLoadCache() throws Exception {
         Resource resource1 = Resource.database("foo-" + UUID.randomUUID());
-        Set<AccessControlEntry> acls1 =
-                Collections.singleton(
-                        new AccessControlEntry(
-                                new FlussPrincipal("user1", "User"),
-                                "host-1",
-                                READ,
-                                PermissionType.ANY));
+        Set<AccessControlEntry> acls1 = Collections.singleton(
+                new AccessControlEntry(new FlussPrincipal("user1", "User"), "host-1", READ, PermissionType.ANY));
         addAcls(authorizer, resource1, acls1);
 
         Resource resource2 = Resource.database("foo-" + UUID.randomUUID());
-        Set<AccessControlEntry> acls2 =
-                Collections.singleton(
-                        new AccessControlEntry(
-                                new FlussPrincipal("user2", "User"),
-                                "host-1",
-                                READ,
-                                PermissionType.ANY));
+        Set<AccessControlEntry> acls2 = Collections.singleton(
+                new AccessControlEntry(new FlussPrincipal("user2", "User"), "host-1", READ, PermissionType.ANY));
         addAcls(authorizer, resource2, acls2);
 
         // delete acl change notifications to test initial load.
         deleteAclChangeNotifications();
 
-        try (Authorizer newAuthorizer =
-                AuthorizerLoader.createAuthorizer(configuration, null, null)) {
+        try (Authorizer newAuthorizer = AuthorizerLoader.createAuthorizer(configuration, null, null)) {
             newAuthorizer.startup();
             assertThat(listAcls(newAuthorizer, resource1)).isEqualTo(acls1);
             assertThat(listAcls(newAuthorizer, resource2)).isEqualTo(acls2);
 
             // test update cache later
-            final Set<AccessControlEntry> acls3 =
-                    new HashSet<>(
-                            Collections.singleton(
-                                    new AccessControlEntry(
-                                            new FlussPrincipal("user2", "User"),
-                                            "host-1",
-                                            READ,
-                                            PermissionType.ANY)));
+            final Set<AccessControlEntry> acls3 = new HashSet<>(Collections.singleton(
+                    new AccessControlEntry(new FlussPrincipal("user2", "User"), "host-1", READ, PermissionType.ANY)));
             addAcls(authorizer, resource2, acls3);
-            retry(
-                    Duration.ofMinutes(1),
-                    () -> assertThat(listAcls(newAuthorizer, resource2)).isEqualTo(acls3));
+            retry(Duration.ofMinutes(1), () -> assertThat(listAcls(newAuthorizer, resource2))
+                    .isEqualTo(acls3));
         }
     }
 
@@ -434,17 +348,11 @@ public class DefaultAuthorizerTest {
     // name.
     @Test
     void testEmptyAclThrowsException() {
-        assertThatThrownBy(
-                        () ->
-                                addAcls(
-                                        authorizer,
-                                        Resource.database(""),
-                                        Collections.singleton(
-                                                new AccessControlEntry(
-                                                        new FlussPrincipal("user1", "User"),
-                                                        "host-1",
-                                                        READ,
-                                                        PermissionType.ANY))))
+        assertThatThrownBy(() -> addAcls(
+                        authorizer,
+                        Resource.database(""),
+                        Collections.singleton(new AccessControlEntry(
+                                new FlussPrincipal("user1", "User"), "host-1", READ, PermissionType.ANY))))
                 .hasMessageContaining("Path must not end with / character");
     }
 
@@ -457,8 +365,7 @@ public class DefaultAuthorizerTest {
         AccessControlEntry acl2 = new AccessControlEntry(user2, "host-2", READ, PermissionType.ANY);
         addAcls(authorizer, commonResource, Collections.singleton(acl1));
         addAcls(authorizer, commonResource, Collections.singleton(acl2));
-        assertThat(listAcls(authorizer, commonResource))
-                .isEqualTo(new HashSet<>(Arrays.asList(acl1, acl2)));
+        assertThat(listAcls(authorizer, commonResource)).isEqualTo(new HashSet<>(Arrays.asList(acl1, acl2)));
     }
 
     @Test
@@ -479,18 +386,12 @@ public class DefaultAuthorizerTest {
         addAcls(authorizer, commonResource, Collections.singleton(acl3));
         dropAcls(authorizer2, commonResource, Collections.singleton(acl3));
 
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(listAcls(authorizer, commonResource))
-                                .isEqualTo(new HashSet<>(Arrays.asList(acl1, acl2))));
+        retry(Duration.ofMinutes(1), () -> assertThat(listAcls(authorizer, commonResource))
+                .isEqualTo(new HashSet<>(Arrays.asList(acl1, acl2))));
 
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    assertThat(listAcls(authorizer2, commonResource))
-                            .isEqualTo(new HashSet<>(Arrays.asList(acl1, acl2)));
-                });
+        retry(Duration.ofMinutes(1), () -> {
+            assertThat(listAcls(authorizer2, commonResource)).isEqualTo(new HashSet<>(Arrays.asList(acl1, acl2)));
+        });
     }
 
     @Test
@@ -502,42 +403,24 @@ public class DefaultAuthorizerTest {
 
         for (int i = 0; i < 50; i++) {
             // each task represent that add acl to different user on same resource.
-            final AccessControlEntry accessControlEntry =
-                    createAclEntry(String.valueOf(i), "host-1", READ);
+            final AccessControlEntry accessControlEntry = createAclEntry(String.valueOf(i), "host-1", READ);
             int finalI = i;
-            Runnable runnable =
-                    () -> {
-                        if (finalI % 2 == 0) {
-                            addAcls(
-                                    authorizer,
-                                    commonResource,
-                                    Collections.singleton(accessControlEntry));
-                        } else {
-                            addAcls(
-                                    authorizer2,
-                                    commonResource,
-                                    Collections.singleton(accessControlEntry));
-                        }
+            Runnable runnable = () -> {
+                if (finalI % 2 == 0) {
+                    addAcls(authorizer, commonResource, Collections.singleton(accessControlEntry));
+                } else {
+                    addAcls(authorizer2, commonResource, Collections.singleton(accessControlEntry));
+                }
 
-                        if (finalI % 10 == 0) {
-                            // If cache is still empty because modify notification is not arrived,
-                            // AclBindingFilter will match nothing. Thus retry to make sure that the
-                            // acl is deleted.
-                            retry(
-                                    Duration.ofMinutes(1),
-                                    () ->
-                                            assertThat(
-                                                            dropAcls(
-                                                                    authorizer2,
-                                                                    commonResource,
-                                                                    Collections.singleton(
-                                                                            accessControlEntry)))
-                                                    .containsExactly(
-                                                            new AclBinding(
-                                                                    commonResource,
-                                                                    accessControlEntry)));
-                        }
-                    };
+                if (finalI % 10 == 0) {
+                    // If cache is still empty because modify notification is not arrived,
+                    // AclBindingFilter will match nothing. Thus retry to make sure that the
+                    // acl is deleted.
+                    retry(Duration.ofMinutes(1), () -> assertThat(
+                                    dropAcls(authorizer2, commonResource, Collections.singleton(accessControlEntry)))
+                            .containsExactly(new AclBinding(commonResource, accessControlEntry)));
+                }
+            };
             concurrentTasks.add(runnable);
 
             if (finalI % 10 != 0) {
@@ -547,35 +430,25 @@ public class DefaultAuthorizerTest {
 
         runInConcurrent(concurrentTasks);
         // Make sure all acl notifacations are arrived.
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(listAcls(authorizer, commonResource)).isEqualTo(expectedAcls));
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(listAcls(authorizer2, commonResource)).isEqualTo(expectedAcls));
+        retry(Duration.ofMinutes(1), () -> assertThat(listAcls(authorizer, commonResource))
+                .isEqualTo(expectedAcls));
+        retry(Duration.ofMinutes(1), () -> assertThat(listAcls(authorizer2, commonResource))
+                .isEqualTo(expectedAcls));
     }
 
     @Test
     void testHighConcurrencyDeletionOfResourceAcls() {
         Resource commonResource = Resource.database("foo-" + UUID.randomUUID());
         AccessControlEntry accessControlEntry =
-                new AccessControlEntry(
-                        new FlussPrincipal("user1", "User"), "host-1", READ, PermissionType.ANY);
+                new AccessControlEntry(new FlussPrincipal("user1", "User"), "host-1", READ, PermissionType.ANY);
         // generate 50 concurrent acl operation tasks.
         List<Runnable> concurrentTasks = new ArrayList<>();
         for (int i = 0; i < 50; i++) {
             // each task represent that add acl to same user on same resource.
-            Runnable runnable =
-                    () -> {
-                        addAcls(
-                                authorizer,
-                                commonResource,
-                                Collections.singleton(accessControlEntry));
-                        dropAcls(
-                                authorizer2,
-                                commonResource,
-                                Collections.singleton(accessControlEntry));
-                    };
+            Runnable runnable = () -> {
+                addAcls(authorizer, commonResource, Collections.singleton(accessControlEntry));
+                dropAcls(authorizer2, commonResource, Collections.singleton(accessControlEntry));
+            };
             concurrentTasks.add(runnable);
         }
         runInConcurrent(concurrentTasks);
@@ -584,62 +457,41 @@ public class DefaultAuthorizerTest {
 
     void addAcls(Authorizer authorizer, Resource resource, Set<AccessControlEntry> entries) {
         List<AclBinding> aclBindings =
-                entries.stream()
-                        .map(entry -> new AclBinding(resource, entry))
-                        .collect(Collectors.toList());
-        authorizer
-                .addAcls(createRootUserSession(), aclBindings)
-                .forEach(
-                        result -> {
-                            if (result.exception().isPresent()) {
-                                throw result.exception().get();
-                            }
-                        });
+                entries.stream().map(entry -> new AclBinding(resource, entry)).collect(Collectors.toList());
+        authorizer.addAcls(createRootUserSession(), aclBindings).forEach(result -> {
+            if (result.exception().isPresent()) {
+                throw result.exception().get();
+            }
+        });
     }
 
     Set<AccessControlEntry> listAcls(Authorizer authorizer, Resource resource) {
-        AclBindingFilter aclBindingFilter =
-                new AclBindingFilter(
-                        new ResourceFilter(resource.getType(), resource.getName()),
-                        AccessControlEntryFilter.ANY);
-        Collection<AclBinding> aclBindings =
-                authorizer.listAcls(createRootUserSession(), aclBindingFilter);
-        return aclBindings.stream()
-                .map(AclBinding::getAccessControlEntry)
-                .collect(Collectors.toSet());
+        AclBindingFilter aclBindingFilter = new AclBindingFilter(
+                new ResourceFilter(resource.getType(), resource.getName()), AccessControlEntryFilter.ANY);
+        Collection<AclBinding> aclBindings = authorizer.listAcls(createRootUserSession(), aclBindingFilter);
+        return aclBindings.stream().map(AclBinding::getAccessControlEntry).collect(Collectors.toSet());
     }
 
-    List<AclBinding> dropAcls(
-            Authorizer authorizer, Resource resource, Set<AccessControlEntry> entries) {
-        List<AclBindingFilter> aclBindings =
-                entries.stream()
-                        .map(
-                                entry ->
-                                        new AclBindingFilter(
-                                                new ResourceFilter(
-                                                        resource.getType(), resource.getName()),
-                                                new AccessControlEntryFilter(
-                                                        entry.getPrincipal(),
-                                                        entry.getHost(),
-                                                        entry.getOperationType(),
-                                                        entry.getPermissionType())))
-                        .collect(Collectors.toList());
+    List<AclBinding> dropAcls(Authorizer authorizer, Resource resource, Set<AccessControlEntry> entries) {
+        List<AclBindingFilter> aclBindings = entries.stream()
+                .map(entry -> new AclBindingFilter(
+                        new ResourceFilter(resource.getType(), resource.getName()),
+                        new AccessControlEntryFilter(
+                                entry.getPrincipal(),
+                                entry.getHost(),
+                                entry.getOperationType(),
+                                entry.getPermissionType())))
+                .collect(Collectors.toList());
         List<AclBinding> deleteAclBindings = new ArrayList<>();
-        authorizer
-                .dropAcls(createRootUserSession(), aclBindings)
-                .forEach(
-                        result -> {
-                            if (result.error().isPresent()) {
-                                throw result.error().get().exception();
-                            } else {
-                                deleteAclBindings.addAll(
-                                        result.aclBindingDeleteResults().stream()
-                                                .map(
-                                                        AclDeleteResult.AclBindingDeleteResult
-                                                                ::aclBinding)
-                                                .collect(Collectors.toList()));
-                            }
-                        });
+        authorizer.dropAcls(createRootUserSession(), aclBindings).forEach(result -> {
+            if (result.error().isPresent()) {
+                throw result.error().get().exception();
+            } else {
+                deleteAclBindings.addAll(result.aclBindingDeleteResults().stream()
+                        .map(AclDeleteResult.AclBindingDeleteResult::aclBinding)
+                        .collect(Collectors.toList()));
+            }
+        });
         return deleteAclBindings;
     }
 
@@ -661,9 +513,7 @@ public class DefaultAuthorizerTest {
             }
         } catch (Exception e) {
             throw new RuntimeException(
-                    "Should support many concurrent calls"
-                            + " - Exception during concurrent execution",
-                    e);
+                    "Should support many concurrent calls" + " - Exception during concurrent execution", e);
         }
     }
 
@@ -676,34 +526,21 @@ public class DefaultAuthorizerTest {
     }
 
     private Session createSession(String username, String host) throws Exception {
-        return new Session(
-                (byte) 1,
-                "FLUSS",
-                false,
-                InetAddress.getByName(host),
-                new FlussPrincipal(username, "USER"));
+        return new Session((byte) 1, "FLUSS", false, InetAddress.getByName(host), new FlussPrincipal(username, "USER"));
     }
 
-    private AclBinding createAclBinding(
-            Resource resource, String username, String host, OperationType operation) {
+    private AclBinding createAclBinding(Resource resource, String username, String host, OperationType operation) {
         return new AclBinding(resource, createAclEntry(username, host, operation));
     }
 
-    private AccessControlEntry createAclEntry(
-            String username, String host, OperationType operation) {
-        return new AccessControlEntry(
-                new FlussPrincipal(username, "USER"), host, operation, PermissionType.ALLOW);
+    private AccessControlEntry createAclEntry(String username, String host, OperationType operation) {
+        return new AccessControlEntry(new FlussPrincipal(username, "USER"), host, operation, PermissionType.ALLOW);
     }
 
     private AclBindingFilter createAclBindingFilter(
-            ResourceFilter resourceFilter,
-            FlussPrincipal flussPrincipal,
-            String host,
-            OperationType operation) {
+            ResourceFilter resourceFilter, FlussPrincipal flussPrincipal, String host, OperationType operation) {
         return new AclBindingFilter(
-                resourceFilter,
-                new AccessControlEntryFilter(
-                        flussPrincipal, host, operation, PermissionType.ALLOW));
+                resourceFilter, new AccessControlEntryFilter(flussPrincipal, host, operation, PermissionType.ALLOW));
     }
 
     public void deleteAclChangeNotifications() throws Exception {

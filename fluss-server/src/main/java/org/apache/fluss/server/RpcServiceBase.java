@@ -167,11 +167,10 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         Set<ApiKeys> apiKeys = apiManager.enabledApis();
         List<PbApiVersion> apiVersions = new ArrayList<>();
         for (ApiKeys api : apiKeys) {
-            apiVersions.add(
-                    new PbApiVersion()
-                            .setApiKey(api.id)
-                            .setMinVersion(api.lowestSupportedVersion)
-                            .setMaxVersion(api.highestSupportedVersion));
+            apiVersions.add(new PbApiVersion()
+                    .setApiKey(api.id)
+                    .setMinVersion(api.lowestSupportedVersion)
+                    .setMaxVersion(api.highestSupportedVersion));
         }
         ApiVersionsResponse response = new ApiVersionsResponse();
         response.addAllApiVersions(apiVersions);
@@ -184,15 +183,11 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         Collection<String> databaseNames = metadataManager.listDatabases();
 
         if (authorizer != null) {
-            Collection<Resource> authorizedDatabase =
-                    authorizer.filterByAuthorized(
-                            currentSession(),
-                            OperationType.DESCRIBE,
-                            databaseNames.stream()
-                                    .map(Resource::database)
-                                    .collect(Collectors.toList()));
-            databaseNames =
-                    authorizedDatabase.stream().map(Resource::getName).collect(Collectors.toList());
+            Collection<Resource> authorizedDatabase = authorizer.filterByAuthorized(
+                    currentSession(),
+                    OperationType.DESCRIBE,
+                    databaseNames.stream().map(Resource::database).collect(Collectors.toList()));
+            databaseNames = authorizedDatabase.stream().map(Resource::getName).collect(Collectors.toList());
         }
 
         response.addAllDatabaseNames(databaseNames);
@@ -200,13 +195,10 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     @Override
-    public CompletableFuture<GetDatabaseInfoResponse> getDatabaseInfo(
-            GetDatabaseInfoRequest request) {
+    public CompletableFuture<GetDatabaseInfoResponse> getDatabaseInfo(GetDatabaseInfoRequest request) {
         if (authorizer != null) {
             authorizer.authorize(
-                    currentSession(),
-                    OperationType.DESCRIBE,
-                    Resource.database(request.getDatabaseName()));
+                    currentSession(), OperationType.DESCRIBE, Resource.database(request.getDatabaseName()));
         }
 
         GetDatabaseInfoResponse response = new GetDatabaseInfoResponse();
@@ -230,17 +222,14 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         ListTablesResponse response = new ListTablesResponse();
         List<String> tableNames = metadataManager.listTables(request.getDatabaseName());
         if (authorizer != null) {
-            List<Resource> resources =
-                    tableNames.stream()
-                            .map(t -> Resource.table(request.getDatabaseName(), t))
-                            .collect(Collectors.toList());
+            List<Resource> resources = tableNames.stream()
+                    .map(t -> Resource.table(request.getDatabaseName(), t))
+                    .collect(Collectors.toList());
             Collection<Resource> authorizedTable =
-                    authorizer.filterByAuthorized(
-                            currentSession(), OperationType.DESCRIBE, resources);
-            tableNames =
-                    authorizedTable.stream()
-                            .map(resource -> resource.getName().split(TABLE_SPLITTER)[1])
-                            .collect(Collectors.toList());
+                    authorizer.filterByAuthorized(currentSession(), OperationType.DESCRIBE, resources);
+            tableNames = authorizedTable.stream()
+                    .map(resource -> resource.getName().split(TABLE_SPLITTER)[1])
+                    .collect(Collectors.toList());
         }
 
         response.addAllTableNames(tableNames);
@@ -291,8 +280,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     @Override
-    public CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(
-            GetLatestKvSnapshotsRequest request) {
+    public CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(GetLatestKvSnapshotsRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
         // get table info
         TableInfo tableInfo = metadataManager.getTable(tablePath);
@@ -302,25 +290,19 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         boolean isPartitioned = tableInfo.isPartitioned();
         if (!hasPrimaryKey) {
             throw new NonPrimaryKeyTableException(
-                    "Table '"
-                            + tablePath
-                            + "' is not a primary key table, so it doesn't have any kv snapshots.");
+                    "Table '" + tablePath + "' is not a primary key table, so it doesn't have any kv snapshots.");
         } else if (hasPartitionName && !isPartitioned) {
-            throw new TableNotPartitionedException(
-                    "Table '" + tablePath + "' is not a partitioned table.");
+            throw new TableNotPartitionedException("Table '" + tablePath + "' is not a partitioned table.");
         } else if (!hasPartitionName && isPartitioned) {
             throw new PartitionNotExistException(
-                    "Table '"
-                            + tablePath
-                            + "' is a partitioned table, but partition name is not provided.");
+                    "Table '" + tablePath + "' is a partitioned table, but partition name is not provided.");
         }
 
         try {
             // get table id
             long tableId = tableInfo.getTableId();
             int numBuckets = tableInfo.getNumBuckets();
-            Long partitionId =
-                    hasPartitionName ? getPartitionId(tablePath, request.getPartitionName()) : null;
+            Long partitionId = hasPartitionName ? getPartitionId(tablePath, request.getPartitionName()) : null;
             Map<Integer, Optional<BucketSnapshot>> snapshots;
             if (partitionId != null) {
                 snapshots = zkClient.getPartitionLatestBucketSnapshot(partitionId);
@@ -340,14 +322,11 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             optTablePartition = zkClient.getPartition(tablePath, partitionName);
         } catch (Exception e) {
             throw new FlussRuntimeException(
-                    String.format("Failed to get latest kv snapshots for table '%s'", tablePath),
-                    e);
+                    String.format("Failed to get latest kv snapshots for table '%s'", tablePath), e);
         }
         if (!optTablePartition.isPresent()) {
             throw new PartitionNotExistException(
-                    String.format(
-                            "The partition '%s' of table '%s' does not exist.",
-                            partitionName, tablePath));
+                    String.format("The partition '%s' of table '%s' does not exist.", partitionName, tablePath));
         }
         return optTablePartition.get().getPartitionId();
     }
@@ -355,11 +334,10 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     @Override
     public CompletableFuture<GetKvSnapshotMetadataResponse> getKvSnapshotMetadata(
             GetKvSnapshotMetadataRequest request) {
-        TableBucket tableBucket =
-                new TableBucket(
-                        request.getTableId(),
-                        request.hasPartitionId() ? request.getPartitionId() : null,
-                        request.getBucketId());
+        TableBucket tableBucket = new TableBucket(
+                request.getTableId(),
+                request.hasPartitionId() ? request.getPartitionId() : null,
+                request.getBucketId());
         long snapshotId = request.getSnapshotId();
 
         Optional<BucketSnapshot> snapshot;
@@ -368,13 +346,11 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             checkState(snapshot.isPresent(), "Kv snapshot not found");
             CompletedSnapshot completedSnapshot =
                     snapshot.get().toCompletedSnapshotHandle().retrieveCompleteSnapshot();
-            return CompletableFuture.completedFuture(
-                    makeKvSnapshotMetadataResponse(completedSnapshot));
+            return CompletableFuture.completedFuture(makeKvSnapshotMetadataResponse(completedSnapshot));
         } catch (Exception e) {
-            throw new KvSnapshotNotExistException(
-                    String.format(
-                            "Failed to get kv snapshot metadata for table bucket %s and snapshot id %s. Error: %s",
-                            tableBucket, snapshotId, e.getMessage()));
+            throw new KvSnapshotNotExistException(String.format(
+                    "Failed to get kv snapshot metadata for table bucket %s and snapshot id %s. Error: %s",
+                    tableBucket, snapshotId, e.getMessage()));
         }
     }
 
@@ -385,38 +361,31 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         try {
             // In order to avoid repeatedly obtaining security token, cache it for a while.
             long currentTimeMs = System.currentTimeMillis();
-            if (securityToken == null
-                    || currentTimeMs - tokenLastUpdateTimeMs > TOKEN_EXPIRATION_TIME_MS) {
+            if (securityToken == null || currentTimeMs - tokenLastUpdateTimeMs > TOKEN_EXPIRATION_TIME_MS) {
                 securityToken = remoteFileSystem.obtainSecurityToken();
                 tokenLastUpdateTimeMs = currentTimeMs;
             }
 
-            return CompletableFuture.completedFuture(
-                    toGetFileSystemSecurityTokenResponse(
-                            remoteFileSystem.getUri().getScheme(), securityToken));
+            return CompletableFuture.completedFuture(toGetFileSystemSecurityTokenResponse(
+                    remoteFileSystem.getUri().getScheme(), securityToken));
         } catch (Exception e) {
-            throw new SecurityTokenException(
-                    "Failed to get file access security token: " + e.getMessage());
+            throw new SecurityTokenException("Failed to get file access security token: " + e.getMessage());
         }
     }
 
     @Override
-    public CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(
-            ListPartitionInfosRequest request) {
+    public CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(ListPartitionInfosRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
         Map<String, Long> partitionNameAndIds;
         if (request.hasPartialPartitionSpec()) {
-            ResolvedPartitionSpec partitionSpecFromRequest =
-                    toResolvedPartitionSpec(request.getPartialPartitionSpec());
-            partitionNameAndIds =
-                    metadataManager.listPartitions(tablePath, partitionSpecFromRequest);
+            ResolvedPartitionSpec partitionSpecFromRequest = toResolvedPartitionSpec(request.getPartialPartitionSpec());
+            partitionNameAndIds = metadataManager.listPartitions(tablePath, partitionSpecFromRequest);
         } else {
             partitionNameAndIds = metadataManager.listPartitions(tablePath);
         }
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         List<String> partitionKeys = tableInfo.getPartitionKeys();
-        return CompletableFuture.completedFuture(
-                toListPartitionInfosResponse(partitionKeys, partitionNameAndIds));
+        return CompletableFuture.completedFuture(toListPartitionInfosResponse(partitionKeys, partitionNameAndIds));
     }
 
     @Override
@@ -433,22 +402,17 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             optLakeTableSnapshot = zkClient.getLakeTableSnapshot(tableId);
         } catch (Exception e) {
             throw new FlussRuntimeException(
-                    String.format(
-                            "Failed to get lake table snapshot for table: %s, table id: %d",
-                            tablePath, tableId),
+                    String.format("Failed to get lake table snapshot for table: %s, table id: %d", tablePath, tableId),
                     e);
         }
 
         if (!optLakeTableSnapshot.isPresent()) {
             throw new LakeTableSnapshotNotExistException(
-                    String.format(
-                            "Lake table snapshot not exist for table: %s, table id: %d",
-                            tablePath, tableId));
+                    String.format("Lake table snapshot not exist for table: %s, table id: %d", tablePath, tableId));
         }
 
         LakeTableSnapshot lakeTableSnapshot = optLakeTableSnapshot.get();
-        return CompletableFuture.completedFuture(
-                makeGetLatestLakeSnapshotResponse(tableId, lakeTableSnapshot));
+        return CompletableFuture.completedFuture(makeGetLatestLakeSnapshotResponse(tableId, lakeTableSnapshot));
     }
 
     @Override
@@ -461,8 +425,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             Collection<AclBinding> acls = authorizer.listAcls(currentSession(), aclBindingFilter);
             return CompletableFuture.completedFuture(makeListAclsResponse(acls));
         } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    String.format("Failed to list acls for resource: %s", aclBindingFilter), e);
+            throw new FlussRuntimeException(String.format("Failed to list acls for resource: %s", aclBindingFilter), e);
         }
     }
 
@@ -484,8 +447,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                     || authorizer.isAuthorized(
                             session,
                             OperationType.DESCRIBE,
-                            Resource.table(
-                                    pbTablePath.getDatabaseName(), pbTablePath.getTableName()))) {
+                            Resource.table(pbTablePath.getDatabaseName(), pbTablePath.getTableName()))) {
                 TablePath tablePath = toTablePath(pbTablePath);
                 tableMetadata.add(getTableMetadataFunc.apply(tablePath));
                 tablePaths.add(tablePath);
@@ -493,15 +455,13 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         }
 
         List<PartitionMetadata> partitionMetadata = new ArrayList<>();
-        List<PhysicalTablePath> partitions =
-                request.getPartitionsPathsList().stream()
-                        .map(ServerRpcMessageUtils::toPhysicalTablePath)
-                        .collect(Collectors.toList());
+        List<PhysicalTablePath> partitions = request.getPartitionsPathsList().stream()
+                .map(ServerRpcMessageUtils::toPhysicalTablePath)
+                .collect(Collectors.toList());
         long[] partitionIds = request.getPartitionsIds();
         Set<Long> partitionIdsNotExistsInCache = new HashSet<>();
         for (long partitionId : partitionIds) {
-            Optional<PhysicalTablePath> physicalTablePath =
-                    getPhysicalTablePathFunc.apply(partitionId);
+            Optional<PhysicalTablePath> physicalTablePath = getPhysicalTablePathFunc.apply(partitionId);
             if (physicalTablePath.isPresent()) {
                 partitions.add(physicalTablePath.get());
             } else {
@@ -510,8 +470,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         }
 
         if (!partitionIdsNotExistsInCache.isEmpty()) {
-            partitionMetadata.addAll(
-                    getPartitionMetadataFromZk(tablePaths, partitionIdsNotExistsInCache));
+            partitionMetadata.addAll(getPartitionMetadataFromZk(tablePaths, partitionIdsNotExistsInCache));
         }
 
         for (PhysicalTablePath partitionPath : partitions) {
@@ -519,16 +478,15 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                     || authorizer.isAuthorized(
                             session,
                             OperationType.DESCRIBE,
-                            Resource.table(
-                                    partitionPath.getDatabaseName(),
-                                    partitionPath.getTableName()))) {
+                            Resource.table(partitionPath.getDatabaseName(), partitionPath.getTableName()))) {
                 partitionMetadata.add(getPartitionMetadataFunc.apply(partitionPath));
             }
         }
 
         return buildMetadataResponse(
                 metadataCache.getCoordinatorServer(listenerName),
-                new HashSet<>(metadataCache.getAllAliveTabletServers(listenerName).values()),
+                new HashSet<>(
+                        metadataCache.getAllAliveTabletServers(listenerName).values()),
                 tableMetadata,
                 partitionMetadata);
     }
@@ -536,13 +494,11 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     public static List<BucketMetadata> getTableMetadataFromZk(
             ZooKeeperClient zkClient, TablePath tablePath, long tableId, boolean isPartitioned) {
         try {
-            AssignmentInfo assignmentInfo =
-                    getAssignmentInfo(tableId, PhysicalTablePath.of(tablePath), zkClient);
+            AssignmentInfo assignmentInfo = getAssignmentInfo(tableId, PhysicalTablePath.of(tablePath), zkClient);
             List<BucketMetadata> bucketMetadataList = new ArrayList<>();
             if (assignmentInfo.tableAssignment != null) {
                 TableAssignment tableAssignment = assignmentInfo.tableAssignment;
-                bucketMetadataList =
-                        toBucketMetadataList(tableId, null, tableAssignment, null, zkClient);
+                bucketMetadataList = toBucketMetadataList(tableId, null, tableAssignment, null, zkClient);
             } else {
                 if (isPartitioned) {
                     LOG.warn("No table assignment node found for table {}", tableId);
@@ -550,31 +506,21 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             }
             return bucketMetadataList;
         } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    String.format("Failed to get metadata for %s", tablePath), e);
+            throw new FlussRuntimeException(String.format("Failed to get metadata for %s", tablePath), e);
         }
     }
 
     public static PartitionMetadata getPartitionMetadataFromZk(
             PhysicalTablePath partitionPath, ZooKeeperClient zkClient) {
         try {
-            checkNotNull(
-                    partitionPath.getPartitionName(),
-                    "partitionName must be not null, but get: " + partitionPath);
+            checkNotNull(partitionPath.getPartitionName(), "partitionName must be not null, but get: " + partitionPath);
             AssignmentInfo assignmentInfo = getAssignmentInfo(null, partitionPath, zkClient);
             List<BucketMetadata> bucketMetadataList = new ArrayList<>();
-            checkNotNull(
-                    assignmentInfo.partitionId,
-                    "partition id must be not null for " + partitionPath);
+            checkNotNull(assignmentInfo.partitionId, "partition id must be not null for " + partitionPath);
             if (assignmentInfo.tableAssignment != null) {
                 TableAssignment tableAssignment = assignmentInfo.tableAssignment;
-                bucketMetadataList =
-                        toBucketMetadataList(
-                                assignmentInfo.tableId,
-                                assignmentInfo.partitionId,
-                                tableAssignment,
-                                null,
-                                zkClient);
+                bucketMetadataList = toBucketMetadataList(
+                        assignmentInfo.tableId, assignmentInfo.partitionId, tableAssignment, null, zkClient);
             } else {
                 LOG.warn("No partition assignment node found for partition {}", partitionPath);
             }
@@ -586,8 +532,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         } catch (PartitionNotExistException e) {
             throw e;
         } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    String.format("Failed to get metadata for partition %s", partitionPath), e);
+            throw new FlussRuntimeException(String.format("Failed to get metadata for partition %s", partitionPath), e);
         }
     }
 
@@ -637,35 +582,29 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                     String partitionName = partitionNameById.get(partitionId);
                     if (partitionName != null) {
                         partitionMetadata.add(
-                                getPartitionMetadataFromZk(
-                                        PhysicalTablePath.of(tablePath, partitionName), zkClient));
+                                getPartitionMetadataFromZk(PhysicalTablePath.of(tablePath, partitionName), zkClient));
                         hitPartitionIds.add(partitionId);
                     }
                 }
                 partitionIdSet.removeAll(hitPartitionIds);
             }
         } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    "Failed to get metadata for partition ids: " + partitionIdSet, e);
+            throw new FlussRuntimeException("Failed to get metadata for partition ids: " + partitionIdSet, e);
         }
         if (!partitionIdSet.isEmpty()) {
-            throw new PartitionNotExistException(
-                    "Partition not exist for partition ids: " + partitionIdSet);
+            throw new PartitionNotExistException("Partition not exist for partition ids: " + partitionIdSet);
         }
         return partitionMetadata;
     }
 
     private static AssignmentInfo getAssignmentInfo(
-            @Nullable Long tableId, PhysicalTablePath physicalTablePath, ZooKeeperClient zkClient)
-            throws Exception {
+            @Nullable Long tableId, PhysicalTablePath physicalTablePath, ZooKeeperClient zkClient) throws Exception {
         // it's a partition, get the partition assignment
         if (physicalTablePath.getPartitionName() != null) {
             Optional<TablePartition> tablePartition =
-                    zkClient.getPartition(
-                            physicalTablePath.getTablePath(), physicalTablePath.getPartitionName());
+                    zkClient.getPartition(physicalTablePath.getTablePath(), physicalTablePath.getPartitionName());
             if (!tablePartition.isPresent()) {
-                throw new PartitionNotExistException(
-                        "Table partition '" + physicalTablePath + "' does not exist.");
+                throw new PartitionNotExistException("Table partition '" + physicalTablePath + "' does not exist.");
             }
             long partitionId = tablePartition.get().getPartitionId();
 
@@ -686,8 +625,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
         private final @Nullable Long partitionId;
         private final @Nullable TableAssignment tableAssignment;
 
-        private AssignmentInfo(
-                long tableId, TableAssignment tableAssignment, @Nullable Long partitionId) {
+        private AssignmentInfo(long tableId, TableAssignment tableAssignment, @Nullable Long partitionId) {
             this.tableId = tableId;
             this.tableAssignment = tableAssignment;
             this.partitionId = partitionId;

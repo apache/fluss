@@ -42,15 +42,11 @@ public class PartitionGetter {
         for (String partitionKey : partitionKeys) {
             int partitionColumnIndex = fieldNames.indexOf(partitionKey);
             checkArgument(
-                    partitionColumnIndex >= 0,
-                    "The partition column %s is not in the row %s.",
-                    partitionKey,
-                    rowType);
+                    partitionColumnIndex >= 0, "The partition column %s is not in the row %s.", partitionKey, rowType);
 
             // check the data type of the partition column
             DataType partitionColumnDataType = rowType.getTypeAt(partitionColumnIndex);
-            partitionFieldGetters.add(
-                    InternalRow.createFieldGetter(partitionColumnDataType, partitionColumnIndex));
+            partitionFieldGetters.add(InternalRow.createFieldGetter(partitionColumnDataType, partitionColumnIndex));
         }
     }
 
@@ -61,8 +57,7 @@ public class PartitionGetter {
             checkNotNull(partitionValue, "Partition value shouldn't be null.");
             partitionValues.add(partitionValue.toString());
         }
-        ResolvedPartitionSpec resolvedPartitionSpec =
-                new ResolvedPartitionSpec(partitionKeys, partitionValues);
+        ResolvedPartitionSpec resolvedPartitionSpec = new ResolvedPartitionSpec(partitionKeys, partitionValues);
         return resolvedPartitionSpec.getPartitionName();
     }
 }

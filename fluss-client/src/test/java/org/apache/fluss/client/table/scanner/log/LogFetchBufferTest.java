@@ -62,8 +62,7 @@ public class LogFetchBufferTest {
         scanBuckets.put(tableBucket3, 0L);
         logScannerStatus = new LogScannerStatus();
         logScannerStatus.assignScanBuckets(scanBuckets);
-        readContext =
-                LogRecordReadContext.createArrowReadContext(DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
+        readContext = LogRecordReadContext.createArrowReadContext(DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
     }
 
     @AfterEach
@@ -121,8 +120,7 @@ public class LogFetchBufferTest {
                     .containsExactlyInAnyOrder(tableBucket1, tableBucket2, tableBucket3);
 
             logFetchBuffer.setNextInLineFetch(null);
-            assertThat(logFetchBuffer.bufferedBuckets())
-                    .containsExactlyInAnyOrder(tableBucket2, tableBucket3);
+            assertThat(logFetchBuffer.bufferedBuckets()).containsExactlyInAnyOrder(tableBucket2, tableBucket3);
 
             logFetchBuffer.poll();
             assertThat(logFetchBuffer.bufferedBuckets()).containsExactlyInAnyOrder(tableBucket3);
@@ -136,9 +134,7 @@ public class LogFetchBufferTest {
     void testAddAllAndRetainAll() throws Exception {
         try (LogFetchBuffer logFetchBuffer = new LogFetchBuffer()) {
             logFetchBuffer.setNextInLineFetch(makeCompletedFetch(tableBucket1));
-            logFetchBuffer.addAll(
-                    Arrays.asList(
-                            makeCompletedFetch(tableBucket2), makeCompletedFetch(tableBucket3)));
+            logFetchBuffer.addAll(Arrays.asList(makeCompletedFetch(tableBucket2), makeCompletedFetch(tableBucket3)));
             logFetchBuffer.pend(makePendingFetch(tableBucket1));
             logFetchBuffer.pend(makePendingFetch(tableBucket2));
             logFetchBuffer.pend(makePendingFetch(tableBucket3));
@@ -149,10 +145,8 @@ public class LogFetchBufferTest {
                     .containsExactlyInAnyOrder(tableBucket1, tableBucket2, tableBucket3);
 
             logFetchBuffer.retainAll(new HashSet<>(Arrays.asList(tableBucket2, tableBucket3)));
-            assertThat(logFetchBuffer.bufferedBuckets())
-                    .containsExactlyInAnyOrder(tableBucket2, tableBucket3);
-            assertThat(logFetchBuffer.pendedBuckets())
-                    .containsExactlyInAnyOrder(tableBucket2, tableBucket3);
+            assertThat(logFetchBuffer.bufferedBuckets()).containsExactlyInAnyOrder(tableBucket2, tableBucket3);
+            assertThat(logFetchBuffer.pendedBuckets()).containsExactlyInAnyOrder(tableBucket2, tableBucket3);
 
             logFetchBuffer.retainAll(Collections.singleton(tableBucket3));
             assertThat(logFetchBuffer.bufferedBuckets()).containsExactlyInAnyOrder(tableBucket3);
@@ -168,16 +162,14 @@ public class LogFetchBufferTest {
     void testWakeup() throws Exception {
         try (LogFetchBuffer logFetchBuffer = new LogFetchBuffer()) {
             AtomicReference<Exception> exception = new AtomicReference<>();
-            final Thread waitingThread =
-                    new Thread(
-                            () -> {
-                                try {
-                                    logFetchBuffer.awaitNotEmpty(
-                                            System.nanoTime() + Duration.ofMinutes(1).toNanos());
-                                } catch (Exception e) {
-                                    exception.set(e);
-                                }
-                            });
+            final Thread waitingThread = new Thread(() -> {
+                try {
+                    logFetchBuffer.awaitNotEmpty(
+                            System.nanoTime() + Duration.ofMinutes(1).toNanos());
+                } catch (Exception e) {
+                    exception.set(e);
+                }
+            });
             waitingThread.start();
             logFetchBuffer.wakeup();
             waitingThread.join(Duration.ofSeconds(30).toMillis());
@@ -191,10 +183,8 @@ public class LogFetchBufferTest {
         ExecutorService service = Executors.newSingleThreadExecutor();
 
         try (LogFetchBuffer logFetchBuffer = new LogFetchBuffer()) {
-            Callable<Boolean> await =
-                    () ->
-                            logFetchBuffer.awaitNotEmpty(
-                                    System.nanoTime() + Duration.ofMinutes(1).toNanos());
+            Callable<Boolean> await = () -> logFetchBuffer.awaitNotEmpty(
+                    System.nanoTime() + Duration.ofMinutes(1).toNanos());
 
             assertThat(logFetchBuffer.isEmpty()).isTrue();
             AtomicBoolean completed1 = new AtomicBoolean(false);
@@ -219,8 +209,7 @@ public class LogFetchBufferTest {
             logFetchBuffer.pend(pending3);
             logFetchBuffer.pend(pending4);
 
-            Future<Boolean> signal =
-                    service.submit(() -> await(logFetchBuffer, Duration.ofSeconds(1)));
+            Future<Boolean> signal = service.submit(() -> await(logFetchBuffer, Duration.ofSeconds(1)));
             logFetchBuffer.tryComplete(pending1.tableBucket());
             // nothing happen, as pending1 is not completed
             assertThat(logFetchBuffer.isEmpty()).isTrue();
@@ -269,8 +258,7 @@ public class LogFetchBufferTest {
         return new CompletedPendingFetch(makeCompletedFetch(tableBucket));
     }
 
-    private PendingFetch makePendingFetch(TableBucket tableBucket, AtomicBoolean completed)
-            throws Exception {
+    private PendingFetch makePendingFetch(TableBucket tableBucket, AtomicBoolean completed) throws Exception {
         DefaultCompletedFetch completedFetch = makeCompletedFetch(tableBucket);
         return new PendingFetch() {
             @Override

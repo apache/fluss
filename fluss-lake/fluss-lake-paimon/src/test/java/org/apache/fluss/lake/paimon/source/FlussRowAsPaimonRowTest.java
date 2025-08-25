@@ -46,22 +46,21 @@ class FlussRowAsPaimonRowTest {
     @Test
     void testLogTableRecordAllTypes() {
         // Construct a FlussRowAsPaimonRow instance
-        RowType tableRowType =
-                RowType.of(
-                        new org.apache.paimon.types.BooleanType(),
-                        new org.apache.paimon.types.TinyIntType(),
-                        new org.apache.paimon.types.SmallIntType(),
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BigIntType(),
-                        new org.apache.paimon.types.FloatType(),
-                        new org.apache.paimon.types.DoubleType(),
-                        new org.apache.paimon.types.VarCharType(),
-                        new org.apache.paimon.types.DecimalType(5, 2),
-                        new org.apache.paimon.types.DecimalType(20, 0),
-                        new org.apache.paimon.types.LocalZonedTimestampType(6),
-                        new org.apache.paimon.types.TimestampType(6),
-                        new org.apache.paimon.types.BinaryType(),
-                        new org.apache.paimon.types.VarCharType());
+        RowType tableRowType = RowType.of(
+                new org.apache.paimon.types.BooleanType(),
+                new org.apache.paimon.types.TinyIntType(),
+                new org.apache.paimon.types.SmallIntType(),
+                new org.apache.paimon.types.IntType(),
+                new org.apache.paimon.types.BigIntType(),
+                new org.apache.paimon.types.FloatType(),
+                new org.apache.paimon.types.DoubleType(),
+                new org.apache.paimon.types.VarCharType(),
+                new org.apache.paimon.types.DecimalType(5, 2),
+                new org.apache.paimon.types.DecimalType(20, 0),
+                new org.apache.paimon.types.LocalZonedTimestampType(6),
+                new org.apache.paimon.types.TimestampType(6),
+                new org.apache.paimon.types.BinaryType(),
+                new org.apache.paimon.types.VarCharType());
 
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
@@ -81,8 +80,7 @@ class FlussRowAsPaimonRowTest {
         genericRow.setField(12, new byte[] {1, 2, 3, 4});
         genericRow.setField(13, null);
         LogRecord logRecord = new GenericRecord(logOffset, timeStamp, APPEND_ONLY, genericRow);
-        FlussRowAsPaimonRow flussRowAsPaimonRow =
-                new FlussRowAsPaimonRow(logRecord.getRow(), tableRowType);
+        FlussRowAsPaimonRow flussRowAsPaimonRow = new FlussRowAsPaimonRow(logRecord.getRow(), tableRowType);
 
         // verify FlussRecordAsPaimonRow normal columns
         assertThat(flussRowAsPaimonRow.getBoolean(0)).isTrue();
@@ -93,16 +91,14 @@ class FlussRowAsPaimonRowTest {
         assertThat(flussRowAsPaimonRow.getFloat(5)).isEqualTo(5.1f);
         assertThat(flussRowAsPaimonRow.getDouble(6)).isEqualTo(6.0d);
         assertThat(flussRowAsPaimonRow.getString(7).toString()).isEqualTo("string");
-        assertThat(flussRowAsPaimonRow.getDecimal(8, 5, 2).toBigDecimal())
-                .isEqualTo(new BigDecimal("0.09"));
-        assertThat(flussRowAsPaimonRow.getDecimal(9, 20, 0).toBigDecimal())
-                .isEqualTo(new BigDecimal(10));
-        assertThat(flussRowAsPaimonRow.getTimestamp(10, 6).getMillisecond())
-                .isEqualTo(1698235273182L);
-        assertThat(flussRowAsPaimonRow.getTimestamp(10, 6).getNanoOfMillisecond()).isEqualTo(5678);
-        assertThat(flussRowAsPaimonRow.getTimestamp(11, 6).getMillisecond())
-                .isEqualTo(1698235273182L);
-        assertThat(flussRowAsPaimonRow.getTimestamp(11, 6).getNanoOfMillisecond()).isEqualTo(5678);
+        assertThat(flussRowAsPaimonRow.getDecimal(8, 5, 2).toBigDecimal()).isEqualTo(new BigDecimal("0.09"));
+        assertThat(flussRowAsPaimonRow.getDecimal(9, 20, 0).toBigDecimal()).isEqualTo(new BigDecimal(10));
+        assertThat(flussRowAsPaimonRow.getTimestamp(10, 6).getMillisecond()).isEqualTo(1698235273182L);
+        assertThat(flussRowAsPaimonRow.getTimestamp(10, 6).getNanoOfMillisecond())
+                .isEqualTo(5678);
+        assertThat(flussRowAsPaimonRow.getTimestamp(11, 6).getMillisecond()).isEqualTo(1698235273182L);
+        assertThat(flussRowAsPaimonRow.getTimestamp(11, 6).getNanoOfMillisecond())
+                .isEqualTo(5678);
         assertThat(flussRowAsPaimonRow.getBinary(12)).isEqualTo(new byte[] {1, 2, 3, 4});
         assertThat(flussRowAsPaimonRow.isNullAt(13)).isTrue();
     }
@@ -110,9 +106,7 @@ class FlussRowAsPaimonRowTest {
     @Test
     void testPrimaryKeyTableRecord() {
         RowType tableRowType =
-                RowType.of(
-                        new org.apache.paimon.types.IntType(),
-                        new org.apache.paimon.types.BooleanType());
+                RowType.of(new org.apache.paimon.types.IntType(), new org.apache.paimon.types.BooleanType());
 
         long logOffset = 0;
         long timeStamp = System.currentTimeMillis();
@@ -121,8 +115,7 @@ class FlussRowAsPaimonRowTest {
         genericRow.setField(1, true);
 
         LogRecord logRecord = new GenericRecord(logOffset, timeStamp, INSERT, genericRow);
-        FlussRowAsPaimonRow flussRowAsPaimonRow =
-                new FlussRowAsPaimonRow(logRecord.getRow(), tableRowType);
+        FlussRowAsPaimonRow flussRowAsPaimonRow = new FlussRowAsPaimonRow(logRecord.getRow(), tableRowType);
 
         assertThat(flussRowAsPaimonRow.getInt(0)).isEqualTo(10);
         // verify rowkind

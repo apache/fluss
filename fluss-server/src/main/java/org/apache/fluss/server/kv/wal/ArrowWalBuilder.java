@@ -35,12 +35,10 @@ public class ArrowWalBuilder implements WalBuilder {
     private final ManagedPagedOutputView outputView;
     private final MemoryLogRecordsArrowBuilder recordsBuilder;
 
-    public ArrowWalBuilder(int schemaId, ArrowWriter writer, MemorySegmentPool memorySegmentPool)
-            throws IOException {
+    public ArrowWalBuilder(int schemaId, ArrowWriter writer, MemorySegmentPool memorySegmentPool) throws IOException {
         this.memorySegmentPool = memorySegmentPool;
         this.outputView = new ManagedPagedOutputView(memorySegmentPool);
-        this.recordsBuilder =
-                MemoryLogRecordsArrowBuilder.builder(schemaId, writer, outputView, false);
+        this.recordsBuilder = MemoryLogRecordsArrowBuilder.builder(schemaId, writer, outputView, false);
     }
 
     @Override

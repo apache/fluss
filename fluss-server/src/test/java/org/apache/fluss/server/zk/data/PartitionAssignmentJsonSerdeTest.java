@@ -30,19 +30,16 @@ class PartitionAssignmentJsonSerdeTest extends JsonSerdeTestBase<PartitionAssign
 
     @Override
     protected PartitionAssignment[] createObjects() {
-        Map<Integer, BucketAssignment> bucketAssignments =
-                TableAssignment.builder()
-                        .add(0, BucketAssignment.of(1, 4, 5))
-                        .add(1, BucketAssignment.of(2, 3))
-                        .build()
-                        .getBucketAssignments();
+        Map<Integer, BucketAssignment> bucketAssignments = TableAssignment.builder()
+                .add(0, BucketAssignment.of(1, 4, 5))
+                .add(1, BucketAssignment.of(2, 3))
+                .build()
+                .getBucketAssignments();
         return new PartitionAssignment[] {new PartitionAssignment(1, bucketAssignments)};
     }
 
     @Override
     protected String[] expectedJsons() {
-        return new String[] {
-            "{\"version\":1,\"table_id\":1,\"buckets\":{\"0\":[1,4,5],\"1\":[2,3]}}"
-        };
+        return new String[] {"{\"version\":1,\"table_id\":1,\"buckets\":{\"0\":[1,4,5],\"1\":[2,3]}}"};
     }
 }

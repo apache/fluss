@@ -76,8 +76,7 @@ public class ApiMethod {
         List<ServerType> tmp = new ArrayList<>();
         tmp.add(additional);
         tmp.addAll(providers);
-        return new ApiMethod(
-                apiKey, requestClass, responseClass, method, ImmutableList.copyOf(tmp));
+        return new ApiMethod(apiKey, requestClass, responseClass, method, ImmutableList.copyOf(tmp));
     }
 
     public ApiKeys getApiKey() {

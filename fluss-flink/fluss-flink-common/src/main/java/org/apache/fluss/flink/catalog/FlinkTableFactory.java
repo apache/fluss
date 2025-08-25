@@ -89,25 +89,22 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         helper.validateExcept(prefixesToSkip.toArray(new String[0]));
 
         boolean isStreamingMode =
-                context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE)
-                        == RuntimeExecutionMode.STREAMING;
+                context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE) == RuntimeExecutionMode.STREAMING;
 
         RowType tableOutputType = (RowType) context.getPhysicalRowDataType().getLogicalType();
         FlinkConnectorOptionsUtils.validateTableSourceOptions(tableOptions);
 
-        ZoneId timeZone =
-                FlinkConnectorOptionsUtils.getLocalTimeZone(
-                        context.getConfiguration().get(TableConfigOptions.LOCAL_TIME_ZONE));
+        ZoneId timeZone = FlinkConnectorOptionsUtils.getLocalTimeZone(
+                context.getConfiguration().get(TableConfigOptions.LOCAL_TIME_ZONE));
         final FlinkConnectorOptionsUtils.StartupOptions startupOptions =
                 FlinkConnectorOptionsUtils.getStartupOptions(tableOptions, timeZone);
 
         ResolvedSchema resolvedSchema = context.getCatalogTable().getResolvedSchema();
         ResolvedCatalogTable resolvedCatalogTable = context.getCatalogTable();
         int[] primaryKeyIndexes = resolvedSchema.getPrimaryKeyIndexes();
-        int[] partitionKeyIndexes =
-                resolvedCatalogTable.getPartitionKeys().stream()
-                        .mapToInt(tableOutputType::getFieldIndex)
-                        .toArray();
+        int[] partitionKeyIndexes = resolvedCatalogTable.getPartitionKeys().stream()
+                .mapToInt(tableOutputType::getFieldIndex)
+                .toArray();
         int[] bucketKeyIndexes = getBucketKeyIndexes(tableOptions, tableOutputType);
 
         // options for lookup
@@ -123,15 +120,13 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         }
 
         // other option values
-        long partitionDiscoveryIntervalMs =
-                tableOptions
-                        .get(FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL)
-                        .toMillis();
+        long partitionDiscoveryIntervalMs = tableOptions
+                .get(FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL)
+                .toMillis();
 
         return new FlinkTableSource(
                 toFlussTablePath(context.getObjectIdentifier()),
-                toFlussClientConfig(
-                        context.getCatalogTable().getOptions(), context.getConfiguration()),
+                toFlussClientConfig(context.getCatalogTable().getOptions(), context.getConfiguration()),
                 tableOutputType,
                 primaryKeyIndexes,
                 bucketKeyIndexes,
@@ -159,8 +154,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         }
 
         boolean isStreamingMode =
-                context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE)
-                        == RuntimeExecutionMode.STREAMING;
+                context.getConfiguration().get(ExecutionOptions.RUNTIME_MODE) == RuntimeExecutionMode.STREAMING;
 
         ResolvedCatalogTable resolvedCatalogTable = context.getCatalogTable();
         List<String> partitionKeys = resolvedCatalogTable.getPartitionKeys();
@@ -169,8 +163,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
         return new FlinkTableSink(
                 toFlussTablePath(context.getObjectIdentifier()),
-                toFlussClientConfig(
-                        context.getCatalogTable().getOptions(), context.getConfiguration()),
+                toFlussClientConfig(context.getCatalogTable().getOptions(), context.getConfiguration()),
                 rowType,
                 context.getPrimaryKeyIndexes(),
                 partitionKeys,
@@ -195,43 +188,38 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
 
     @Override
     public Set<ConfigOption<?>> optionalOptions() {
-        HashSet<ConfigOption<?>> options =
-                new HashSet<>(
-                        Arrays.asList(
-                                FlinkConnectorOptions.BUCKET_KEY,
-                                FlinkConnectorOptions.BUCKET_NUMBER,
-                                FlinkConnectorOptions.SCAN_STARTUP_MODE,
-                                FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP,
-                                FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL,
-                                FlinkConnectorOptions.LOOKUP_ASYNC,
-                                FlinkConnectorOptions.SINK_IGNORE_DELETE,
-                                FlinkConnectorOptions.SINK_BUCKET_SHUFFLE,
-                                LookupOptions.MAX_RETRIES,
-                                LookupOptions.CACHE_TYPE,
-                                LookupOptions.PARTIAL_CACHE_EXPIRE_AFTER_ACCESS,
-                                LookupOptions.PARTIAL_CACHE_EXPIRE_AFTER_WRITE,
-                                LookupOptions.PARTIAL_CACHE_CACHE_MISSING_KEY,
-                                LookupOptions.PARTIAL_CACHE_MAX_ROWS));
+        HashSet<ConfigOption<?>> options = new HashSet<>(Arrays.asList(
+                FlinkConnectorOptions.BUCKET_KEY,
+                FlinkConnectorOptions.BUCKET_NUMBER,
+                FlinkConnectorOptions.SCAN_STARTUP_MODE,
+                FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP,
+                FlinkConnectorOptions.SCAN_PARTITION_DISCOVERY_INTERVAL,
+                FlinkConnectorOptions.LOOKUP_ASYNC,
+                FlinkConnectorOptions.SINK_IGNORE_DELETE,
+                FlinkConnectorOptions.SINK_BUCKET_SHUFFLE,
+                LookupOptions.MAX_RETRIES,
+                LookupOptions.CACHE_TYPE,
+                LookupOptions.PARTIAL_CACHE_EXPIRE_AFTER_ACCESS,
+                LookupOptions.PARTIAL_CACHE_EXPIRE_AFTER_WRITE,
+                LookupOptions.PARTIAL_CACHE_CACHE_MISSING_KEY,
+                LookupOptions.PARTIAL_CACHE_MAX_ROWS));
         // forward all fluss table and client options
         options.addAll(FlinkConnectorOptions.TABLE_OPTIONS);
         options.addAll(FlinkConnectorOptions.CLIENT_OPTIONS);
         return options;
     }
 
-    private static Configuration toFlussClientConfig(
-            Map<String, String> tableOptions, ReadableConfig flinkConfig) {
+    private static Configuration toFlussClientConfig(Map<String, String> tableOptions, ReadableConfig flinkConfig) {
         Configuration flussConfig = new Configuration();
         flussConfig.setString(
-                ConfigOptions.BOOTSTRAP_SERVERS.key(),
-                tableOptions.get(FlinkConnectorOptions.BOOTSTRAP_SERVERS.key()));
+                ConfigOptions.BOOTSTRAP_SERVERS.key(), tableOptions.get(FlinkConnectorOptions.BOOTSTRAP_SERVERS.key()));
 
         // forward all client configs
-        tableOptions.forEach(
-                (key, value) -> {
-                    if (key.startsWith(CLIENT_PREFIX)) {
-                        flussConfig.setString(key, value);
-                    }
-                });
+        tableOptions.forEach((key, value) -> {
+            if (key.startsWith(CLIENT_PREFIX)) {
+                flussConfig.setString(key, value);
+            }
+        });
 
         // pass flink io tmp dir to fluss client.
         flussConfig.setString(

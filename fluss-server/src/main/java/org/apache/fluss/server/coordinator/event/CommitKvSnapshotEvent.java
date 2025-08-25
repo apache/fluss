@@ -31,8 +31,7 @@ public class CommitKvSnapshotEvent implements FencedCoordinatorEvent {
     private final CompletableFuture<CommitKvSnapshotResponse> respCallback;
 
     public CommitKvSnapshotEvent(
-            CommitKvSnapshotData commitKvSnapshotData,
-            CompletableFuture<CommitKvSnapshotResponse> respCallback) {
+            CommitKvSnapshotData commitKvSnapshotData, CompletableFuture<CommitKvSnapshotResponse> respCallback) {
         this.commitKvSnapshotData = commitKvSnapshotData;
         this.respCallback = respCallback;
     }

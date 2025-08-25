@@ -28,8 +28,7 @@ public class WrappingProxyUtilTest {
     @Test
     void testThrowsExceptionIfTooManyProxies() {
         try {
-            WrappingProxyUtils.stripProxy(
-                    new SelfWrappingProxy(WrappingProxyUtils.SAFETY_NET_MAX_ITERATIONS));
+            WrappingProxyUtils.stripProxy(new SelfWrappingProxy(WrappingProxyUtils.SAFETY_NET_MAX_ITERATIONS));
             fail("Expected exception not thrown");
         } catch (final IllegalArgumentException e) {
             assertThat(e.getMessage()).contains("Are there loops in the object graph?");
@@ -38,10 +37,8 @@ public class WrappingProxyUtilTest {
 
     @Test
     public void testStripsAllProxies() {
-        final SelfWrappingProxy wrappingProxy =
-                new SelfWrappingProxy(WrappingProxyUtils.SAFETY_NET_MAX_ITERATIONS - 1);
-        assertThat(WrappingProxyUtils.stripProxy(wrappingProxy))
-                .isNotInstanceOf(SelfWrappingProxy.class);
+        final SelfWrappingProxy wrappingProxy = new SelfWrappingProxy(WrappingProxyUtils.SAFETY_NET_MAX_ITERATIONS - 1);
+        assertThat(WrappingProxyUtils.stripProxy(wrappingProxy)).isNotInstanceOf(SelfWrappingProxy.class);
     }
 
     private static class Wrapped {}

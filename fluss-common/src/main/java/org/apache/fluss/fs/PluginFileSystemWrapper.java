@@ -60,8 +60,7 @@ public class PluginFileSystemWrapper implements FileSystemPlugin {
         }
     }
 
-    static class ClassLoaderFixingFileSystem extends FileSystem
-            implements WrappingProxy<FileSystem> {
+    static class ClassLoaderFixingFileSystem extends FileSystem implements WrappingProxy<FileSystem> {
         private final FileSystem inner;
         private final ClassLoader loader;
 
@@ -125,8 +124,7 @@ public class PluginFileSystemWrapper implements FileSystemPlugin {
         }
 
         @Override
-        public FSDataOutputStream create(final FsPath f, final WriteMode overwriteMode)
-                throws IOException {
+        public FSDataOutputStream create(final FsPath f, final WriteMode overwriteMode) throws IOException {
             try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
                 return inner.create(f, overwriteMode);
             }

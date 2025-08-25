@@ -26,40 +26,34 @@ import java.util.Collections;
 /** Test for {@link SchemaJsonSerde}. */
 public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
 
-    static final Schema SCHEMA_0 =
-            Schema.newBuilder()
-                    .column("a", DataTypes.INT())
-                    .withComment("a is first column")
-                    .column("b", DataTypes.STRING())
-                    .withComment("b is second column")
-                    .column("c", DataTypes.CHAR(10))
-                    .withComment("c is third column")
-                    .primaryKey("a", "c")
-                    .build();
+    static final Schema SCHEMA_0 = Schema.newBuilder()
+            .column("a", DataTypes.INT())
+            .withComment("a is first column")
+            .column("b", DataTypes.STRING())
+            .withComment("b is second column")
+            .column("c", DataTypes.CHAR(10))
+            .withComment("c is third column")
+            .primaryKey("a", "c")
+            .build();
 
-    static final Schema SCHEMA_1 =
-            Schema.newBuilder()
-                    .fromColumns(
-                            Arrays.asList(
-                                    new Schema.Column("a", DataTypes.INT()),
-                                    new Schema.Column(
-                                            "b", DataTypes.STRING(), "b is second column"),
-                                    new Schema.Column(
-                                            "c", DataTypes.TIMESTAMP(), "c is third column")))
-                    .primaryKey(Collections.singletonList("a"))
-                    .build();
+    static final Schema SCHEMA_1 = Schema.newBuilder()
+            .fromColumns(Arrays.asList(
+                    new Schema.Column("a", DataTypes.INT()),
+                    new Schema.Column("b", DataTypes.STRING(), "b is second column"),
+                    new Schema.Column("c", DataTypes.TIMESTAMP(), "c is third column")))
+            .primaryKey(Collections.singletonList("a"))
+            .build();
 
     static final Schema SCHEMA_2 = Schema.newBuilder().fromSchema(SCHEMA_1).build();
 
-    static final Schema SCHEMA_3 =
-            Schema.newBuilder()
-                    .column("a", DataTypes.BIGINT())
-                    .withComment("a is first column")
-                    .column("b", DataTypes.STRING())
-                    .withComment("b is second column")
-                    .column("c", DataTypes.TIMESTAMP(6))
-                    .withComment("c is third column")
-                    .build();
+    static final Schema SCHEMA_3 = Schema.newBuilder()
+            .column("a", DataTypes.BIGINT())
+            .withComment("a is first column")
+            .column("b", DataTypes.STRING())
+            .withComment("b is second column")
+            .column("c", DataTypes.TIMESTAMP(6))
+            .withComment("c is third column")
+            .build();
 
     static final String SCHEMA_JSON_0 =
             "{\"version\":1,\"columns\":[{\"name\":\"a\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"a is first column\"},{\"name\":\"b\",\"data_type\":{\"type\":\"STRING\"},\"comment\":\"b is second column\"},{\"name\":\"c\",\"data_type\":{\"type\":\"CHAR\",\"nullable\":false,\"length\":10},\"comment\":\"c is third column\"}],\"primary_key\":[\"a\",\"c\"]}";

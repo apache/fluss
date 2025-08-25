@@ -38,13 +38,7 @@ public class TieringLogSplit extends TieringSplit {
             @Nullable String partitionName,
             long startingOffset,
             long stoppingOffset) {
-        this(
-                tablePath,
-                tableBucket,
-                partitionName,
-                startingOffset,
-                stoppingOffset,
-                UNKNOWN_NUMBER_OF_SPLITS);
+        this(tablePath, tableBucket, partitionName, startingOffset, stoppingOffset, UNKNOWN_NUMBER_OF_SPLITS);
     }
 
     public TieringLogSplit(
@@ -94,12 +88,7 @@ public class TieringLogSplit extends TieringSplit {
     @Override
     public TieringLogSplit copy(int numberOfSplits) {
         return new TieringLogSplit(
-                tablePath,
-                tableBucket,
-                partitionName,
-                startingOffset,
-                stoppingOffset,
-                numberOfSplits);
+                tablePath, tableBucket, partitionName, startingOffset, stoppingOffset, numberOfSplits);
     }
 
     @Override

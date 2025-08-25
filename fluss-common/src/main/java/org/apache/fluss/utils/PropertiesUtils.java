@@ -25,8 +25,7 @@ public class PropertiesUtils {
 
     /** Returns the properties as a map copy with a prefix key. */
     public static <V> Map<String, V> asPrefixedMap(Map<String, V> properties, String prefix) {
-        return properties.entrySet().stream()
-                .collect(Collectors.toMap(e -> prefix + e.getKey(), Map.Entry::getValue));
+        return properties.entrySet().stream().collect(Collectors.toMap(e -> prefix + e.getKey(), Map.Entry::getValue));
     }
 
     /**
@@ -35,14 +34,10 @@ public class PropertiesUtils {
      * @param originalMap The original map
      * @param prefix The prefix to filter the keys
      */
-    public static <V> Map<String, V> extractAndRemovePrefix(
-            Map<String, V> originalMap, String prefix) {
+    public static <V> Map<String, V> extractAndRemovePrefix(Map<String, V> originalMap, String prefix) {
         return originalMap.entrySet().stream()
                 .filter(entry -> entry.getKey().startsWith(prefix))
-                .collect(
-                        Collectors.toMap(
-                                entry -> entry.getKey().substring(prefix.length()),
-                                Map.Entry::getValue));
+                .collect(Collectors.toMap(entry -> entry.getKey().substring(prefix.length()), Map.Entry::getValue));
     }
 
     /**

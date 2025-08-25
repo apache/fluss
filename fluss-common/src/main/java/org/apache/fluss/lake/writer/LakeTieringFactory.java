@@ -46,8 +46,7 @@ public interface LakeTieringFactory<WriteResult, CommittableT> extends Serializa
      * @return the lake writer
      * @throws IOException if an I/O error occurs
      */
-    LakeWriter<WriteResult> createLakeWriter(WriterInitContext writerInitContext)
-            throws IOException;
+    LakeWriter<WriteResult> createLakeWriter(WriterInitContext writerInitContext) throws IOException;
 
     /**
      * Returns the serializer for write results.
@@ -62,8 +61,8 @@ public interface LakeTieringFactory<WriteResult, CommittableT> extends Serializa
      * @return the lake committer
      * @throws IOException if an I/O error occurs
      */
-    LakeCommitter<WriteResult, CommittableT> createLakeCommitter(
-            CommitterInitContext committerInitContext) throws IOException;
+    LakeCommitter<WriteResult, CommittableT> createLakeCommitter(CommitterInitContext committerInitContext)
+            throws IOException;
 
     /**
      * Returns the serializer for committable objects.

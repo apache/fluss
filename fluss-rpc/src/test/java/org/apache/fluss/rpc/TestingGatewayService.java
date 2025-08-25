@@ -33,8 +33,7 @@ import java.util.concurrent.CompletableFuture;
 /** Test gateway service. */
 public class TestingGatewayService extends RpcGatewayService {
 
-    private final List<String> processorThreadNames =
-            Collections.synchronizedList(new ArrayList<>());
+    private final List<String> processorThreadNames = Collections.synchronizedList(new ArrayList<>());
 
     public List<String> getProcessorThreadNames() {
         return new ArrayList<>(processorThreadNames);
@@ -46,11 +45,10 @@ public class TestingGatewayService extends RpcGatewayService {
         Set<ApiKeys> apiKeys = apiManager.enabledApis();
         List<PbApiVersion> apiVersions = new ArrayList<>();
         for (ApiKeys api : apiKeys) {
-            apiVersions.add(
-                    new PbApiVersion()
-                            .setApiKey(api.id)
-                            .setMinVersion(api.lowestSupportedVersion)
-                            .setMaxVersion(api.highestSupportedVersion));
+            apiVersions.add(new PbApiVersion()
+                    .setApiKey(api.id)
+                    .setMinVersion(api.lowestSupportedVersion)
+                    .setMaxVersion(api.highestSupportedVersion));
         }
         ApiVersionsResponse response = new ApiVersionsResponse();
         response.addAllApiVersions(apiVersions);

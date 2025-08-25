@@ -37,8 +37,7 @@ public class TestingRemoteLogStorage extends DefaultRemoteLogStorage {
     }
 
     @Override
-    public FsPath writeRemoteLogManifestSnapshot(RemoteLogManifest manifest)
-            throws RemoteStorageException {
+    public FsPath writeRemoteLogManifestSnapshot(RemoteLogManifest manifest) throws RemoteStorageException {
         if (writeManifestFail.get()) {
             throw new RuntimeException("failed to upload remote log manifest snapshot");
         }

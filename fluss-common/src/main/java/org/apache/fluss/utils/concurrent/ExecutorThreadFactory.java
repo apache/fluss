@@ -55,8 +55,11 @@ public class ExecutorThreadFactory implements ThreadFactory {
 
     private final int threadPriority;
 
-    @Nullable private final Thread.UncaughtExceptionHandler exceptionHandler;
-    @Nullable private final ClassLoader threadContextClassLoader;
+    @Nullable
+    private final Thread.UncaughtExceptionHandler exceptionHandler;
+
+    @Nullable
+    private final ClassLoader threadContextClassLoader;
 
     // ------------------------------------------------------------------------
 
@@ -87,15 +90,12 @@ public class ExecutorThreadFactory implements ThreadFactory {
      * @param poolName The pool name, used as the threads' name prefix
      * @param exceptionHandler The uncaught exception handler for the threads
      */
-    public ExecutorThreadFactory(
-            String poolName, Thread.UncaughtExceptionHandler exceptionHandler) {
+    public ExecutorThreadFactory(String poolName, Thread.UncaughtExceptionHandler exceptionHandler) {
         this(poolName, Thread.NORM_PRIORITY, exceptionHandler, null);
     }
 
     ExecutorThreadFactory(
-            String poolName,
-            Thread.UncaughtExceptionHandler exceptionHandler,
-            @Nullable ClassLoader classLoader) {
+            String poolName, Thread.UncaughtExceptionHandler exceptionHandler, @Nullable ClassLoader classLoader) {
         this(poolName, Thread.NORM_PRIORITY, exceptionHandler, classLoader);
     }
 
@@ -109,10 +109,9 @@ public class ExecutorThreadFactory implements ThreadFactory {
         this.exceptionHandler = exceptionHandler;
 
         SecurityManager securityManager = System.getSecurityManager();
-        this.group =
-                (securityManager != null)
-                        ? securityManager.getThreadGroup()
-                        : Thread.currentThread().getThreadGroup();
+        this.group = (securityManager != null)
+                ? securityManager.getThreadGroup()
+                : Thread.currentThread().getThreadGroup();
         this.threadContextClassLoader = threadContextClassLoader;
     }
 
@@ -143,8 +142,7 @@ public class ExecutorThreadFactory implements ThreadFactory {
     public static final class Builder {
         private String poolName;
         private int priority = Thread.NORM_PRIORITY;
-        private Thread.UncaughtExceptionHandler exceptionHandler =
-                FatalExitExceptionHandler.INSTANCE;
+        private Thread.UncaughtExceptionHandler exceptionHandler = FatalExitExceptionHandler.INSTANCE;
         private @Nullable ClassLoader threadContextClassLoader = null;
 
         public Builder setPoolName(final String poolName) {
@@ -157,8 +155,7 @@ public class ExecutorThreadFactory implements ThreadFactory {
             return this;
         }
 
-        public Builder setThreadContextClassloader(
-                @Nullable final ClassLoader threadContextClassLoader) {
+        public Builder setThreadContextClassloader(@Nullable final ClassLoader threadContextClassLoader) {
             this.threadContextClassLoader = threadContextClassLoader;
             return this;
         }
@@ -169,8 +166,7 @@ public class ExecutorThreadFactory implements ThreadFactory {
         }
 
         public ExecutorThreadFactory build() {
-            return new ExecutorThreadFactory(
-                    poolName, priority, exceptionHandler, threadContextClassLoader);
+            return new ExecutorThreadFactory(poolName, priority, exceptionHandler, threadContextClassLoader);
         }
     }
 }

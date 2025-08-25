@@ -22,8 +22,7 @@ import org.junit.jupiter.api.extension.BeforeAllCallback;
 import org.junit.jupiter.api.extension.ExtensionContext;
 
 /** An extension wrap logic for {@link BeforeAllCallback} and {@link AfterAllCallback}. */
-public class AllCallbackWrapper<C extends CustomExtension>
-        implements BeforeAllCallback, AfterAllCallback {
+public class AllCallbackWrapper<C extends CustomExtension> implements BeforeAllCallback, AfterAllCallback {
     private final C customExtension;
 
     public AllCallbackWrapper(C customExtension) {

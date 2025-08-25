@@ -107,23 +107,17 @@ public class FsPath implements Serializable {
         if (!(parentPath.equals("/") || parentPath.equals(""))) {
             try {
                 parentUri =
-                        new URI(
-                                parentUri.getScheme(),
-                                parentUri.getAuthority(),
-                                parentUri.getPath() + "/",
-                                null,
-                                null);
+                        new URI(parentUri.getScheme(), parentUri.getAuthority(), parentUri.getPath() + "/", null, null);
             } catch (URISyntaxException e) {
                 throw new IllegalArgumentException(e);
             }
         }
 
         if (child.uri.getPath().startsWith(FsPath.SEPARATOR)) {
-            child =
-                    new FsPath(
-                            child.uri.getScheme(),
-                            child.uri.getAuthority(),
-                            child.uri.getPath().substring(1));
+            child = new FsPath(
+                    child.uri.getScheme(),
+                    child.uri.getAuthority(),
+                    child.uri.getPath().substring(1));
         }
 
         final URI resolved = parentUri.resolve(child.uri);
@@ -181,8 +175,7 @@ public class FsPath implements Serializable {
         }
 
         // parse uri authority, if any
-        if (pathString.startsWith("//", start)
-                && (pathString.length() - start > 2)) { // has authority
+        if (pathString.startsWith("//", start) && (pathString.length() - start > 2)) { // has authority
             final int nextSlash = pathString.indexOf('/', start + 2);
             final int authEnd = nextSlash > 0 ? nextSlash : pathString.length();
             authority = pathString.substring(start + 2, authEnd);

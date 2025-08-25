@@ -30,11 +30,9 @@ import java.util.Map;
 import java.util.Set;
 
 /** A serializer for {@link SourceEnumeratorState}. */
-public class FlussSourceEnumeratorStateSerializer
-        implements SimpleVersionedSerializer<SourceEnumeratorState> {
+public class FlussSourceEnumeratorStateSerializer implements SimpleVersionedSerializer<SourceEnumeratorState> {
 
-    public static final FlussSourceEnumeratorStateSerializer INSTANCE =
-            new FlussSourceEnumeratorStateSerializer();
+    public static final FlussSourceEnumeratorStateSerializer INSTANCE = new FlussSourceEnumeratorStateSerializer();
 
     private static final int VERSION_0 = 0;
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =

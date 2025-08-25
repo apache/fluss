@@ -82,10 +82,7 @@ final class LogManagerTest extends LogTestBase {
 
     @BeforeAll
     static void baseBeforeAll() {
-        zkClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        zkClient = ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getZooKeeperClient(NOPErrorHandler.INSTANCE);
     }
 
     @BeforeEach
@@ -99,18 +96,15 @@ final class LogManagerTest extends LogTestBase {
         tablePath2 = TablePath.of(dbName, "t2");
 
         registerTableInZkClient();
-        logManager =
-                LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
+        logManager = LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
         logManager.startup();
     }
 
     private void registerTableInZkClient() throws Exception {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
-        zkClient.registerTable(
-                tablePath1, TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
+        zkClient.registerTable(tablePath1, TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
         zkClient.registerSchema(tablePath1, DATA1_SCHEMA);
-        zkClient.registerTable(
-                tablePath2, TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
+        zkClient.registerTable(tablePath2, TableRegistration.newTable(DATA2_TABLE_ID, DATA2_TABLE_DESCRIPTOR));
         zkClient.registerSchema(tablePath2, DATA2_SCHEMA);
     }
 
@@ -167,9 +161,7 @@ final class LogManagerTest extends LogTestBase {
 
         logManager.checkpointRecoveryOffsets();
         Map<TableBucket, Long> checkpoints =
-                new OffsetCheckpointFile(
-                                new File(tempDir, LogManager.RECOVERY_POINT_CHECKPOINT_FILE))
-                        .read();
+                new OffsetCheckpointFile(new File(tempDir, LogManager.RECOVERY_POINT_CHECKPOINT_FILE)).read();
 
         assertThat(checkpoints.get(tableBucket1)).isEqualTo(log1.getRecoveryPoint());
         assertThat(checkpoints.get(tableBucket2)).isEqualTo(log2.getRecoveryPoint());
@@ -193,16 +185,13 @@ final class LogManagerTest extends LogTestBase {
         logManager.shutdown();
         logManager = null;
 
-        LogManager newLogManager =
-                LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
+        LogManager newLogManager = LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
         newLogManager.startup();
         logManager = newLogManager;
         log1 = getOrCreateLog(tablePath1, null, tableBucket1);
         log2 = getOrCreateLog(tablePath2, null, tableBucket2);
         Map<TableBucket, Long> checkpoints =
-                new OffsetCheckpointFile(
-                                new File(tempDir, LogManager.RECOVERY_POINT_CHECKPOINT_FILE))
-                        .read();
+                new OffsetCheckpointFile(new File(tempDir, LogManager.RECOVERY_POINT_CHECKPOINT_FILE)).read();
 
         assertThat(checkpoints.get(tableBucket1)).isEqualTo(log1.getRecoveryPoint());
         assertThat(checkpoints.get(tableBucket2)).isEqualTo(log2.getRecoveryPoint());
@@ -233,8 +222,7 @@ final class LogManagerTest extends LogTestBase {
         String dataDir = conf.getString(ConfigOptions.DATA_DIR);
         assertThat(new File(dataDir, CLEAN_SHUTDOWN_FILE).exists()).isTrue();
 
-        LogManager newLogManager =
-                LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
+        LogManager newLogManager = LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
         assertThat(new File(dataDir, CLEAN_SHUTDOWN_FILE).exists()).isTrue();
         newLogManager.startup();
         logManager = newLogManager;
@@ -250,11 +238,8 @@ final class LogManagerTest extends LogTestBase {
         log1.appendAsLeader(mr1);
 
         // Different db with same table name.
-        LogTablet log2 =
-                getOrCreateLog(
-                        TablePath.of("db2", "t1"),
-                        partitionName,
-                        new TableBucket(15002L, tableBucket1.getPartitionId(), 2));
+        LogTablet log2 = getOrCreateLog(
+                TablePath.of("db2", "t1"), partitionName, new TableBucket(15002L, tableBucket1.getPartitionId(), 2));
         MemoryLogRecords mr2 = genMemoryLogRecordsByObject(ANOTHER_DATA1);
         log2.appendAsLeader(mr2);
 
@@ -279,11 +264,10 @@ final class LogManagerTest extends LogTestBase {
         assertThat(logManager.getLog(log1.getTableBucket()).isPresent()).isTrue();
     }
 
-    private LogTablet getOrCreateLog(
-            TablePath tablePath, String partitionName, TableBucket tableBucket) throws Exception {
+    private LogTablet getOrCreateLog(TablePath tablePath, String partitionName, TableBucket tableBucket)
+            throws Exception {
         return logManager.getOrCreateLog(
-                PhysicalTablePath.of(
-                        tablePath.getDatabaseName(), tablePath.getTableName(), partitionName),
+                PhysicalTablePath.of(tablePath.getDatabaseName(), tablePath.getTableName(), partitionName),
                 tableBucket,
                 LogFormat.ARROW,
                 1,

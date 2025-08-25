@@ -60,12 +60,11 @@ class TableChangeWatcherTest {
 
     private static final String DEFAULT_DB = "db";
 
-    private static final TableDescriptor TEST_TABLE =
-            TableDescriptor.builder()
-                    .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
-                    .distributedBy(3, "a")
-                    .build()
-                    .withReplicationFactor(3);
+    private static final TableDescriptor TEST_TABLE = TableDescriptor.builder()
+            .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
+            .distributedBy(3, "a")
+            .build()
+            .withReplicationFactor(3);
 
     @RegisterExtension
     public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
@@ -79,9 +78,7 @@ class TableChangeWatcherTest {
     @BeforeAll
     static void beforeAll() {
         zookeeperClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+                ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getZooKeeperClient(NOPErrorHandler.INSTANCE);
         metadataManager = new MetadataManager(zookeeperClient, new Configuration());
         metadataManager.createDatabase(DEFAULT_DB, DatabaseDescriptor.builder().build(), false);
     }
@@ -106,36 +103,20 @@ class TableChangeWatcherTest {
         List<CoordinatorEvent> expectedCreateTableEvents = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
             TablePath tablePath = TablePath.of(DEFAULT_DB, "table_" + i);
-            TableAssignment tableAssignment =
-                    generateAssignment(
-                            3,
-                            3,
-                            new TabletServerInfo[] {
-                                new TabletServerInfo(0, "rack0"),
-                                new TabletServerInfo(1, "rack1"),
-                                new TabletServerInfo(2, "rack2")
-                            });
-            long tableId =
-                    metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
+            TableAssignment tableAssignment = generateAssignment(3, 3, new TabletServerInfo[] {
+                new TabletServerInfo(0, "rack0"), new TabletServerInfo(1, "rack1"), new TabletServerInfo(2, "rack2")
+            });
+            long tableId = metadataManager.createTable(tablePath, TEST_TABLE, tableAssignment, false);
             SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
             long currentMillis = System.currentTimeMillis();
-            expectedCreateTableEvents.add(
-                    new CreateTableEvent(
-                            TableInfo.of(
-                                    tablePath,
-                                    tableId,
-                                    schemaInfo.getSchemaId(),
-                                    TEST_TABLE,
-                                    currentMillis,
-                                    currentMillis),
-                            tableAssignment));
+            expectedCreateTableEvents.add(new CreateTableEvent(
+                    TableInfo.of(
+                            tablePath, tableId, schemaInfo.getSchemaId(), TEST_TABLE, currentMillis, currentMillis),
+                    tableAssignment));
         }
 
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventManager.getEvents())
-                                .containsExactlyInAnyOrderElementsOf(expectedCreateTableEvents));
+        retry(Duration.ofMinutes(1), () -> assertThat(eventManager.getEvents())
+                .containsExactlyInAnyOrderElementsOf(expectedCreateTableEvents));
 
         // drop tables, collect drop table events
         List<CoordinatorEvent> expectedTableEvents = new ArrayList<>();
@@ -149,75 +130,53 @@ class TableChangeWatcherTest {
         // collect all events and check the all events
         List<CoordinatorEvent> allEvents = new ArrayList<>(expectedCreateTableEvents);
         allEvents.addAll(expectedTableEvents);
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventManager.getEvents())
-                                .containsExactlyInAnyOrderElementsOf(allEvents));
+        retry(Duration.ofMinutes(1), () -> assertThat(eventManager.getEvents())
+                .containsExactlyInAnyOrderElementsOf(allEvents));
     }
 
     @Test
     void testPartitionedTable() throws Exception {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "partition_table");
-        TableDescriptor partitionedTable =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("a", DataTypes.INT())
-                                        .column("b", DataTypes.STRING())
-                                        .build())
-                        .distributedBy(3, "a")
-                        .partitionedBy("b")
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true")
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), "DAY")
-                        .build()
-                        .withReplicationFactor(3);
+        TableDescriptor partitionedTable = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.STRING())
+                        .build())
+                .distributedBy(3, "a")
+                .partitionedBy("b")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), "DAY")
+                .build()
+                .withReplicationFactor(3);
         long tableId = metadataManager.createTable(tablePath, partitionedTable, null, false);
         List<CoordinatorEvent> expectedEvents = new ArrayList<>();
         SchemaInfo schemaInfo = metadataManager.getLatestSchema(tablePath);
         // create table event
         long currentMillis = System.currentTimeMillis();
-        expectedEvents.add(
-                new CreateTableEvent(
-                        TableInfo.of(
-                                tablePath,
-                                tableId,
-                                schemaInfo.getSchemaId(),
-                                partitionedTable,
-                                currentMillis,
-                                currentMillis),
-                        TableAssignment.builder().build()));
+        expectedEvents.add(new CreateTableEvent(
+                TableInfo.of(
+                        tablePath, tableId, schemaInfo.getSchemaId(), partitionedTable, currentMillis, currentMillis),
+                TableAssignment.builder().build()));
 
         // register partition
-        PartitionAssignment partitionAssignment =
-                new PartitionAssignment(
-                        tableId,
-                        generateAssignment(
-                                        3,
-                                        3,
-                                        new TabletServerInfo[] {
-                                            new TabletServerInfo(0, "rack0"),
-                                            new TabletServerInfo(1, "rack1"),
-                                            new TabletServerInfo(2, "rack2")
-                                        })
-                                .getBucketAssignments());
+        PartitionAssignment partitionAssignment = new PartitionAssignment(
+                tableId,
+                generateAssignment(3, 3, new TabletServerInfo[] {
+                            new TabletServerInfo(0, "rack0"),
+                            new TabletServerInfo(1, "rack1"),
+                            new TabletServerInfo(2, "rack2")
+                        })
+                        .getBucketAssignments());
         // register assignment and metadata
-        zookeeperClient.registerPartitionAssignmentAndMetadata(
-                1L, "2011", partitionAssignment, tablePath, tableId);
-        zookeeperClient.registerPartitionAssignmentAndMetadata(
-                2L, "2022", partitionAssignment, tablePath, tableId);
+        zookeeperClient.registerPartitionAssignmentAndMetadata(1L, "2011", partitionAssignment, tablePath, tableId);
+        zookeeperClient.registerPartitionAssignmentAndMetadata(2L, "2022", partitionAssignment, tablePath, tableId);
 
         // create partitions events
-        expectedEvents.add(
-                new CreatePartitionEvent(tablePath, tableId, 1L, "2011", partitionAssignment));
-        expectedEvents.add(
-                new CreatePartitionEvent(tablePath, tableId, 2L, "2022", partitionAssignment));
+        expectedEvents.add(new CreatePartitionEvent(tablePath, tableId, 1L, "2011", partitionAssignment));
+        expectedEvents.add(new CreatePartitionEvent(tablePath, tableId, 2L, "2022", partitionAssignment));
 
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventManager.getEvents())
-                                .containsExactlyInAnyOrderElementsOf(expectedEvents));
+        retry(Duration.ofMinutes(1), () -> assertThat(eventManager.getEvents())
+                .containsExactlyInAnyOrderElementsOf(expectedEvents));
 
         metadataManager.dropTable(tablePath, false);
 
@@ -227,10 +186,7 @@ class TableChangeWatcherTest {
         // drop table event
         expectedEvents.add(new DropTableEvent(tableId, true, false));
 
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventManager.getEvents())
-                                .containsExactlyInAnyOrderElementsOf(expectedEvents));
+        retry(Duration.ofMinutes(1), () -> assertThat(eventManager.getEvents())
+                .containsExactlyInAnyOrderElementsOf(expectedEvents));
     }
 }

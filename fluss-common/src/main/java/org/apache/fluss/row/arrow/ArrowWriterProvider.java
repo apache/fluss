@@ -25,11 +25,7 @@ import org.apache.fluss.types.RowType;
 @Internal
 public interface ArrowWriterProvider extends AutoCloseable {
     ArrowWriter getOrCreateWriter(
-            long tableId,
-            int schemaId,
-            int bufferSizeInBytes,
-            RowType schema,
-            ArrowCompressionInfo compressionInfo);
+            long tableId, int schemaId, int bufferSizeInBytes, RowType schema, ArrowCompressionInfo compressionInfo);
 
     void recycleWriter(ArrowWriter arrowWriter);
 }

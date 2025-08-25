@@ -91,13 +91,12 @@ public final class NettyServer implements RpcServer {
         this.endpoints = checkNotNull(endpoints, "endpoints");
         this.protocols = loadProtocols(conf, service.providerType(), endpoints, requestsMetrics);
 
-        this.workerPool =
-                new RequestProcessorPool(
-                        conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
-                        conf.getInt(ConfigOptions.NETTY_SERVER_MAX_QUEUED_REQUESTS),
-                        service,
-                        protocols,
-                        requestsMetrics);
+        this.workerPool = new RequestProcessorPool(
+                conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
+                conf.getInt(ConfigOptions.NETTY_SERVER_MAX_QUEUED_REQUESTS),
+                service,
+                protocols,
+                requestsMetrics);
         this.bindChannels = new CopyOnWriteArrayList<>();
         this.bindEndpoints = new CopyOnWriteArrayList<>();
     }
@@ -115,12 +114,10 @@ public final class NettyServer implements RpcServer {
 
         final long start = System.nanoTime();
 
-        this.acceptorGroup =
-                NettyUtils.newEventLoopGroup(
-                        1, // always use single thread for acceptor
-                        "fluss-netty-server-acceptor");
-        this.selectorGroup =
-                NettyUtils.newEventLoopGroup(numNetworkThreads, "fluss-netty-server-selector");
+        this.acceptorGroup = NettyUtils.newEventLoopGroup(
+                1, // always use single thread for acceptor
+                "fluss-netty-server-acceptor");
+        this.selectorGroup = NettyUtils.newEventLoopGroup(numNetworkThreads, "fluss-netty-server-selector");
         PooledByteBufAllocator pooledBufAllocator = PooledByteBufAllocator.DEFAULT;
 
         // setup worker thread pool
@@ -135,10 +132,7 @@ public final class NettyServer implements RpcServer {
         }
 
         final long duration = (System.nanoTime() - start) / 1_000_000;
-        LOG.info(
-                "Successfully start Netty server (took {} ms). Listening on endpoints {}.",
-                duration,
-                bindEndpoints);
+        LOG.info("Successfully start Netty server (took {} ms). Listening on endpoints {}.", duration, bindEndpoints);
         isRunning = true;
         NettyMetrics.registerNettyMetrics(serverMetricGroup, pooledBufAllocator);
     }
@@ -149,24 +143,20 @@ public final class NettyServer implements RpcServer {
         return bindEndpoints;
     }
 
-    private void startEndpoint(Endpoint endpoint, NetworkProtocolPlugin protocol)
-            throws IOException {
+    private void startEndpoint(Endpoint endpoint, NetworkProtocolPlugin protocol) throws IOException {
         ServerBootstrap bootstrap = new ServerBootstrap();
 
         bootstrap.childOption(ChannelOption.ALLOCATOR, PooledByteBufAllocator.DEFAULT);
         bootstrap.group(acceptorGroup, selectorGroup);
         bootstrap.childOption(ChannelOption.TCP_NODELAY, true);
         bootstrap.childOption(
-                ChannelOption.RCVBUF_ALLOCATOR,
-                new AdaptiveRecvByteBufAllocator(1024, 16 * 1024, 1024 * 1024));
+                ChannelOption.RCVBUF_ALLOCATOR, new AdaptiveRecvByteBufAllocator(1024, 16 * 1024, 1024 * 1024));
         bootstrap.channel(NettyUtils.getServerSocketChannelClass(selectorGroup));
 
         // child channel pipeline for accepted connections
         final ChannelHandler channelHandler;
         final String protocolName = protocol.name();
-        channelHandler =
-                protocol.createChannelHandler(
-                        workerPool.getRequestChannels(), endpoint.getListenerName());
+        channelHandler = protocol.createChannelHandler(workerPool.getRequestChannels(), endpoint.getListenerName());
         bootstrap.childHandler(channelHandler);
 
         // --------------------------------------------------------------------
@@ -181,16 +171,11 @@ public final class NettyServer implements RpcServer {
             Channel bindChannel = bootstrap.bind().syncUninterruptibly().channel();
             if (bindChannel == null) {
                 throw new BindException(
-                        String.format(
-                                "Could not start Netty server on address: %s and port %s ",
-                                hostname, port));
+                        String.format("Could not start Netty server on address: %s and port %s ", hostname, port));
             }
             InetSocketAddress bindAddress = (InetSocketAddress) bindChannel.localAddress();
-            Endpoint bindEndpoint =
-                    new Endpoint(
-                            bindAddress.getAddress().getHostAddress(),
-                            bindAddress.getPort(),
-                            endpoint.getListenerName());
+            Endpoint bindEndpoint = new Endpoint(
+                    bindAddress.getAddress().getHostAddress(), bindAddress.getPort(), endpoint.getListenerName());
             bindEndpoints.add(bindEndpoint);
             LOG.info(
                     "Listening on address {} and port {} for {} protocol",
@@ -228,8 +213,7 @@ public final class NettyServer implements RpcServer {
                 endpoints.stream().map(Endpoint::getListenerName).collect(Collectors.toList());
         List<NetworkProtocolPlugin> protocolPlugins = new ArrayList<>();
         if (conf.get(ConfigOptions.KAFKA_ENABLED)) {
-            NetworkProtocolPlugin kafkaPlugin =
-                    loadProtocolPlugin(NetworkProtocolPlugin.KAFKA_PROTOCOL_NAME);
+            NetworkProtocolPlugin kafkaPlugin = loadProtocolPlugin(NetworkProtocolPlugin.KAFKA_PROTOCOL_NAME);
             kafkaPlugin.setup(conf);
             listeners.removeAll(kafkaPlugin.listenerNames());
             protocolPlugins.add(kafkaPlugin);
@@ -237,8 +221,7 @@ public final class NettyServer implements RpcServer {
 
         // Add the Fluss protocol plugin in the end to allow other protocol
         // pick their listener names first
-        NetworkProtocolPlugin flussPlugin =
-                new FlussProtocolPlugin(serverType, listeners, requestsMetrics);
+        NetworkProtocolPlugin flussPlugin = new FlussProtocolPlugin(serverType, listeners, requestsMetrics);
         flussPlugin.setup(conf);
         protocolPlugins.add(flussPlugin);
         return protocolPlugins;
@@ -248,16 +231,14 @@ public final class NettyServer implements RpcServer {
         LOG.info("Loading {} protocol plugin", protocolName);
 
         Map<String, NetworkProtocolPlugin> protocols = new HashMap<>();
-        Consumer<NetworkProtocolPlugin> loadProtocol =
-                (protocol) -> {
-                    checkState(
-                            !protocols.containsKey(protocol.name()),
-                            "NetworkProtocolPlugin with protocol name {} has multiple implementations",
-                            protocol.name());
-                    protocols.put(protocol.name(), protocol);
-                };
-        ServiceLoader.load(
-                        NetworkProtocolPlugin.class, NetworkProtocolPlugin.class.getClassLoader())
+        Consumer<NetworkProtocolPlugin> loadProtocol = (protocol) -> {
+            checkState(
+                    !protocols.containsKey(protocol.name()),
+                    "NetworkProtocolPlugin with protocol name {} has multiple implementations",
+                    protocol.name());
+            protocols.put(protocol.name(), protocol);
+        };
+        ServiceLoader.load(NetworkProtocolPlugin.class, NetworkProtocolPlugin.class.getClassLoader())
                 .iterator()
                 .forEachRemaining(loadProtocol);
 
@@ -266,10 +247,8 @@ public final class NettyServer implements RpcServer {
             return protocols.get(protocolName);
         }
 
-        throw new IllegalStateException(
-                String.format(
-                        "Protocol plugin %s not found, existing protocol plugins: %s",
-                        protocolName, protocols.keySet()));
+        throw new IllegalStateException(String.format(
+                "Protocol plugin %s not found, existing protocol plugins: %s", protocolName, protocols.keySet()));
     }
 
     @Override
@@ -288,11 +267,8 @@ public final class NettyServer implements RpcServer {
 
         CompletableFuture<Void> acceptorShutdownFuture = shutdownGroup(acceptorGroup);
         CompletableFuture<Void> selectorShutdownFuture = shutdownGroup(selectorGroup);
-        CompletableFuture<Void> channelShutdownFuture =
-                FutureUtils.completeAll(
-                        bindChannels.stream()
-                                .map(NettyUtils::shutdownChannel)
-                                .collect(Collectors.toList()));
+        CompletableFuture<Void> channelShutdownFuture = FutureUtils.completeAll(
+                bindChannels.stream().map(NettyUtils::shutdownChannel).collect(Collectors.toList()));
         CompletableFuture<Void> workerShutdownFuture;
         if (workerPool != null) {
             workerShutdownFuture = workerPool.closeAsync();
@@ -301,9 +277,6 @@ public final class NettyServer implements RpcServer {
         }
 
         return CompletableFuture.allOf(
-                acceptorShutdownFuture,
-                selectorShutdownFuture,
-                channelShutdownFuture,
-                workerShutdownFuture);
+                acceptorShutdownFuture, selectorShutdownFuture, channelShutdownFuture, workerShutdownFuture);
     }
 }

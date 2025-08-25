@@ -35,19 +35,14 @@ class DefaultKvRecordBatchTest extends KvTestBase {
     @Test
     void writeAndReadBatch() throws Exception {
         int recordNumber = 100;
-        KvRecordBatchBuilder builder =
-                KvRecordBatchBuilder.builder(
-                        schemaId,
-                        Integer.MAX_VALUE,
-                        new UnmanagedPagedOutputView(100),
-                        KvFormat.COMPACTED);
+        KvRecordBatchBuilder builder = KvRecordBatchBuilder.builder(
+                schemaId, Integer.MAX_VALUE, new UnmanagedPagedOutputView(100), KvFormat.COMPACTED);
 
         List<byte[]> keys = new ArrayList<>();
         List<CompactedRow> rows = new ArrayList<>();
         for (int i = 0; i < recordNumber; i++) {
             byte[] key = new byte[] {(byte) i, (byte) i};
-            CompactedRow row =
-                    i % 2 == 1 ? null : TestInternalRowGenerator.genCompactedRowForAllType();
+            CompactedRow row = i % 2 == 1 ? null : TestInternalRowGenerator.genCompactedRowForAllType();
             builder.append(key, row);
             keys.add(key);
             rows.add(row);
@@ -65,9 +60,7 @@ class DefaultKvRecordBatchTest extends KvTestBase {
         // verify record.
         int i = 0;
         for (KvRecord record :
-                kvRecords.records(
-                        KvRecordReadContext.createReadContext(
-                                KvFormat.COMPACTED, baseRowFieldTypes))) {
+                kvRecords.records(KvRecordReadContext.createReadContext(KvFormat.COMPACTED, baseRowFieldTypes))) {
             assertThat(keyToBytes(record)).isEqualTo(keys.get(i));
             assertThat(record.getRow()).isEqualTo(rows.get(i));
             i++;

@@ -70,35 +70,30 @@ public class LakeTieringJobBuilder {
     @SuppressWarnings({"rawtypes", "unchecked"})
     public JobClient build() throws Exception {
         // get the lake storage plugin
-        LakeStoragePlugin lakeStoragePlugin =
-                LakeStoragePluginSetUp.fromDataLakeFormat(dataLakeFormat, null);
+        LakeStoragePlugin lakeStoragePlugin = LakeStoragePluginSetUp.fromDataLakeFormat(dataLakeFormat, null);
         // create lake storage from configurations
         LakeStorage lakeStorage = checkNotNull(lakeStoragePlugin).createLakeStorage(dataLakeConfig);
 
         LakeTieringFactory lakeTieringFactory = lakeStorage.createLakeTieringFactory();
 
         // build tiering source
-        TieringSource.Builder<?> tieringSourceBuilder =
-                new TieringSource.Builder<>(flussConfig, lakeTieringFactory);
+        TieringSource.Builder<?> tieringSourceBuilder = new TieringSource.Builder<>(flussConfig, lakeTieringFactory);
         if (flussConfig.get(POLL_TIERING_TABLE_INTERVAL) != null) {
             tieringSourceBuilder.withPollTieringTableIntervalMs(
                     flussConfig.get(POLL_TIERING_TABLE_INTERVAL).toMillis());
         }
         TieringSource<?> tieringSource = tieringSourceBuilder.build();
-        DataStreamSource<?> source =
-                env.fromSource(
-                        tieringSource,
-                        WatermarkStrategy.noWatermarks(),
-                        "TieringSource",
-                        TableBucketWriteResultTypeInfo.of(
-                                () -> lakeTieringFactory.getWriteResultSerializer()));
+        DataStreamSource<?> source = env.fromSource(
+                tieringSource,
+                WatermarkStrategy.noWatermarks(),
+                "TieringSource",
+                TableBucketWriteResultTypeInfo.of(() -> lakeTieringFactory.getWriteResultSerializer()));
 
         source.getTransformation().setUid(TIERING_SOURCE_TRANSFORMATION_UID);
 
         source.transform(
                         "TieringCommitter",
-                        CommittableMessageTypeInfo.of(
-                                () -> lakeTieringFactory.getCommittableSerializer()),
+                        CommittableMessageTypeInfo.of(() -> lakeTieringFactory.getCommittableSerializer()),
                         new TieringCommitOperatorFactory(flussConfig, lakeTieringFactory))
                 .setParallelism(1)
                 .setMaxParallelism(1)
@@ -106,9 +101,7 @@ public class LakeTieringJobBuilder {
                 .name("end")
                 .setParallelism(1);
         String jobName =
-                env.getConfiguration()
-                        .getOptional(PipelineOptions.NAME)
-                        .orElse(DEFAULT_TIERING_SERVICE_JOB_NAME);
+                env.getConfiguration().getOptional(PipelineOptions.NAME).orElse(DEFAULT_TIERING_SERVICE_JOB_NAME);
 
         return env.executeAsync(jobName);
     }

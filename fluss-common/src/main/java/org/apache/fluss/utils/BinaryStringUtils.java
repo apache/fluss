@@ -30,15 +30,13 @@ import java.util.stream.Stream;
 /** Util for {@link BinaryString}. */
 public class BinaryStringUtils {
 
-    private static final List<BinaryString> TRUE_STRINGS =
-            Stream.of("t", "true", "y", "yes", "1")
-                    .map(BinaryString::fromString)
-                    .collect(Collectors.toList());
+    private static final List<BinaryString> TRUE_STRINGS = Stream.of("t", "true", "y", "yes", "1")
+            .map(BinaryString::fromString)
+            .collect(Collectors.toList());
 
-    private static final List<BinaryString> FALSE_STRINGS =
-            Stream.of("f", "false", "n", "no", "0")
-                    .map(BinaryString::fromString)
-                    .collect(Collectors.toList());
+    private static final List<BinaryString> FALSE_STRINGS = Stream.of("f", "false", "n", "no", "0")
+            .map(BinaryString::fromString)
+            .collect(Collectors.toList());
 
     /** Parse a {@link BinaryString} to boolean. */
     public static boolean toBoolean(BinaryString str) {
@@ -71,14 +69,13 @@ public class BinaryStringUtils {
     }
 
     /** Used by {@code CAST(x as TIMESTAMP_NTZ)}. */
-    public static TimestampNtz toTimestampNtz(BinaryString input, int precision)
-            throws DateTimeException {
+    public static TimestampNtz toTimestampNtz(BinaryString input, int precision) throws DateTimeException {
         return DateTimeUtils.parseTimestampData(input.toString(), precision);
     }
 
     /** Used by {@code CAST(x as TIMESTAMP_LTZ)}. */
-    public static TimestampLtz toTimestampLtz(
-            BinaryString input, int precision, TimeZone localTimeZone) throws DateTimeException {
+    public static TimestampLtz toTimestampLtz(BinaryString input, int precision, TimeZone localTimeZone)
+            throws DateTimeException {
         return DateTimeUtils.parseTimestampData(input.toString(), precision, localTimeZone);
     }
 }

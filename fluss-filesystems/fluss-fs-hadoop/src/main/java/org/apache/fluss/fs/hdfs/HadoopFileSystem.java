@@ -40,8 +40,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public class HadoopFileSystem extends FileSystem {
 
     private static final ObtainedSecurityToken TOKEN =
-            new ObtainedSecurityToken(
-                    HadoopFsPlugin.SCHEME, new byte[0], null, Collections.emptyMap());
+            new ObtainedSecurityToken(HadoopFsPlugin.SCHEME, new byte[0], null, Collections.emptyMap());
 
     /** The wrapped Hadoop File System. */
     private final org.apache.hadoop.fs.FileSystem fs;
@@ -84,8 +83,7 @@ public class HadoopFileSystem extends FileSystem {
     }
 
     @Override
-    public HadoopDataOutputStream create(final FsPath f, final WriteMode overwrite)
-            throws IOException {
+    public HadoopDataOutputStream create(final FsPath f, final WriteMode overwrite) throws IOException {
         final org.apache.hadoop.fs.FSDataOutputStream fsDataOutputStream =
                 this.fs.create(toHadoopPath(f), overwrite == WriteMode.OVERWRITE);
         return new HadoopDataOutputStream(fsDataOutputStream);

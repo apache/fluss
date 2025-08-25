@@ -48,19 +48,17 @@ class PaimonSplitTest extends PaimonSourceTestBase {
         // prepare paimon table
         int bucketNum = 1;
         TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE);
-        Schema.Builder builder =
-                Schema.newBuilder()
-                        .column("c1", DataTypes.INT())
-                        .column("c2", DataTypes.STRING())
-                        .column("c3", DataTypes.STRING());
+        Schema.Builder builder = Schema.newBuilder()
+                .column("c1", DataTypes.INT())
+                .column("c2", DataTypes.STRING())
+                .column("c3", DataTypes.STRING());
         builder.partitionKeys("c3");
         builder.primaryKey("c1", "c3");
         builder.option(CoreOptions.BUCKET.key(), String.valueOf(bucketNum));
         createTable(tablePath, builder.build());
         Table table = getTable(tablePath);
 
-        GenericRow record1 =
-                GenericRow.of(12, BinaryString.fromString("a"), BinaryString.fromString("A"));
+        GenericRow record1 = GenericRow.of(12, BinaryString.fromString("a"), BinaryString.fromString("A"));
         writeRecord(tablePath, Collections.singletonList(record1));
         Snapshot snapshot = table.latestSnapshot().get();
 

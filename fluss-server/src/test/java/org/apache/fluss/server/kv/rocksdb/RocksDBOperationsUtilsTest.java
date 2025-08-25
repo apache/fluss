@@ -43,17 +43,15 @@ class RocksDBOperationsUtilsTest {
         Files.createDirectories(rocksDir.toPath());
 
         try (DBOptions dbOptions = new DBOptions().setCreateIfMissing(false)) {
-            assertThatThrownBy(
-                            () -> {
-                                RocksDB rocks =
-                                        RocksDBOperationUtils.openDB(
-                                                rocksDir.getAbsolutePath(),
-                                                Collections.emptyList(),
-                                                Collections.emptyList(),
-                                                dbOptions,
-                                                false);
-                                rocks.close();
-                            })
+            assertThatThrownBy(() -> {
+                        RocksDB rocks = RocksDBOperationUtils.openDB(
+                                rocksDir.getAbsolutePath(),
+                                Collections.emptyList(),
+                                Collections.emptyList(),
+                                dbOptions,
+                                false);
+                        rocks.close();
+                    })
                     .isInstanceOf(IOException.class)
                     .hasMessage("Error while opening RocksDB instance.")
                     .cause()

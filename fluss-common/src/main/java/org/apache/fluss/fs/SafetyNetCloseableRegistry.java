@@ -116,8 +116,7 @@ public class SafetyNetCloseableRegistry
         }
 
         PhantomDelegatingCloseableRef phantomRef =
-                new PhantomDelegatingCloseableRef(
-                        wrappingProxyCloseable, this, REAPER_THREAD.referenceQueue);
+                new PhantomDelegatingCloseableRef(wrappingProxyCloseable, this, REAPER_THREAD.referenceQueue);
 
         closeableMap.put(innerCloseable, phantomRef);
     }
@@ -160,8 +159,7 @@ public class SafetyNetCloseableRegistry
 
     /** Phantom reference to {@link WrappingProxyCloseable}. */
     static final class PhantomDelegatingCloseableRef
-            extends PhantomReference<WrappingProxyCloseable<? extends Closeable>>
-            implements Closeable {
+            extends PhantomReference<WrappingProxyCloseable<? extends Closeable>> implements Closeable {
 
         private final Closeable innerCloseable;
         private final SafetyNetCloseableRegistry closeableRegistry;

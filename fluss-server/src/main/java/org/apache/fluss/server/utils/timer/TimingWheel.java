@@ -163,8 +163,7 @@ final class TimingWheel {
 
     private synchronized void addOverflowWheel() {
         if (overflowWheel == null) {
-            overflowWheel =
-                    new TimingWheel(interval, wheelSize, currentTime, taskCounter, queue, clock);
+            overflowWheel = new TimingWheel(interval, wheelSize, currentTime, taskCounter, queue, clock);
         }
     }
 

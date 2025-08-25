@@ -30,8 +30,7 @@ public class ManuallyTriggeredScheduledExecutor implements Executor {
      * The service that we redirect to. We wrap this rather than extending it to limit the surfaced
      * interface.
      */
-    ManuallyTriggeredScheduledExecutorService execService =
-            new ManuallyTriggeredScheduledExecutorService();
+    ManuallyTriggeredScheduledExecutorService execService = new ManuallyTriggeredScheduledExecutorService();
 
     @Override
     public void execute(@Nonnull Runnable command) {

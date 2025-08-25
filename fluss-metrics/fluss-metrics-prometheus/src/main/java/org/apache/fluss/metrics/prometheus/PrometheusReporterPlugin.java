@@ -36,8 +36,7 @@ public class PrometheusReporterPlugin implements MetricReporterPlugin {
 
     @Override
     public MetricReporter createMetricReporter(Configuration configuration) {
-        String portsConfig =
-                configuration.getString(ConfigOptions.METRICS_REPORTER_PROMETHEUS_PORT);
+        String portsConfig = configuration.getString(ConfigOptions.METRICS_REPORTER_PROMETHEUS_PORT);
         Iterator<Integer> ports = NetUtils.getPortRangeFromString(portsConfig);
         return new PrometheusReporter(ports);
     }

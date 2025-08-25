@@ -44,19 +44,18 @@ public class RequestChannelTest {
         List<RpcRequest> rpcRequests = new ArrayList<>();
         // push rpc requests
         for (int i = 0; i < 100; i++) {
-            RpcRequest rpcRequest =
-                    new FlussRequest(
-                            ApiKeys.GET_TABLE_INFO.id,
-                            (short) 0,
-                            i,
-                            null,
-                            new GetTableInfoRequest(),
-                            new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
-                            "FLUSS",
-                            true,
-                            null,
-                            null,
-                            new CompletableFuture<>());
+            RpcRequest rpcRequest = new FlussRequest(
+                    ApiKeys.GET_TABLE_INFO.id,
+                    (short) 0,
+                    i,
+                    null,
+                    new GetTableInfoRequest(),
+                    new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
+                    "FLUSS",
+                    true,
+                    null,
+                    null,
+                    new CompletableFuture<>());
             channel.putRequest(rpcRequest);
             rpcRequests.add(rpcRequest);
         }
@@ -67,32 +66,30 @@ public class RequestChannelTest {
         }
 
         // 2. Different request type, Use FIFO.
-        RpcRequest rpcRequest1 =
-                new FlussRequest(
-                        ApiKeys.GET_TABLE_INFO.id,
-                        (short) 0,
-                        3,
-                        null,
-                        new GetTableInfoRequest(),
-                        new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
-                        "FLUSS",
-                        true,
-                        null,
-                        null,
-                        new CompletableFuture<>());
-        RpcRequest rpcRequest2 =
-                new FlussRequest(
-                        ApiKeys.FETCH_LOG.id,
-                        (short) 0,
-                        100,
-                        null,
-                        new FetchLogRequest().setMaxBytes(100).setFollowerServerId(2),
-                        new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
-                        "FLUSS",
-                        true,
-                        null,
-                        null,
-                        new CompletableFuture<>());
+        RpcRequest rpcRequest1 = new FlussRequest(
+                ApiKeys.GET_TABLE_INFO.id,
+                (short) 0,
+                3,
+                null,
+                new GetTableInfoRequest(),
+                new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
+                "FLUSS",
+                true,
+                null,
+                null,
+                new CompletableFuture<>());
+        RpcRequest rpcRequest2 = new FlussRequest(
+                ApiKeys.FETCH_LOG.id,
+                (short) 0,
+                100,
+                null,
+                new FetchLogRequest().setMaxBytes(100).setFollowerServerId(2),
+                new EmptyByteBuf(new UnpooledByteBufAllocator(true, true)),
+                "FLUSS",
+                true,
+                null,
+                null,
+                new CompletableFuture<>());
         channel.putRequest(rpcRequest1);
         channel.putRequest(rpcRequest2);
         RpcRequest rpcRequest = channel.pollRequest(100);

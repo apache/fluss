@@ -146,33 +146,19 @@ public class CompactedRowReader {
             } else if ((x ^= ((long) segment.get(tempPos++) << 35)) < 0L) {
                 x ^= (~0L << 7) ^ (~0L << 14) ^ (~0L << 21) ^ (~0L << 28) ^ (~0L << 35);
             } else if ((x ^= ((long) segment.get(tempPos++) << 42)) >= 0L) {
-                x ^=
-                        (~0L << 7)
-                                ^ (~0L << 14)
-                                ^ (~0L << 21)
-                                ^ (~0L << 28)
-                                ^ (~0L << 35)
-                                ^ (~0L << 42);
+                x ^= (~0L << 7) ^ (~0L << 14) ^ (~0L << 21) ^ (~0L << 28) ^ (~0L << 35) ^ (~0L << 42);
             } else if ((x ^= ((long) segment.get(tempPos++) << 49)) < 0L) {
-                x ^=
-                        (~0L << 7)
-                                ^ (~0L << 14)
-                                ^ (~0L << 21)
-                                ^ (~0L << 28)
-                                ^ (~0L << 35)
-                                ^ (~0L << 42)
-                                ^ (~0L << 49);
+                x ^= (~0L << 7) ^ (~0L << 14) ^ (~0L << 21) ^ (~0L << 28) ^ (~0L << 35) ^ (~0L << 42) ^ (~0L << 49);
             } else {
                 x ^= ((long) segment.get(tempPos++) << 56);
-                x ^=
-                        (~0L << 7)
-                                ^ (~0L << 14)
-                                ^ (~0L << 21)
-                                ^ (~0L << 28)
-                                ^ (~0L << 35)
-                                ^ (~0L << 42)
-                                ^ (~0L << 49)
-                                ^ (~0L << 56);
+                x ^= (~0L << 7)
+                        ^ (~0L << 14)
+                        ^ (~0L << 21)
+                        ^ (~0L << 28)
+                        ^ (~0L << 35)
+                        ^ (~0L << 42)
+                        ^ (~0L << 49)
+                        ^ (~0L << 56);
                 if (x < 0L) {
                     if (segment.get(tempPos++) < 0L) {
                         break fastPath; // illegal, throws exception

@@ -92,8 +92,7 @@ public enum OperatingSystem {
             return FREE_BSD;
         }
         String osNameLowerCase = osName.toLowerCase();
-        if (osNameLowerCase.contains(SOLARIS_OS_INFIX_1)
-                || osNameLowerCase.contains(SOLARIS_OS_INFIX_2)) {
+        if (osNameLowerCase.contains(SOLARIS_OS_INFIX_1) || osNameLowerCase.contains(SOLARIS_OS_INFIX_2)) {
             return SOLARIS;
         }
 

@@ -59,8 +59,7 @@ public class CompletedSnapshotJsonSerde
     private static final String LOG_OFFSET = "log_offset";
 
     @Override
-    public void serialize(CompletedSnapshot completedSnapshot, JsonGenerator generator)
-            throws IOException {
+    public void serialize(CompletedSnapshot completedSnapshot, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
 
         // serialize data version.
@@ -96,8 +95,7 @@ public class CompletedSnapshotJsonSerde
         generator.writeEndArray();
 
         // serialize persisted size of this snapshot
-        generator.writeNumberField(
-                SNAPSHOT_INCREMENTAL_SIZE, kvSnapshotHandle.getIncrementalSize());
+        generator.writeNumberField(SNAPSHOT_INCREMENTAL_SIZE, kvSnapshotHandle.getIncrementalSize());
         generator.writeEndObject();
 
         // serialize log offset
@@ -107,8 +105,7 @@ public class CompletedSnapshotJsonSerde
     }
 
     private void serializeKvFileHandles(
-            JsonGenerator generator, List<KvFileHandleAndLocalPath> kvFileHandleAndLocalPaths)
-            throws IOException {
+            JsonGenerator generator, List<KvFileHandleAndLocalPath> kvFileHandleAndLocalPaths) throws IOException {
         for (KvFileHandleAndLocalPath fileHandleAndLocalPath : kvFileHandleAndLocalPaths) {
             generator.writeStartObject();
 
@@ -131,9 +128,8 @@ public class CompletedSnapshotJsonSerde
         JsonNode partitionIdNode = node.get(PARTITION_ID);
         Long partitionId = partitionIdNode == null ? null : partitionIdNode.asLong();
         // deserialize table bucket
-        TableBucket tableBucket =
-                new TableBucket(
-                        node.get(TABLE_ID).asLong(), partitionId, node.get(BUCKET_ID).asInt());
+        TableBucket tableBucket = new TableBucket(
+                node.get(TABLE_ID).asLong(), partitionId, node.get(BUCKET_ID).asInt());
 
         // deserialize snapshot id
         long snapshotId = node.get(SNAPSHOT_ID).asLong();
@@ -153,7 +149,8 @@ public class CompletedSnapshotJsonSerde
                 deserializeKvFileHandles(kvSnapshotFileHandleNode, KV_PRIVATE_FILES_HANDLE);
 
         // deserialize snapshot incremental size
-        long incrementalSize = kvSnapshotFileHandleNode.get(SNAPSHOT_INCREMENTAL_SIZE).asLong();
+        long incrementalSize =
+                kvSnapshotFileHandleNode.get(SNAPSHOT_INCREMENTAL_SIZE).asLong();
 
         // deserialize log offset
         long logOffset = node.get(LOG_OFFSET).asLong();
@@ -165,8 +162,7 @@ public class CompletedSnapshotJsonSerde
                 tableBucket, snapshotId, new FsPath(snapshotLocation), kvSnapshotHandle, logOffset);
     }
 
-    private List<KvFileHandleAndLocalPath> deserializeKvFileHandles(
-            JsonNode node, String kvHandleType) {
+    private List<KvFileHandleAndLocalPath> deserializeKvFileHandles(JsonNode node, String kvHandleType) {
         List<KvFileHandleAndLocalPath> kvFileHandleAndLocalPaths = new ArrayList<>();
         for (JsonNode kvFileHandleAndLocalPathNode : node.get(kvHandleType)) {
             // deserialize kv file handle
@@ -176,9 +172,9 @@ public class CompletedSnapshotJsonSerde
             KvFileHandle kvFileHandle = new KvFileHandle(filePath, fileSize);
 
             // deserialize kv file local path
-            String localPath = kvFileHandleAndLocalPathNode.get(KV_FILE_LOCAL_PATH).asText();
-            KvFileHandleAndLocalPath kvFileHandleAndLocalPath =
-                    KvFileHandleAndLocalPath.of(kvFileHandle, localPath);
+            String localPath =
+                    kvFileHandleAndLocalPathNode.get(KV_FILE_LOCAL_PATH).asText();
+            KvFileHandleAndLocalPath kvFileHandleAndLocalPath = KvFileHandleAndLocalPath.of(kvFileHandle, localPath);
             kvFileHandleAndLocalPaths.add(kvFileHandleAndLocalPath);
         }
         return kvFileHandleAndLocalPaths;

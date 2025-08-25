@@ -56,8 +56,7 @@ class KvSnapshotDataDownloaderTest {
 
     /** Tests that download files with multi-thread correctly. */
     @Test
-    void testMultiThreadRestoreCorrectly(@TempDir Path destDir, @TempDir Path srcDir)
-            throws Exception {
+    void testMultiThreadRestoreCorrectly(@TempDir Path destDir, @TempDir Path srcDir) throws Exception {
         int numRemoteHandles = 3;
         int numSubHandles = 6;
         byte[][][] contents = createContents(numRemoteHandles, numSubHandles);
@@ -66,26 +65,22 @@ class KvSnapshotDataDownloaderTest {
             downloadRequests.add(createDownloadRequestForContent(destDir, srcDir, contents[i], i));
         }
 
-        KvSnapshotDataDownloader kvSnapshotDataDownloader =
-                new KvSnapshotDataDownloader(downLoaderThreadPool);
-        kvSnapshotDataDownloader.transferAllDataToDirectory(
-                downloadRequests, new CloseableRegistry());
+        KvSnapshotDataDownloader kvSnapshotDataDownloader = new KvSnapshotDataDownloader(downLoaderThreadPool);
+        kvSnapshotDataDownloader.transferAllDataToDirectory(downloadRequests, new CloseableRegistry());
 
         for (int i = 0; i < numRemoteHandles; ++i) {
             KvSnapshotDownloadSpec downloadRequest = downloadRequests.get(i);
             Path dstPath = downloadRequest.getDownloadDestination();
             assertThat(dstPath.toFile()).exists();
             for (int j = 0; j < numSubHandles; ++j) {
-                assertStateContentEqual(
-                        contents[i][j], dstPath.resolve(String.format("shared-%d-%d", i, j)));
+                assertStateContentEqual(contents[i][j], dstPath.resolve(String.format("shared-%d-%d", i, j)));
             }
         }
     }
 
     /** Tests cleanup on download failures. */
     @Test
-    public void testMultiThreadCleanupOnFailure(@TempDir Path destDir, @TempDir Path srcDir)
-            throws Exception {
+    public void testMultiThreadCleanupOnFailure(@TempDir Path destDir, @TempDir Path srcDir) throws Exception {
         int numRemoteHandles = 3;
         int numSubHandles = 6;
         byte[][][] contents = createContents(numRemoteHandles, numSubHandles);
@@ -100,20 +95,15 @@ class KvSnapshotDataDownloaderTest {
         // Add a state handle that induces an exception
         kvSnapshotHandle
                 .getSharedKvFileHandles()
-                .add(
-                        KvFileHandleAndLocalPath.of(
-                                new KvFileHandle(
-                                        // a file that doesn't exist should then throw IOException
-                                        "file-non-exist", 0),
-                                "error-handle"));
+                .add(KvFileHandleAndLocalPath.of(
+                        new KvFileHandle(
+                                // a file that doesn't exist should then throw IOException
+                                "file-non-exist", 0),
+                        "error-handle"));
 
         CloseableRegistry closeableRegistry = new CloseableRegistry();
-        KvSnapshotDataDownloader kvSnapshotDownloader =
-                new KvSnapshotDataDownloader(downLoaderThreadPool);
-        assertThatThrownBy(
-                        () ->
-                                kvSnapshotDownloader.transferAllDataToDirectory(
-                                        downloadRequests, closeableRegistry))
+        KvSnapshotDataDownloader kvSnapshotDownloader = new KvSnapshotDataDownloader(downLoaderThreadPool);
+        assertThatThrownBy(() -> kvSnapshotDownloader.transferAllDataToDirectory(downloadRequests, closeableRegistry))
                 .isInstanceOf(IOException.class);
 
         // Check that all download directories have been deleted
@@ -155,11 +145,9 @@ class KvSnapshotDataDownloaderTest {
         List<KvFileHandleAndLocalPath> privateStates = new ArrayList<>(numSubHandles);
         for (int i = 0; i < numSubHandles; ++i) {
             sharedStates.add(
-                    KvFileHandleAndLocalPath.of(
-                            handles.get(i), String.format("shared-%d-%d", remoteHandleId, i)));
+                    KvFileHandleAndLocalPath.of(handles.get(i), String.format("shared-%d-%d", remoteHandleId, i)));
             privateStates.add(
-                    KvFileHandleAndLocalPath.of(
-                            handles.get(i), String.format("private-%d-%d", remoteHandleId, i)));
+                    KvFileHandleAndLocalPath.of(handles.get(i), String.format("private-%d-%d", remoteHandleId, i)));
         }
 
         KvSnapshotHandle kvSnapshotHandle = new KvSnapshotHandle(sharedStates, privateStates, -1);

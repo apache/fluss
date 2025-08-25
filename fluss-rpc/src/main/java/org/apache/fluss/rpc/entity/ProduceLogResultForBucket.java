@@ -36,8 +36,7 @@ public class ProduceLogResultForBucket extends WriteResultForBucket {
         this(tableBucket, -1L, -1L, error);
     }
 
-    private ProduceLogResultForBucket(
-            TableBucket tableBucket, long baseOffset, long endOffset, ApiError error) {
+    private ProduceLogResultForBucket(TableBucket tableBucket, long baseOffset, long endOffset, ApiError error) {
         super(tableBucket, endOffset, error);
         this.baseOffset = baseOffset;
     }
@@ -50,8 +49,7 @@ public class ProduceLogResultForBucket extends WriteResultForBucket {
     public <T extends WriteResultForBucket> T copy(Errors newError) {
         //noinspection unchecked
         return (T)
-                new ProduceLogResultForBucket(
-                        tableBucket, baseOffset, getWriteLogEndOffset(), newError.toApiError());
+                new ProduceLogResultForBucket(tableBucket, baseOffset, getWriteLogEndOffset(), newError.toApiError());
     }
 
     @Override

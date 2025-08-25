@@ -33,14 +33,9 @@ public class DatabaseRegistrationJsonSerdeTest extends JsonSerdeTestBase<Databas
         DatabaseRegistration[] databaseRegistrations = new DatabaseRegistration[2];
 
         databaseRegistrations[0] =
-                new DatabaseRegistration(
-                        null,
-                        Collections.singletonMap("option-3", "300"),
-                        1735538268L,
-                        1735538268L);
+                new DatabaseRegistration(null, Collections.singletonMap("option-3", "300"), 1735538268L, 1735538268L);
 
-        databaseRegistrations[1] =
-                new DatabaseRegistration("second-table", Maps.newHashMap(), -1, -1);
+        databaseRegistrations[1] = new DatabaseRegistration("second-table", Maps.newHashMap(), -1, -1);
 
         return databaseRegistrations;
     }

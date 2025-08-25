@@ -23,28 +23,31 @@ import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 /** Access to credentials to access OSS buckets during integration tests. */
 public class OSSTestCredentials {
-    @Nullable private static final String ENDPOINT = System.getenv("ARTIFACTS_OSS_ENDPOINT");
+    @Nullable
+    private static final String ENDPOINT = System.getenv("ARTIFACTS_OSS_ENDPOINT");
 
-    @Nullable private static final String REGION = System.getenv("ARTIFACTS_OSS_REGION");
+    @Nullable
+    private static final String REGION = System.getenv("ARTIFACTS_OSS_REGION");
 
-    @Nullable private static final String BUCKET = System.getenv("ARTIFACTS_OSS_BUCKET");
+    @Nullable
+    private static final String BUCKET = System.getenv("ARTIFACTS_OSS_BUCKET");
 
-    @Nullable private static final String ACCESS_KEY = System.getenv("ARTIFACTS_OSS_ACCESS_KEY");
+    @Nullable
+    private static final String ACCESS_KEY = System.getenv("ARTIFACTS_OSS_ACCESS_KEY");
 
-    @Nullable private static final String SECRET_KEY = System.getenv("ARTIFACTS_OSS_SECRET_KEY");
+    @Nullable
+    private static final String SECRET_KEY = System.getenv("ARTIFACTS_OSS_SECRET_KEY");
 
     @Nullable
     private static final String STS_ENDPOINT = System.getenv("ARTIFACTS_OSS_STS_ENDPOINT");
 
-    @Nullable private static final String ROLE_ARN = System.getenv("ARTIFACTS_OSS_ROLE_ARN");
+    @Nullable
+    private static final String ROLE_ARN = System.getenv("ARTIFACTS_OSS_ROLE_ARN");
 
     // ------------------------------------------------------------------------
 
     public static boolean credentialsAvailable() {
-        return isNotEmpty(ENDPOINT)
-                && isNotEmpty(BUCKET)
-                && isNotEmpty(ACCESS_KEY)
-                && isNotEmpty(SECRET_KEY);
+        return isNotEmpty(ENDPOINT) && isNotEmpty(BUCKET) && isNotEmpty(ACCESS_KEY) && isNotEmpty(SECRET_KEY);
     }
 
     /** Checks if a String is not null and not empty. */
@@ -53,8 +56,7 @@ public class OSSTestCredentials {
     }
 
     public static void assumeCredentialsAvailable() {
-        assumeTrue(
-                credentialsAvailable(), "No OSS credentials available in this test's environment");
+        assumeTrue(credentialsAvailable(), "No OSS credentials available in this test's environment");
     }
 
     /**

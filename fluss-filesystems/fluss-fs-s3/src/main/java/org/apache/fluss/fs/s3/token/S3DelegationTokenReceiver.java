@@ -87,9 +87,7 @@ public class S3DelegationTokenReceiver implements SecurityTokenReceiver {
         credentials = CredentialsJsonSerde.fromJson(tokenBytes);
         additionInfos = token.getAdditionInfos();
 
-        LOG.info(
-                "Session credentials updated successfully with access key: {}.",
-                credentials.getAccessKeyId());
+        LOG.info("Session credentials updated successfully with access key: {}.", credentials.getAccessKeyId());
     }
 
     public static Credentials getCredentials() {

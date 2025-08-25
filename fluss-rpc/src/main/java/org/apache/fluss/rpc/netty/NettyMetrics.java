@@ -30,8 +30,7 @@ public class NettyMetrics {
 
     public static final String NETTY_METRIC_GROUP = "netty";
 
-    public static void registerNettyMetrics(
-            MetricGroup metricGroup, PooledByteBufAllocator pooledAllocator) {
+    public static void registerNettyMetrics(MetricGroup metricGroup, PooledByteBufAllocator pooledAllocator) {
         MetricGroup nettyMetricGroup = metricGroup.addGroup(NETTY_METRIC_GROUP);
         PooledByteBufAllocatorMetric pooledAllocatorMetric = pooledAllocator.metric();
         nettyMetricGroup.<Long, Gauge<Long>>gauge(
@@ -40,17 +39,13 @@ public class NettyMetrics {
                 MetricNames.NETTY_NUM_DIRECT_ARENAS, pooledAllocatorMetric::numDirectArenas);
         nettyMetricGroup.meter(
                 MetricNames.NETTY_NUM_ALLOCATIONS_PER_SECONDS,
-                new MeterView(
-                        () ->
-                                pooledAllocatorMetric.directArenas().stream()
-                                        .mapToLong(PoolArenaMetric::numAllocations)
-                                        .sum()));
+                new MeterView(() -> pooledAllocatorMetric.directArenas().stream()
+                        .mapToLong(PoolArenaMetric::numAllocations)
+                        .sum()));
         nettyMetricGroup.meter(
                 MetricNames.NETTY_NUM_HUGE_ALLOCATIONS_PER_SECONDS,
-                new MeterView(
-                        () ->
-                                pooledAllocatorMetric.directArenas().stream()
-                                        .mapToLong(PoolArenaMetric::numHugeAllocations)
-                                        .sum()));
+                new MeterView(() -> pooledAllocatorMetric.directArenas().stream()
+                        .mapToLong(PoolArenaMetric::numHugeAllocations)
+                        .sum()));
     }
 }

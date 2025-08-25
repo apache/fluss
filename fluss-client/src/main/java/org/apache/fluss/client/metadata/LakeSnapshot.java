@@ -42,9 +42,7 @@ public class LakeSnapshot {
     private final Map<Long, String> partitionNameById;
 
     public LakeSnapshot(
-            long snapshotId,
-            Map<TableBucket, Long> tableBucketsOffset,
-            Map<Long, String> partitionNameById) {
+            long snapshotId, Map<TableBucket, Long> tableBucketsOffset, Map<Long, String> partitionNameById) {
         this.snapshotId = snapshotId;
         this.tableBucketsOffset = tableBucketsOffset;
         this.partitionNameById = partitionNameById;

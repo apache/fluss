@@ -93,8 +93,7 @@ class JMXServer {
         // this allows clients to lookup the JMX service
         rmiRegistry = new JmxRegistry(port, "jmxrmi", rmiServerReference);
 
-        String serviceUrl =
-                "service:jmx:rmi://localhost:" + port + "/jndi/rmi://localhost:" + port + "/jmxrmi";
+        String serviceUrl = "service:jmx:rmi://localhost:" + port + "/jndi/rmi://localhost:" + port + "/jmxrmi";
         JMXServiceURL url;
         try {
             url = new JMXServiceURL(serviceUrl);
@@ -104,9 +103,7 @@ class JMXServer {
 
         final RMIJRMPServerImpl rmiServer = new RMIJRMPServerImpl(port, null, null, null);
 
-        connector =
-                new RMIConnectorServer(
-                        url, null, rmiServer, ManagementFactory.getPlatformMBeanServer());
+        connector = new RMIConnectorServer(url, null, rmiServer, ManagementFactory.getPlatformMBeanServer());
         connector.start();
 
         // we can't pass the created stub directly to the registry since this would form a cyclic
@@ -123,10 +120,7 @@ class JMXServer {
         private final String lookupName;
         private final AtomicReference<Remote> remoteServerStub;
 
-        JmxRegistry(
-                final int port,
-                final String lookupName,
-                final AtomicReference<Remote> remoteServerStub)
+        JmxRegistry(final int port, final String lookupName, final AtomicReference<Remote> remoteServerStub)
                 throws RemoteException {
             super(port);
             this.lookupName = lookupName;

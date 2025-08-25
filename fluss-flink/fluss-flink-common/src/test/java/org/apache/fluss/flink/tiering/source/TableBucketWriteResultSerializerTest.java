@@ -29,9 +29,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Test for {@link TableBucketWriteResultSerializer}. */
 class TableBucketWriteResultSerializerTest {
 
-    private static final TableBucketWriteResultSerializer<TestingWriteResult>
-            tableBucketWriteResultSerializer =
-                    new TableBucketWriteResultSerializer<>(new TestingWriteResultSerializer());
+    private static final TableBucketWriteResultSerializer<TestingWriteResult> tableBucketWriteResultSerializer =
+            new TableBucketWriteResultSerializer<>(new TestingWriteResultSerializer());
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
@@ -39,35 +38,29 @@ class TableBucketWriteResultSerializerTest {
         // verify when writeResult is not null
         TestingWriteResult testingWriteResult = new TestingWriteResult(2);
         TablePath tablePath = TablePath.of("db1", "tb1");
-        TableBucket tableBucket =
-                isPartitioned ? new TableBucket(1, 1000L, 2) : new TableBucket(1, 2);
+        TableBucket tableBucket = isPartitioned ? new TableBucket(1, 1000L, 2) : new TableBucket(1, 2);
         String partitionName = isPartitioned ? "partition1" : null;
         TableBucketWriteResult<TestingWriteResult> tableBucketWriteResult =
-                new TableBucketWriteResult<>(
-                        tablePath, tableBucket, partitionName, testingWriteResult, 10, 20);
+                new TableBucketWriteResult<>(tablePath, tableBucket, partitionName, testingWriteResult, 10, 20);
 
         // test serialize and deserialize
         byte[] serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
         TableBucketWriteResult<TestingWriteResult> deserialized =
-                tableBucketWriteResultSerializer.deserialize(
-                        tableBucketWriteResultSerializer.getVersion(), serialized);
+                tableBucketWriteResultSerializer.deserialize(tableBucketWriteResultSerializer.getVersion(), serialized);
 
         assertThat(deserialized.tablePath()).isEqualTo(tablePath);
         assertThat(deserialized.tableBucket()).isEqualTo(tableBucket);
         assertThat(deserialized.partitionName()).isEqualTo(partitionName);
         TestingWriteResult deserializedWriteResult = deserialized.writeResult();
         assertThat(deserializedWriteResult).isNotNull();
-        assertThat(deserializedWriteResult.getWriteResult())
-                .isEqualTo(testingWriteResult.getWriteResult());
+        assertThat(deserializedWriteResult.getWriteResult()).isEqualTo(testingWriteResult.getWriteResult());
         assertThat(deserialized.numberOfWriteResults()).isEqualTo(20);
 
         // verify when writeResult is null
-        tableBucketWriteResult =
-                new TableBucketWriteResult<>(tablePath, tableBucket, partitionName, null, 20, 30);
+        tableBucketWriteResult = new TableBucketWriteResult<>(tablePath, tableBucket, partitionName, null, 20, 30);
         serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
         deserialized =
-                tableBucketWriteResultSerializer.deserialize(
-                        tableBucketWriteResultSerializer.getVersion(), serialized);
+                tableBucketWriteResultSerializer.deserialize(tableBucketWriteResultSerializer.getVersion(), serialized);
         assertThat(deserialized.tablePath()).isEqualTo(tablePath);
         assertThat(deserialized.tableBucket()).isEqualTo(tableBucket);
         assertThat(deserialized.partitionName()).isEqualTo(partitionName);

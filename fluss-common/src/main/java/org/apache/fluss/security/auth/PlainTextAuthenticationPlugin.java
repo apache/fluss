@@ -22,8 +22,7 @@ import org.apache.fluss.exception.AuthenticationException;
 import org.apache.fluss.security.acl.FlussPrincipal;
 
 /** Authentication Plugin for PLAINTEXT which not need to do authentication. */
-public class PlainTextAuthenticationPlugin
-        implements ServerAuthenticationPlugin, ClientAuthenticationPlugin {
+public class PlainTextAuthenticationPlugin implements ServerAuthenticationPlugin, ClientAuthenticationPlugin {
     private static final String AUTH_PROTOCOL = "PLAINTEXT";
 
     @Override

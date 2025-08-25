@@ -42,18 +42,12 @@ public class StructuredOptionsSplitterTest {
                 Arguments.of(TestSpec.split("A;B;C", ';').expect("A", "B", "C")),
                 Arguments.of(TestSpec.split("'AB''D;B';C", ';').expect("AB'D;B", "C")),
                 Arguments.of(TestSpec.split("A'BD;B';C", ';').expect("A'BD", "B'", "C")),
-                Arguments.of(
-                        TestSpec.split("'AB'D;B;C", ';')
-                                .expectException(
-                                        "Could not split string. Illegal quoting at position: 3")),
-                Arguments.of(
-                        TestSpec.split("'A", ';')
-                                .expectException(
-                                        "Could not split string. Quoting was not closed properly.")),
-                Arguments.of(
-                        TestSpec.split("C;'", ';')
-                                .expectException(
-                                        "Could not split string. Quoting was not closed properly.")),
+                Arguments.of(TestSpec.split("'AB'D;B;C", ';')
+                        .expectException("Could not split string. Illegal quoting at position: 3")),
+                Arguments.of(TestSpec.split("'A", ';')
+                        .expectException("Could not split string. Quoting was not closed properly.")),
+                Arguments.of(TestSpec.split("C;'", ';')
+                        .expectException("Could not split string. Quoting was not closed properly.")),
 
                 // Use double quotes for quoting
                 Arguments.of(TestSpec.split("\"A;B\";C", ';').expect("A;B", "C")),
@@ -61,18 +55,12 @@ public class StructuredOptionsSplitterTest {
                 Arguments.of(TestSpec.split("A;B;C", ';').expect("A", "B", "C")),
                 Arguments.of(TestSpec.split("\"AB\"\"D;B\";C", ';').expect("AB\"D;B", "C")),
                 Arguments.of(TestSpec.split("A\"BD;B\";C", ';').expect("A\"BD", "B\"", "C")),
-                Arguments.of(
-                        TestSpec.split("\"AB\"D;B;C", ';')
-                                .expectException(
-                                        "Could not split string. Illegal quoting at position: 3")),
-                Arguments.of(
-                        TestSpec.split("\"A", ';')
-                                .expectException(
-                                        "Could not split string. Quoting was not closed properly.")),
-                Arguments.of(
-                        TestSpec.split("C;\"", ';')
-                                .expectException(
-                                        "Could not split string. Quoting was not closed properly.")),
+                Arguments.of(TestSpec.split("\"AB\"D;B;C", ';')
+                        .expectException("Could not split string. Illegal quoting at position: 3")),
+                Arguments.of(TestSpec.split("\"A", ';')
+                        .expectException("Could not split string. Quoting was not closed properly.")),
+                Arguments.of(TestSpec.split("C;\"", ';')
+                        .expectException("Could not split string. Quoting was not closed properly.")),
 
                 // Mix different quoting
                 Arguments.of(TestSpec.split("'AB\"D';B;C", ';').expect("AB\"D", "B", "C")),
@@ -90,8 +78,7 @@ public class StructuredOptionsSplitterTest {
                 Arguments.of(TestSpec.split("   'A;B'    ;   C   ", ';').expect("A;B", "C")),
                 Arguments.of(TestSpec.split("   A;B    ;   C   ", ';').expect("A", "B", "C")),
                 Arguments.of(TestSpec.split("'A;B'    ;C A", ';').expect("A;B", "C A")),
-                Arguments.of(
-                        TestSpec.split("' A    ;B'    ;'   C'", ';').expect(" A    ;B", "   C")));
+                Arguments.of(TestSpec.split("' A    ;B'    ;'   C'", ';').expect(" A    ;B", "   C")));
     }
 
     @ParameterizedTest(name = "{0}")
@@ -102,9 +89,7 @@ public class StructuredOptionsSplitterTest {
             return;
         }
 
-        List<String> splits =
-                StructuredOptionsSplitter.splitEscaped(
-                        testSpec.getString(), testSpec.getDelimiter());
+        List<String> splits = StructuredOptionsSplitter.splitEscaped(testSpec.getString(), testSpec.getDelimiter());
 
         assertThat(splits).isEqualTo(testSpec.getExpectedSplits());
     }
@@ -112,7 +97,10 @@ public class StructuredOptionsSplitterTest {
     private static class TestSpec {
         private final String string;
         private final char delimiter;
-        @Nullable private String expectedException = null;
+
+        @Nullable
+        private String expectedException = null;
+
         private List<String> expectedSplits = null;
 
         private TestSpec(String string, char delimiter) {
@@ -158,11 +146,7 @@ public class StructuredOptionsSplitterTest {
                     delimiter,
                     getExpectedException()
                             .map(e -> String.format("Exception(%s)", e))
-                            .orElseGet(
-                                    () ->
-                                            expectedSplits.stream()
-                                                    .collect(
-                                                            Collectors.joining("], [", "[", "]"))));
+                            .orElseGet(() -> expectedSplits.stream().collect(Collectors.joining("], [", "[", "]"))));
         }
     }
 }

@@ -30,8 +30,7 @@ public class ValueRecordReadContext implements ValueRecordBatch.ReadContext {
         this.rowDecoder = rowDecoder;
     }
 
-    public static ValueRecordReadContext createReadContext(
-            KvFormat kvFormat, DataType[] fieldTypes) {
+    public static ValueRecordReadContext createReadContext(KvFormat kvFormat, DataType[] fieldTypes) {
         return new ValueRecordReadContext(RowDecoder.create(kvFormat, fieldTypes));
     }
 

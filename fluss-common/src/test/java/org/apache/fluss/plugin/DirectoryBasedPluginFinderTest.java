@@ -52,9 +52,7 @@ public class DirectoryBasedPluginFinderTest {
         assertThat(actual.isEmpty()).as("empty root dir -> expected no actual").isTrue();
 
         List<File> subDirs =
-                Stream.of("A", "B", "C")
-                        .map(s -> new File(rootFolder, s))
-                        .collect(Collectors.toList());
+                Stream.of("A", "B", "C").map(s -> new File(rootFolder, s)).collect(Collectors.toList());
 
         for (File subDir : subDirs) {
             checkState(subDir.mkdirs());
@@ -107,8 +105,7 @@ public class DirectoryBasedPluginFinderTest {
             return false;
         }
 
-        final Comparator<PluginDescriptor> comparator =
-                Comparator.comparing(PluginDescriptor::getPluginId);
+        final Comparator<PluginDescriptor> comparator = Comparator.comparing(PluginDescriptor::getPluginId);
 
         a.sort(comparator);
         b.sort(comparator);

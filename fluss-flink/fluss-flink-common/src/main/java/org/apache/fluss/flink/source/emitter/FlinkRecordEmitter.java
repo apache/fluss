@@ -52,14 +52,11 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
 
     @Override
     public void emitRecord(
-            RecordAndPos recordAndPosition,
-            SourceOutput<OUT> sourceOutput,
-            SourceSplitState splitState) {
+            RecordAndPos recordAndPosition, SourceOutput<OUT> sourceOutput, SourceSplitState splitState) {
         if (splitState.isHybridSnapshotLogSplitState()) {
             // if it's hybrid split, we need to update the records number to skip(if in snapshot
             // phase) or log offset(in incremental phase)
-            HybridSnapshotLogSplitState hybridSnapshotLogSplitState =
-                    splitState.asHybridSnapshotLogSplitState();
+            HybridSnapshotLogSplitState hybridSnapshotLogSplitState = splitState.asHybridSnapshotLogSplitState();
 
             ScanRecord scanRecord = recordAndPosition.record();
             if (scanRecord.logOffset() >= 0) {
@@ -73,7 +70,9 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
             }
             processAndEmitRecord(scanRecord, sourceOutput);
         } else if (splitState.isLogSplitState()) {
-            splitState.asLogSplitState().setNextOffset(recordAndPosition.record().logOffset() + 1);
+            splitState
+                    .asLogSplitState()
+                    .setNextOffset(recordAndPosition.record().logOffset() + 1);
             processAndEmitRecord(recordAndPosition.record(), sourceOutput);
         } else if (splitState.isLakeSplit()) {
             if (lakeRecordRecordEmitter == null) {
@@ -90,9 +89,7 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
         try {
             record = deserializationSchema.deserialize(scanRecord);
         } catch (Exception e) {
-            throw new RuntimeException(
-                    "Failed to deserialize record: " + scanRecord + ". Cause: " + e.getMessage(),
-                    e);
+            throw new RuntimeException("Failed to deserialize record: " + scanRecord + ". Cause: " + e.getMessage(), e);
         }
 
         if (record != null) {

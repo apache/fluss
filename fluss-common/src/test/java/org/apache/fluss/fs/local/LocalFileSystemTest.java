@@ -55,7 +55,8 @@ import static org.assertj.core.api.Assertions.assertThatExceptionOfType;
  */
 class LocalFileSystemTest {
 
-    @TempDir private Path temporaryFolder;
+    @TempDir
+    private Path temporaryFolder;
 
     /**
      * This test checks the functionality of the {@link org.apache.fluss.fs.local.LocalFileSystem}
@@ -63,7 +64,8 @@ class LocalFileSystemTest {
      */
     @Test
     void testLocalFilesystem() throws Exception {
-        final File tempdir = new File(temporaryFolder.toString(), UUID.randomUUID().toString());
+        final File tempdir =
+                new File(temporaryFolder.toString(), UUID.randomUUID().toString());
 
         final File testfile1 = new File(tempdir, UUID.randomUUID().toString());
         final File testfile2 = new File(tempdir, UUID.randomUUID().toString());
@@ -117,8 +119,7 @@ class LocalFileSystemTest {
          */
 
         // create files.. one ""natively"", one using lfs
-        final FSDataOutputStream lfsoutput1 =
-                lfs.create(pathtotestfile1, FileSystem.WriteMode.NO_OVERWRITE);
+        final FSDataOutputStream lfsoutput1 = lfs.create(pathtotestfile1, FileSystem.WriteMode.NO_OVERWRITE);
         assertThat(testfile2.createNewFile()).isTrue();
 
         // does lfs create files? does lfs recognize created files?
@@ -140,7 +141,8 @@ class LocalFileSystemTest {
         assertThat(testbytestest).isEqualTo(testbytes);
 
         // does lfs see the correct file length?
-        assertThat(testfile1.length()).isEqualTo(lfs.getFileStatus(pathtotestfile1).getLen());
+        assertThat(testfile1.length())
+                .isEqualTo(lfs.getFileStatus(pathtotestfile1).getLen());
 
         // as well, when we call the listStatus (that is intended for directories?)
         assertThat(testfile1.length()).isEqualTo(lfs.listStatus(pathtotestfile1)[0].getLen());
@@ -235,14 +237,16 @@ class LocalFileSystemTest {
         final FileSystem fs = FileSystem.get(LocalFileSystem.getLocalFsURI());
 
         // a source folder with a file
-        final File srcFolder =
-                Files.createTempDirectory(temporaryFolder, UUID.randomUUID().toString()).toFile();
+        final File srcFolder = Files.createTempDirectory(
+                        temporaryFolder, UUID.randomUUID().toString())
+                .toFile();
         final File srcFile = new File(srcFolder, "someFile.txt");
         assertThat(srcFile.createNewFile()).isTrue();
 
         // a non-empty destination folder
-        final File dstFolder =
-                Files.createTempDirectory(temporaryFolder, UUID.randomUUID().toString()).toFile();
+        final File dstFolder = Files.createTempDirectory(
+                        temporaryFolder, UUID.randomUUID().toString())
+                .toFile();
         final File dstFile = new File(dstFolder, "target");
         assertThat(dstFile.createNewFile()).isTrue();
 
@@ -264,35 +268,31 @@ class LocalFileSystemTest {
         final int directoryDepth = 10;
         final int concurrentOperations = 10;
 
-        final Collection<File> targetDirectories =
-                createTargetDirectories(root, directoryDepth, concurrentOperations);
+        final Collection<File> targetDirectories = createTargetDirectories(root, directoryDepth, concurrentOperations);
 
         final ExecutorService executor = Executors.newFixedThreadPool(concurrentOperations);
         final CyclicBarrier cyclicBarrier = new CyclicBarrier(concurrentOperations);
 
         try {
-            final Collection<CompletableFuture<Void>> mkdirsFutures =
-                    new ArrayList<>(concurrentOperations);
+            final Collection<CompletableFuture<Void>> mkdirsFutures = new ArrayList<>(concurrentOperations);
             for (File targetDirectory : targetDirectories) {
-                final CompletableFuture<Void> mkdirsFuture =
-                        CompletableFuture.runAsync(
-                                () -> {
-                                    try {
-                                        cyclicBarrier.await();
-                                        assertThat(fs.mkdirs(FsPath.fromLocalFile(targetDirectory)))
-                                                .isTrue();
-                                    } catch (Exception e) {
-                                        throw new CompletionException(e);
-                                    }
-                                },
-                                executor);
+                final CompletableFuture<Void> mkdirsFuture = CompletableFuture.runAsync(
+                        () -> {
+                            try {
+                                cyclicBarrier.await();
+                                assertThat(fs.mkdirs(FsPath.fromLocalFile(targetDirectory)))
+                                        .isTrue();
+                            } catch (Exception e) {
+                                throw new CompletionException(e);
+                            }
+                        },
+                        executor);
 
                 mkdirsFutures.add(mkdirsFuture);
             }
 
             final CompletableFuture<Void> allFutures =
-                    CompletableFuture.allOf(
-                            mkdirsFutures.toArray(new CompletableFuture[concurrentOperations]));
+                    CompletableFuture.allOf(mkdirsFutures.toArray(new CompletableFuture[concurrentOperations]));
 
             allFutures.get();
         } finally {
@@ -306,8 +306,7 @@ class LocalFileSystemTest {
         FileSystem fs = FileSystem.get(LocalFileSystem.getLocalFsURI());
 
         FsPath filePath = new FsPath("local_fs_test_" + UUID.randomUUID());
-        try (FSDataOutputStream outputStream =
-                fs.create(filePath, FileSystem.WriteMode.OVERWRITE)) {
+        try (FSDataOutputStream outputStream = fs.create(filePath, FileSystem.WriteMode.OVERWRITE)) {
             // Do nothing.
         } finally {
             for (int i = 0; i < 10 && fs.exists(filePath); ++i) {
@@ -337,10 +336,7 @@ class LocalFileSystemTest {
     @Test
     void testWriteBytesSubArrayMethodFailsOnClosedOutputStream() throws IOException {
         assertThatExceptionOfType(ClosedChannelException.class)
-                .isThrownBy(
-                        () ->
-                                testMethodCallFailureOnClosedStream(
-                                        os -> os.write(new byte[0], 0, 0)));
+                .isThrownBy(() -> testMethodCallFailureOnClosedStream(os -> os.write(new byte[0], 0, 0)));
     }
 
     @Test
@@ -349,20 +345,17 @@ class LocalFileSystemTest {
                 .isThrownBy(() -> testMethodCallFailureOnClosedStream(FSDataOutputStream::getPos));
     }
 
-    private void testMethodCallFailureOnClosedStream(
-            ThrowingConsumer<FSDataOutputStream, IOException> callback) throws IOException {
+    private void testMethodCallFailureOnClosedStream(ThrowingConsumer<FSDataOutputStream, IOException> callback)
+            throws IOException {
         final FileSystem fs = FileSystem.get(LocalFileSystem.getLocalFsURI());
-        final FSDataOutputStream outputStream =
-                fs.create(
-                        new FsPath(
-                                temporaryFolder.toString(), "close_fs_test_" + UUID.randomUUID()),
-                        FileSystem.WriteMode.OVERWRITE);
+        final FSDataOutputStream outputStream = fs.create(
+                new FsPath(temporaryFolder.toString(), "close_fs_test_" + UUID.randomUUID()),
+                FileSystem.WriteMode.OVERWRITE);
         outputStream.close();
         callback.accept(outputStream);
     }
 
-    private Collection<File> createTargetDirectories(
-            File root, int directoryDepth, int numberDirectories) {
+    private Collection<File> createTargetDirectories(File root, int directoryDepth, int numberDirectories) {
         final StringBuilder stringBuilder = new StringBuilder();
 
         for (int i = 0; i < directoryDepth; i++) {

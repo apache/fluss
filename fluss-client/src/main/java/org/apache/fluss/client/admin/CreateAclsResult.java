@@ -71,17 +71,16 @@ public class CreateAclsResult {
      *     results.
      */
     public void complete(List<PbCreateAclRespInfo> pbAclRespInfos) {
-        pbAclRespInfos.forEach(
-                pbAclRespInfo -> {
-                    AclBinding aclBinding = toAclBinding(pbAclRespInfo.getAcl());
-                    CompletableFuture<Void> future = futures.get(aclBinding);
-                    ApiError error = ApiError.fromErrorMessage(pbAclRespInfo);
-                    if (error.isFailure()) {
-                        future.completeExceptionally(error.exception());
-                    } else {
-                        future.complete(null);
-                    }
-                });
+        pbAclRespInfos.forEach(pbAclRespInfo -> {
+            AclBinding aclBinding = toAclBinding(pbAclRespInfo.getAcl());
+            CompletableFuture<Void> future = futures.get(aclBinding);
+            ApiError error = ApiError.fromErrorMessage(pbAclRespInfo);
+            if (error.isFailure()) {
+                future.completeExceptionally(error.exception());
+            } else {
+                future.complete(null);
+            }
+        });
     }
 
     /**

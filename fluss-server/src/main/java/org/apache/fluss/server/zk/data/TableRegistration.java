@@ -65,8 +65,7 @@ public class TableRegistration {
             long createdTime,
             long modifiedTime) {
         checkArgument(
-                tableDistribution.getBucketCount().isPresent(),
-                "Bucket count is required for table registration.");
+                tableDistribution.getBucketCount().isPresent(), "Bucket count is required for table registration.");
         this.tableId = tableId;
         this.comment = comment;
         this.partitionKeys = partitionKeys;
@@ -91,9 +90,7 @@ public class TableRegistration {
     }
 
     public TableInfo toTableInfo(
-            TablePath tablePath,
-            SchemaInfo schemaInfo,
-            @Nullable Map<String, String> defaultTableLakeOptions) {
+            TablePath tablePath, SchemaInfo schemaInfo, @Nullable Map<String, String> defaultTableLakeOptions) {
         Configuration properties = Configuration.fromMap(this.properties);
         if (defaultTableLakeOptions != null) {
             if (properties.get(ConfigOptions.TABLE_DATALAKE_ENABLED)) {

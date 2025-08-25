@@ -53,11 +53,10 @@ import static org.assertj.core.api.AssertionsForInterfaceTypes.assertThat;
 class CommitLakeTableSnapshotITCase {
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setClusterConf(initConfig())
-                    .setNumOfTabletServers(3)
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setClusterConf(initConfig())
+            .setNumOfTabletServers(3)
+            .build();
 
     private static final int BUCKET_NUM = 3;
 
@@ -83,18 +82,13 @@ class CommitLakeTableSnapshotITCase {
             TableBucket tb = new TableBucket(tableId, bucket);
             // get the leader server
             int leaderServer = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
-            TabletServerGateway leaderGateWay =
-                    FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
+            TabletServerGateway leaderGateWay = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderServer);
             FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
 
             for (int i = 0; i < 10; i++) {
                 leaderGateWay
-                        .produceLog(
-                                RpcMessageTestUtils.newProduceLogRequest(
-                                        tableId,
-                                        tb.getBucket(),
-                                        -1,
-                                        genMemoryLogRecordsByObject(DATA1)))
+                        .produceLog(RpcMessageTestUtils.newProduceLogRequest(
+                                tableId, tb.getBucket(), -1, genMemoryLogRecordsByObject(DATA1)))
                         .get();
             }
         }
@@ -104,14 +98,11 @@ class CommitLakeTableSnapshotITCase {
         long snapshotId = 1;
         long dataLakeLogStartOffset = 0;
         long dataLakeLogEndOffset = 50;
-        CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest =
-                genCommitLakeTableSnapshotRequest(
-                        tableId,
-                        BUCKET_NUM,
-                        snapshotId,
-                        dataLakeLogStartOffset,
-                        dataLakeLogEndOffset);
-        coordinatorGateway.commitLakeTableSnapshot(commitLakeTableSnapshotRequest).get();
+        CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest = genCommitLakeTableSnapshotRequest(
+                tableId, BUCKET_NUM, snapshotId, dataLakeLogStartOffset, dataLakeLogEndOffset);
+        coordinatorGateway
+                .commitLakeTableSnapshot(commitLakeTableSnapshotRequest)
+                .get();
 
         Map<TableBucket, Long> bucketsLogStartOffset = new HashMap<>();
         Map<TableBucket, Long> bucketsLogEndOffset = new HashMap<>();
@@ -120,35 +111,27 @@ class CommitLakeTableSnapshotITCase {
             bucketsLogStartOffset.put(tb, dataLakeLogStartOffset);
             bucketsLogEndOffset.put(tb, dataLakeLogEndOffset);
             Replica replica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb);
-            retry(
-                    Duration.ofMinutes(2),
-                    () -> {
-                        LogTablet logTablet = replica.getLogTablet();
-                        assertThat(logTablet.getLakeLogStartOffset())
-                                .isEqualTo(dataLakeLogStartOffset);
-                        assertThat(logTablet.getLakeLogEndOffset()).isEqualTo(dataLakeLogEndOffset);
-                    });
+            retry(Duration.ofMinutes(2), () -> {
+                LogTablet logTablet = replica.getLogTablet();
+                assertThat(logTablet.getLakeLogStartOffset()).isEqualTo(dataLakeLogStartOffset);
+                assertThat(logTablet.getLakeLogEndOffset()).isEqualTo(dataLakeLogEndOffset);
+            });
         }
 
-        LakeTableSnapshot expectedDataLakeTieredInfo =
-                new LakeTableSnapshot(
-                        snapshotId,
-                        tableId,
-                        bucketsLogStartOffset,
-                        bucketsLogEndOffset,
-                        Collections.emptyMap());
+        LakeTableSnapshot expectedDataLakeTieredInfo = new LakeTableSnapshot(
+                snapshotId, tableId, bucketsLogStartOffset, bucketsLogEndOffset, Collections.emptyMap());
         checkLakeTableDataInZk(tableId, expectedDataLakeTieredInfo);
     }
 
     private void checkLakeTableDataInZk(long tableId, LakeTableSnapshot expected) throws Exception {
-        LakeTableSnapshot lakeTableSnapshot = zkClient.getLakeTableSnapshot(tableId).get();
+        LakeTableSnapshot lakeTableSnapshot =
+                zkClient.getLakeTableSnapshot(tableId).get();
         assertThat(lakeTableSnapshot).isEqualTo(expected);
     }
 
     private static CommitLakeTableSnapshotRequest genCommitLakeTableSnapshotRequest(
             long tableId, int buckets, long snapshotId, long logStartOffset, long logEndOffset) {
-        CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest =
-                new CommitLakeTableSnapshotRequest();
+        CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest = new CommitLakeTableSnapshotRequest();
         PbLakeTableSnapshotInfo reqForTable = commitLakeTableSnapshotRequest.addTablesReq();
         reqForTable.setTableId(tableId);
         reqForTable.setSnapshotId(snapshotId);
@@ -166,13 +149,11 @@ class CommitLakeTableSnapshotITCase {
     }
 
     private long createLogTable() throws Exception {
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(DATA1_SCHEMA)
-                        .distributedBy(BUCKET_NUM, "a")
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
-                        .build();
-        return RpcMessageTestUtils.createTable(
-                FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(DATA1_SCHEMA)
+                .distributedBy(BUCKET_NUM, "a")
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                .build();
+        return RpcMessageTestUtils.createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
     }
 }

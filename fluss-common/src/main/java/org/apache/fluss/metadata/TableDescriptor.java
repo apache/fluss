@@ -78,50 +78,35 @@ public final class TableDescriptor implements Serializable {
         this.comment = comment;
         this.partitionKeys = checkNotNull(partitionKeys, "partition keys must not be null.");
         this.properties = unmodifiableMap(checkNotNull(properties, "options must not be null."));
-        this.customProperties =
-                unmodifiableMap(
-                        checkNotNull(customProperties, "customProperties must not be null."));
+        this.customProperties = unmodifiableMap(checkNotNull(customProperties, "customProperties must not be null."));
 
         // validate and normalize bucket keys.
         this.tableDistribution = normalizeDistribution(schema, partitionKeys, tableDistribution);
 
         // validate partition keys and bucket keys
         Set<String> columnNames =
-                schema.getColumns().stream()
-                        .map(Schema.Column::getName)
-                        .collect(Collectors.toSet());
+                schema.getColumns().stream().map(Schema.Column::getName).collect(Collectors.toSet());
         if (schema.getPrimaryKey().isPresent()) {
             List<String> pkColumns = schema.getPrimaryKey().get().getColumnNames();
-            partitionKeys.forEach(
-                    f ->
-                            checkArgument(
-                                    pkColumns.contains(f),
-                                    "Partitioned Primary Key Table requires partition key %s is a subset of the primary key %s.",
-                                    partitionKeys,
-                                    pkColumns));
+            partitionKeys.forEach(f -> checkArgument(
+                    pkColumns.contains(f),
+                    "Partitioned Primary Key Table requires partition key %s is a subset of the primary key %s.",
+                    partitionKeys,
+                    pkColumns));
         } else {
             partitionKeys.forEach(
-                    f ->
-                            checkArgument(
-                                    columnNames.contains(f),
-                                    "Partition key '%s' does not exist in the schema.",
-                                    f));
+                    f -> checkArgument(columnNames.contains(f), "Partition key '%s' does not exist in the schema.", f));
         }
 
         if (this.tableDistribution != null) {
             this.tableDistribution
                     .getBucketKeys()
-                    .forEach(
-                            f ->
-                                    checkArgument(
-                                            columnNames.contains(f),
-                                            "Bucket key '%s' does not exist in the schema.",
-                                            f));
+                    .forEach(f ->
+                            checkArgument(columnNames.contains(f), "Bucket key '%s' does not exist in the schema.", f));
         }
 
         checkArgument(
-                properties.entrySet().stream()
-                        .allMatch(e -> e.getKey() != null && e.getValue() != null),
+                properties.entrySet().stream().allMatch(e -> e.getKey() != null && e.getValue() != null),
                 "options cannot have null keys or values.");
 
         // we don't check property validation here, it will be checked in server,
@@ -222,8 +207,7 @@ public final class TableDescriptor implements Serializable {
      */
     public int getReplicationFactor() {
         String factor = properties.get(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
-        checkArgument(
-                factor != null, "%s is not set.", ConfigOptions.TABLE_REPLICATION_FACTOR.key());
+        checkArgument(factor != null, "%s is not set.", ConfigOptions.TABLE_REPLICATION_FACTOR.key());
         return Integer.parseInt(factor);
     }
 
@@ -232,8 +216,7 @@ public final class TableDescriptor implements Serializable {
      * properties.
      */
     public TableDescriptor withProperties(Map<String, String> newProperties) {
-        return new TableDescriptor(
-                schema, comment, partitionKeys, tableDistribution, newProperties, customProperties);
+        return new TableDescriptor(schema, comment, partitionKeys, tableDistribution, newProperties, customProperties);
     }
 
     /**
@@ -242,8 +225,7 @@ public final class TableDescriptor implements Serializable {
      */
     public TableDescriptor withReplicationFactor(int newReplicationFactor) {
         Map<String, String> newProperties = new HashMap<>(properties);
-        newProperties.put(
-                ConfigOptions.TABLE_REPLICATION_FACTOR.key(), String.valueOf(newReplicationFactor));
+        newProperties.put(ConfigOptions.TABLE_REPLICATION_FACTOR.key(), String.valueOf(newReplicationFactor));
         return withProperties(newProperties);
     }
 
@@ -316,8 +298,7 @@ public final class TableDescriptor implements Serializable {
 
     @Override
     public int hashCode() {
-        return Objects.hash(
-                schema, comment, partitionKeys, tableDistribution, properties, customProperties);
+        return Objects.hash(schema, comment, partitionKeys, tableDistribution, properties, customProperties);
     }
 
     @Override
@@ -343,18 +324,14 @@ public final class TableDescriptor implements Serializable {
 
     @Nullable
     private static TableDistribution normalizeDistribution(
-            Schema schema,
-            List<String> partitionKeys,
-            @Nullable TableDistribution originDistribution) {
+            Schema schema, List<String> partitionKeys, @Nullable TableDistribution originDistribution) {
         if (originDistribution != null) {
             // we may need to check and normalize bucket key
             List<String> bucketKeys = originDistribution.getBucketKeys();
             // bucket key shouldn't include partition key
             if (bucketKeys.stream().anyMatch(partitionKeys::contains)) {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "Bucket key %s shouldn't include any column in partition keys %s.",
-                                bucketKeys, partitionKeys));
+                throw new IllegalArgumentException(String.format(
+                        "Bucket key %s shouldn't include any column in partition keys %s.", bucketKeys, partitionKeys));
             }
 
             // if primary key set
@@ -368,13 +345,12 @@ public final class TableDescriptor implements Serializable {
                     // check the provided bucket key
                     List<String> pkColumns = schema.getPrimaryKey().get().getColumnNames();
                     if (!new HashSet<>(pkColumns).containsAll(bucketKeys)) {
-                        throw new IllegalArgumentException(
-                                String.format(
-                                        "Bucket keys must be a subset of primary keys excluding partition "
-                                                + "keys for primary-key tables. The primary keys are %s, the "
-                                                + "partition keys are %s, but "
-                                                + "the user-defined bucket keys are %s.",
-                                        pkColumns, partitionKeys, bucketKeys));
+                        throw new IllegalArgumentException(String.format(
+                                "Bucket keys must be a subset of primary keys excluding partition "
+                                        + "keys for primary-key tables. The primary keys are %s, the "
+                                        + "partition keys are %s, but "
+                                        + "the user-defined bucket keys are %s.",
+                                pkColumns, partitionKeys, bucketKeys));
                     }
                     return new TableDistribution(
                             originDistribution.getBucketCount().orElse(null), bucketKeys);
@@ -386,8 +362,7 @@ public final class TableDescriptor implements Serializable {
             // if primary key is set, need to set the bucket keys
             // to primary key (exclude partition key if it is partitioned table)
             if (schema.getPrimaryKey().isPresent()) {
-                return new TableDistribution(
-                        null, defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys));
+                return new TableDistribution(null, defaultBucketKeyOfPrimaryKeyTable(schema, partitionKeys));
             } else {
                 return originDistribution;
             }
@@ -395,16 +370,14 @@ public final class TableDescriptor implements Serializable {
     }
 
     /** The default bucket key of primary key table is the primary key excluding partition keys. */
-    private static List<String> defaultBucketKeyOfPrimaryKeyTable(
-            Schema schema, List<String> partitionKeys) {
+    private static List<String> defaultBucketKeyOfPrimaryKeyTable(Schema schema, List<String> partitionKeys) {
         checkArgument(schema.getPrimaryKey().isPresent(), "Primary key must be set.");
         List<String> bucketKeys = new ArrayList<>(schema.getPrimaryKey().get().getColumnNames());
         bucketKeys.removeAll(partitionKeys);
         if (bucketKeys.isEmpty()) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Primary Key constraint %s should not be same with partition fields %s.",
-                            schema.getPrimaryKey().get().getColumnNames(), partitionKeys));
+            throw new IllegalArgumentException(String.format(
+                    "Primary Key constraint %s should not be same with partition fields %s.",
+                    schema.getPrimaryKey().get().getColumnNames(), partitionKeys));
         }
 
         return bucketKeys;
@@ -447,8 +420,7 @@ public final class TableDescriptor implements Serializable {
                 return false;
             }
             TableDistribution that = (TableDistribution) o;
-            return Objects.equals(bucketCount, that.bucketCount)
-                    && Objects.equals(bucketKeys, that.bucketKeys);
+            return Objects.equals(bucketCount, that.bucketCount) && Objects.equals(bucketKeys, that.bucketKeys);
         }
 
         @Override
@@ -516,8 +488,7 @@ public final class TableDescriptor implements Serializable {
         public <T> Builder property(ConfigOption<T> configOption, T value) {
             checkNotNull(configOption, "Config option must not be null.");
             checkNotNull(value, "Value must not be null.");
-            properties.put(
-                    configOption.key(), ConfigurationUtils.convertValue(value, String.class));
+            properties.put(configOption.key(), ConfigurationUtils.convertValue(value, String.class));
             return this;
         }
 
@@ -613,13 +584,7 @@ public final class TableDescriptor implements Serializable {
 
         /** Returns an immutable instance of {@link TableDescriptor}. */
         public TableDescriptor build() {
-            return new TableDescriptor(
-                    schema,
-                    comment,
-                    partitionKeys,
-                    tableDistribution,
-                    properties,
-                    customProperties);
+            return new TableDescriptor(schema, comment, partitionKeys, tableDistribution, properties, customProperties);
         }
     }
 }

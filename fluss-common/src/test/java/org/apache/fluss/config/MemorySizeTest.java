@@ -32,16 +32,12 @@ public class MemorySizeTest {
 
     static Stream<Arguments> parameters() {
         return Stream.of(
-                Arguments.of(
-                        new MemorySize(MemorySize.MemoryUnit.KILO_BYTES.getMultiplier() + 1),
-                        "1025 bytes"),
+                Arguments.of(new MemorySize(MemorySize.MemoryUnit.KILO_BYTES.getMultiplier() + 1), "1025 bytes"),
                 Arguments.of(new MemorySize(100), "100 bytes"),
                 Arguments.of(new MemorySize(1024), "1 kb"),
                 Arguments.of(
                         new MemorySize(MemorySize.MemoryUnit.GIGA_BYTES.getMultiplier() + 1),
-                        String.format(
-                                "%d %s",
-                                MemorySize.MemoryUnit.GIGA_BYTES.getMultiplier() + 1, "bytes")),
+                        String.format("%d %s", MemorySize.MemoryUnit.GIGA_BYTES.getMultiplier() + 1, "bytes")),
                 Arguments.of(new MemorySize(0), "0 bytes"));
     }
 
@@ -162,36 +158,30 @@ public class MemorySizeTest {
         assertThatThrownBy(() -> MemorySize.parseBytes("1234"))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("The memory value '1234' does not specify a memory unit.");
-        assertThatThrownBy(() -> MemorySize.parseBytes("      155      "))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> MemorySize.parseBytes("      155      ")).isInstanceOf(IllegalArgumentException.class);
 
         // null
-        assertThatThrownBy(() -> MemorySize.parseBytes(null))
-                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> MemorySize.parseBytes(null)).isInstanceOf(NullPointerException.class);
 
         // empty
-        assertThatThrownBy(() -> MemorySize.parseBytes(""))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> MemorySize.parseBytes("")).isInstanceOf(IllegalArgumentException.class);
 
         // blank
-        assertThatThrownBy(() -> MemorySize.parseBytes("     "))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> MemorySize.parseBytes("     ")).isInstanceOf(IllegalArgumentException.class);
 
         // no number
         assertThatThrownBy(() -> MemorySize.parseBytes("foobar or fubar or foo bazz"))
                 .isInstanceOf(IllegalArgumentException.class);
 
         // wrong unit
-        assertThatThrownBy(() -> MemorySize.parseBytes("16 gjah"))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> MemorySize.parseBytes("16 gjah")).isInstanceOf(IllegalArgumentException.class);
 
         // multiple numbers
         assertThatThrownBy(() -> MemorySize.parseBytes("16 16 17 18 bytes"))
                 .isInstanceOf(IllegalArgumentException.class);
 
         // negative number
-        assertThatThrownBy(() -> MemorySize.parseBytes("-100 bytes"))
-                .isInstanceOf(IllegalArgumentException.class);
+        assertThatThrownBy(() -> MemorySize.parseBytes("-100 bytes")).isInstanceOf(IllegalArgumentException.class);
     }
 
     @Test
@@ -225,10 +215,8 @@ public class MemorySizeTest {
         assertThat(new MemorySize(1024L).toHumanReadableString()).isEqualTo(("1024 bytes"));
         assertThat(new MemorySize(1025L).toHumanReadableString()).isEqualTo("1.001kb (1025 bytes)");
         assertThat(new MemorySize(1536L).toHumanReadableString()).isEqualTo("1.500kb (1536 bytes)");
-        assertThat(new MemorySize(1_000_000L).toHumanReadableString())
-                .isEqualTo("976.563kb (1000000 bytes)");
-        assertThat(new MemorySize(1_000_000_000L).toHumanReadableString())
-                .isEqualTo("953.674mb (1000000000 bytes)");
+        assertThat(new MemorySize(1_000_000L).toHumanReadableString()).isEqualTo("976.563kb (1000000 bytes)");
+        assertThat(new MemorySize(1_000_000_000L).toHumanReadableString()).isEqualTo("953.674mb (1000000000 bytes)");
         assertThat(new MemorySize(1_000_000_000_000L).toHumanReadableString())
                 .isEqualTo("931.323gb (1000000000000 bytes)");
         assertThat(new MemorySize(1_000_000_000_000_000L).toHumanReadableString())

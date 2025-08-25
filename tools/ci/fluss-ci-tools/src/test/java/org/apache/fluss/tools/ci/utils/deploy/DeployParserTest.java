@@ -26,31 +26,24 @@ import static org.assertj.core.api.Assertions.assertThat;
 class DeployParserTest {
     @Test
     void testParseDeployOutputDetectsDeployment() {
-        assertThat(
-                        DeployParser.parseDeployOutput(
-                                Stream.of(
-                                        "[INFO] --- maven-deploy-plugin:2.8.2:deploy (default-deploy) @ fluss-parent ---",
-                                        "[INFO] ")))
+        assertThat(DeployParser.parseDeployOutput(Stream.of(
+                        "[INFO] --- maven-deploy-plugin:2.8.2:deploy (default-deploy) @ fluss-parent ---", "[INFO] ")))
                 .containsExactly("fluss-parent");
     }
 
     @Test
     void testParseDeployOutputDetectsDeploymentWithAltRepository() {
-        assertThat(
-                        DeployParser.parseDeployOutput(
-                                Stream.of(
-                                        "[INFO] --- maven-deploy-plugin:2.8.2:deploy (default-deploy) @ fluss-parent ---",
-                                        "[INFO] Using alternate deployment repository.../tmp/fluss-validation-deployment")))
+        assertThat(DeployParser.parseDeployOutput(Stream.of(
+                        "[INFO] --- maven-deploy-plugin:2.8.2:deploy (default-deploy) @ fluss-parent ---",
+                        "[INFO] Using alternate deployment repository.../tmp/fluss-validation-deployment")))
                 .containsExactly("fluss-parent");
     }
 
     @Test
     void testParseDeployOutputDetectsSkippedDeployments() {
-        assertThat(
-                        DeployParser.parseDeployOutput(
-                                Stream.of(
-                                        "[INFO] --- maven-deploy-plugin:2.8.2:deploy (default-deploy) @ fluss-parent ---",
-                                        "[INFO] Skipping artifact deployment")))
+        assertThat(DeployParser.parseDeployOutput(Stream.of(
+                        "[INFO] --- maven-deploy-plugin:2.8.2:deploy (default-deploy) @ fluss-parent ---",
+                        "[INFO] Skipping artifact deployment")))
                 .isEmpty();
     }
 }

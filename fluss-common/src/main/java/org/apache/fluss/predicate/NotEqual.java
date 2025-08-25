@@ -43,8 +43,7 @@ public class NotEqual extends NullFalseLeafBinaryFunction {
     }
 
     @Override
-    public boolean test(
-            DataType type, long rowCount, Object min, Object max, Long nullCount, Object literal) {
+    public boolean test(DataType type, long rowCount, Object min, Object max, Long nullCount, Object literal) {
         // ony when max == min == literal, the result is false,
         // otherwise, the row set MAY contain the literal.
         return compareLiteral(type, literal, min) != 0 || compareLiteral(type, literal, max) != 0;

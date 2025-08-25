@@ -121,9 +121,7 @@ public class PeriodicSnapshotManager implements Closeable {
         this.guardedExecutor = guardedExecutor;
         this.asyncOperationsThreadPool = asyncOperationsThreadPool;
         this.initialDelay =
-                periodicSnapshotDelay > 0
-                        ? MathUtils.murmurHash(tableBucket.hashCode()) % periodicSnapshotDelay
-                        : 0;
+                periodicSnapshotDelay > 0 ? MathUtils.murmurHash(tableBucket.hashCode()) % periodicSnapshotDelay : 0;
 
         registerMetrics(bucketMetricGroup);
     }
@@ -165,10 +163,7 @@ public class PeriodicSnapshotManager implements Closeable {
     private synchronized void scheduleNextSnapshot(long delay) {
         if (started && !periodicExecutor.isShutdown()) {
 
-            LOG.debug(
-                    "TableBucket {} schedules the next snapshot in {} seconds",
-                    tableBucket,
-                    delay / 1000);
+            LOG.debug("TableBucket {} schedules the next snapshot in {} seconds", tableBucket, delay / 1000);
             periodicExecutor.schedule(this::triggerSnapshot, delay, TimeUnit.MILLISECONDS);
         }
     }
@@ -176,40 +171,37 @@ public class PeriodicSnapshotManager implements Closeable {
     public void triggerSnapshot() {
         // todo: consider shrink the scope
         // of using guardedExecutor
-        guardedExecutor.execute(
-                () -> {
-                    if (started) {
-                        LOG.debug("TableBucket {} triggers snapshot.", tableBucket);
-                        long triggerTime = System.currentTimeMillis();
+        guardedExecutor.execute(() -> {
+            if (started) {
+                LOG.debug("TableBucket {} triggers snapshot.", tableBucket);
+                long triggerTime = System.currentTimeMillis();
 
-                        Optional<SnapshotRunnable> snapshotRunnableOptional;
-                        try {
-                            snapshotRunnableOptional = target.initSnapshot();
-                        } catch (Exception e) {
-                            LOG.error("Fail to init snapshot during triggering snapshot.", e);
-                            return;
-                        }
-                        if (snapshotRunnableOptional.isPresent()) {
-                            SnapshotRunnable runnable = snapshotRunnableOptional.get();
-                            asyncOperationsThreadPool.execute(
-                                    () ->
-                                            asyncSnapshotPhase(
-                                                    triggerTime,
-                                                    runnable.getSnapshotId(),
-                                                    runnable.getCoordinatorEpoch(),
-                                                    runnable.getBucketLeaderEpoch(),
-                                                    runnable.getSnapshotLocation(),
-                                                    runnable.getSnapshotRunnable()));
-                        } else {
-                            scheduleNextSnapshot();
-                            LOG.debug(
-                                    "TableBucket {} has no data updates since last snapshot, "
-                                            + "skip this one and schedule the next one in {} seconds",
-                                    tableBucket,
-                                    periodicSnapshotDelay / 1000);
-                        }
-                    }
-                });
+                Optional<SnapshotRunnable> snapshotRunnableOptional;
+                try {
+                    snapshotRunnableOptional = target.initSnapshot();
+                } catch (Exception e) {
+                    LOG.error("Fail to init snapshot during triggering snapshot.", e);
+                    return;
+                }
+                if (snapshotRunnableOptional.isPresent()) {
+                    SnapshotRunnable runnable = snapshotRunnableOptional.get();
+                    asyncOperationsThreadPool.execute(() -> asyncSnapshotPhase(
+                            triggerTime,
+                            runnable.getSnapshotId(),
+                            runnable.getCoordinatorEpoch(),
+                            runnable.getBucketLeaderEpoch(),
+                            runnable.getSnapshotLocation(),
+                            runnable.getSnapshotRunnable()));
+                } else {
+                    scheduleNextSnapshot();
+                    LOG.debug(
+                            "TableBucket {} has no data updates since last snapshot, "
+                                    + "skip this one and schedule the next one in {} seconds",
+                            tableBucket,
+                            periodicSnapshotDelay / 1000);
+                }
+            }
+        });
     }
 
     private void asyncSnapshotPhase(
@@ -219,55 +211,43 @@ public class PeriodicSnapshotManager implements Closeable {
             int bucketLeaderEpoch,
             SnapshotLocation snapshotLocation,
             RunnableFuture<SnapshotResult> snapshotedRunnableFuture) {
-        uploadSnapshot(snapshotedRunnableFuture)
-                .whenComplete(
-                        (snapshotResult, throwable) -> {
-                            // if succeed
-                            if (throwable == null) {
-                                numberOfConsecutiveFailures.set(0);
+        uploadSnapshot(snapshotedRunnableFuture).whenComplete((snapshotResult, throwable) -> {
+            // if succeed
+            if (throwable == null) {
+                numberOfConsecutiveFailures.set(0);
 
-                                try {
-                                    target.handleSnapshotResult(
-                                            snapshotId,
-                                            coordinatorEpoch,
-                                            bucketLeaderEpoch,
-                                            snapshotLocation,
-                                            snapshotResult);
-                                    LOG.info(
-                                            "TableBucket {} snapshot finished successfully, cost {} ms.",
-                                            tableBucket,
-                                            System.currentTimeMillis() - triggerTime);
-                                } catch (Throwable t) {
-                                    LOG.warn(
-                                            "Fail to handle snapshot result during snapshot of TableBucket {}",
-                                            tableBucket,
-                                            t);
-                                }
-                                scheduleNextSnapshot();
-                            } else {
-                                // if failed
-                                notifyFailureOrCancellation(
-                                        snapshotId, snapshotLocation, throwable);
-                                int retryTime = numberOfConsecutiveFailures.incrementAndGet();
-                                LOG.info(
-                                        "TableBucket {} asynchronous part of snapshot is not completed for the {} time.",
-                                        tableBucket,
-                                        retryTime,
-                                        throwable);
+                try {
+                    target.handleSnapshotResult(
+                            snapshotId, coordinatorEpoch, bucketLeaderEpoch, snapshotLocation, snapshotResult);
+                    LOG.info(
+                            "TableBucket {} snapshot finished successfully, cost {} ms.",
+                            tableBucket,
+                            System.currentTimeMillis() - triggerTime);
+                } catch (Throwable t) {
+                    LOG.warn("Fail to handle snapshot result during snapshot of TableBucket {}", tableBucket, t);
+                }
+                scheduleNextSnapshot();
+            } else {
+                // if failed
+                notifyFailureOrCancellation(snapshotId, snapshotLocation, throwable);
+                int retryTime = numberOfConsecutiveFailures.incrementAndGet();
+                LOG.info(
+                        "TableBucket {} asynchronous part of snapshot is not completed for the {} time.",
+                        tableBucket,
+                        retryTime,
+                        throwable);
 
-                                scheduleNextSnapshot();
-                            }
-                        });
+                scheduleNextSnapshot();
+            }
+        });
     }
 
-    private void notifyFailureOrCancellation(
-            long snapshot, SnapshotLocation snapshotLocation, Throwable cause) {
+    private void notifyFailureOrCancellation(long snapshot, SnapshotLocation snapshotLocation, Throwable cause) {
         LOG.warn("TableBucket {} snapshot {} failed.", tableBucket, snapshot, cause);
         target.handleSnapshotFailure(snapshot, snapshotLocation, cause);
     }
 
-    private CompletableFuture<SnapshotResult> uploadSnapshot(
-            RunnableFuture<SnapshotResult> snapshotedRunnableFuture) {
+    private CompletableFuture<SnapshotResult> uploadSnapshot(RunnableFuture<SnapshotResult> snapshotedRunnableFuture) {
 
         FileSystemSafetyNet.initializeSafetyNetForThread();
         CompletableFuture<SnapshotResult> result = new CompletableFuture<>();
@@ -343,8 +323,7 @@ public class PeriodicSnapshotManager implements Closeable {
                 throws Throwable;
 
         /** Called when the snapshot is fail. */
-        void handleSnapshotFailure(
-                long snapshotId, SnapshotLocation snapshotLocation, Throwable cause);
+        void handleSnapshotFailure(long snapshotId, SnapshotLocation snapshotLocation, Throwable cause);
 
         /** Get the total size of the snapshot. */
         long getSnapshotSize();

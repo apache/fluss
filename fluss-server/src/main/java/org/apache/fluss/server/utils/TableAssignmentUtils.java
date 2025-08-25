@@ -42,24 +42,18 @@ public class TableAssignmentUtils {
 
     @VisibleForTesting
     protected static TableAssignment generateAssignment(
-            int nBuckets,
-            int replicationFactor,
-            TabletServerInfo[] servers,
-            int startIndex,
-            int nextReplicaShift) {
+            int nBuckets, int replicationFactor, TabletServerInfo[] servers, int startIndex, int nextReplicaShift) {
         if (nBuckets <= 0) {
             throw new InvalidBucketsException("Number of buckets must be larger than 0.");
         }
 
         if (replicationFactor <= 0) {
-            throw new InvalidReplicationFactorException(
-                    "Replication factor must be larger than 0.");
+            throw new InvalidReplicationFactorException("Replication factor must be larger than 0.");
         }
         if (replicationFactor > servers.length) {
-            throw new InvalidReplicationFactorException(
-                    String.format(
-                            "Replication factor: " + "%s larger than available tablet servers: %s.",
-                            replicationFactor, servers.length));
+            throw new InvalidReplicationFactorException(String.format(
+                    "Replication factor: " + "%s larger than available tablet servers: %s.",
+                    replicationFactor, servers.length));
         }
 
         if (Arrays.stream(servers).noneMatch(tsInfo -> tsInfo.getRack() != null)) {
@@ -74,8 +68,7 @@ public class TableAssignmentUtils {
                 throw new InvalidServerRackInfoException(
                         "Not all tabletServers have rack information for replica rack aware assignment.");
             } else {
-                return generateRackAwareAssigment(
-                        nBuckets, replicationFactor, servers, startIndex, nextReplicaShift);
+                return generateRackAwareAssigment(nBuckets, replicationFactor, servers, startIndex, nextReplicaShift);
             }
         }
     }
@@ -161,23 +154,14 @@ public class TableAssignmentUtils {
      * number of racks and each rack has the same number of tabletServers, it guarantees that the
      * replica distribution is even across tabletServers and racks.
      */
-    public static TableAssignment generateAssignment(
-            int nBuckets, int replicationFactor, TabletServerInfo[] servers)
+    public static TableAssignment generateAssignment(int nBuckets, int replicationFactor, TabletServerInfo[] servers)
             throws InvalidReplicationFactorException {
         return generateAssignment(
-                nBuckets,
-                replicationFactor,
-                servers,
-                randomInt(servers.length),
-                randomInt(servers.length));
+                nBuckets, replicationFactor, servers, randomInt(servers.length), randomInt(servers.length));
     }
 
     private static TableAssignment generateRackUnawareAssigment(
-            int nBuckets,
-            int replicationFactor,
-            int[] serverIds,
-            int startIndex,
-            int nextReplicaShift) {
+            int nBuckets, int replicationFactor, int[] serverIds, int startIndex, int nextReplicaShift) {
         Map<Integer, BucketAssignment> assignments = new HashMap<>();
         int currentBucketId = 0;
         for (int i = 0; i < nBuckets; i++) {
@@ -188,8 +172,7 @@ public class TableAssignmentUtils {
             List<Integer> replicas = new ArrayList<>();
             replicas.add(serverIds[firstReplicaIndex]);
             for (int j = 0; j < replicationFactor - 1; j++) {
-                int replicaIndex =
-                        replicaIndex(firstReplicaIndex, nextReplicaShift, j, serverIds.length);
+                int replicaIndex = replicaIndex(firstReplicaIndex, nextReplicaShift, j, serverIds.length);
                 replicas.add(serverIds[replicaIndex]);
             }
             assignments.put(currentBucketId, new BucketAssignment(replicas));
@@ -199,11 +182,7 @@ public class TableAssignmentUtils {
     }
 
     private static TableAssignment generateRackAwareAssigment(
-            int nBuckets,
-            int replicationFactor,
-            TabletServerInfo[] servers,
-            int startIndex,
-            int nextReplicaShift) {
+            int nBuckets, int replicationFactor, TabletServerInfo[] servers, int startIndex, int nextReplicaShift) {
         Map<Integer, String> serverRackMap = new HashMap<>();
         for (TabletServerInfo server : servers) {
             serverRackMap.put(server.getId(), server.getRack());
@@ -230,13 +209,8 @@ public class TableAssignmentUtils {
             for (int j = 0; j < replicationFactor - 1; j++) {
                 boolean done = false;
                 while (!done) {
-                    Integer broker =
-                            arrangedServerList.get(
-                                    replicaIndex(
-                                            firstReplicaIndex,
-                                            nextReplicaShift * numRacks,
-                                            k,
-                                            arrangedServerList.size()));
+                    Integer broker = arrangedServerList.get(
+                            replicaIndex(firstReplicaIndex, nextReplicaShift * numRacks, k, arrangedServerList.size()));
                     String rack = serverRackMap.get(broker);
                     // Skip this tabletServer if
                     // 1. there is already a tabletServer in the same rack that has assigned a
@@ -244,8 +218,7 @@ public class TableAssignmentUtils {
                     // 2. the tabletServer has already assigned a replica AND there is one or more
                     // tabletServers that do not have replica assigned
                     if ((!racksWithReplicas.contains(rack) || racksWithReplicas.size() == numRacks)
-                            && (!brokersWithReplicas.contains(broker)
-                                    || brokersWithReplicas.size() == numServers)) {
+                            && (!brokersWithReplicas.contains(broker) || brokersWithReplicas.size() == numServers)) {
                         replicas.add(broker);
                         racksWithReplicas.add(rack);
                         brokersWithReplicas.add(broker);
@@ -280,8 +253,7 @@ public class TableAssignmentUtils {
     @VisibleForTesting
     static List<Integer> getRackAlternatedTabletServerList(Map<Integer, String> serverRackMap) {
         Map<String, Iterator<Integer>> serversIteratorByRack = new HashMap<>();
-        getInverseMap(serverRackMap)
-                .forEach((rack, servers) -> serversIteratorByRack.put(rack, servers.iterator()));
+        getInverseMap(serverRackMap).forEach((rack, servers) -> serversIteratorByRack.put(rack, servers.iterator()));
         String[] racks = serversIteratorByRack.keySet().toArray(new String[0]);
         Arrays.sort(racks);
         List<Integer> result = new ArrayList<>();
@@ -300,16 +272,15 @@ public class TableAssignmentUtils {
         return nServers == 0 ? 0 : rand.nextInt(nServers);
     }
 
-    private static int replicaIndex(
-            int firstReplicaIndex, int secondReplicaShift, int replicaIndex, int nServers) {
+    private static int replicaIndex(int firstReplicaIndex, int secondReplicaShift, int replicaIndex, int nServers) {
         int shift = 1 + (secondReplicaShift + replicaIndex) % (nServers - 1);
         return (firstReplicaIndex + shift) % nServers;
     }
 
     private static Map<String, List<Integer>> getInverseMap(Map<Integer, String> serverRackMap) {
         Map<String, List<Integer>> results = new HashMap<>();
-        serverRackMap.forEach(
-                (id, rack) -> results.computeIfAbsent(rack, key -> new ArrayList<>()).add(id));
+        serverRackMap.forEach((id, rack) ->
+                results.computeIfAbsent(rack, key -> new ArrayList<>()).add(id));
         results.forEach((rack, rackAndIdList) -> rackAndIdList.sort(Integer::compareTo));
         return results;
     }

@@ -36,8 +36,9 @@ class MetricGroupUtilsTest {
 
         assertThat(scope).isEqualTo(new String[] {"a", "b", "c"});
 
-        metricGroup =
-                TestMetricGroup.newBuilder().setScopeComponents(new String[] {"a", "b"}).build();
+        metricGroup = TestMetricGroup.newBuilder()
+                .setScopeComponents(new String[] {"a", "b"})
+                .build();
 
         scope = MetricGroupUtils.makeScope(metricGroup, "c", "d");
         assertThat(scope).isEqualTo(new String[] {"a", "b", "c", "d"});

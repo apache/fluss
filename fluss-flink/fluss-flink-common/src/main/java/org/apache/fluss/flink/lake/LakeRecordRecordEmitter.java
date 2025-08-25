@@ -36,20 +36,15 @@ public class LakeRecordRecordEmitter<OUT> {
         this.sourceOutputFunc = sourceOutputFunc;
     }
 
-    public void emitRecord(
-            SourceSplitState splitState,
-            SourceOutput<OUT> sourceOutput,
-            RecordAndPos recordAndPos) {
+    public void emitRecord(SourceSplitState splitState, SourceOutput<OUT> sourceOutput, RecordAndPos recordAndPos) {
         if (splitState instanceof LakeSnapshotSplitState) {
             ((LakeSnapshotSplitState) splitState).setRecordsToSkip(recordAndPos.readRecordsCount());
             sourceOutputFunc.accept(recordAndPos.record(), sourceOutput);
         } else if (splitState instanceof LakeSnapshotAndFlussLogSplitState) {
-            ((LakeSnapshotAndFlussLogSplitState) splitState)
-                    .setRecordsToSkip(recordAndPos.readRecordsCount());
+            ((LakeSnapshotAndFlussLogSplitState) splitState).setRecordsToSkip(recordAndPos.readRecordsCount());
             sourceOutputFunc.accept(recordAndPos.record(), sourceOutput);
         } else {
-            throw new UnsupportedOperationException(
-                    "Unknown split state type: " + splitState.getClass());
+            throw new UnsupportedOperationException("Unknown split state type: " + splitState.getClass());
         }
     }
 }

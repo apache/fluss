@@ -31,10 +31,7 @@ import java.util.Map;
  */
 public class CatalogTableAdapter {
     public static CatalogTable toCatalogTable(
-            Schema schema,
-            @Nullable String comment,
-            List<String> partitionKeys,
-            Map<String, String> options) {
+            Schema schema, @Nullable String comment, List<String> partitionKeys, Map<String, String> options) {
         return CatalogTable.of(schema, comment, partitionKeys, options);
     }
 }

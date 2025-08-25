@@ -54,8 +54,7 @@ public class CreateTableEvent implements CoordinatorEvent {
             return false;
         }
         CreateTableEvent that = (CreateTableEvent) o;
-        return Objects.equals(tableInfo, that.tableInfo)
-                && Objects.equals(tableAssignment, that.tableAssignment);
+        return Objects.equals(tableInfo, that.tableInfo) && Objects.equals(tableAssignment, that.tableAssignment);
     }
 
     @Override
@@ -65,11 +64,6 @@ public class CreateTableEvent implements CoordinatorEvent {
 
     @Override
     public String toString() {
-        return "CreateTableEvent{"
-                + "tableInfo="
-                + tableInfo
-                + ", tableAssignment="
-                + tableAssignment
-                + '}';
+        return "CreateTableEvent{" + "tableInfo=" + tableInfo + ", tableAssignment=" + tableAssignment + '}';
     }
 }

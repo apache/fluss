@@ -32,8 +32,7 @@ import java.util.Map;
 
 /** Json serializer and deserializer for {@link TableAssignment}. */
 @Internal
-public class TableAssignmentJsonSerde
-        implements JsonSerializer<TableAssignment>, JsonDeserializer<TableAssignment> {
+public class TableAssignmentJsonSerde implements JsonSerializer<TableAssignment>, JsonDeserializer<TableAssignment> {
 
     public static final TableAssignmentJsonSerde INSTANCE = new TableAssignmentJsonSerde();
 
@@ -42,8 +41,7 @@ public class TableAssignmentJsonSerde
     private static final int VERSION = 1;
 
     @Override
-    public void serialize(TableAssignment tableAssignment, JsonGenerator generator)
-            throws IOException {
+    public void serialize(TableAssignment tableAssignment, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, VERSION);
         serializeBucketAssignments(generator, tableAssignment.getBucketAssignments());
@@ -59,8 +57,7 @@ public class TableAssignmentJsonSerde
     }
 
     public static void serializeBucketAssignments(
-            JsonGenerator generator, Map<Integer, BucketAssignment> bucketAssignments)
-            throws IOException {
+            JsonGenerator generator, Map<Integer, BucketAssignment> bucketAssignments) throws IOException {
         generator.writeObjectFieldStart(BUCKETS);
         for (Map.Entry<Integer, BucketAssignment> entry : bucketAssignments.entrySet()) {
             // write assignment for one bucket
@@ -73,8 +70,7 @@ public class TableAssignmentJsonSerde
         generator.writeEndObject();
     }
 
-    public static Map<Integer, BucketAssignment> deserializeBucketAssignments(
-            JsonNode bucketsNode) {
+    public static Map<Integer, BucketAssignment> deserializeBucketAssignments(JsonNode bucketsNode) {
         Map<Integer, BucketAssignment> bucketAssignments = new HashMap<>();
         Iterator<String> fieldNames = bucketsNode.fieldNames();
         while (fieldNames.hasNext()) {

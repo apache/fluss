@@ -43,8 +43,7 @@ public class DynamicWriteBatchSizeEstimator {
 
     private final ConcurrentHashMap<PhysicalTablePath, Integer> estimatedBatchSizeMap;
 
-    public DynamicWriteBatchSizeEstimator(
-            boolean dynamicBatchSizeEnabled, int maxBatchSize, int pageSize) {
+    public DynamicWriteBatchSizeEstimator(boolean dynamicBatchSizeEnabled, int maxBatchSize, int pageSize) {
         this.dynamicBatchSizeEnabled = dynamicBatchSizeEnabled;
 
         if (dynamicBatchSizeEnabled) {
@@ -62,8 +61,7 @@ public class DynamicWriteBatchSizeEstimator {
             return;
         }
 
-        int estimatedBatchSize =
-                estimatedBatchSizeMap.getOrDefault(physicalTablePath, maxBatchSize);
+        int estimatedBatchSize = estimatedBatchSizeMap.getOrDefault(physicalTablePath, maxBatchSize);
         int newEstimatedBatchSize = estimatedBatchSize;
         if (observedBatchSize >= estimatedBatchSize
                 || observedBatchSize > estimatedBatchSize * RATIO_TO_INCREASE_BATCH_SIZE) {

@@ -52,8 +52,7 @@ public class FlinkCatalogFactory implements CatalogFactory {
 
     @Override
     public FlinkCatalog createCatalog(Context context) {
-        final FactoryUtil.CatalogFactoryHelper helper =
-                FactoryUtil.createCatalogFactoryHelper(this, context);
+        final FactoryUtil.CatalogFactoryHelper helper = FactoryUtil.createCatalogFactoryHelper(this, context);
         helper.validateExcept(CLIENT_SECURITY_PREFIX);
         Map<String, String> options = context.getOptions();
         Map<String, String> securityConfigs = extractPrefix(options, CLIENT_SECURITY_PREFIX);

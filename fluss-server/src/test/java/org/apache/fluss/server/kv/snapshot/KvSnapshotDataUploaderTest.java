@@ -44,7 +44,9 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** Test class for {@link org.apache.fluss.server.kv.snapshot.KvSnapshotDataUploader}. */
 class KvSnapshotDataUploaderTest {
 
-    @TempDir private Path temporaryFolder;
+    @TempDir
+    private Path temporaryFolder;
+
     private ExecutorService downLoaderThreadPool;
 
     @BeforeEach
@@ -65,37 +67,30 @@ class KvSnapshotDataUploaderTest {
         File snapshotSharedFolder = new File(temporaryFolder.toFile(), "shared");
         FsPath snapshotSharedDirectory = FsPath.fromLocalFile(snapshotSharedFolder);
 
-        SnapshotLocation snapshotLocation =
-                new SnapshotLocation(
-                        LocalFileSystem.getSharedInstance(),
-                        snapshotSharedDirectory,
-                        snapshotSharedDirectory,
-                        1024);
+        SnapshotLocation snapshotLocation = new SnapshotLocation(
+                LocalFileSystem.getSharedInstance(), snapshotSharedDirectory, snapshotSharedDirectory, 1024);
 
         String localFolder = "local";
         new File(temporaryFolder.toFile(), localFolder).mkdir();
 
         int sstFileCount = 6;
         int fileSizeThreshold = 1024;
-        List<Path> sstFilePaths =
-                generateRandomSstFiles(localFolder, sstFileCount, fileSizeThreshold);
+        List<Path> sstFilePaths = generateRandomSstFiles(localFolder, sstFileCount, fileSizeThreshold);
 
         KvSnapshotDataUploader snapshotUploader = new KvSnapshotDataUploader(downLoaderThreadPool);
-        List<KvFileHandleAndLocalPath> sstFiles =
-                snapshotUploader.uploadFilesToSnapshotLocation(
-                        sstFilePaths,
-                        snapshotLocation,
-                        SnapshotFileScope.SHARED,
-                        new CloseableRegistry(),
-                        new CloseableRegistry());
+        List<KvFileHandleAndLocalPath> sstFiles = snapshotUploader.uploadFilesToSnapshotLocation(
+                sstFilePaths,
+                snapshotLocation,
+                SnapshotFileScope.SHARED,
+                new CloseableRegistry(),
+                new CloseableRegistry());
 
         for (Path path : sstFilePaths) {
-            KvFileHandle kvFileHandle =
-                    sstFiles.stream()
-                            .filter(e -> e.getLocalPath().equals(path.getFileName().toString()))
-                            .findFirst()
-                            .get()
-                            .getKvFileHandle();
+            KvFileHandle kvFileHandle = sstFiles.stream()
+                    .filter(e -> e.getLocalPath().equals(path.getFileName().toString()))
+                    .findFirst()
+                    .get()
+                    .getKvFileHandle();
             assertThat(kvFileHandle.getFilePath())
                     .startsWith(LocalFileSystem.getLocalFsURI().getScheme());
             FsPath fsPath = new FsPath(kvFileHandle.getFilePath());
@@ -104,8 +99,7 @@ class KvSnapshotDataUploaderTest {
         }
     }
 
-    private void assertContentEqual(Path stateFilePath, FSDataInputStream inputStream)
-            throws IOException {
+    private void assertContentEqual(Path stateFilePath, FSDataInputStream inputStream) throws IOException {
         byte[] expected = Files.readAllBytes(stateFilePath);
         byte[] actual = new byte[expected.length];
         IOUtils.readFully(inputStream, actual, 0, actual.length);
@@ -113,16 +107,14 @@ class KvSnapshotDataUploaderTest {
         assertThat(actual).isEqualTo(expected);
     }
 
-    private List<Path> generateRandomSstFiles(
-            String localFolder, int sstFileCount, int fileSizeThreshold) throws IOException {
+    private List<Path> generateRandomSstFiles(String localFolder, int sstFileCount, int fileSizeThreshold)
+            throws IOException {
         ThreadLocalRandom random = ThreadLocalRandom.current();
 
         List<Path> sstFilePaths = new ArrayList<>(sstFileCount);
         for (int i = 0; i < sstFileCount; ++i) {
-            File file =
-                    new File(temporaryFolder.toFile(), String.format("%s/%d.sst", localFolder, i));
-            generateRandomFileContent(
-                    file.getPath(), random.nextInt(1_000_000) + fileSizeThreshold);
+            File file = new File(temporaryFolder.toFile(), String.format("%s/%d.sst", localFolder, i));
+            generateRandomFileContent(file.getPath(), random.nextInt(1_000_000) + fileSizeThreshold);
             sstFilePaths.add(file.toPath());
         }
         return sstFilePaths;

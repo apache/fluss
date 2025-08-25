@@ -54,9 +54,7 @@ class PrometheusReporterTest {
     private static final String LOGICAL_SCOPE = "logical_scope";
 
     private static final String DIMENSIONS =
-            String.format(
-                    "%s=\"%s\",%s=\"%s\"",
-                    LABEL_NAMES[0], LABEL_VALUES[0], LABEL_NAMES[1], LABEL_VALUES[1]);
+            String.format("%s=\"%s\",%s=\"%s\"", LABEL_NAMES[0], LABEL_VALUES[0], LABEL_NAMES[1], LABEL_VALUES[1]);
     private static final String DEFAULT_LABELS = "{" + DIMENSIONS + ",}";
     private static final String SCOPE_PREFIX =
             PrometheusReporter.SCOPE_PREFIX + LOGICAL_SCOPE + PrometheusReporter.SCOPE_SEPARATOR;
@@ -70,9 +68,7 @@ class PrometheusReporterTest {
     void setupReporter() {
         reporter = new PrometheusReporter(portRangeProvider.next());
 
-        metricGroup =
-                TestUtils.createTestMetricGroup(
-                        LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, LABEL_VALUES));
+        metricGroup = TestUtils.createTestMetricGroup(LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, LABEL_VALUES));
     }
 
     @AfterEach
@@ -115,8 +111,7 @@ class PrometheusReporterTest {
         assertThatGaugeIsExported(testMeter, "testMeter", "5.0");
     }
 
-    private void assertThatGaugeIsExported(Metric metric, String name, String expectedValue)
-            throws UnirestException {
+    private void assertThatGaugeIsExported(Metric metric, String name, String expectedValue) throws UnirestException {
         assertThat(addMetricAndPollResponse(metric, name))
                 .contains(createExpectedPollResponse(name, "", "gauge", expectedValue));
     }
@@ -129,19 +124,10 @@ class PrometheusReporterTest {
         String summaryName = SCOPE_PREFIX + histogramName;
 
         String response = addMetricAndPollResponse(testHistogram, histogramName);
-        assertThat(response)
-                .contains(createExpectedPollResponse(histogramName, "_count", "summary", "1.0"));
+        assertThat(response).contains(createExpectedPollResponse(histogramName, "_count", "summary", "1.0"));
         for (String quantile : Arrays.asList("0.5", "0.75", "0.95", "0.98", "0.99", "0.999")) {
             assertThat(response)
-                    .contains(
-                            summaryName
-                                    + "{"
-                                    + DIMENSIONS
-                                    + ",quantile=\""
-                                    + quantile
-                                    + "\",} "
-                                    + quantile
-                                    + "\n");
+                    .contains(summaryName + "{" + DIMENSIONS + ",quantile=\"" + quantile + "\",} " + quantile + "\n");
         }
     }
 
@@ -158,7 +144,8 @@ class PrometheusReporterTest {
         Counter metric2 = new SimpleCounter();
 
         final Map<String, String> variables2 = new HashMap<>(metricGroup.getAllVariables());
-        final Map.Entry<String, String> entryToModify = variables2.entrySet().iterator().next();
+        final Map.Entry<String, String> entryToModify =
+                variables2.entrySet().iterator().next();
         final String labelValueThatShouldBeRemoved = entryToModify.getValue();
         variables2.put(entryToModify.getKey(), "some_value");
         final MetricGroup metricGroup2 = TestUtils.createTestMetricGroup(LOGICAL_SCOPE, variables2);
@@ -186,8 +173,7 @@ class PrometheusReporterTest {
         assertThat(PrometheusReporter.replaceInvalidChars("a b c")).isEqualTo("a_b_c");
         assertThat(PrometheusReporter.replaceInvalidChars("a b c ")).isEqualTo("a_b_c_");
         assertThat(PrometheusReporter.replaceInvalidChars("a;b'c*")).isEqualTo("a_b_c_");
-        assertThat(PrometheusReporter.replaceInvalidChars("a,=;:?'b,=;:?'c"))
-                .isEqualTo("a___:__b___:__c");
+        assertThat(PrometheusReporter.replaceInvalidChars("a,=;:?'b,=;:?'c")).isEqualTo("a___:__b___:__c");
     }
 
     @Test
@@ -223,18 +209,15 @@ class PrometheusReporterTest {
 
     @Test
     void cannotStartTwoReportersOnSamePort() {
-        assertThatThrownBy(
-                        () ->
-                                new PrometheusReporter(
-                                        Collections.singleton(reporter.getPort()).iterator()))
+        assertThatThrownBy(() -> new PrometheusReporter(
+                        Collections.singleton(reporter.getPort()).iterator()))
                 .isInstanceOf(Exception.class);
     }
 
     @Test
     void canStartTwoReportersWhenUsingPortRange() {
         final Iterator<Integer> portRange =
-                Iterators.concat(
-                        Iterators.singletonIterator(reporter.getPort()), portRangeProvider.next());
+                Iterators.concat(Iterators.singletonIterator(reporter.getPort()), portRangeProvider.next());
         new PrometheusReporter(portRange).close();
     }
 
@@ -264,8 +247,7 @@ class PrometheusReporterTest {
         }
     }
 
-    private String addMetricAndPollResponse(Metric metric, String metricName)
-            throws UnirestException {
+    private String addMetricAndPollResponse(Metric metric, String metricName) throws UnirestException {
         reporter.notifyOfAddedMetric(metric, metricName, metricGroup);
         return pollMetrics(reporter.getPort()).getBody();
     }
@@ -274,8 +256,7 @@ class PrometheusReporterTest {
         return Unirest.get("http://localhost:" + port + "/metrics").asString();
     }
 
-    private static String createExpectedPollResponse(
-            String name, String nameSuffix, String type, String value) {
+    private static String createExpectedPollResponse(String name, String nameSuffix, String type, String value) {
         final String scopedName = SCOPE_PREFIX + name;
         return ""
                 + String.format("# HELP %s %s (scope: %s)\n", scopedName, name, LOGICAL_SCOPE)

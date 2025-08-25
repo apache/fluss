@@ -47,8 +47,7 @@ public class ConnectionMetricGroup extends AbstractMetricGroup {
     /** Metrics for different request/response metrics with specify {@link ApiKeys}. */
     private final Map<String, Metrics> metricsByRequestName = MapUtils.newConcurrentHashMap();
 
-    public ConnectionMetricGroup(
-            MetricRegistry registry, String serverId, ClientMetricGroup parent) {
+    public ConnectionMetricGroup(MetricRegistry registry, String serverId, ClientMetricGroup parent) {
         super(registry, makeScope(parent, serverId), parent);
         this.serverId = serverId;
     }

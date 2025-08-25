@@ -41,8 +41,7 @@ public class TypeUtils {
                 return s.getBytes(StandardCharsets.UTF_8);
             case DECIMAL:
                 DecimalType decimalType = (DecimalType) type;
-                return Decimal.fromBigDecimal(
-                        new BigDecimal(s), decimalType.getPrecision(), decimalType.getScale());
+                return Decimal.fromBigDecimal(new BigDecimal(s), decimalType.getPrecision(), decimalType.getScale());
             case TINYINT:
                 return Byte.valueOf(s);
             case SMALLINT:

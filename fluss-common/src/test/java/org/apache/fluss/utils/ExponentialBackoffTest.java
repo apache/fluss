@@ -30,16 +30,14 @@ public class ExponentialBackoffTest {
         int ratio = 2;
         long backoffMax = 2000;
         double jitter = 0.2;
-        ExponentialBackoff exponentialBackoff =
-                new ExponentialBackoff(initialValue, ratio, backoffMax, jitter);
+        ExponentialBackoff exponentialBackoff = new ExponentialBackoff(initialValue, ratio, backoffMax, jitter);
 
         for (int i = 0; i <= 100; i++) {
             for (int attempts = 0; attempts <= 10; attempts++) {
                 if (attempts <= 4) {
                     assertThat(1.0 * exponentialBackoff.backoff(attempts))
                             .isCloseTo(
-                                    initialValue * Math.pow(ratio, attempts),
-                                    Percentage.withPercentage(jitter * 100));
+                                    initialValue * Math.pow(ratio, attempts), Percentage.withPercentage(jitter * 100));
                 } else {
                     assertThat(exponentialBackoff.backoff(attempts) <= backoffMax * (1 + jitter))
                             .isTrue();

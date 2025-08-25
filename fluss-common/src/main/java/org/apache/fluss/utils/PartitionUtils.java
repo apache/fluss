@@ -51,19 +51,16 @@ public class PartitionUtils {
             TablePath tablePath, List<String> partitionKeys, PartitionSpec partitionSpec) {
         Map<String, String> partitionSpecMap = partitionSpec.getSpecMap();
         if (partitionKeys.size() != partitionSpecMap.size()) {
-            throw new InvalidPartitionException(
-                    String.format(
-                            "PartitionSpec size is not equal to partition keys size for partitioned table %s.",
-                            tablePath));
+            throw new InvalidPartitionException(String.format(
+                    "PartitionSpec size is not equal to partition keys size for partitioned table %s.", tablePath));
         }
 
         List<String> reOrderedPartitionValues = new ArrayList<>(partitionKeys.size());
         for (String partitionKey : partitionKeys) {
             if (!partitionSpecMap.containsKey(partitionKey)) {
-                throw new InvalidPartitionException(
-                        String.format(
-                                "PartitionSpec %s does not contain partition key '%s' for partitioned table %s.",
-                                partitionSpec, partitionKey, tablePath));
+                throw new InvalidPartitionException(String.format(
+                        "PartitionSpec %s does not contain partition key '%s' for partitioned table %s.",
+                        partitionSpec, partitionKey, tablePath));
             } else {
                 reOrderedPartitionValues.add(partitionSpecMap.get(partitionKey));
             }
@@ -77,8 +74,7 @@ public class PartitionUtils {
         for (String value : partitionValues) {
             String invalidName = detectInvalidName(value);
             if (invalidName != null) {
-                throw new InvalidPartitionException(
-                        "The partition value " + value + " is invalid: " + invalidName);
+                throw new InvalidPartitionException("The partition value " + value + " is invalid: " + invalidName);
             }
         }
     }
@@ -96,25 +92,20 @@ public class PartitionUtils {
      * @return the resolved partition spec
      */
     public static ResolvedPartitionSpec generateAutoPartition(
-            List<String> partitionKeys,
-            ZonedDateTime current,
-            int offset,
-            AutoPartitionTimeUnit timeUnit) {
+            List<String> partitionKeys, ZonedDateTime current, int offset, AutoPartitionTimeUnit timeUnit) {
         String autoPartitionFieldSpec = generateAutoPartitionTime(current, offset, timeUnit);
 
         return ResolvedPartitionSpec.fromPartitionName(partitionKeys, autoPartitionFieldSpec);
     }
 
-    public static String generateAutoPartitionTime(
-            ZonedDateTime current, int offset, AutoPartitionTimeUnit timeUnit) {
+    public static String generateAutoPartitionTime(ZonedDateTime current, int offset, AutoPartitionTimeUnit timeUnit) {
         String autoPartitionFieldSpec;
         switch (timeUnit) {
             case YEAR:
                 autoPartitionFieldSpec = getFormattedTime(current.plusYears(offset), YEAR_FORMAT);
                 break;
             case QUARTER:
-                autoPartitionFieldSpec =
-                        getFormattedTime(current.plusMonths(offset * 3L), QUARTER_FORMAT);
+                autoPartitionFieldSpec = getFormattedTime(current.plusMonths(offset * 3L), QUARTER_FORMAT);
                 break;
             case MONTH:
                 autoPartitionFieldSpec = getFormattedTime(current.plusMonths(offset), MONTH_FORMAT);

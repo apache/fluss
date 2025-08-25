@@ -103,8 +103,7 @@ class Crc32CTest {
     public void testComputeListOfMemorySegmentBytesViews() {
         byte[] data = "hello".getBytes();
         List<MemorySegmentBytesView> views =
-                Collections.singletonList(
-                        new MemorySegmentBytesView(MemorySegment.wrap(data), 0, data.length));
+                Collections.singletonList(new MemorySegmentBytesView(MemorySegment.wrap(data), 0, data.length));
         long crc = Crc32C.compute(views, 0);
         assertThat(crc).isEqualTo(2591144780L);
     }
@@ -113,8 +112,7 @@ class Crc32CTest {
     public void testComputeListWithStartOffset() {
         byte[] data = "1234 hello".getBytes();
         List<MemorySegmentBytesView> views =
-                Collections.singletonList(
-                        new MemorySegmentBytesView(MemorySegment.wrap(data), 0, data.length));
+                Collections.singletonList(new MemorySegmentBytesView(MemorySegment.wrap(data), 0, data.length));
         long crc = Crc32C.compute(views, 5);
         assertThat(crc).isEqualTo(2591144780L);
     }

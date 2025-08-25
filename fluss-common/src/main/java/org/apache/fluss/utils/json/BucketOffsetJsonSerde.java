@@ -24,8 +24,7 @@ import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import java.io.IOException;
 
 /** Json serializer and deserializer for {@link BucketOffset}. */
-public class BucketOffsetJsonSerde
-        implements JsonSerializer<BucketOffset>, JsonDeserializer<BucketOffset> {
+public class BucketOffsetJsonSerde implements JsonSerializer<BucketOffset>, JsonDeserializer<BucketOffset> {
 
     public static final BucketOffsetJsonSerde INSTANCE = new BucketOffsetJsonSerde();
     private static final String PARTITION_ID = "partition_id";

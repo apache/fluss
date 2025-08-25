@@ -39,10 +39,8 @@ public class ArrowTimestampLtzWriter extends ArrowFieldWriter<InternalRow> {
 
     private ArrowTimestampLtzWriter(ValueVector valueVector, int precision) {
         super(valueVector);
-        checkState(
-                valueVector instanceof TimeStampVector
-                        && ((ArrowType.Timestamp) valueVector.getField().getType()).getTimezone()
-                                == null);
+        checkState(valueVector instanceof TimeStampVector
+                && ((ArrowType.Timestamp) valueVector.getField().getType()).getTimezone() == null);
         this.precision = precision;
     }
 
@@ -68,18 +66,14 @@ public class ArrowTimestampLtzWriter extends ArrowFieldWriter<InternalRow> {
                     vector.set(getCount(), ms);
                 }
             } else if (vector instanceof TimeStampMicroVector) {
-                long microSec =
-                        timestamp.getEpochMillisecond() * 1000
-                                + timestamp.getNanoOfMillisecond() / 1000;
+                long microSec = timestamp.getEpochMillisecond() * 1000 + timestamp.getNanoOfMillisecond() / 1000;
                 if (handleSafe) {
                     vector.setSafe(getCount(), microSec);
                 } else {
                     vector.set(getCount(), microSec);
                 }
             } else {
-                long nanoSec =
-                        timestamp.getEpochMillisecond() * 1_000_000
-                                + timestamp.getNanoOfMillisecond();
+                long nanoSec = timestamp.getEpochMillisecond() * 1_000_000 + timestamp.getNanoOfMillisecond();
                 if (handleSafe) {
                     vector.setSafe(getCount(), nanoSec);
                 } else {

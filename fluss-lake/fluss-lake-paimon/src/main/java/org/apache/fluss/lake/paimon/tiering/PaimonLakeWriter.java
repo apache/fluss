@@ -39,26 +39,18 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
     private final Catalog paimonCatalog;
     private final RecordWriter<?> recordWriter;
 
-    public PaimonLakeWriter(
-            PaimonCatalogProvider paimonCatalogProvider, WriterInitContext writerInitContext)
+    public PaimonLakeWriter(PaimonCatalogProvider paimonCatalogProvider, WriterInitContext writerInitContext)
             throws IOException {
         this.paimonCatalog = paimonCatalogProvider.get();
         FileStoreTable fileStoreTable = getTable(writerInitContext.tablePath());
 
         List<String> partitionKeys = fileStoreTable.partitionKeys();
 
-        this.recordWriter =
-                fileStoreTable.primaryKeys().isEmpty()
-                        ? new AppendOnlyWriter(
-                                fileStoreTable,
-                                writerInitContext.tableBucket(),
-                                writerInitContext.partition(),
-                                partitionKeys)
-                        : new MergeTreeWriter(
-                                fileStoreTable,
-                                writerInitContext.tableBucket(),
-                                writerInitContext.partition(),
-                                partitionKeys);
+        this.recordWriter = fileStoreTable.primaryKeys().isEmpty()
+                ? new AppendOnlyWriter(
+                        fileStoreTable, writerInitContext.tableBucket(), writerInitContext.partition(), partitionKeys)
+                : new MergeTreeWriter(
+                        fileStoreTable, writerInitContext.tableBucket(), writerInitContext.partition(), partitionKeys);
     }
 
     @Override

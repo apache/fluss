@@ -68,9 +68,8 @@ public class FileDownloadUtils {
         closeableRegistry.registerCloseable(internalCloser);
         List<CompletableFuture<Long>> futures = new ArrayList<>();
         try {
-            futures =
-                    transferDataToDirectoryAsync(fileDownloadSpecs, internalCloser, executorService)
-                            .collect(Collectors.toList());
+            futures = transferDataToDirectoryAsync(fileDownloadSpecs, internalCloser, executorService)
+                    .collect(Collectors.toList());
             // Wait until either all futures completed successfully or one failed exceptionally.
             FutureUtils.waitForAll(futures, new DownloadProgressAction(fileDownloadSpecs.size()))
                     .get();
@@ -102,24 +101,15 @@ public class FileDownloadUtils {
             CloseableRegistry closeableRegistry,
             ExecutorService executorService) {
         return fileDownloadSpecs.stream()
-                .flatMap(
-                        downloadSpec -> {
-                            Path targetDirectory = downloadSpec.getTargetDirectory();
-                            return downloadSpec.getFileHandles().stream()
-                                    .map(
-                                            fileHandle -> {
-                                                Path downloadDest =
-                                                        targetDirectory.resolve(
-                                                                fileHandle.getFileName());
-                                                // Create one runnable for each file handle
-                                                return CheckedSupplier.unchecked(
-                                                        () ->
-                                                                downloadFile(
-                                                                        downloadDest,
-                                                                        fileHandle.getPath(),
-                                                                        closeableRegistry));
-                                            });
-                        })
+                .flatMap(downloadSpec -> {
+                    Path targetDirectory = downloadSpec.getTargetDirectory();
+                    return downloadSpec.getFileHandles().stream().map(fileHandle -> {
+                        Path downloadDest = targetDirectory.resolve(fileHandle.getFileName());
+                        // Create one runnable for each file handle
+                        return CheckedSupplier.unchecked(
+                                () -> downloadFile(downloadDest, fileHandle.getPath(), closeableRegistry));
+                    });
+                })
                 .map(runnable -> CompletableFuture.supplyAsync(runnable, executorService));
     }
 
@@ -127,8 +117,7 @@ public class FileDownloadUtils {
      * Copies the file from a remote file path to the given target file path, returns the number of
      * downloaded bytes.
      */
-    private static Long downloadFile(
-            Path targetFilePath, FsPath remoteFilePath, CloseableRegistry closeableRegistry)
+    private static Long downloadFile(Path targetFilePath, FsPath remoteFilePath, CloseableRegistry closeableRegistry)
             throws IOException {
 
         if (closeableRegistry.isClosed()) {

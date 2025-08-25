@@ -77,15 +77,14 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         LogScannerStatus logScannerStatus = new LogScannerStatus();
         logScannerStatus.assignScanBuckets(scanBuckets);
         TestingScannerMetricGroup scannerMetricGroup = TestingScannerMetricGroup.newInstance();
-        logFetcher =
-                new LogFetcher(
-                        DATA1_TABLE_INFO,
-                        null,
-                        logScannerStatus,
-                        clientConf,
-                        metadataUpdater,
-                        scannerMetricGroup,
-                        new RemoteFileDownloader(1));
+        logFetcher = new LogFetcher(
+                DATA1_TABLE_INFO,
+                null,
+                logScannerStatus,
+                clientConf,
+                metadataUpdater,
+                scannerMetricGroup,
+                new RemoteFileDownloader(1));
     }
 
     @Test
@@ -106,12 +105,10 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         logFetcher.sendFetches();
         // The fetcher is async to fetch data, so we need to wait the result write to the
         // logFetchBuffer.
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    assertThat(logFetcher.hasAvailableFetches()).isTrue();
-                    assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(2);
-                });
+        retry(Duration.ofMinutes(1), () -> {
+            assertThat(logFetcher.hasAvailableFetches()).isTrue();
+            assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(2);
+        });
 
         Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
         assertThat(records.size()).isEqualTo(2);
@@ -137,31 +134,28 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         // now, remove leader nodd ,so that fetch destination
         // server node is null
         Cluster oldCluster = metadataUpdater.getCluster();
-        Map<Integer, ServerNode> aliveTabletServersById =
-                new HashMap<>(oldCluster.getAliveTabletServers());
+        Map<Integer, ServerNode> aliveTabletServersById = new HashMap<>(oldCluster.getAliveTabletServers());
         aliveTabletServersById.remove(leaderNode);
-        Cluster newCluster =
-                new Cluster(
-                        aliveTabletServersById,
-                        oldCluster.getCoordinatorServer(),
-                        oldCluster.getBucketLocationsByPath(),
-                        oldCluster.getTableIdByPath(),
-                        oldCluster.getPartitionIdByPath(),
-                        oldCluster.getTableInfoByPath());
+        Cluster newCluster = new Cluster(
+                aliveTabletServersById,
+                oldCluster.getCoordinatorServer(),
+                oldCluster.getBucketLocationsByPath(),
+                oldCluster.getTableIdByPath(),
+                oldCluster.getPartitionIdByPath(),
+                oldCluster.getTableInfoByPath());
         metadataUpdater = new MetadataUpdater(rpcClient, newCluster);
 
         LogScannerStatus logScannerStatus = new LogScannerStatus();
         logScannerStatus.assignScanBuckets(Collections.singletonMap(tb0, 0L));
 
-        LogFetcher logFetcher =
-                new LogFetcher(
-                        DATA1_TABLE_INFO,
-                        null,
-                        logScannerStatus,
-                        clientConf,
-                        metadataUpdater,
-                        TestingScannerMetricGroup.newInstance(),
-                        new RemoteFileDownloader(1));
+        LogFetcher logFetcher = new LogFetcher(
+                DATA1_TABLE_INFO,
+                null,
+                logScannerStatus,
+                clientConf,
+                metadataUpdater,
+                TestingScannerMetricGroup.newInstance(),
+                new RemoteFileDownloader(1));
 
         // send fetches to fetch data, should have no available fetch.
         logFetcher.sendFetches();
@@ -172,38 +166,32 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         logFetcher.sendFetches();
         // second send fetch will do real fetch data
         logFetcher.sendFetches();
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    assertThat(logFetcher.hasAvailableFetches()).isTrue();
-                    assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(1);
-                });
+        retry(Duration.ofMinutes(1), () -> {
+            assertThat(logFetcher.hasAvailableFetches()).isTrue();
+            assertThat(logFetcher.getCompletedFetchesSize()).isEqualTo(1);
+        });
         Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
         assertThat(records.size()).isEqualTo(1);
         assertThat(records.get(tb0).size()).isEqualTo(10);
     }
 
-    private void addRecordsToBucket(
-            TableBucket tableBucket, MemoryLogRecords logRecords, long expectedBaseOffset)
+    private void addRecordsToBucket(TableBucket tableBucket, MemoryLogRecords logRecords, long expectedBaseOffset)
             throws Exception {
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tableBucket);
-        TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        TabletServerGateway leaderGateWay = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         assertProduceLogResponse(
                 leaderGateWay
-                        .produceLog(
-                                newProduceLogRequest(
-                                        tableBucket.getTableId(),
-                                        tableBucket.getBucket(),
-                                        -1, // need ack, so we can make sure every batch is acked.
-                                        logRecords))
+                        .produceLog(newProduceLogRequest(
+                                tableBucket.getTableId(),
+                                tableBucket.getBucket(),
+                                -1, // need ack, so we can make sure every batch is acked.
+                                logRecords))
                         .get(),
                 tableBucket.getBucket(),
                 expectedBaseOffset);
     }
 
-    private static void assertProduceLogResponse(
-            ProduceLogResponse produceLogResponse, int bucketId, Long baseOffset) {
+    private static void assertProduceLogResponse(ProduceLogResponse produceLogResponse, int bucketId, Long baseOffset) {
         assertThat(produceLogResponse.getBucketsRespsCount()).isEqualTo(1);
         PbProduceLogRespForBucket produceLogRespForBucket =
                 produceLogResponse.getBucketsRespsList().get(0);

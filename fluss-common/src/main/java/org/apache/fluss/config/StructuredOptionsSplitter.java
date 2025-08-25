@@ -71,10 +71,9 @@ class StructuredOptionsSplitter {
      * @return escaped string by single quote
      */
     static String escapeWithSingleQuote(String string, String... charsToEscape) {
-        boolean escape =
-                Arrays.stream(charsToEscape).anyMatch(string::contains)
-                        || string.contains("\"")
-                        || string.contains("'");
+        boolean escape = Arrays.stream(charsToEscape).anyMatch(string::contains)
+                || string.contains("\"")
+                || string.contains("'");
 
         if (escape) {
             return "'" + string.replaceAll("'", "''") + "'";
@@ -90,12 +89,10 @@ class StructuredOptionsSplitter {
             switch (token.getTokenType()) {
                 case DOUBLE_QUOTED:
                 case SINGLE_QUOTED:
-                    if (i + 1 < tokens.size()
-                            && tokens.get(i + 1).getTokenType() != TokenType.DELIMITER) {
+                    if (i + 1 < tokens.size() && tokens.get(i + 1).getTokenType() != TokenType.DELIMITER) {
                         int illegalPosition = tokens.get(i + 1).getPosition() - 1;
                         throw new IllegalArgumentException(
-                                "Could not split string. Illegal quoting at position: "
-                                        + illegalPosition);
+                                "Could not split string. Illegal quoting at position: " + illegalPosition);
                     }
                     splits.add(token.getString());
                     break;
@@ -103,8 +100,7 @@ class StructuredOptionsSplitter {
                     splits.add(token.getString());
                     break;
                 case DELIMITER:
-                    if (i + 1 < tokens.size()
-                            && tokens.get(i + 1).getTokenType() == TokenType.DELIMITER) {
+                    if (i + 1 < tokens.size() && tokens.get(i + 1).getTokenType() == TokenType.DELIMITER) {
                         splits.add("");
                     }
                     break;
@@ -140,8 +136,7 @@ class StructuredOptionsSplitter {
         return tokens;
     }
 
-    private static int consumeInQuotes(
-            String string, char quote, int cursor, StringBuilder builder) {
+    private static int consumeInQuotes(String string, char quote, int cursor, StringBuilder builder) {
         for (int i = cursor + 1; i < string.length(); i++) {
             char c = string.charAt(i);
             if (c == quote) {
@@ -156,12 +151,10 @@ class StructuredOptionsSplitter {
             }
         }
 
-        throw new IllegalArgumentException(
-                "Could not split string. Quoting was not closed properly.");
+        throw new IllegalArgumentException("Could not split string. Quoting was not closed properly.");
     }
 
-    private static int consumeUnquoted(
-            String string, char delimiter, int cursor, StringBuilder builder) {
+    private static int consumeUnquoted(String string, char delimiter, int cursor, StringBuilder builder) {
         int i;
         for (i = cursor; i < string.length(); i++) {
             char c = string.charAt(i);

@@ -150,8 +150,7 @@ public class KafkaRequestHandler implements RequestHandler<KafkaRequest> {
     private void handleUnsupportedRequest(KafkaRequest request) {
         String message = String.format("Unsupported request with api key %s", request.apiKey());
         AbstractRequest abstractRequest = request.request();
-        AbstractResponse response =
-                abstractRequest.getErrorResponse(new UnsupportedOperationException(message));
+        AbstractResponse response = abstractRequest.getErrorResponse(new UnsupportedOperationException(message));
         request.complete(response);
     }
 
@@ -164,11 +163,10 @@ public class KafkaRequestHandler implements RequestHandler<KafkaRequest> {
         ApiVersionsResponseData data = new ApiVersionsResponseData();
         for (ApiKeys apiKey : ApiKeys.values()) {
             if (apiKey.minRequiredInterBrokerMagic <= RecordBatch.CURRENT_MAGIC_VALUE) {
-                ApiVersionsResponseData.ApiVersion apiVersionData =
-                        new ApiVersionsResponseData.ApiVersion()
-                                .setApiKey(apiKey.id)
-                                .setMinVersion(apiKey.oldestVersion())
-                                .setMaxVersion(apiKey.latestVersion());
+                ApiVersionsResponseData.ApiVersion apiVersionData = new ApiVersionsResponseData.ApiVersion()
+                        .setApiKey(apiKey.id)
+                        .setMinVersion(apiKey.oldestVersion())
+                        .setMaxVersion(apiKey.latestVersion());
                 if (apiKey.equals(ApiKeys.METADATA)) {
                     // Not support TopicId
                     short v = apiKey.latestVersion() > 11 ? 11 : apiKey.latestVersion();

@@ -72,15 +72,13 @@ public interface RowMerger {
                 case VERSIONED:
                     Optional<String> versionColumn = tableConf.getMergeEngineVersionColumn();
                     if (!versionColumn.isPresent()) {
-                        throw new IllegalArgumentException(
-                                String.format(
-                                        "'%s' must be set for versioned merge engine.",
-                                        ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key()));
+                        throw new IllegalArgumentException(String.format(
+                                "'%s' must be set for versioned merge engine.",
+                                ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key()));
                     }
                     return new VersionedRowMerger(schema.getRowType(), versionColumn.get());
                 default:
-                    throw new IllegalArgumentException(
-                            "Unsupported merge engine type: " + mergeEngineType.get());
+                    throw new IllegalArgumentException("Unsupported merge engine type: " + mergeEngineType.get());
             }
         } else {
             return new DefaultRowMerger(schema, kvFormat);

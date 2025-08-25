@@ -37,12 +37,10 @@ public class ZkSequenceIDCounter implements SequenceIDCounter {
     private final DistributedAtomicLong sequenceIdCounter;
 
     public ZkSequenceIDCounter(CuratorFramework curatorClient, String sequenceIDPath) {
-        sequenceIdCounter =
-                new DistributedAtomicLong(
-                        curatorClient,
-                        sequenceIDPath,
-                        new BoundedExponentialBackoffRetry(
-                                BASE_SLEEP_MS, MAX_SLEEP_MS, RETRY_TIMES));
+        sequenceIdCounter = new DistributedAtomicLong(
+                curatorClient,
+                sequenceIDPath,
+                new BoundedExponentialBackoffRetry(BASE_SLEEP_MS, MAX_SLEEP_MS, RETRY_TIMES));
     }
 
     /**

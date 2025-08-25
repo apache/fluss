@@ -96,17 +96,16 @@ final class HighWatermarkPersistenceTest extends ReplicaTestBase {
         TableBucket tableBucket1 = new TableBucket(DATA2_TABLE_ID, 0);
         replicaManager.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
-                Collections.singletonList(
-                        new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA2_TABLE_PATH),
-                                tableBucket1,
+                Collections.singletonList(new NotifyLeaderAndIsrData(
+                        PhysicalTablePath.of(DATA2_TABLE_PATH),
+                        tableBucket1,
+                        Collections.singletonList(TABLET_SERVER_ID),
+                        new LeaderAndIsr(
+                                TABLET_SERVER_ID,
+                                LeaderAndIsr.INITIAL_LEADER_EPOCH,
                                 Collections.singletonList(TABLET_SERVER_ID),
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        LeaderAndIsr.INITIAL_LEADER_EPOCH,
-                                        Collections.singletonList(TABLET_SERVER_ID),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        LeaderAndIsr.INITIAL_BUCKET_EPOCH))),
+                                INITIAL_COORDINATOR_EPOCH,
+                                LeaderAndIsr.INITIAL_BUCKET_EPOCH))),
                 result -> {});
 
         replicaManager.checkpointHighWatermarks();
@@ -144,9 +143,8 @@ final class HighWatermarkPersistenceTest extends ReplicaTestBase {
         Replica replica = replicaManager.getReplicaOrException(tableBucket);
         replica.appendRecordsToLeader(genMemoryLogRecordsByObject(DATA1), 1);
 
-        retry(
-                Duration.ofMinutes(1),
-                () -> assertThat(highWatermarkFor(tableBucket)).isEqualTo(10L));
+        retry(Duration.ofMinutes(1), () -> assertThat(highWatermarkFor(tableBucket))
+                .isEqualTo(10L));
     }
 
     @Test
@@ -193,9 +191,7 @@ final class HighWatermarkPersistenceTest extends ReplicaTestBase {
 
     private long highWatermarkFor(TableBucket tableBucket) throws Exception {
         return new OffsetCheckpointFile(
-                        new File(
-                                conf.getString(ConfigOptions.DATA_DIR),
-                                HIGH_WATERMARK_CHECKPOINT_FILE_NAME))
+                        new File(conf.getString(ConfigOptions.DATA_DIR), HIGH_WATERMARK_CHECKPOINT_FILE_NAME))
                 .read()
                 .getOrDefault(tableBucket, 0L);
     }

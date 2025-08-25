@@ -73,19 +73,17 @@ public final class NettyClientHandler extends ChannelInboundHandlerAdapter {
                 if (messageSize < 0) {
                     callback.onRequestFailure(
                             requestId,
-                            new CorruptMessageException(
-                                    "Invalid response frame length "
-                                            + frameLength
-                                            + " which is must greater than "
-                                            + RESPONSE_HEADER_LENGTH));
+                            new CorruptMessageException("Invalid response frame length "
+                                    + frameLength
+                                    + " which is must greater than "
+                                    + RESPONSE_HEADER_LENGTH));
                 }
                 ApiMethod apiMethod = callback.getRequestApiMethod(requestId);
                 if (apiMethod == null) {
                     callback.onRequestFailure(
                             requestId,
                             new IllegalStateException(
-                                    "Unknown request, this might be caused by the"
-                                            + " request has been timeout."));
+                                    "Unknown request, this might be caused by the" + " request has been timeout."));
                     return;
                 }
                 ApiMessage response = apiMethod.getResponseConstructor().get();
@@ -123,11 +121,10 @@ public final class NettyClientHandler extends ChannelInboundHandlerAdapter {
                 if (messageSize < 0) {
                     callback.onRequestFailure(
                             requestId,
-                            new CorruptMessageException(
-                                    "Invalid response frame length "
-                                            + frameLength
-                                            + " which is must greater than "
-                                            + RESPONSE_HEADER_LENGTH));
+                            new CorruptMessageException("Invalid response frame length "
+                                    + frameLength
+                                    + " which is must greater than "
+                                    + RESPONSE_HEADER_LENGTH));
                 }
                 ErrorResponse errorResponse = new ErrorResponse();
                 errorResponse.parseFrom(buffer, messageSize);
@@ -137,11 +134,10 @@ public final class NettyClientHandler extends ChannelInboundHandlerAdapter {
             } else if (respType == ResponseType.SERVER_FAILURE) {
                 int messageSize = frameLength - SERVER_FAILURE_HEADER_LENGTH;
                 if (messageSize < 0) {
-                    throw new CorruptMessageException(
-                            "Invalid server failure frame length "
-                                    + frameLength
-                                    + " which is must greater than "
-                                    + SERVER_FAILURE_HEADER_LENGTH);
+                    throw new CorruptMessageException("Invalid server failure frame length "
+                            + frameLength
+                            + " which is must greater than "
+                            + SERVER_FAILURE_HEADER_LENGTH);
                 }
                 ErrorResponse errorResponse = new ErrorResponse();
                 errorResponse.parseFrom(buffer, messageSize);

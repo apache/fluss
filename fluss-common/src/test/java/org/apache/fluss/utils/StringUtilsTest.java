@@ -47,9 +47,7 @@ public class StringUtilsTest {
         assertThat(StringUtils.arrayAwareToString(new byte[][] {{4, 5, 6}, null, {}}))
                 .isEqualTo("[[4, 5, 6], null, []]");
 
-        assertThat(
-                        StringUtils.arrayAwareToString(
-                                new Object[] {new Integer[] {4, 5, 6}, null, DayOfWeek.MONDAY}))
+        assertThat(StringUtils.arrayAwareToString(new Object[] {new Integer[] {4, 5, 6}, null, DayOfWeek.MONDAY}))
                 .isEqualTo("[[4, 5, 6], null, MONDAY]");
     }
 }

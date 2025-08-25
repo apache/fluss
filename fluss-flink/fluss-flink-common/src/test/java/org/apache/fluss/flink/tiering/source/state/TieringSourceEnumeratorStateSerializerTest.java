@@ -35,8 +35,7 @@ class TieringSourceEnumeratorStateSerializerTest {
         TieringSourceEnumeratorState state = new TieringSourceEnumeratorState();
         byte[] serialized = serializer.serialize(state);
         assertThat(serialized).hasSize(0);
-        TieringSourceEnumeratorState deserialized =
-                serializer.deserialize(serializer.getVersion(), serialized);
+        TieringSourceEnumeratorState deserialized = serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserialized).isEqualTo(state);
     }
 }

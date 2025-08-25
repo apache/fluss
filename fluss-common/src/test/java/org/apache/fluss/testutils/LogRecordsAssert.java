@@ -72,9 +72,7 @@ public class LogRecordsAssert extends AbstractAssert<LogRecordsAssert, LogRecord
                     .isEqualTo(expectedNext);
         }
         assertThat(actualIter.hasNext()).isFalse();
-        assertThat(actual.sizeInBytes())
-                .as("LogRecords#sizeInBytes()")
-                .isEqualTo(expected.sizeInBytes());
+        assertThat(actual.sizeInBytes()).as("LogRecords#sizeInBytes()").isEqualTo(expected.sizeInBytes());
         return this;
     }
 }

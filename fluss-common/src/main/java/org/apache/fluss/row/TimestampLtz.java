@@ -154,8 +154,7 @@ public class TimestampLtz implements Comparable<TimestampLtz>, Serializable {
             return false;
         }
         TimestampLtz that = (TimestampLtz) obj;
-        return this.millisecond == that.millisecond
-                && this.nanoOfMillisecond == that.nanoOfMillisecond;
+        return this.millisecond == that.millisecond && this.nanoOfMillisecond == that.nanoOfMillisecond;
     }
 
     @Override

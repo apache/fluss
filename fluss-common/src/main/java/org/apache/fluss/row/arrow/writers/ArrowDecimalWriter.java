@@ -28,8 +28,7 @@ import java.math.BigDecimal;
 @Internal
 public class ArrowDecimalWriter extends ArrowFieldWriter<InternalRow> {
 
-    public static ArrowDecimalWriter forField(
-            DecimalVector decimalVector, int precision, int scale) {
+    public static ArrowDecimalWriter forField(DecimalVector decimalVector, int precision, int scale) {
         return new ArrowDecimalWriter(decimalVector, precision, scale);
     }
 

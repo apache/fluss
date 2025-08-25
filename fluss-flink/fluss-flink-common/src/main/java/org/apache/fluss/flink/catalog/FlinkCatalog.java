@@ -162,8 +162,7 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public CatalogDatabase getDatabase(String databaseName)
-            throws DatabaseNotExistException, CatalogException {
+    public CatalogDatabase getDatabase(String databaseName) throws DatabaseNotExistException, CatalogException {
         if (!databaseExists(databaseName)) {
             throw new DatabaseNotExistException(getName(), databaseName);
         }
@@ -186,27 +185,24 @@ public class FlinkCatalog extends AbstractCatalog {
             return admin.databaseExists(databaseName).get();
         } catch (Exception e) {
             throw new CatalogException(
-                    String.format(
-                            "Failed to check if database %s exists in %s", databaseName, getName()),
+                    String.format("Failed to check if database %s exists in %s", databaseName, getName()),
                     ExceptionUtils.stripExecutionException(e));
         }
     }
 
     @Override
-    public void createDatabase(
-            String databaseName, CatalogDatabase database, boolean ignoreIfExists)
+    public void createDatabase(String databaseName, CatalogDatabase database, boolean ignoreIfExists)
             throws DatabaseAlreadyExistException, CatalogException {
         try {
-            admin.createDatabase(databaseName, toFlussDatabase(database), ignoreIfExists).get();
+            admin.createDatabase(databaseName, toFlussDatabase(database), ignoreIfExists)
+                    .get();
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (CatalogExceptionUtils.isDatabaseAlreadyExist(t)) {
                 throw new DatabaseAlreadyExistException(getName(), databaseName);
             } else {
                 throw new CatalogException(
-                        String.format(
-                                "Failed to create database %s in %s", databaseName, getName()),
-                        t);
+                        String.format("Failed to create database %s in %s", databaseName, getName()), t);
             }
         }
     }
@@ -224,8 +220,7 @@ public class FlinkCatalog extends AbstractCatalog {
                 throw new DatabaseNotEmptyException(getName(), databaseName);
             } else {
                 throw new CatalogException(
-                        String.format("Failed to drop database %s in %s", databaseName, getName()),
-                        t);
+                        String.format("Failed to drop database %s in %s", databaseName, getName()), t);
             }
         }
     }
@@ -237,8 +232,7 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public List<String> listTables(String databaseName)
-            throws DatabaseNotExistException, CatalogException {
+    public List<String> listTables(String databaseName) throws DatabaseNotExistException, CatalogException {
         try {
             return admin.listTables(databaseName).get();
         } catch (Exception e) {
@@ -247,10 +241,7 @@ public class FlinkCatalog extends AbstractCatalog {
                 throw new DatabaseNotExistException(getName(), databaseName);
             }
             throw new CatalogException(
-                    String.format(
-                            "Failed to list all tables in database %s in %s",
-                            databaseName, getName()),
-                    t);
+                    String.format("Failed to list all tables in database %s in %s", databaseName, getName()), t);
         }
     }
 
@@ -260,8 +251,7 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public CatalogBaseTable getTable(ObjectPath objectPath)
-            throws TableNotExistException, CatalogException {
+    public CatalogBaseTable getTable(ObjectPath objectPath) throws TableNotExistException, CatalogException {
         // may be should be as a datalake table
         String tableName = objectPath.getObjectName();
         TablePath tablePath = toTablePath(objectPath);
@@ -269,23 +259,17 @@ public class FlinkCatalog extends AbstractCatalog {
             TableInfo tableInfo;
             // table name contains $lake, means to read from datalake
             if (tableName.contains(LAKE_TABLE_SPLITTER)) {
-                tableInfo =
-                        admin.getTableInfo(
-                                        TablePath.of(
-                                                objectPath.getDatabaseName(),
-                                                tableName.split("\\" + LAKE_TABLE_SPLITTER)[0]))
-                                .get();
+                tableInfo = admin.getTableInfo(TablePath.of(
+                                objectPath.getDatabaseName(), tableName.split("\\" + LAKE_TABLE_SPLITTER)[0]))
+                        .get();
                 // we need to make sure the table enable datalake
                 if (!tableInfo.getTableConfig().isDataLakeEnabled()) {
-                    throw new UnsupportedOperationException(
-                            String.format(
-                                    "Table %s is not datalake enabled.",
-                                    TablePath.of(
-                                            objectPath.getDatabaseName(),
-                                            tableName.split("\\" + LAKE_TABLE_SPLITTER)[0])));
+                    throw new UnsupportedOperationException(String.format(
+                            "Table %s is not datalake enabled.",
+                            TablePath.of(
+                                    objectPath.getDatabaseName(), tableName.split("\\" + LAKE_TABLE_SPLITTER)[0])));
                 }
-                return getLakeTable(
-                        objectPath.getDatabaseName(), tableName, tableInfo.getProperties());
+                return getLakeTable(objectPath.getDatabaseName(), tableName, tableInfo.getProperties());
             } else {
                 tableInfo = admin.getTableInfo(tablePath).get();
             }
@@ -302,14 +286,12 @@ public class FlinkCatalog extends AbstractCatalog {
             if (isTableNotExist(t)) {
                 throw new TableNotExistException(getName(), objectPath);
             } else {
-                throw new CatalogException(
-                        String.format("Failed to get table %s in %s", objectPath, getName()), t);
+                throw new CatalogException(String.format("Failed to get table %s in %s", objectPath, getName()), t);
             }
         }
     }
 
-    protected CatalogBaseTable getLakeTable(
-            String databaseName, String tableName, Configuration properties)
+    protected CatalogBaseTable getLakeTable(String databaseName, String tableName, Configuration properties)
             throws TableNotExistException, CatalogException {
         mayInitLakeCatalogCatalog(properties);
         String[] tableComponents = tableName.split("\\" + LAKE_TABLE_SPLITTER);
@@ -330,8 +312,7 @@ public class FlinkCatalog extends AbstractCatalog {
             return admin.tableExists(tablePath).get();
         } catch (Exception e) {
             throw new CatalogException(
-                    String.format(
-                            "Failed to check if table %s exists in %s", objectPath, getName()),
+                    String.format("Failed to check if table %s exists in %s", objectPath, getName()),
                     ExceptionUtils.stripExecutionException(e));
         }
     }
@@ -347,8 +328,7 @@ public class FlinkCatalog extends AbstractCatalog {
             if (isTableNotExist(t)) {
                 throw new TableNotExistException(getName(), objectPath);
             } else {
-                throw new CatalogException(
-                        String.format("Failed to drop table %s in %s", objectPath, getName()), t);
+                throw new CatalogException(String.format("Failed to drop table %s in %s", objectPath, getName()), t);
             }
         }
     }
@@ -363,15 +343,13 @@ public class FlinkCatalog extends AbstractCatalog {
     public void createTable(ObjectPath objectPath, CatalogBaseTable table, boolean ignoreIfExist)
             throws TableAlreadyExistException, DatabaseNotExistException, CatalogException {
         if (table instanceof CatalogView) {
-            throw new UnsupportedOperationException(
-                    "CREATE [TEMPORARY] VIEW is not supported for Fluss catalog");
+            throw new UnsupportedOperationException("CREATE [TEMPORARY] VIEW is not supported for Fluss catalog");
         }
 
         checkArgument(table instanceof ResolvedCatalogTable, "table should be resolved");
 
         TablePath tablePath = toTablePath(objectPath);
-        TableDescriptor tableDescriptor =
-                FlinkConversions.toFlussTable((ResolvedCatalogTable) table);
+        TableDescriptor tableDescriptor = FlinkConversions.toFlussTable((ResolvedCatalogTable) table);
         try {
             admin.createTable(tablePath, tableDescriptor, ignoreIfExist).get();
         } catch (Exception e) {
@@ -383,8 +361,7 @@ public class FlinkCatalog extends AbstractCatalog {
             } else if (isTableInvalid(t)) {
                 throw new InvalidTableException(t.getMessage());
             } else {
-                throw new CatalogException(
-                        String.format("Failed to create table %s in %s", objectPath, getName()), t);
+                throw new CatalogException(String.format("Failed to create table %s in %s", objectPath, getName()), t);
             }
         }
     }
@@ -411,10 +388,9 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public List<CatalogPartitionSpec> listPartitions(
-            ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec)
-            throws TableNotExistException, TableNotPartitionedException,
-                    PartitionSpecInvalidException, CatalogException {
+    public List<CatalogPartitionSpec> listPartitions(ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec)
+            throws TableNotExistException, TableNotPartitionedException, PartitionSpecInvalidException,
+                    CatalogException {
 
         // TODO lake table should support.
         if (objectPath.getObjectName().contains(LAKE_TABLE_SPLITTER)) {
@@ -426,15 +402,15 @@ public class FlinkCatalog extends AbstractCatalog {
             List<PartitionInfo> partitionInfos;
             if (catalogPartitionSpec != null) {
                 Map<String, String> partitionSpec = catalogPartitionSpec.getPartitionSpec();
-                partitionInfos =
-                        admin.listPartitionInfos(tablePath, new PartitionSpec(partitionSpec)).get();
+                partitionInfos = admin.listPartitionInfos(tablePath, new PartitionSpec(partitionSpec))
+                        .get();
             } else {
                 partitionInfos = admin.listPartitionInfos(tablePath).get();
             }
             List<CatalogPartitionSpec> catalogPartitionSpecs = new ArrayList<>();
             for (PartitionInfo partitionInfo : partitionInfos) {
-                catalogPartitionSpecs.add(
-                        new CatalogPartitionSpec(partitionInfo.getPartitionSpec().getSpecMap()));
+                catalogPartitionSpecs.add(new CatalogPartitionSpec(
+                        partitionInfo.getPartitionSpec().getSpecMap()));
             }
             return catalogPartitionSpecs;
         } catch (Exception e) {
@@ -444,8 +420,7 @@ public class FlinkCatalog extends AbstractCatalog {
             } else if (isTableNotPartitioned(t)) {
                 throw new TableNotPartitionedException(getName(), objectPath);
             } else if (isPartitionInvalid(t) && catalogPartitionSpec != null) {
-                throw new PartitionSpecInvalidException(
-                        getName(), new ArrayList<>(), objectPath, catalogPartitionSpec);
+                throw new PartitionSpecInvalidException(getName(), new ArrayList<>(), objectPath, catalogPartitionSpec);
             } else {
                 throw new CatalogException(
                         String.format(
@@ -457,15 +432,13 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public List<CatalogPartitionSpec> listPartitionsByFilter(
-            ObjectPath objectPath, List<Expression> list)
+    public List<CatalogPartitionSpec> listPartitionsByFilter(ObjectPath objectPath, List<Expression> list)
             throws TableNotExistException, TableNotPartitionedException, CatalogException {
         throw new UnsupportedOperationException();
     }
 
     @Override
-    public CatalogPartition getPartition(
-            ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec)
+    public CatalogPartition getPartition(ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec)
             throws PartitionNotExistException, CatalogException {
         throw new UnsupportedOperationException();
     }
@@ -482,9 +455,8 @@ public class FlinkCatalog extends AbstractCatalog {
             CatalogPartitionSpec catalogPartitionSpec,
             CatalogPartition catalogPartition,
             boolean b)
-            throws TableNotExistException, TableNotPartitionedException,
-                    PartitionSpecInvalidException, PartitionAlreadyExistsException,
-                    CatalogException {
+            throws TableNotExistException, TableNotPartitionedException, PartitionSpecInvalidException,
+                    PartitionAlreadyExistsException, CatalogException {
         TablePath tablePath = toTablePath(objectPath);
         PartitionSpec partitionSpec = new PartitionSpec(catalogPartitionSpec.getPartitionSpec());
         try {
@@ -505,18 +477,17 @@ public class FlinkCatalog extends AbstractCatalog {
                 }
                 if (partitionKeys != null
                         && !new HashSet<>(partitionKeys)
-                                .containsAll(catalogPartitionSpec.getPartitionSpec().keySet())) {
+                                .containsAll(
+                                        catalogPartitionSpec.getPartitionSpec().keySet())) {
                     // throw specific partition exception if getting partition keys success.
                     throw new PartitionSpecInvalidException(
                             getName(), partitionKeys, objectPath, catalogPartitionSpec, e);
                 } else {
                     // throw general exception
-                    throw new CatalogException(
-                            "The partition value is invalid, " + e.getMessage(), e);
+                    throw new CatalogException("The partition value is invalid, " + e.getMessage(), e);
                 }
             } else if (isPartitionAlreadyExists(t)) {
-                throw new PartitionAlreadyExistsException(
-                        getName(), objectPath, catalogPartitionSpec);
+                throw new PartitionAlreadyExistsException(getName(), objectPath, catalogPartitionSpec);
             } else {
                 throw new CatalogException(
                         String.format(
@@ -528,8 +499,7 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public void dropPartition(
-            ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec, boolean b)
+    public void dropPartition(ObjectPath objectPath, CatalogPartitionSpec catalogPartitionSpec, boolean b)
             throws PartitionNotExistException, CatalogException {
         PartitionSpec partitionSpec = new PartitionSpec(catalogPartitionSpec.getPartitionSpec());
         try {
@@ -537,8 +507,7 @@ public class FlinkCatalog extends AbstractCatalog {
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (isPartitionNotExist(t)) {
-                throw new PartitionNotExistException(
-                        getName(), objectPath, catalogPartitionSpec, e);
+                throw new PartitionNotExistException(getName(), objectPath, catalogPartitionSpec, e);
             } else {
                 throw new CatalogException(
                         String.format(
@@ -565,8 +534,7 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public CatalogFunction getFunction(ObjectPath functionPath)
-            throws FunctionNotExistException, CatalogException {
+    public CatalogFunction getFunction(ObjectPath functionPath) throws FunctionNotExistException, CatalogException {
         throw new FunctionNotExistException(getName(), functionPath);
     }
 
@@ -588,8 +556,7 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public void dropFunction(ObjectPath objectPath, boolean b)
-            throws FunctionNotExistException, CatalogException {
+    public void dropFunction(ObjectPath objectPath, boolean b) throws FunctionNotExistException, CatalogException {
         throw new UnsupportedOperationException();
     }
 
@@ -620,8 +587,7 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public void alterTableStatistics(
-            ObjectPath objectPath, CatalogTableStatistics catalogTableStatistics, boolean b)
+    public void alterTableStatistics(ObjectPath objectPath, CatalogTableStatistics catalogTableStatistics, boolean b)
             throws TableNotExistException, CatalogException {
         throw new UnsupportedOperationException();
     }
@@ -658,8 +624,7 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public List<String> listProcedures(String dbName)
-            throws DatabaseNotExistException, CatalogException {
+    public List<String> listProcedures(String dbName) throws DatabaseNotExistException, CatalogException {
         if (!databaseExists(dbName)) {
             throw new DatabaseNotExistException(getName(), dbName);
         }
@@ -667,8 +632,7 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public Procedure getProcedure(ObjectPath procedurePath)
-            throws ProcedureNotExistException, CatalogException {
+    public Procedure getProcedure(ObjectPath procedurePath) throws ProcedureNotExistException, CatalogException {
         Optional<Procedure> procedure = ProcedureManager.getProcedure(admin, procedurePath);
         if (procedure.isPresent()) {
             return procedure.get();

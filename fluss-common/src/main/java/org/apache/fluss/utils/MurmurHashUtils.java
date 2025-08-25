@@ -83,8 +83,7 @@ public class MurmurHashUtils {
         return h1;
     }
 
-    private static int hashBytesByInt(
-            MemorySegment segment, int offset, int lengthInBytes, int seed) {
+    private static int hashBytesByInt(MemorySegment segment, int offset, int lengthInBytes, int seed) {
         assert (lengthInBytes % 4 == 0);
         int h1 = seed;
         for (int i = 0; i < lengthInBytes; i += 4) {

@@ -56,16 +56,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** UT for {@link PaimonLakeSource}. */
 class PaimonLakeSourceTest extends PaimonSourceTestBase {
 
-    private static final Schema SCHEMA =
-            Schema.newBuilder()
-                    .column("id", org.apache.paimon.types.DataTypes.INT())
-                    .column("name", org.apache.paimon.types.DataTypes.STRING())
-                    .column("__bucket", org.apache.paimon.types.DataTypes.INT())
-                    .column("__offset", org.apache.paimon.types.DataTypes.BIGINT())
-                    .column("__timestamp", org.apache.paimon.types.DataTypes.TIMESTAMP(6))
-                    .primaryKey("id")
-                    .option(CoreOptions.BUCKET.key(), "1")
-                    .build();
+    private static final Schema SCHEMA = Schema.newBuilder()
+            .column("id", org.apache.paimon.types.DataTypes.INT())
+            .column("name", org.apache.paimon.types.DataTypes.STRING())
+            .column("__bucket", org.apache.paimon.types.DataTypes.INT())
+            .column("__offset", org.apache.paimon.types.DataTypes.BIGINT())
+            .column("__timestamp", org.apache.paimon.types.DataTypes.TIMESTAMP(6))
+            .primaryKey("id")
+            .option(CoreOptions.BUCKET.key(), "1")
+            .build();
 
     private static final PredicateBuilder FLUSS_BUILDER =
             new PredicateBuilder(RowType.of(DataTypes.BIGINT(), DataTypes.STRING()));
@@ -83,34 +82,31 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
         // write some rows
         List<InternalRow> rows = new ArrayList<>();
         for (int i = 1; i <= 4; i++) {
-            rows.add(
-                    GenericRow.of(
-                            i,
-                            BinaryString.fromString("name" + i),
-                            0,
-                            (long) i,
-                            Timestamp.fromEpochMillis(System.currentTimeMillis())));
+            rows.add(GenericRow.of(
+                    i,
+                    BinaryString.fromString("name" + i),
+                    0,
+                    (long) i,
+                    Timestamp.fromEpochMillis(System.currentTimeMillis())));
         }
         writeRecord(tablePath, rows);
 
         // write some rows again
         rows = new ArrayList<>();
         for (int i = 10; i <= 14; i++) {
-            rows.add(
-                    GenericRow.of(
-                            i,
-                            BinaryString.fromString("name" + i),
-                            0,
-                            (long) i,
-                            Timestamp.fromEpochMillis(System.currentTimeMillis())));
+            rows.add(GenericRow.of(
+                    i,
+                    BinaryString.fromString("name" + i),
+                    0,
+                    (long) i,
+                    Timestamp.fromEpochMillis(System.currentTimeMillis())));
         }
         writeRecord(tablePath, rows);
 
         // test all filter can be accepted
         Predicate filter1 = FLUSS_BUILDER.greaterOrEqual(0, 2);
         Predicate filter2 = FLUSS_BUILDER.lessOrEqual(0, 3);
-        Predicate filter3 =
-                FLUSS_BUILDER.startsWith(1, org.apache.fluss.row.BinaryString.fromString("name"));
+        Predicate filter3 = FLUSS_BUILDER.startsWith(1, org.apache.fluss.row.BinaryString.fromString("name"));
         List<Predicate> allFilters = Arrays.asList(filter1, filter2, filter3);
 
         LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
@@ -129,25 +125,17 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
         // read data with filter to mae sure the reader with filter works properly
         List<Row> actual = new ArrayList<>();
         org.apache.fluss.row.InternalRow.FieldGetter[] fieldGetters =
-                org.apache.fluss.row.InternalRow.createFieldGetters(
-                        RowType.of(new IntType(), new StringType()));
+                org.apache.fluss.row.InternalRow.createFieldGetters(RowType.of(new IntType(), new StringType()));
         RecordReader recordReader = lakeSource.createRecordReader(() -> paimonSplit);
         try (CloseableIterator<LogRecord> iterator = recordReader.read()) {
-            actual.addAll(
-                    convertToFlinkRow(
-                            fieldGetters,
-                            TransformingCloseableIterator.transform(iterator, LogRecord::getRow)));
+            actual.addAll(convertToFlinkRow(
+                    fieldGetters, TransformingCloseableIterator.transform(iterator, LogRecord::getRow)));
         }
         assertThat(actual.toString()).isEqualTo("[+I[2, name2], +I[3, name3]]");
 
         // test mix one unaccepted filter
         Predicate nonConvertibleFilter =
-                new LeafPredicate(
-                        new UnSupportFilterFunction(),
-                        DataTypes.INT(),
-                        0,
-                        "f1",
-                        Collections.emptyList());
+                new LeafPredicate(new UnSupportFilterFunction(), DataTypes.INT(), 0, "f1", Collections.emptyList());
         allFilters = Arrays.asList(nonConvertibleFilter, filter1, filter2);
 
         filterPushDownResult = lakeSource.withFilters(allFilters);
@@ -160,8 +148,7 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
         allFilters = Arrays.asList(nonConvertibleFilter, nonConvertibleFilter);
         filterPushDownResult = lakeSource.withFilters(allFilters);
         assertThat(filterPushDownResult.acceptedPredicates()).isEmpty();
-        assertThat(filterPushDownResult.remainingPredicates().toString())
-                .isEqualTo(allFilters.toString());
+        assertThat(filterPushDownResult.remainingPredicates().toString()).isEqualTo(allFilters.toString());
     }
 
     private static class UnSupportFilterFunction extends LeafFunction {
@@ -173,12 +160,7 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
 
         @Override
         public boolean test(
-                DataType type,
-                long rowCount,
-                Object min,
-                Object max,
-                Long nullCount,
-                List<Object> literals) {
+                DataType type, long rowCount, Object min, Object max, Long nullCount, List<Object> literals) {
             return false;
         }
 
@@ -189,8 +171,7 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
 
         @Override
         public <T> T visit(FunctionVisitor<T> visitor, FieldRef fieldRef, List<Object> literals) {
-            throw new UnsupportedOperationException(
-                    "Unsupported filter function for test purpose.");
+            throw new UnsupportedOperationException("Unsupported filter function for test purpose.");
         }
     }
 }

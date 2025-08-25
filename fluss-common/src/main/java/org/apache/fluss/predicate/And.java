@@ -48,11 +48,7 @@ public class And extends CompoundPredicate.Function {
 
     @Override
     public boolean test(
-            long rowCount,
-            InternalRow minValues,
-            InternalRow maxValues,
-            Long[] nullCounts,
-            List<Predicate> children) {
+            long rowCount, InternalRow minValues, InternalRow maxValues, Long[] nullCounts, List<Predicate> children) {
         for (Predicate child : children) {
             if (!child.test(rowCount, minValues, maxValues, nullCounts)) {
                 return false;

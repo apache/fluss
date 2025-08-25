@@ -57,12 +57,11 @@ public class RowDataDeserializationSchemaTest {
 
     @BeforeEach
     public void setUp() throws Exception {
-        List<DataField> fields =
-                Arrays.asList(
-                        new DataField("orderId", DataTypes.BIGINT()),
-                        new DataField("itemId", DataTypes.BIGINT()),
-                        new DataField("amount", DataTypes.INT()),
-                        new DataField("address", DataTypes.STRING()));
+        List<DataField> fields = Arrays.asList(
+                new DataField("orderId", DataTypes.BIGINT()),
+                new DataField("itemId", DataTypes.BIGINT()),
+                new DataField("amount", DataTypes.INT()),
+                new DataField("address", DataTypes.STRING()));
 
         rowType = new RowType(fields);
         deserializer = getRowDataDeserializationSchema(rowType);
@@ -89,33 +88,30 @@ public class RowDataDeserializationSchemaTest {
         assertThat(result.getString(3).toString()).isEqualTo("Test addr");
     }
 
-    private @NotNull RowDataDeserializationSchema getRowDataDeserializationSchema(RowType rowType)
-            throws Exception {
+    private @NotNull RowDataDeserializationSchema getRowDataDeserializationSchema(RowType rowType) throws Exception {
         RowDataDeserializationSchema deserializationSchema = new RowDataDeserializationSchema();
-        deserializationSchema.open(
-                new FlussDeserializationSchema.InitializationContext() {
-                    @Override
-                    public MetricGroup getMetricGroup() {
-                        return null;
-                    }
+        deserializationSchema.open(new FlussDeserializationSchema.InitializationContext() {
+            @Override
+            public MetricGroup getMetricGroup() {
+                return null;
+            }
 
-                    @Override
-                    public UserCodeClassLoader getUserCodeClassLoader() {
-                        return null;
-                    }
+            @Override
+            public UserCodeClassLoader getUserCodeClassLoader() {
+                return null;
+            }
 
-                    @Override
-                    public RowType getRowSchema() {
-                        return rowType;
-                    }
-                });
+            @Override
+            public RowType getRowSchema() {
+                return rowType;
+            }
+        });
         return deserializationSchema;
     }
 
     @Test
     public void testDeserializeWithNullRecord() {
-        assertThatThrownBy(() -> deserializer.deserialize(null))
-                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> deserializer.deserialize(null)).isInstanceOf(NullPointerException.class);
     }
 
     @Test
@@ -124,11 +120,9 @@ public class RowDataDeserializationSchemaTest {
 
         assertThat(typeInfo).isNotNull();
         assertThat(typeInfo).isInstanceOf(InternalTypeInfo.class);
-        assertThat(((InternalTypeInfo) typeInfo).toRowType().getFieldCount())
-                .isEqualTo(rowType.getFieldCount());
+        assertThat(((InternalTypeInfo) typeInfo).toRowType().getFieldCount()).isEqualTo(rowType.getFieldCount());
         assertThat(typeInfo.getTypeClass()).isEqualTo(RowData.class);
-        assertThat(typeInfo.createSerializer(new SerializerConfigImpl()))
-                .isInstanceOf(RowDataSerializer.class);
+        assertThat(typeInfo.createSerializer(new SerializerConfigImpl())).isInstanceOf(RowDataSerializer.class);
     }
 
     @Test
@@ -142,30 +136,23 @@ public class RowDataDeserializationSchemaTest {
         // Deserialize
         ByteArrayInputStream bais = new ByteArrayInputStream(baos.toByteArray());
         ObjectInputStream ois = new ObjectInputStream(bais);
-        RowDataDeserializationSchema deserializedSchema =
-                (RowDataDeserializationSchema) ois.readObject();
+        RowDataDeserializationSchema deserializedSchema = (RowDataDeserializationSchema) ois.readObject();
         ois.close();
 
         // Verify
         assertThat(deserializedSchema).isNotNull();
         assertThat(deserializedSchema.getProducedType(rowType)).isNotNull();
-        assertThat(deserializedSchema.getProducedType(rowType))
-                .isEqualTo(deserializer.getProducedType(rowType));
-        assertThat(
-                        deserializedSchema
-                                .getProducedType(rowType)
-                                .createSerializer(new SerializerConfigImpl()))
+        assertThat(deserializedSchema.getProducedType(rowType)).isEqualTo(deserializer.getProducedType(rowType));
+        assertThat(deserializedSchema.getProducedType(rowType).createSerializer(new SerializerConfigImpl()))
                 .isInstanceOf(RowDataSerializer.class);
     }
 
     @Test
     public void testDifferentRowTypes() throws Exception {
         // Test with different row types
-        List<DataField> simpleFields =
-                Collections.singletonList(new DataField("id", DataTypes.BIGINT()));
+        List<DataField> simpleFields = Collections.singletonList(new DataField("id", DataTypes.BIGINT()));
 
-        RowDataDeserializationSchema simpleSchema =
-                getRowDataDeserializationSchema(new RowType(simpleFields));
+        RowDataDeserializationSchema simpleSchema = getRowDataDeserializationSchema(new RowType(simpleFields));
 
         assertThat(simpleSchema).isNotNull();
         assertThat(simpleSchema.getProducedType(rowType).getTypeClass()).isEqualTo(RowData.class);

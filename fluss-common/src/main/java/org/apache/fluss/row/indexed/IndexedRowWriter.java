@@ -58,8 +58,7 @@ public class IndexedRowWriter extends OutputStream implements MemorySegmentWrita
 
     public IndexedRowWriter(DataType[] types) {
         this.nullBitsSizeInBytes = IndexedRow.calculateBitSetWidthInBytes(types.length);
-        this.variableColumnLengthListInBytes =
-                IndexedRow.calculateVariableColumnLengthListSize(types);
+        this.variableColumnLengthListInBytes = IndexedRow.calculateVariableColumnLengthListSize(types);
         this.headerSizeInBytes = nullBitsSizeInBytes + variableColumnLengthListInBytes;
         this.position = headerSizeInBytes;
         // begin from nullBitsSizeInBytes.
@@ -270,8 +269,7 @@ public class IndexedRowWriter extends OutputStream implements MemorySegmentWrita
         switch (fieldType.getTypeRoot()) {
             case CHAR:
                 final int charLength = getLength(fieldType);
-                fieldWriter =
-                        (writer, pos, value) -> writer.writeChar((BinaryString) value, charLength);
+                fieldWriter = (writer, pos, value) -> writer.writeChar((BinaryString) value, charLength);
                 break;
             case STRING:
                 fieldWriter = (writer, pos, value) -> writer.writeString((BinaryString) value);
@@ -281,17 +279,14 @@ public class IndexedRowWriter extends OutputStream implements MemorySegmentWrita
                 break;
             case BINARY:
                 final int binaryLength = getLength(fieldType);
-                fieldWriter =
-                        (writer, pos, value) -> writer.writeBinary((byte[]) value, binaryLength);
+                fieldWriter = (writer, pos, value) -> writer.writeBinary((byte[]) value, binaryLength);
                 break;
             case BYTES:
                 fieldWriter = (writer, pos, value) -> writer.writeBytes((byte[]) value);
                 break;
             case DECIMAL:
                 final int decimalPrecision = getPrecision(fieldType);
-                fieldWriter =
-                        (writer, pos, value) ->
-                                writer.writeDecimal((Decimal) value, decimalPrecision);
+                fieldWriter = (writer, pos, value) -> writer.writeDecimal((Decimal) value, decimalPrecision);
                 break;
             case TINYINT:
                 fieldWriter = (writer, pos, value) -> writer.writeByte((byte) value);
@@ -316,16 +311,12 @@ public class IndexedRowWriter extends OutputStream implements MemorySegmentWrita
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 final int timestampNtzPrecision = getPrecision(fieldType);
                 fieldWriter =
-                        (writer, pos, value) ->
-                                writer.writeTimestampNtz(
-                                        (TimestampNtz) value, timestampNtzPrecision);
+                        (writer, pos, value) -> writer.writeTimestampNtz((TimestampNtz) value, timestampNtzPrecision);
                 break;
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 final int timestampLtzPrecision = getPrecision(fieldType);
                 fieldWriter =
-                        (writer, pos, value) ->
-                                writer.writeTimestampLtz(
-                                        (TimestampLtz) value, timestampLtzPrecision);
+                        (writer, pos, value) -> writer.writeTimestampLtz((TimestampLtz) value, timestampLtzPrecision);
                 break;
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);

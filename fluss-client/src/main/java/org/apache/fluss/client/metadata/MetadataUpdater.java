@@ -110,10 +110,7 @@ public class MetadataUpdater {
 
     public TableInfo getTableInfoOrElseThrow(long tableId) {
         return getTableInfo(cluster.getTablePathOrElseThrow(tableId))
-                .orElseThrow(
-                        () ->
-                                new FlussRuntimeException(
-                                        "Table not found for table id: " + tableId));
+                .orElseThrow(() -> new FlussRuntimeException("Table not found for table id: " + tableId));
     }
 
     public int leaderFor(TableBucket tableBucket) {
@@ -138,10 +135,7 @@ public class MetadataUpdater {
 
             if (serverNode == null) {
                 throw new FlussRuntimeException(
-                        "Leader not found after retry  "
-                                + MAX_RETRY_TIMES
-                                + " times for table bucket: "
-                                + tableBucket);
+                        "Leader not found after retry  " + MAX_RETRY_TIMES + " times for table bucket: " + tableBucket);
             }
         }
 
@@ -157,13 +151,11 @@ public class MetadataUpdater {
     }
 
     public CoordinatorGateway newCoordinatorServerClient() {
-        return GatewayClientProxy.createGatewayProxy(
-                this::getCoordinatorServer, rpcClient, CoordinatorGateway.class);
+        return GatewayClientProxy.createGatewayProxy(this::getCoordinatorServer, rpcClient, CoordinatorGateway.class);
     }
 
     public TabletServerGateway newRandomTabletServerClient() {
-        return GatewayClientProxy.createGatewayProxy(
-                this::getRandomTabletServer, rpcClient, TabletServerGateway.class);
+        return GatewayClientProxy.createGatewayProxy(this::getRandomTabletServer, rpcClient, TabletServerGateway.class);
     }
 
     public @Nullable TabletServerGateway newTabletServerClientForNode(int serverId) {
@@ -171,16 +163,14 @@ public class MetadataUpdater {
         if (serverNode == null) {
             return null;
         } else {
-            return GatewayClientProxy.createGatewayProxy(
-                    () -> serverNode, rpcClient, TabletServerGateway.class);
+            return GatewayClientProxy.createGatewayProxy(() -> serverNode, rpcClient, TabletServerGateway.class);
         }
     }
 
     public void checkAndUpdateTableMetadata(Set<TablePath> tablePaths) {
-        Set<TablePath> needUpdateTablePaths =
-                tablePaths.stream()
-                        .filter(tablePath -> !cluster.getTable(tablePath).isPresent())
-                        .collect(Collectors.toSet());
+        Set<TablePath> needUpdateTablePaths = tablePaths.stream()
+                .filter(tablePath -> !cluster.getTable(tablePath).isPresent())
+                .collect(Collectors.toSet());
         if (!needUpdateTablePaths.isEmpty()) {
             updateMetadata(needUpdateTablePaths, null, null);
         }
@@ -208,8 +198,7 @@ public class MetadataUpdater {
         if (tableBucket.getPartitionId() == null) {
             checkAndUpdateTableMetadata(Collections.singleton(tablePath));
         } else {
-            checkAndUpdatePartitionMetadata(
-                    tablePath, Collections.singleton(tableBucket.getPartitionId()));
+            checkAndUpdatePartitionMetadata(tablePath, Collections.singleton(tableBucket.getPartitionId()));
         }
     }
 
@@ -219,8 +208,7 @@ public class MetadataUpdater {
      *
      * <p>Note: it'll assume the partition ids belong to the given {@code tablePath}
      */
-    public void checkAndUpdatePartitionMetadata(
-            TablePath tablePath, Collection<Long> partitionIds) {
+    public void checkAndUpdatePartitionMetadata(TablePath tablePath, Collection<Long> partitionIds) {
         Set<Long> needUpdatePartitionIds = new HashSet<>();
         for (Long partitionId : partitionIds) {
             if (!cluster.getPartitionName(partitionId).isPresent()) {
@@ -234,8 +222,7 @@ public class MetadataUpdater {
     }
 
     public void updateTableOrPartitionMetadata(TablePath tablePath, @Nullable Long partitionId) {
-        Collection<Long> partitionIds =
-                partitionId == null ? null : Collections.singleton(partitionId);
+        Collection<Long> partitionIds = partitionId == null ? null : Collections.singleton(partitionId);
         updateMetadata(Collections.singleton(tablePath), null, partitionIds);
     }
 
@@ -261,13 +248,8 @@ public class MetadataUpdater {
             throws PartitionNotExistException {
         try {
             synchronized (this) {
-                cluster =
-                        sendMetadataRequestAndRebuildCluster(
-                                cluster,
-                                rpcClient,
-                                tablePaths,
-                                tablePartitionNames,
-                                tablePartitionIds);
+                cluster = sendMetadataRequestAndRebuildCluster(
+                        cluster, rpcClient, tablePaths, tablePartitionNames, tablePartitionIds);
             }
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
@@ -296,19 +278,15 @@ public class MetadataUpdater {
                 cluster = tryToInitializeCluster(rpcClient, address);
                 break;
             } catch (Exception e) {
-                LOG.error(
-                        "Failed to initialize fluss client connection to bootstrap server: {}",
-                        address,
-                        e);
+                LOG.error("Failed to initialize fluss client connection to bootstrap server: {}", address, e);
                 lastException = e;
             }
         }
 
         if (cluster == null && lastException != null) {
-            String errorMsg =
-                    "Failed to initialize fluss client connection to server because no "
-                            + "bootstrap server is validate. bootstrap servers: "
-                            + inetSocketAddresses;
+            String errorMsg = "Failed to initialize fluss client connection to server because no "
+                    + "bootstrap server is validate. bootstrap servers: "
+                    + inetSocketAddresses;
             LOG.error(errorMsg);
             throw new IllegalStateException(errorMsg, lastException);
         }
@@ -316,14 +294,10 @@ public class MetadataUpdater {
         return cluster;
     }
 
-    private static Cluster tryToInitializeCluster(RpcClient rpcClient, InetSocketAddress address)
-            throws Exception {
-        ServerNode serverNode =
-                new ServerNode(
-                        -1, address.getHostString(), address.getPort(), ServerType.COORDINATOR);
+    private static Cluster tryToInitializeCluster(RpcClient rpcClient, InetSocketAddress address) throws Exception {
+        ServerNode serverNode = new ServerNode(-1, address.getHostString(), address.getPort(), ServerType.COORDINATOR);
         AdminReadOnlyGateway adminReadOnlyGateway =
-                GatewayClientProxy.createGatewayProxy(
-                        () -> serverNode, rpcClient, AdminReadOnlyGateway.class);
+                GatewayClientProxy.createGatewayProxy(() -> serverNode, rpcClient, AdminReadOnlyGateway.class);
         return sendMetadataRequestAndRebuildCluster(adminReadOnlyGateway, Collections.emptySet());
     }
 
@@ -336,30 +310,19 @@ public class MetadataUpdater {
 
     /** Get the table physical paths by table ids and partition ids. */
     public Set<PhysicalTablePath> getPhysicalTablePathByIds(
-            @Nullable Collection<Long> tableId,
-            @Nullable Collection<TablePartition> tablePartitions) {
+            @Nullable Collection<Long> tableId, @Nullable Collection<TablePartition> tablePartitions) {
         Set<PhysicalTablePath> physicalTablePaths = new HashSet<>();
         if (tableId != null) {
             tableId.forEach(
-                    id ->
-                            cluster.getTablePath(id)
-                                    .ifPresent(
-                                            p -> physicalTablePaths.add(PhysicalTablePath.of(p))));
+                    id -> cluster.getTablePath(id).ifPresent(p -> physicalTablePaths.add(PhysicalTablePath.of(p))));
         }
 
         if (tablePartitions != null) {
             for (TablePartition tablePartition : tablePartitions) {
-                cluster.getTablePath(tablePartition.getTableId())
-                        .ifPresent(
-                                path -> {
-                                    Optional<String> optPartition =
-                                            cluster.getPartitionName(
-                                                    tablePartition.getPartitionId());
-                                    optPartition.ifPresent(
-                                            p ->
-                                                    physicalTablePaths.add(
-                                                            PhysicalTablePath.of(path, p)));
-                                });
+                cluster.getTablePath(tablePartition.getTableId()).ifPresent(path -> {
+                    Optional<String> optPartition = cluster.getPartitionName(tablePartition.getPartitionId());
+                    optPartition.ifPresent(p -> physicalTablePaths.add(PhysicalTablePath.of(path, p)));
+                });
             }
         }
         return physicalTablePaths;

@@ -60,38 +60,28 @@ import java.util.stream.Collectors;
 public class CommonRpcMessageUtils {
 
     public static List<PbAclInfo> toPbAclInfos(Collection<AclBinding> aclBindings) {
-        return aclBindings.stream()
-                .map(CommonRpcMessageUtils::toPbAclInfo)
-                .collect(Collectors.toList());
+        return aclBindings.stream().map(CommonRpcMessageUtils::toPbAclInfo).collect(Collectors.toList());
     }
 
     public static List<AclBinding> toAclBindings(Collection<PbAclInfo> pbAclInfos) {
-        return pbAclInfos.stream()
-                .map(CommonRpcMessageUtils::toAclBinding)
-                .collect(Collectors.toList());
+        return pbAclInfos.stream().map(CommonRpcMessageUtils::toAclBinding).collect(Collectors.toList());
     }
 
-    public static List<PbAclFilter> toPbAclBindingFilters(
-            Collection<AclBindingFilter> aclBindingFilters) {
+    public static List<PbAclFilter> toPbAclBindingFilters(Collection<AclBindingFilter> aclBindingFilters) {
         return aclBindingFilters.stream()
                 .map(CommonRpcMessageUtils::toPbAclFilter)
                 .collect(Collectors.toList());
     }
 
     public static List<AclBindingFilter> toAclBindingFilters(Collection<PbAclFilter> pbAclFilters) {
-        return pbAclFilters.stream()
-                .map(CommonRpcMessageUtils::toAclFilter)
-                .collect(Collectors.toList());
+        return pbAclFilters.stream().map(CommonRpcMessageUtils::toAclFilter).collect(Collectors.toList());
     }
 
     public static AclBinding toAclBinding(PbAclInfo pbAclInfo) {
         return new AclBinding(
-                new Resource(
-                        ResourceType.fromCode((byte) pbAclInfo.getResourceType()),
-                        pbAclInfo.getResourceName()),
+                new Resource(ResourceType.fromCode((byte) pbAclInfo.getResourceType()), pbAclInfo.getResourceName()),
                 new AccessControlEntry(
-                        new FlussPrincipal(
-                                pbAclInfo.getPrincipalName(), pbAclInfo.getPrincipalType()),
+                        new FlussPrincipal(pbAclInfo.getPrincipalName(), pbAclInfo.getPrincipalType()),
                         pbAclInfo.getHost(),
                         OperationType.fromCode((byte) pbAclInfo.getOperationType()),
                         PermissionType.fromCode((byte) pbAclInfo.getPermissionType())));
@@ -101,10 +91,13 @@ public class CommonRpcMessageUtils {
         return new PbAclInfo()
                 .setResourceType(aclBinding.getResource().getType().getCode())
                 .setResourceName(aclBinding.getResource().getName())
-                .setPrincipalName(aclBinding.getAccessControlEntry().getPrincipal().getName())
-                .setPrincipalType(aclBinding.getAccessControlEntry().getPrincipal().getType())
+                .setPrincipalName(
+                        aclBinding.getAccessControlEntry().getPrincipal().getName())
+                .setPrincipalType(
+                        aclBinding.getAccessControlEntry().getPrincipal().getType())
                 .setHost(aclBinding.getAccessControlEntry().getHost())
-                .setOperationType(aclBinding.getAccessControlEntry().getOperationType().getCode())
+                .setOperationType(
+                        aclBinding.getAccessControlEntry().getOperationType().getCode())
                 .setPermissionType(
                         aclBinding.getAccessControlEntry().getPermissionType().getCode());
     }
@@ -145,9 +138,7 @@ public class CommonRpcMessageUtils {
                         pbAclFilter.hasResourceName() ? pbAclFilter.getResourceName() : null),
                 new AccessControlEntryFilter(
                         pbAclFilter.hasPrincipalName() && pbAclFilter.hasPrincipalType()
-                                ? new FlussPrincipal(
-                                        pbAclFilter.getPrincipalName(),
-                                        pbAclFilter.getPrincipalType())
+                                ? new FlussPrincipal(pbAclFilter.getPrincipalName(), pbAclFilter.getPrincipalType())
                                 : null,
                         pbAclFilter.hasHost() ? pbAclFilter.getHost() : null,
                         OperationType.fromCode((byte) pbAclFilter.getOperationType()),
@@ -158,52 +149,40 @@ public class CommonRpcMessageUtils {
             TableBucket tb, TablePath tp, PbFetchLogRespForBucket respForBucket) {
         FetchLogResultForBucket fetchLogResultForBucket;
         if (respForBucket.hasErrorCode()) {
-            fetchLogResultForBucket =
-                    new FetchLogResultForBucket(tb, ApiError.fromErrorMessage(respForBucket));
+            fetchLogResultForBucket = new FetchLogResultForBucket(tb, ApiError.fromErrorMessage(respForBucket));
         } else {
             if (respForBucket.hasRemoteLogFetchInfo()) {
                 PbRemoteLogFetchInfo pbRlfInfo = respForBucket.getRemoteLogFetchInfo();
-                String partitionName =
-                        pbRlfInfo.hasPartitionName() ? pbRlfInfo.getPartitionName() : null;
+                String partitionName = pbRlfInfo.hasPartitionName() ? pbRlfInfo.getPartitionName() : null;
                 PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tp, partitionName);
                 List<RemoteLogSegment> remoteLogSegmentList = new ArrayList<>();
                 for (PbRemoteLogSegment pbRemoteLogSegment : pbRlfInfo.getRemoteLogSegmentsList()) {
                     long maxTimestamp =
-                            pbRemoteLogSegment.hasMaxTimestamp()
-                                    ? pbRemoteLogSegment.getMaxTimestamp()
-                                    : -1;
-                    RemoteLogSegment remoteLogSegment =
-                            RemoteLogSegment.Builder.builder()
-                                    .tableBucket(tb)
-                                    .physicalTablePath(physicalTablePath)
-                                    .remoteLogSegmentId(
-                                            UUID.fromString(
-                                                    pbRemoteLogSegment.getRemoteLogSegmentId()))
-                                    .remoteLogEndOffset(pbRemoteLogSegment.getRemoteLogEndOffset())
-                                    .remoteLogStartOffset(
-                                            pbRemoteLogSegment.getRemoteLogStartOffset())
-                                    .segmentSizeInBytes(pbRemoteLogSegment.getSegmentSizeInBytes())
-                                    .maxTimestamp(maxTimestamp)
-                                    .build();
+                            pbRemoteLogSegment.hasMaxTimestamp() ? pbRemoteLogSegment.getMaxTimestamp() : -1;
+                    RemoteLogSegment remoteLogSegment = RemoteLogSegment.Builder.builder()
+                            .tableBucket(tb)
+                            .physicalTablePath(physicalTablePath)
+                            .remoteLogSegmentId(UUID.fromString(pbRemoteLogSegment.getRemoteLogSegmentId()))
+                            .remoteLogEndOffset(pbRemoteLogSegment.getRemoteLogEndOffset())
+                            .remoteLogStartOffset(pbRemoteLogSegment.getRemoteLogStartOffset())
+                            .segmentSizeInBytes(pbRemoteLogSegment.getSegmentSizeInBytes())
+                            .maxTimestamp(maxTimestamp)
+                            .build();
                     remoteLogSegmentList.add(remoteLogSegment);
                 }
-                RemoteLogFetchInfo rlFetchInfo =
-                        new RemoteLogFetchInfo(
-                                pbRlfInfo.getRemoteLogTabletDir(),
-                                pbRlfInfo.hasPartitionName() ? pbRlfInfo.getPartitionName() : null,
-                                remoteLogSegmentList,
-                                pbRlfInfo.getFirstStartPos());
+                RemoteLogFetchInfo rlFetchInfo = new RemoteLogFetchInfo(
+                        pbRlfInfo.getRemoteLogTabletDir(),
+                        pbRlfInfo.hasPartitionName() ? pbRlfInfo.getPartitionName() : null,
+                        remoteLogSegmentList,
+                        pbRlfInfo.getFirstStartPos());
                 fetchLogResultForBucket =
-                        new FetchLogResultForBucket(
-                                tb, rlFetchInfo, respForBucket.getHighWatermark());
+                        new FetchLogResultForBucket(tb, rlFetchInfo, respForBucket.getHighWatermark());
             } else {
                 ByteBuffer recordsBuffer = toByteBuffer(respForBucket.getRecordsSlice());
-                LogRecords records =
-                        respForBucket.hasRecords()
-                                ? MemoryLogRecords.pointToByteBuffer(recordsBuffer)
-                                : MemoryLogRecords.EMPTY;
-                fetchLogResultForBucket =
-                        new FetchLogResultForBucket(tb, records, respForBucket.getHighWatermark());
+                LogRecords records = respForBucket.hasRecords()
+                        ? MemoryLogRecords.pointToByteBuffer(recordsBuffer)
+                        : MemoryLogRecords.EMPTY;
+                fetchLogResultForBucket = new FetchLogResultForBucket(tb, records, respForBucket.getHighWatermark());
             }
         }
 

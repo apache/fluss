@@ -57,13 +57,13 @@ public class StringsTest {
         assertThat(lps.getNameAt(1)).isEqualTo("b");
         assertThat(lps.getNameAt(2)).isEqualTo("c");
 
-        Strings.S pbs =
-                Strings.S.newBuilder()
-                        .setId("id")
-                        .addNames("a")
-                        .addNames("b")
-                        .addNames("c")
-                        .build();
+        Strings.S pbs = Strings.S
+                .newBuilder()
+                .setId("id")
+                .addNames("a")
+                .addNames("b")
+                .addNames("c")
+                .build();
 
         assertThat(lps.totalSize()).isEqualTo(pbs.getSerializedSize());
 

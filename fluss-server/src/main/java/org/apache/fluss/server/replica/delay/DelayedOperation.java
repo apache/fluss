@@ -45,7 +45,9 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
  */
 public abstract class DelayedOperation extends TimerTask {
     private final AtomicBoolean completed;
-    @VisibleForTesting final Lock lock = new ReentrantLock();
+
+    @VisibleForTesting
+    final Lock lock = new ReentrantLock();
 
     public DelayedOperation(long delayMs) {
         super(delayMs);
@@ -105,17 +107,15 @@ public abstract class DelayedOperation extends TimerTask {
      * @return result of tryComplete
      */
     public boolean safeTryCompleteOrElse(Runnable f) {
-        return inLock(
-                lock,
-                () -> {
-                    if (tryComplete()) {
-                        return true;
-                    } else {
-                        f.run();
-                        // last completion check.
-                        return tryComplete();
-                    }
-                });
+        return inLock(lock, () -> {
+            if (tryComplete()) {
+                return true;
+            } else {
+                f.run();
+                // last completion check.
+                return tryComplete();
+            }
+        });
     }
 
     /** Thread-safe variant of tryComplete(). */

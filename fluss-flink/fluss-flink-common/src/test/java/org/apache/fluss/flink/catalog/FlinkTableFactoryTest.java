@@ -68,8 +68,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Test for {@link FlinkTableFactory}. */
 abstract class FlinkTableFactoryTest {
 
-    public static final ObjectIdentifier OBJECT_IDENTIFIER =
-            ObjectIdentifier.of("default", "default", "t1");
+    public static final ObjectIdentifier OBJECT_IDENTIFIER = ObjectIdentifier.of("default", "default", "t1");
 
     @Test
     void testTableSourceOptions() {
@@ -87,12 +86,10 @@ abstract class FlinkTableFactoryTest {
         scanModeProperties.put(FlinkConnectorOptions.SCAN_STARTUP_MODE.key(), "timestamp");
         assertThatThrownBy(() -> createTableSource(schema, scanModeProperties))
                 .isInstanceOf(ValidationException.class)
-                .hasMessageContaining(
-                        "'scan.startup.timestamp' is required int 'timestamp' startup mode but missing.");
+                .hasMessageContaining("'scan.startup.timestamp' is required int 'timestamp' startup mode but missing.");
         scanModeProperties.put(FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP.key(), "1678883047356");
         createTableSource(schema, scanModeProperties);
-        scanModeProperties.put(
-                FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP.key(), "2023-12-09 23:09:12");
+        scanModeProperties.put(FlinkConnectorOptions.SCAN_STARTUP_TIMESTAMP.key(), "2023-12-09 23:09:12");
         createTableSource(schema, scanModeProperties);
 
         // test datalake options
@@ -131,13 +128,12 @@ abstract class FlinkTableFactoryTest {
         // test cache
         FlinkTableSource tableSource = (FlinkTableSource) createTableSource(schema, properties);
         DefaultLookupCache cache = (DefaultLookupCache) tableSource.getCache();
-        DefaultLookupCache expectedCache =
-                DefaultLookupCache.newBuilder()
-                        .expireAfterAccess(Duration.ofMillis(18000))
-                        .expireAfterWrite(Duration.ofMillis(36000))
-                        .maximumSize(100000)
-                        .cacheMissingKey(false)
-                        .build();
+        DefaultLookupCache expectedCache = DefaultLookupCache.newBuilder()
+                .expireAfterAccess(Duration.ofMillis(18000))
+                .expireAfterWrite(Duration.ofMillis(36000))
+                .maximumSize(100000)
+                .cacheMissingKey(false)
+                .build();
         assertThat(cache).isEqualTo(expectedCache);
 
         // test async
@@ -154,11 +150,9 @@ abstract class FlinkTableFactoryTest {
         // test sync
         properties.put(FlinkConnectorOptions.LOOKUP_ASYNC.key(), "false");
         tableSource = (FlinkTableSource) createTableSource(schema, properties);
-        lookupProvider =
-                tableSource.getLookupRuntimeProvider(new LookupRuntimeProviderContext(lookupKey));
+        lookupProvider = tableSource.getLookupRuntimeProvider(new LookupRuntimeProviderContext(lookupKey));
         assertThat(lookupProvider instanceof LookupFunctionProvider).isTrue();
-        LookupFunction lookupFunction =
-                ((LookupFunctionProvider) lookupProvider).createLookupFunction();
+        LookupFunction lookupFunction = ((LookupFunctionProvider) lookupProvider).createLookupFunction();
         assertThat(lookupFunction instanceof FlinkLookupFunction).isTrue();
 
         // test lookup full cache
@@ -203,53 +197,47 @@ abstract class FlinkTableFactoryTest {
         return basicOptions;
     }
 
-    private static DynamicTableSource createTableSource(
-            ResolvedSchema schema, Map<String, String> options) {
+    private static DynamicTableSource createTableSource(ResolvedSchema schema, Map<String, String> options) {
         return createTableSource(schema, options, Collections.emptyMap());
     }
 
     private static DynamicTableSource createTableSource(
-            ResolvedSchema schema,
-            Map<String, String> options,
-            Map<String, String> enrichmentOptions) {
+            ResolvedSchema schema, Map<String, String> options, Map<String, String> enrichmentOptions) {
         FlinkTableFactory tableFactory = createFlinkTableFactory();
-        FactoryUtil.DefaultDynamicTableContext context =
-                new FactoryUtil.DefaultDynamicTableContext(
-                        OBJECT_IDENTIFIER,
-                        new ResolvedCatalogTable(
-                                CatalogTable.of(
-                                        Schema.newBuilder().fromResolvedSchema(schema).build(),
-                                        "mock source",
-                                        schema.getPrimaryKey()
-                                                .map(UniqueConstraint::getColumns)
-                                                .orElse(Collections.emptyList()),
-                                        options),
-                                schema),
-                        enrichmentOptions,
-                        new Configuration(),
-                        Thread.currentThread().getContextClassLoader(),
-                        false);
+        FactoryUtil.DefaultDynamicTableContext context = new FactoryUtil.DefaultDynamicTableContext(
+                OBJECT_IDENTIFIER,
+                new ResolvedCatalogTable(
+                        CatalogTable.of(
+                                Schema.newBuilder().fromResolvedSchema(schema).build(),
+                                "mock source",
+                                schema.getPrimaryKey()
+                                        .map(UniqueConstraint::getColumns)
+                                        .orElse(Collections.emptyList()),
+                                options),
+                        schema),
+                enrichmentOptions,
+                new Configuration(),
+                Thread.currentThread().getContextClassLoader(),
+                false);
         return tableFactory.createDynamicTableSource(context);
     }
 
-    private static DynamicTableSink createTableSink(
-            ResolvedSchema schema, Map<String, String> options) {
+    private static DynamicTableSink createTableSink(ResolvedSchema schema, Map<String, String> options) {
 
         FlinkTableFactory tableFactory = createFlinkTableFactory();
-        FactoryUtil.DefaultDynamicTableContext context =
-                new FactoryUtil.DefaultDynamicTableContext(
-                        OBJECT_IDENTIFIER,
-                        new ResolvedCatalogTable(
-                                CatalogTable.of(
-                                        Schema.newBuilder().fromResolvedSchema(schema).build(),
-                                        "mock sink",
-                                        Collections.emptyList(),
-                                        options),
-                                schema),
-                        Collections.emptyMap(),
-                        new Configuration(),
-                        Thread.currentThread().getContextClassLoader(),
-                        false);
+        FactoryUtil.DefaultDynamicTableContext context = new FactoryUtil.DefaultDynamicTableContext(
+                OBJECT_IDENTIFIER,
+                new ResolvedCatalogTable(
+                        CatalogTable.of(
+                                Schema.newBuilder().fromResolvedSchema(schema).build(),
+                                "mock sink",
+                                Collections.emptyList(),
+                                options),
+                        schema),
+                Collections.emptyMap(),
+                new Configuration(),
+                Thread.currentThread().getContextClassLoader(),
+                false);
         return tableFactory.createDynamicTableSink(context);
     }
 
@@ -270,13 +258,11 @@ abstract class FlinkTableFactoryTest {
         options.put(CommonCatalogOptions.CATALOG_TYPE.key(), FlinkCatalogFactory.IDENTIFIER);
 
         // test create catalog
-        FlinkCatalog actualCatalog =
-                (FlinkCatalog)
-                        FactoryUtil.createCatalog(
-                                catalogName,
-                                options,
-                                new Configuration(),
-                                Thread.currentThread().getContextClassLoader());
+        FlinkCatalog actualCatalog = (FlinkCatalog) FactoryUtil.createCatalog(
+                catalogName,
+                options,
+                new Configuration(),
+                Thread.currentThread().getContextClassLoader());
 
         return actualCatalog;
     }

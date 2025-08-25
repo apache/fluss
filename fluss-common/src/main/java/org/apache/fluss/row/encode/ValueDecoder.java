@@ -44,9 +44,7 @@ public class ValueDecoder {
     public Value decodeValue(byte[] valueBytes) {
         MemorySegment memorySegment = MemorySegment.wrap(valueBytes);
         short schemaId = memorySegment.getShort(0);
-        BinaryRow row =
-                rowDecoder.decode(
-                        memorySegment, SCHEMA_ID_LENGTH, valueBytes.length - SCHEMA_ID_LENGTH);
+        BinaryRow row = rowDecoder.decode(memorySegment, SCHEMA_ID_LENGTH, valueBytes.length - SCHEMA_ID_LENGTH);
         return new Value(schemaId, row);
     }
 

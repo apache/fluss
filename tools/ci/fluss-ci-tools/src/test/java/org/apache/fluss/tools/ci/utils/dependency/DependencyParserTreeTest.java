@@ -55,93 +55,65 @@ class DependencyParserTreeTest {
                 .containsExactlyInAnyOrder(
                         Dependency.create("external", "dependency1", "2.1", null, "compile", false),
                         Dependency.create("external", "dependency2", "2.2", null, "compile", true),
-                        Dependency.create(
-                                "external", "dependency3", "2.3", null, "provided", false),
-                        Dependency.create(
-                                "external", "dependency4", "2.4", "classifier", "compile", false));
+                        Dependency.create("external", "dependency3", "2.3", null, "provided", false),
+                        Dependency.create("external", "dependency4", "2.4", "classifier", "compile", false));
         assertThat(dependenciesByModule.get("m2").flatten())
                 .containsExactlyInAnyOrder(
                         Dependency.create("internal", "m1", "1.1", null, "compile", false),
-                        Dependency.create(
-                                "external", "dependency4", "2.4", null, "compile", false));
+                        Dependency.create("external", "dependency4", "2.4", null, "compile", false));
     }
 
     @Test
     void testTreeLineParsingGroupId() {
-        assertThat(
-                        DependencyParser.parseTreeDependency(
-                                "[INFO] +- external:dependency1:jar:1.0:compile"))
+        assertThat(DependencyParser.parseTreeDependency("[INFO] +- external:dependency1:jar:1.0:compile"))
                 .hasValueSatisfying(
                         dependency -> assertThat(dependency.getGroupId()).isEqualTo("external"));
     }
 
     @Test
     void testTreeLineParsingArtifactId() {
-        assertThat(
-                        DependencyParser.parseTreeDependency(
-                                "[INFO] +- external:dependency1:jar:1.0:compile"))
+        assertThat(DependencyParser.parseTreeDependency("[INFO] +- external:dependency1:jar:1.0:compile"))
                 .hasValueSatisfying(
-                        dependency ->
-                                assertThat(dependency.getArtifactId()).isEqualTo("dependency1"));
+                        dependency -> assertThat(dependency.getArtifactId()).isEqualTo("dependency1"));
     }
 
     @Test
     void testTreeLineParsingVersion() {
-        assertThat(
-                        DependencyParser.parseTreeDependency(
-                                "[INFO] +- external:dependency1:jar:1.0:compile"))
+        assertThat(DependencyParser.parseTreeDependency("[INFO] +- external:dependency1:jar:1.0:compile"))
                 .hasValueSatisfying(
                         dependency -> assertThat(dependency.getVersion()).isEqualTo("1.0"));
     }
 
     @Test
     void testTreeLineParsingScope() {
-        assertThat(
-                        DependencyParser.parseTreeDependency(
-                                "[INFO] +- external:dependency1:jar:1.0:provided"))
+        assertThat(DependencyParser.parseTreeDependency("[INFO] +- external:dependency1:jar:1.0:provided"))
                 .hasValueSatisfying(
                         dependency -> assertThat(dependency.getScope()).hasValue("provided"));
     }
 
     @Test
     void testTreeLineParsingWithNonJarType() {
-        assertThat(
-                        DependencyParser.parseTreeDependency(
-                                "[INFO] +- external:dependency1:pom:1.0:compile"))
-                .hasValue(
-                        Dependency.create(
-                                "external", "dependency1", "1.0", null, "compile", false));
+        assertThat(DependencyParser.parseTreeDependency("[INFO] +- external:dependency1:pom:1.0:compile"))
+                .hasValue(Dependency.create("external", "dependency1", "1.0", null, "compile", false));
     }
 
     @Test
     void testTreeLineParsingWithClassifier() {
-        assertThat(
-                        DependencyParser.parseTreeDependency(
-                                "[INFO] +- external:dependency1:jar:some_classifier:1.0:compile"))
-                .hasValue(
-                        Dependency.create(
-                                "external",
-                                "dependency1",
-                                "1.0",
-                                "some_classifier",
-                                "compile",
-                                false));
+        assertThat(DependencyParser.parseTreeDependency(
+                        "[INFO] +- external:dependency1:jar:some_classifier:1.0:compile"))
+                .hasValue(Dependency.create("external", "dependency1", "1.0", "some_classifier", "compile", false));
     }
 
     @Test
     void testTreeLineParsingWithoutOptional() {
-        assertThat(
-                        DependencyParser.parseTreeDependency(
-                                "[INFO] +- external:dependency1:jar:1.0:compile"))
+        assertThat(DependencyParser.parseTreeDependency("[INFO] +- external:dependency1:jar:1.0:compile"))
                 .hasValueSatisfying(
                         dependency -> assertThat(dependency.isOptional()).hasValue(false));
     }
 
     @Test
     void testTreeLineParsingWithOptional() {
-        assertThat(
-                        DependencyParser.parseTreeDependency(
-                                "[INFO] +- external:dependency1:jar:1.0:compile (optional)"))
+        assertThat(DependencyParser.parseTreeDependency("[INFO] +- external:dependency1:jar:1.0:compile (optional)"))
                 .hasValueSatisfying(
                         dependency -> assertThat(dependency.isOptional()).hasValue(true));
     }

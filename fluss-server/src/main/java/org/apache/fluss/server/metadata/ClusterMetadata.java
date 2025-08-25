@@ -40,13 +40,8 @@ public class ClusterMetadata {
     private final List<PartitionMetadata> partitionMetadataList;
 
     @VisibleForTesting
-    public ClusterMetadata(
-            @Nullable ServerInfo coordinatorServer, Set<ServerInfo> aliveTabletServers) {
-        this(
-                coordinatorServer,
-                aliveTabletServers,
-                Collections.emptyList(),
-                Collections.emptyList());
+    public ClusterMetadata(@Nullable ServerInfo coordinatorServer, Set<ServerInfo> aliveTabletServers) {
+        this(coordinatorServer, aliveTabletServers, Collections.emptyList(), Collections.emptyList());
     }
 
     public ClusterMetadata(

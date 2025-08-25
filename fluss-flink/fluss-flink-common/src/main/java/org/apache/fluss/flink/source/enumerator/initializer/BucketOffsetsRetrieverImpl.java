@@ -46,14 +46,12 @@ public class BucketOffsetsRetrieverImpl implements BucketOffsetsRetriever {
     }
 
     @Override
-    public Map<Integer, Long> latestOffsets(
-            @Nullable String partitionName, Collection<Integer> buckets) {
+    public Map<Integer, Long> latestOffsets(@Nullable String partitionName, Collection<Integer> buckets) {
         return listOffsets(partitionName, buckets, new OffsetSpec.LatestSpec());
     }
 
     @Override
-    public Map<Integer, Long> earliestOffsets(
-            @Nullable String partitionName, Collection<Integer> buckets) {
+    public Map<Integer, Long> earliestOffsets(@Nullable String partitionName, Collection<Integer> buckets) {
         Map<Integer, Long> bucketWithOffset = new HashMap<>(buckets.size());
         for (Integer bucket : buckets) {
             bucketWithOffset.put(bucket, EARLIEST_OFFSET);
@@ -79,8 +77,7 @@ public class BucketOffsetsRetrieverImpl implements BucketOffsetsRetriever {
             return result.all().get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new FlinkRuntimeException(
-                    "Interrupted while listing offsets for table buckets: " + buckets, e);
+            throw new FlinkRuntimeException("Interrupted while listing offsets for table buckets: " + buckets, e);
         } catch (ExecutionException e) {
             throw new FlinkRuntimeException(
                     "Failed to list offsets for table buckets: " + buckets + " due to",

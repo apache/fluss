@@ -26,21 +26,17 @@ import org.apache.flink.core.io.SimpleVersionedSerializerTypeSerializerProxy;
 import org.apache.flink.util.function.SerializableSupplier;
 
 /** A {@link TypeInformation} for {@link TableBucketWriteResult} . */
-public class TableBucketWriteResultTypeInfo<WriteResult>
-        extends TypeInformation<TableBucketWriteResult<WriteResult>> {
+public class TableBucketWriteResultTypeInfo<WriteResult> extends TypeInformation<TableBucketWriteResult<WriteResult>> {
 
-    private final SerializableSupplier<SimpleVersionedSerializer<WriteResult>>
-            writeResultSerializerFactory;
+    private final SerializableSupplier<SimpleVersionedSerializer<WriteResult>> writeResultSerializerFactory;
 
     private TableBucketWriteResultTypeInfo(
-            SerializableSupplier<SimpleVersionedSerializer<WriteResult>>
-                    writeResultSerializerFactory) {
+            SerializableSupplier<SimpleVersionedSerializer<WriteResult>> writeResultSerializerFactory) {
         this.writeResultSerializerFactory = writeResultSerializerFactory;
     }
 
     public static <WriteResult> TypeInformation<TableBucketWriteResult<WriteResult>> of(
-            SerializableSupplier<SimpleVersionedSerializer<WriteResult>>
-                    writeResultSerializerFactory) {
+            SerializableSupplier<SimpleVersionedSerializer<WriteResult>> writeResultSerializerFactory) {
         return new TableBucketWriteResultTypeInfo<>(writeResultSerializerFactory);
     }
 
@@ -76,23 +72,19 @@ public class TableBucketWriteResultTypeInfo<WriteResult>
     }
 
     @Override
-    public TypeSerializer<TableBucketWriteResult<WriteResult>> createSerializer(
-            ExecutionConfig executionConfig) {
+    public TypeSerializer<TableBucketWriteResult<WriteResult>> createSerializer(ExecutionConfig executionConfig) {
         // no copy, so that data from lake writer is directly going into lake committer while
         // chaining
-        return new SimpleVersionedSerializerTypeSerializerProxy<
-                TableBucketWriteResult<WriteResult>>(
+        return new SimpleVersionedSerializerTypeSerializerProxy<TableBucketWriteResult<WriteResult>>(
                 () -> new TableBucketWriteResultSerializer<>(writeResultSerializerFactory.get())) {
             @Override
-            public TableBucketWriteResult<WriteResult> copy(
-                    TableBucketWriteResult<WriteResult> from) {
+            public TableBucketWriteResult<WriteResult> copy(TableBucketWriteResult<WriteResult> from) {
                 return from;
             }
 
             @Override
             public TableBucketWriteResult<WriteResult> copy(
-                    TableBucketWriteResult<WriteResult> from,
-                    TableBucketWriteResult<WriteResult> reuse) {
+                    TableBucketWriteResult<WriteResult> from, TableBucketWriteResult<WriteResult> reuse) {
                 return from;
             }
         };

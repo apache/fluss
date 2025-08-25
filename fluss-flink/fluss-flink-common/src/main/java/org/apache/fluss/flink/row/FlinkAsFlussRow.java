@@ -101,26 +101,22 @@ public class FlinkAsFlussRow implements InternalRow {
 
     public static Decimal fromFlinkDecimal(DecimalData decimal) {
         if (decimal.isCompact()) {
-            return Decimal.fromUnscaledLong(
-                    decimal.toUnscaledLong(), decimal.precision(), decimal.scale());
+            return Decimal.fromUnscaledLong(decimal.toUnscaledLong(), decimal.precision(), decimal.scale());
         } else {
-            return Decimal.fromBigDecimal(
-                    decimal.toBigDecimal(), decimal.precision(), decimal.scale());
+            return Decimal.fromBigDecimal(decimal.toBigDecimal(), decimal.precision(), decimal.scale());
         }
     }
 
     @Override
     public TimestampNtz getTimestampNtz(int pos, int precision) {
         TimestampData timestamp = flinkRow.getTimestamp(pos, precision);
-        return TimestampNtz.fromMillis(
-                timestamp.getMillisecond(), timestamp.getNanoOfMillisecond());
+        return TimestampNtz.fromMillis(timestamp.getMillisecond(), timestamp.getNanoOfMillisecond());
     }
 
     @Override
     public TimestampLtz getTimestampLtz(int pos, int precision) {
         TimestampData timestamp = flinkRow.getTimestamp(pos, precision);
-        return TimestampLtz.fromEpochMillis(
-                timestamp.getMillisecond(), timestamp.getNanoOfMillisecond());
+        return TimestampLtz.fromEpochMillis(timestamp.getMillisecond(), timestamp.getNanoOfMillisecond());
     }
 
     @Override

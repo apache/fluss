@@ -120,8 +120,7 @@ public enum ChangeType {
             case 4:
                 return DELETE;
             default:
-                throw new UnsupportedOperationException(
-                        "Unsupported byte value '" + value + "' for change type.");
+                throw new UnsupportedOperationException("Unsupported byte value '" + value + "' for change type.");
         }
     }
 }

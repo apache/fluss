@@ -98,10 +98,7 @@ public class JaasContextTest {
     void testSingleOption() throws Exception {
         Map<String, Object> options = new HashMap<>();
         options.put("propName", "propValue");
-        checkConfiguration(
-                "test.testSingleOption",
-                AppConfigurationEntry.LoginModuleControlFlag.REQUISITE,
-                options);
+        checkConfiguration("test.testSingleOption", AppConfigurationEntry.LoginModuleControlFlag.REQUISITE, options);
     }
 
     @Test
@@ -111,9 +108,7 @@ public class JaasContextTest {
             options.put("propName" + i, "propValue" + i);
         }
         checkConfiguration(
-                "test.testMultipleOptions",
-                AppConfigurationEntry.LoginModuleControlFlag.SUFFICIENT,
-                options);
+                "test.testMultipleOptions", AppConfigurationEntry.LoginModuleControlFlag.SUFFICIENT, options);
     }
 
     @Test
@@ -121,15 +116,11 @@ public class JaasContextTest {
         Map<String, Object> options = new HashMap<>();
         options.put("propName", "prop value");
         options.put("propName2", "value1 = 1, value2 = 2");
-        String config =
-                String.format(
-                        "test.testQuotedOptionValue required propName=\"%s\" propName2=\"%s\";",
-                        options.get("propName"), options.get("propName2"));
+        String config = String.format(
+                "test.testQuotedOptionValue required propName=\"%s\" propName2=\"%s\";",
+                options.get("propName"), options.get("propName2"));
         checkConfiguration(
-                config,
-                "test.testQuotedOptionValue",
-                AppConfigurationEntry.LoginModuleControlFlag.REQUIRED,
-                options);
+                config, "test.testQuotedOptionValue", AppConfigurationEntry.LoginModuleControlFlag.REQUIRED, options);
     }
 
     @Test
@@ -138,10 +129,7 @@ public class JaasContextTest {
         options.put("prop name", "propValue");
         String config = "test.testQuotedOptionName required \"prop name\"=propValue;";
         checkConfiguration(
-                config,
-                "test.testQuotedOptionName",
-                AppConfigurationEntry.LoginModuleControlFlag.REQUIRED,
-                options);
+                config, "test.testQuotedOptionName", AppConfigurationEntry.LoginModuleControlFlag.REQUIRED, options);
     }
 
     @Test
@@ -155,10 +143,7 @@ public class JaasContextTest {
             options.put("module", "Module" + i);
             moduleOptions.put(i, options);
             String module =
-                    jaasConfigProp(
-                            "test.Module" + i,
-                            AppConfigurationEntry.LoginModuleControlFlag.REQUIRED,
-                            options);
+                    jaasConfigProp("test.Module" + i, AppConfigurationEntry.LoginModuleControlFlag.REQUIRED, options);
             builder.append(' ');
             builder.append(module);
         }
@@ -166,8 +151,7 @@ public class JaasContextTest {
 
         String clientContextName = "CLIENT";
         Configuration configuration = new JaasConfig(clientContextName, jaasConfigProp);
-        AppConfigurationEntry[] dynamicEntries =
-                configuration.getAppConfigurationEntry(clientContextName);
+        AppConfigurationEntry[] dynamicEntries = configuration.getAppConfigurationEntry(clientContextName);
         assertThat(dynamicEntries.length).isEqualTo(moduleCount);
 
         for (int i = 0; i < moduleCount; i++) {
@@ -224,9 +208,7 @@ public class JaasContextTest {
     }
 
     private void checkConfiguration(
-            String loginModule,
-            AppConfigurationEntry.LoginModuleControlFlag controlFlag,
-            Map<String, Object> options)
+            String loginModule, AppConfigurationEntry.LoginModuleControlFlag controlFlag, Map<String, Object> options)
             throws Exception {
         String jaasConfigProp = jaasConfigProp(loginModule, controlFlag, options);
         checkConfiguration(jaasConfigProp, loginModule, controlFlag, options);
@@ -238,12 +220,9 @@ public class JaasContextTest {
             AppConfigurationEntry.LoginModuleControlFlag controlFlag,
             Map<String, Object> options)
             throws Exception {
-        AppConfigurationEntry dynamicEntry =
-                configurationEntry(JaasContext.Type.CLIENT, jaasConfigProp);
+        AppConfigurationEntry dynamicEntry = configurationEntry(JaasContext.Type.CLIENT, jaasConfigProp);
         checkEntry(dynamicEntry, loginModule, controlFlag, options);
-        assertThat(
-                        Configuration.getConfiguration()
-                                .getAppConfigurationEntry(JaasContext.Type.CLIENT.name()))
+        assertThat(Configuration.getConfiguration().getAppConfigurationEntry(JaasContext.Type.CLIENT.name()))
                 .isNull();
 
         writeConfiguration(JaasContext.Type.SERVER.name(), jaasConfigProp);
@@ -251,26 +230,21 @@ public class JaasContextTest {
         checkEntry(staticEntry, loginModule, controlFlag, options);
     }
 
-    private AppConfigurationEntry configurationEntry(
-            JaasContext.Type contextType, String saslJaasConfig) {
-        JaasContext context =
-                JaasContext.load(contextType, null, contextType.name(), saslJaasConfig);
+    private AppConfigurationEntry configurationEntry(JaasContext.Type contextType, String saslJaasConfig) {
+        JaasContext context = JaasContext.load(contextType, null, contextType.name(), saslJaasConfig);
         List<AppConfigurationEntry> entries = context.configurationEntries();
         assertThat(entries).hasSize(1);
         return entries.get(0);
     }
 
-    private String controlFlag(
-            AppConfigurationEntry.LoginModuleControlFlag loginModuleControlFlag) {
+    private String controlFlag(AppConfigurationEntry.LoginModuleControlFlag loginModuleControlFlag) {
         // LoginModuleControlFlag.toString() has format "LoginModuleControlFlag: flag"
         String[] tokens = loginModuleControlFlag.toString().split(" ");
         return tokens[tokens.length - 1];
     }
 
     private String jaasConfigProp(
-            String loginModule,
-            AppConfigurationEntry.LoginModuleControlFlag controlFlag,
-            Map<String, Object> options) {
+            String loginModule, AppConfigurationEntry.LoginModuleControlFlag controlFlag, Map<String, Object> options) {
         StringBuilder builder = new StringBuilder();
         builder.append(loginModule);
         builder.append(' ');

@@ -53,37 +53,26 @@ public class ConjunctFutureTest {
 
     @TestTemplate
     void testConjunctFutureFailsOnEmptyAndNull(FutureFactory futureFactory) throws Exception {
-        assertThatThrownBy(() -> futureFactory.createFuture(null))
-                .isInstanceOf(NullPointerException.class);
+        assertThatThrownBy(() -> futureFactory.createFuture(null)).isInstanceOf(NullPointerException.class);
 
-        assertThatThrownBy(
-                        () ->
-                                futureFactory.createFuture(
-                                        Arrays.asList(
-                                                new CompletableFuture<>(),
-                                                null,
-                                                new CompletableFuture<>())))
+        assertThatThrownBy(() -> futureFactory.createFuture(
+                        Arrays.asList(new CompletableFuture<>(), null, new CompletableFuture<>())))
                 .isInstanceOf(NullPointerException.class);
     }
 
     @TestTemplate
     void testConjunctFutureCompletion(FutureFactory futureFactory) throws Exception {
         // some futures that we combine
-        java.util.concurrent.CompletableFuture<Object> future1 =
-                new java.util.concurrent.CompletableFuture<>();
-        java.util.concurrent.CompletableFuture<Object> future2 =
-                new java.util.concurrent.CompletableFuture<>();
-        java.util.concurrent.CompletableFuture<Object> future3 =
-                new java.util.concurrent.CompletableFuture<>();
-        java.util.concurrent.CompletableFuture<Object> future4 =
-                new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<Object> future1 = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<Object> future2 = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<Object> future3 = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<Object> future4 = new java.util.concurrent.CompletableFuture<>();
 
         // some future is initially completed
         future2.complete(new Object());
 
         // build the conjunct future
-        ConjunctFuture<?> result =
-                futureFactory.createFuture(Arrays.asList(future1, future2, future3, future4));
+        ConjunctFuture<?> result = futureFactory.createFuture(Arrays.asList(future1, future2, future3, future4));
 
         CompletableFuture<?> resultMapped = result.thenAccept(value -> {});
 
@@ -119,18 +108,13 @@ public class ConjunctFutureTest {
     @TestTemplate
     void testConjunctFutureFailureOnFirst(FutureFactory futureFactory) throws Exception {
 
-        java.util.concurrent.CompletableFuture<Object> future1 =
-                new java.util.concurrent.CompletableFuture<>();
-        java.util.concurrent.CompletableFuture<Object> future2 =
-                new java.util.concurrent.CompletableFuture<>();
-        java.util.concurrent.CompletableFuture<Object> future3 =
-                new java.util.concurrent.CompletableFuture<>();
-        java.util.concurrent.CompletableFuture<Object> future4 =
-                new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<Object> future1 = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<Object> future2 = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<Object> future3 = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<Object> future4 = new java.util.concurrent.CompletableFuture<>();
 
         // build the conjunct future
-        ConjunctFuture<?> result =
-                futureFactory.createFuture(Arrays.asList(future1, future2, future3, future4));
+        ConjunctFuture<?> result = futureFactory.createFuture(Arrays.asList(future1, future2, future3, future4));
 
         CompletableFuture<?> resultMapped = result.thenAccept(value -> {});
 
@@ -156,18 +140,13 @@ public class ConjunctFutureTest {
     @TestTemplate
     void testConjunctFutureFailureOnSuccessive(FutureFactory futureFactory) throws Exception {
 
-        java.util.concurrent.CompletableFuture<Object> future1 =
-                new java.util.concurrent.CompletableFuture<>();
-        java.util.concurrent.CompletableFuture<Object> future2 =
-                new java.util.concurrent.CompletableFuture<>();
-        java.util.concurrent.CompletableFuture<Object> future3 =
-                new java.util.concurrent.CompletableFuture<>();
-        java.util.concurrent.CompletableFuture<Object> future4 =
-                new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<Object> future1 = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<Object> future2 = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<Object> future3 = new java.util.concurrent.CompletableFuture<>();
+        java.util.concurrent.CompletableFuture<Object> future4 = new java.util.concurrent.CompletableFuture<>();
 
         // build the conjunct future
-        ConjunctFuture<?> result =
-                futureFactory.createFuture(Arrays.asList(future1, future2, future3, future4));
+        ConjunctFuture<?> result = futureFactory.createFuture(Arrays.asList(future1, future2, future3, future4));
         assertThat(result.getNumFuturesTotal()).isEqualTo(4);
 
         java.util.concurrent.CompletableFuture<?> resultMapped = result.thenAccept(value -> {});
@@ -208,10 +187,9 @@ public class ConjunctFutureTest {
 
         ConjunctFuture<Collection<Number>> result = FutureUtils.combineAll(futures);
 
-        final List<Tuple2<Integer, CompletableFuture<Integer>>> shuffledFutures =
-                IntStream.range(0, futures.size())
-                        .mapToObj(index -> Tuple2.of(index, futures.get(index)))
-                        .collect(Collectors.toList());
+        final List<Tuple2<Integer, CompletableFuture<Integer>>> shuffledFutures = IntStream.range(0, futures.size())
+                .mapToObj(index -> Tuple2.of(index, futures.get(index)))
+                .collect(Collectors.toList());
         Collections.shuffle(shuffledFutures);
 
         for (Tuple2<Integer, CompletableFuture<Integer>> shuffledFuture : shuffledFutures) {
@@ -228,8 +206,7 @@ public class ConjunctFutureTest {
     @TestTemplate
     void testConjunctOfNone(FutureFactory futureFactory) throws Exception {
         final ConjunctFuture<?> result =
-                futureFactory.createFuture(
-                        Collections.<java.util.concurrent.CompletableFuture<Object>>emptyList());
+                futureFactory.createFuture(Collections.<java.util.concurrent.CompletableFuture<Object>>emptyList());
 
         assertThat(result.getNumFuturesTotal()).isEqualTo(0);
         assertThat(result.getNumFuturesCompleted()).isEqualTo(0);
@@ -244,8 +221,7 @@ public class ConjunctFutureTest {
     private static class ConjunctFutureFactory implements FutureFactory {
 
         @Override
-        public ConjunctFuture<?> createFuture(
-                Collection<? extends java.util.concurrent.CompletableFuture<?>> futures) {
+        public ConjunctFuture<?> createFuture(Collection<? extends java.util.concurrent.CompletableFuture<?>> futures) {
             return FutureUtils.combineAll(futures);
         }
     }
@@ -253,8 +229,7 @@ public class ConjunctFutureTest {
     private static class WaitingFutureFactory implements FutureFactory {
 
         @Override
-        public ConjunctFuture<?> createFuture(
-                Collection<? extends java.util.concurrent.CompletableFuture<?>> futures) {
+        public ConjunctFuture<?> createFuture(Collection<? extends java.util.concurrent.CompletableFuture<?>> futures) {
             return FutureUtils.waitForAll(futures);
         }
     }

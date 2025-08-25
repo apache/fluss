@@ -28,11 +28,10 @@ public class TableAssignmentJsonSerdeTest extends JsonSerdeTestBase<TableAssignm
 
     @Override
     protected TableAssignment[] createObjects() {
-        TableAssignment tableAssignment =
-                TableAssignment.builder()
-                        .add(0, BucketAssignment.of(1, 4, 5))
-                        .add(1, BucketAssignment.of(2, 3))
-                        .build();
+        TableAssignment tableAssignment = TableAssignment.builder()
+                .add(0, BucketAssignment.of(1, 4, 5))
+                .add(1, BucketAssignment.of(2, 3))
+                .build();
         return new TableAssignment[] {tableAssignment};
     }
 

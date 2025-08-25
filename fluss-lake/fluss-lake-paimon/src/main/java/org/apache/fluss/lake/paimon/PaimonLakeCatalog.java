@@ -68,13 +68,11 @@ public class PaimonLakeCatalog implements LakeCatalog {
 
     public PaimonLakeCatalog(Configuration configuration) {
         this.paimonCatalog =
-                CatalogFactory.createCatalog(
-                        CatalogContext.create(Options.fromMap(configuration.toMap())));
+                CatalogFactory.createCatalog(CatalogContext.create(Options.fromMap(configuration.toMap())));
     }
 
     @Override
-    public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
-            throws TableAlreadyExistException {
+    public void createTable(TablePath tablePath, TableDescriptor tableDescriptor) throws TableAlreadyExistException {
         // then, create the table
         Identifier paimonPath = toPaimonIdentifier(tablePath);
         Schema paimonSchema = toPaimonSchema(tableDescriptor);
@@ -87,18 +85,16 @@ public class PaimonLakeCatalog implements LakeCatalog {
                 createTable(paimonPath, paimonSchema);
             } catch (Catalog.DatabaseNotExistException t) {
                 // shouldn't happen in normal cases
-                throw new RuntimeException(
-                        String.format(
-                                "Fail to create table %s in Paimon, because "
-                                        + "Database %s still doesn't exist although create database "
-                                        + "successfully, please try again.",
-                                tablePath, tablePath.getDatabaseName()));
+                throw new RuntimeException(String.format(
+                        "Fail to create table %s in Paimon, because "
+                                + "Database %s still doesn't exist although create database "
+                                + "successfully, please try again.",
+                        tablePath, tablePath.getDatabaseName()));
             }
         }
     }
 
-    private void createTable(Identifier tablePath, Schema schema)
-            throws Catalog.DatabaseNotExistException {
+    private void createTable(Identifier tablePath, Schema schema) throws Catalog.DatabaseNotExistException {
         try {
             // not ignore if table exists
             paimonCatalog.createTable(tablePath, schema, false);
@@ -127,14 +123,10 @@ public class PaimonLakeCatalog implements LakeCatalog {
         // When bucket key is undefined, it should use dynamic bucket (bucket = -1) mode.
         List<String> bucketKeys = tableDescriptor.getBucketKeys();
         if (!bucketKeys.isEmpty()) {
-            int numBuckets =
-                    tableDescriptor
-                            .getTableDistribution()
-                            .flatMap(TableDescriptor.TableDistribution::getBucketCount)
-                            .orElseThrow(
-                                    () ->
-                                            new IllegalArgumentException(
-                                                    "Bucket count should be set."));
+            int numBuckets = tableDescriptor
+                    .getTableDistribution()
+                    .flatMap(TableDescriptor.TableDistribution::getBucketCount)
+                    .orElseThrow(() -> new IllegalArgumentException("Bucket count should be set."));
             options.set(CoreOptions.BUCKET, numBuckets);
             options.set(CoreOptions.BUCKET_KEY, String.join(",", bucketKeys));
         } else {
@@ -146,10 +138,9 @@ public class PaimonLakeCatalog implements LakeCatalog {
                 tableDescriptor.getSchema().getColumns()) {
             String columnName = column.getName();
             if (SYSTEM_COLUMNS.containsKey(columnName)) {
-                throw new InvalidTableException(
-                        "Column "
-                                + columnName
-                                + " conflicts with a system column name of paimon table, please rename the column.");
+                throw new InvalidTableException("Column "
+                        + columnName
+                        + " conflicts with a system column name of paimon table, please rename the column.");
             }
             schemaBuilder.column(
                     columnName,
@@ -166,18 +157,14 @@ public class PaimonLakeCatalog implements LakeCatalog {
         if (tableDescriptor.hasPrimaryKey()) {
             schemaBuilder.primaryKey(
                     tableDescriptor.getSchema().getPrimaryKey().get().getColumnNames());
-            options.set(
-                    CoreOptions.CHANGELOG_PRODUCER.key(),
-                    CoreOptions.ChangelogProducer.INPUT.toString());
+            options.set(CoreOptions.CHANGELOG_PRODUCER.key(), CoreOptions.ChangelogProducer.INPUT.toString());
         }
         // set partition keys
         schemaBuilder.partitionKeys(tableDescriptor.getPartitionKeys());
 
         // set properties to paimon schema
         tableDescriptor.getProperties().forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
-        tableDescriptor
-                .getCustomProperties()
-                .forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
+        tableDescriptor.getCustomProperties().forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
         schemaBuilder.options(options.toMap());
         return schemaBuilder.build();
     }

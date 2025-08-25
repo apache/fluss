@@ -53,8 +53,7 @@ public interface LakeCommitter<WriteResult, CommittableT> extends AutoCloseable 
      * @return the committed snapshot ID
      * @throws IOException if an I/O error occurs
      */
-    long commit(CommittableT committable, Map<String, String> snapshotProperties)
-            throws IOException;
+    long commit(CommittableT committable, Map<String, String> snapshotProperties) throws IOException;
 
     /**
      * Aborts the given committable object.
@@ -73,6 +72,5 @@ public interface LakeCommitter<WriteResult, CommittableT> extends AutoCloseable 
      * @throws IOException if an I/O error occurs
      */
     @Nullable
-    CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss)
-            throws IOException;
+    CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss) throws IOException;
 }

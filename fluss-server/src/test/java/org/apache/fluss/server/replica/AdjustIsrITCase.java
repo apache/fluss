@@ -50,11 +50,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** ITCase for adjust isr while ISR change. */
 public class AdjustIsrITCase {
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(initConfig())
+            .build();
 
     private ZooKeeperClient zkClient;
 
@@ -73,10 +72,7 @@ public class AdjustIsrITCase {
         TableBucket tb = new TableBucket(tableId, 0);
 
         LeaderAndIsr currentLeaderAndIsr =
-                waitValue(
-                        () -> zkClient.getLeaderAndIsr(tb),
-                        Duration.ofSeconds(20),
-                        "Leader and isr not found");
+                waitValue(() -> zkClient.getLeaderAndIsr(tb), Duration.ofSeconds(20), "Leader and isr not found");
         List<Integer> isr = currentLeaderAndIsr.isr();
         assertThat(isr).containsExactlyInAnyOrder(0, 1, 2);
 
@@ -90,66 +86,45 @@ public class AdjustIsrITCase {
         isr.remove(stopFollower);
 
         // send one batch data to check the stop follower will become out of sync replica.
-        TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        TabletServerGateway leaderGateWay = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         RpcMessageTestUtils.assertProduceLogResponse(
                 leaderGateWay
-                        .produceLog(
-                                RpcMessageTestUtils.newProduceLogRequest(
-                                        tableId,
-                                        tb.getBucket(),
-                                        -1,
-                                        genMemoryLogRecordsByObject(DATA1)))
+                        .produceLog(RpcMessageTestUtils.newProduceLogRequest(
+                                tableId, tb.getBucket(), -1, genMemoryLogRecordsByObject(DATA1)))
                         .get(),
                 0,
                 0L);
 
         // Wait the stop follower to be removed from ISR because the follower tablet server will not
         // fetch log from leader anymore.
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(zkClient.getLeaderAndIsr(tb))
-                                .isPresent()
-                                .hasValueSatisfying(
-                                        leaderAndIsr ->
-                                                assertThat(leaderAndIsr.isr())
-                                                        .containsExactlyInAnyOrderElementsOf(isr)));
+        retry(Duration.ofMinutes(1), () -> assertThat(zkClient.getLeaderAndIsr(tb))
+                .isPresent()
+                .hasValueSatisfying(
+                        leaderAndIsr -> assertThat(leaderAndIsr.isr()).containsExactlyInAnyOrderElementsOf(isr)));
 
         // check leader highWatermark increase even if the stop follower is out of sync.
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(
-                                        FLUSS_CLUSTER_EXTENSION
-                                                .getTabletServerById(leader)
-                                                .getReplicaManager()
-                                                .getReplicaOrException(tb)
-                                                .getLogTablet()
-                                                .getHighWatermark())
-                                .isEqualTo(10L));
+        retry(Duration.ofMinutes(1), () -> assertThat(FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(leader)
+                        .getReplicaManager()
+                        .getReplicaOrException(tb)
+                        .getLogTablet()
+                        .getHighWatermark())
+                .isEqualTo(10L));
 
         currentLeaderAndIsr = zkClient.getLeaderAndIsr(tb).get();
-        LeaderAndIsr newLeaderAndIsr =
-                new LeaderAndIsr(
-                        currentLeaderAndIsr.leader(),
-                        currentLeaderAndIsr.leaderEpoch() + 1,
-                        isr,
-                        currentLeaderAndIsr.coordinatorEpoch(),
-                        currentLeaderAndIsr.bucketEpoch());
+        LeaderAndIsr newLeaderAndIsr = new LeaderAndIsr(
+                currentLeaderAndIsr.leader(),
+                currentLeaderAndIsr.leaderEpoch() + 1,
+                isr,
+                currentLeaderAndIsr.coordinatorEpoch(),
+                currentLeaderAndIsr.bucketEpoch());
         isr.add(stopFollower);
-        FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
-                stopFollower, DATA1_TABLE_PATH, tb, newLeaderAndIsr, isr);
+        FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(stopFollower, DATA1_TABLE_PATH, tb, newLeaderAndIsr, isr);
         // retry until the stop follower add back to ISR.
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(zkClient.getLeaderAndIsr(tb))
-                                .isPresent()
-                                .hasValueSatisfying(
-                                        leaderAndIsr ->
-                                                assertThat(leaderAndIsr.isr())
-                                                        .containsExactlyInAnyOrderElementsOf(isr)));
+        retry(Duration.ofMinutes(1), () -> assertThat(zkClient.getLeaderAndIsr(tb))
+                .isPresent()
+                .hasValueSatisfying(
+                        leaderAndIsr -> assertThat(leaderAndIsr.isr()).containsExactlyInAnyOrderElementsOf(isr)));
     }
 
     @Test
@@ -158,89 +133,75 @@ public class AdjustIsrITCase {
         TableBucket tb = new TableBucket(tableId, 0);
 
         LeaderAndIsr currentLeaderAndIsr =
-                waitValue(
-                        () -> zkClient.getLeaderAndIsr(tb),
-                        Duration.ofSeconds(20),
-                        "Leader and isr not found");
+                waitValue(() -> zkClient.getLeaderAndIsr(tb), Duration.ofSeconds(20), "Leader and isr not found");
         List<Integer> isr = currentLeaderAndIsr.isr();
         assertThat(isr).containsExactlyInAnyOrder(0, 1, 2);
         int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
-        List<Integer> followerSet =
-                isr.stream().filter(i -> i != leader).collect(Collectors.toList());
+        List<Integer> followerSet = isr.stream().filter(i -> i != leader).collect(Collectors.toList());
         followerSet.forEach(unchecked(FLUSS_CLUSTER_EXTENSION::stopTabletServer));
-        TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        TabletServerGateway leaderGateWay = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         RpcMessageTestUtils.assertProduceLogResponse(
                 leaderGateWay
-                        .produceLog(
-                                RpcMessageTestUtils.newProduceLogRequest(
-                                        tableId,
-                                        tb.getBucket(),
-                                        1, // need not ack in this test.
-                                        genMemoryLogRecordsByObject(DATA1)))
+                        .produceLog(RpcMessageTestUtils.newProduceLogRequest(
+                                tableId,
+                                tb.getBucket(),
+                                1, // need not ack in this test.
+                                genMemoryLogRecordsByObject(DATA1)))
                         .get(),
                 0,
                 0L);
 
         // Wait unit the leader isr set only contains the leader.
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(
-                                        FLUSS_CLUSTER_EXTENSION
-                                                .getTabletServerById(leader)
-                                                .getReplicaManager()
-                                                .getReplicaOrException(tb)
-                                                .getIsr())
-                                .containsExactlyInAnyOrder(leader));
+        retry(Duration.ofMinutes(1), () -> assertThat(FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(leader)
+                        .getReplicaManager()
+                        .getReplicaOrException(tb)
+                        .getIsr())
+                .containsExactlyInAnyOrder(leader));
         // check leader highWatermark not increase because the isr set < min_isr
-        assertThat(
-                        FLUSS_CLUSTER_EXTENSION
-                                .getTabletServerById(leader)
-                                .getReplicaManager()
-                                .getReplicaOrException(tb)
-                                .getLogTablet()
-                                .getHighWatermark())
+        assertThat(FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(leader)
+                        .getReplicaManager()
+                        .getReplicaOrException(tb)
+                        .getLogTablet()
+                        .getHighWatermark())
                 .isEqualTo(0L);
 
-        ProduceLogResponse produceLogResponse =
-                leaderGateWay
-                        .produceLog(
-                                RpcMessageTestUtils.newProduceLogRequest(
-                                        tableId,
-                                        tb.getBucket(),
-                                        -1, // need ack
-                                        genMemoryLogRecordsByObject(DATA1)))
-                        .get();
+        ProduceLogResponse produceLogResponse = leaderGateWay
+                .produceLog(RpcMessageTestUtils.newProduceLogRequest(
+                        tableId,
+                        tb.getBucket(),
+                        -1, // need ack
+                        genMemoryLogRecordsByObject(DATA1)))
+                .get();
         assertThat(produceLogResponse.getBucketsRespsCount()).isEqualTo(1);
-        PbProduceLogRespForBucket respForBucket = produceLogResponse.getBucketsRespsList().get(0);
+        PbProduceLogRespForBucket respForBucket =
+                produceLogResponse.getBucketsRespsList().get(0);
         assertThat(respForBucket.getBucketId()).isEqualTo(0);
         assertThat(respForBucket.hasErrorCode()).isTrue();
-        assertThat(respForBucket.getErrorCode())
-                .isEqualTo(Errors.NOT_ENOUGH_REPLICAS_EXCEPTION.code());
+        assertThat(respForBucket.getErrorCode()).isEqualTo(Errors.NOT_ENOUGH_REPLICAS_EXCEPTION.code());
         assertThat(respForBucket.getErrorMessage())
-                .contains(
-                        String.format(
-                                "The size of the current ISR [%s] is insufficient to satisfy the "
-                                        + "required acks -1 for table bucket TableBucket{tableId=%s, bucket=0}.",
-                                leader, tableId));
+                .contains(String.format(
+                        "The size of the current ISR [%s] is insufficient to satisfy the "
+                                + "required acks -1 for table bucket TableBucket{tableId=%s, bucket=0}.",
+                        leader, tableId));
         // check again leader highWatermark not increase because the isr set < min_isr
-        assertThat(
-                        FLUSS_CLUSTER_EXTENSION
-                                .getTabletServerById(leader)
-                                .getReplicaManager()
-                                .getReplicaOrException(tb)
-                                .getLogTablet()
-                                .getHighWatermark())
+        assertThat(FLUSS_CLUSTER_EXTENSION
+                        .getTabletServerById(leader)
+                        .getReplicaManager()
+                        .getReplicaOrException(tb)
+                        .getLogTablet()
+                        .getHighWatermark())
                 .isEqualTo(0L);
     }
 
     private long createLogTable() throws Exception {
         // Set bucket to 1 to easy for debug.
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(1, "a").build();
-        return RpcMessageTestUtils.createTable(
-                FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(DATA1_SCHEMA)
+                .distributedBy(1, "a")
+                .build();
+        return RpcMessageTestUtils.createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, tableDescriptor);
     }
 
     private static Configuration initConfig() {

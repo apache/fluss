@@ -75,7 +75,8 @@ class PeriodicSnapshotManagerTest {
         periodicSnapshotManager = createSnapshotManager(0, NopSnapshotTarget.INSTANCE);
         periodicSnapshotManager.start();
         // periodic snapshot is disabled when periodicMaterializeDelay is not positive
-        Assertions.assertEquals(0, scheduledExecutorService.getAllScheduledTasks().size());
+        Assertions.assertEquals(
+                0, scheduledExecutorService.getAllScheduledTasks().size());
     }
 
     @Test
@@ -102,8 +103,7 @@ class PeriodicSnapshotManagerTest {
         asyncSnapshotExecutorService.trigger();
 
         // now, check the result
-        assertThat(target.getCollectedRemoteDirs())
-                .isEqualTo(Collections.singletonList(snapshotDir));
+        assertThat(target.getCollectedRemoteDirs()).isEqualTo(Collections.singletonList(snapshotDir));
     }
 
     @Test
@@ -128,18 +128,16 @@ class PeriodicSnapshotManagerTest {
     }
 
     private void checkOnlyOneScheduledTasks() {
-        assertThat(
-                        getOnlyElement(scheduledExecutorService.getAllScheduledTasks().iterator())
-                                .getDelay(MILLISECONDS))
-                .as(
-                        String.format(
-                                "task for initial materialization should be scheduled with a 0..%d delay",
-                                periodicMaterializeDelay))
+        assertThat(getOnlyElement(
+                                scheduledExecutorService.getAllScheduledTasks().iterator())
+                        .getDelay(MILLISECONDS))
+                .as(String.format(
+                        "task for initial materialization should be scheduled with a 0..%d delay",
+                        periodicMaterializeDelay))
                 .isLessThanOrEqualTo(periodicMaterializeDelay);
     }
 
-    private PeriodicSnapshotManager createSnapshotManager(
-            PeriodicSnapshotManager.SnapshotTarget target) {
+    private PeriodicSnapshotManager createSnapshotManager(PeriodicSnapshotManager.SnapshotTarget target) {
         return createSnapshotManager(periodicMaterializeDelay, target);
     }
 
@@ -171,8 +169,7 @@ class PeriodicSnapshotManagerTest {
                 SnapshotResult snapshotResult) {}
 
         @Override
-        public void handleSnapshotFailure(
-                long snapshotId, SnapshotLocation snapshotLocation, Throwable cause) {}
+        public void handleSnapshotFailure(long snapshotId, SnapshotLocation snapshotLocation, Throwable cause) {}
 
         @Override
         public long getSnapshotSize() {
@@ -198,8 +195,7 @@ class PeriodicSnapshotManagerTest {
             this.exceptionMessage = exceptionMessage;
             try {
                 this.snapshotLocation =
-                        new SnapshotLocation(
-                                snapshotPath.getFileSystem(), snapshotPath, snapshotPath, 1024);
+                        new SnapshotLocation(snapshotPath.getFileSystem(), snapshotPath, snapshotPath, 1024);
             } catch (IOException e) {
                 throw new FlussRuntimeException(e);
             }
@@ -207,26 +203,19 @@ class PeriodicSnapshotManagerTest {
 
         @Override
         public Optional<PeriodicSnapshotManager.SnapshotRunnable> initSnapshot() {
-            RunnableFuture<SnapshotResult> runnableFuture =
-                    new FutureTask<>(
-                            () -> {
-                                if (exceptionMessage != null) {
-                                    throw new FlussRuntimeException(exceptionMessage);
-                                } else {
-                                    final long logOffset = 0;
-                                    return new SnapshotResult(null, snapshotPath, logOffset);
-                                }
-                            });
+            RunnableFuture<SnapshotResult> runnableFuture = new FutureTask<>(() -> {
+                if (exceptionMessage != null) {
+                    throw new FlussRuntimeException(exceptionMessage);
+                } else {
+                    final long logOffset = 0;
+                    return new SnapshotResult(null, snapshotPath, logOffset);
+                }
+            });
             int snapshotId = 1;
             int coordinatorEpoch = 0;
             int leaderEpoch = 0;
-            return Optional.of(
-                    new PeriodicSnapshotManager.SnapshotRunnable(
-                            runnableFuture,
-                            snapshotId,
-                            coordinatorEpoch,
-                            leaderEpoch,
-                            snapshotLocation));
+            return Optional.of(new PeriodicSnapshotManager.SnapshotRunnable(
+                    runnableFuture, snapshotId, coordinatorEpoch, leaderEpoch, snapshotLocation));
         }
 
         @Override
@@ -240,8 +229,7 @@ class PeriodicSnapshotManagerTest {
         }
 
         @Override
-        public void handleSnapshotFailure(
-                long snapshotId, SnapshotLocation snapshotLocation, Throwable cause) {
+        public void handleSnapshotFailure(long snapshotId, SnapshotLocation snapshotLocation, Throwable cause) {
             this.cause = cause;
         }
 

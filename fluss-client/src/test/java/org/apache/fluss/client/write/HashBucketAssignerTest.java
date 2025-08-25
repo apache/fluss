@@ -46,12 +46,11 @@ class HashBucketAssignerTest {
 
     @Test
     void testBucketAssign() {
-        final RowType rowType =
-                DataTypes.ROW(
-                        new DataField("a", DataTypes.INT()),
-                        new DataField("b", DataTypes.INT()),
-                        new DataField("c", DataTypes.STRING()),
-                        new DataField("d", DataTypes.BIGINT()));
+        final RowType rowType = DataTypes.ROW(
+                new DataField("a", DataTypes.INT()),
+                new DataField("b", DataTypes.INT()),
+                new DataField("c", DataTypes.STRING()),
+                new DataField("d", DataTypes.BIGINT()));
 
         // Suppose a, b are primary keys.
         int[] pkIndices = {0, 1};
@@ -79,12 +78,11 @@ class HashBucketAssignerTest {
 
     @Test
     void testBucketForRowKey() {
-        final RowType rowType =
-                DataTypes.ROW(
-                        new DataField("a", DataTypes.INT()),
-                        new DataField("b", DataTypes.INT()),
-                        new DataField("c", DataTypes.STRING()),
-                        new DataField("d", DataTypes.BIGINT()));
+        final RowType rowType = DataTypes.ROW(
+                new DataField("a", DataTypes.INT()),
+                new DataField("b", DataTypes.INT()),
+                new DataField("c", DataTypes.STRING()),
+                new DataField("d", DataTypes.BIGINT()));
 
         List<byte[]> keyList = new ArrayList<>();
         int rowCount = 3000;
@@ -116,26 +114,23 @@ class HashBucketAssignerTest {
     @ParameterizedTest
     @MethodSource("lakeParameters")
     void testLakeBucketAssign(boolean isPartitioned, boolean isLogTable) {
-        Schema.Builder schemaBuilder =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .column("c", DataTypes.STRING());
-        Schema schema =
-                isLogTable ? schemaBuilder.build() : schemaBuilder.primaryKey("a", "c").build();
+        Schema.Builder schemaBuilder = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.STRING())
+                .column("c", DataTypes.STRING());
+        Schema schema = isLogTable
+                ? schemaBuilder.build()
+                : schemaBuilder.primaryKey("a", "c").build();
 
         // bucket key
-        List<String> bucketKey =
-                isPartitioned ? Collections.singletonList("a") : Arrays.asList("a", "c");
+        List<String> bucketKey = isPartitioned ? Collections.singletonList("a") : Arrays.asList("a", "c");
 
         InternalRow row1 = row(1, "2", "a");
         InternalRow row2 = row(1, "3", "b");
         InternalRow row3 = row(2, "4", "a");
         InternalRow row4 = row(2, "4", "b");
-        KeyEncoder keyEncoder =
-                KeyEncoder.of(schema.getRowType(), bucketKey, DataLakeFormat.PAIMON);
-        HashBucketAssigner bucketAssigner =
-                new HashBucketAssigner(3, BucketingFunction.of(DataLakeFormat.PAIMON));
+        KeyEncoder keyEncoder = KeyEncoder.of(schema.getRowType(), bucketKey, DataLakeFormat.PAIMON);
+        HashBucketAssigner bucketAssigner = new HashBucketAssigner(3, BucketingFunction.of(DataLakeFormat.PAIMON));
 
         int row1Bucket = bucketAssigner.assignBucket(keyEncoder.encodeKey(row1));
         int row2Bucket = bucketAssigner.assignBucket(keyEncoder.encodeKey(row2));

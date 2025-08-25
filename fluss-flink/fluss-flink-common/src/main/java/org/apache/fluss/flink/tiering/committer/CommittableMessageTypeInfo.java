@@ -29,21 +29,17 @@ import org.apache.flink.util.function.SerializableSupplier;
 import java.io.IOException;
 
 /** A {@link TypeInformation} for {@link CommittableMessage}. */
-public class CommittableMessageTypeInfo<Committable>
-        extends TypeInformation<CommittableMessage<Committable>> {
+public class CommittableMessageTypeInfo<Committable> extends TypeInformation<CommittableMessage<Committable>> {
 
-    private final SerializableSupplier<SimpleVersionedSerializer<Committable>>
-            committableSerializerFactory;
+    private final SerializableSupplier<SimpleVersionedSerializer<Committable>> committableSerializerFactory;
 
     private CommittableMessageTypeInfo(
-            SerializableSupplier<SimpleVersionedSerializer<Committable>>
-                    committableSerializerFactory) {
+            SerializableSupplier<SimpleVersionedSerializer<Committable>> committableSerializerFactory) {
         this.committableSerializerFactory = committableSerializerFactory;
     }
 
     public static <Committable> TypeInformation<CommittableMessage<Committable>> of(
-            SerializableSupplier<SimpleVersionedSerializer<Committable>>
-                    committableSerializerFactory) {
+            SerializableSupplier<SimpleVersionedSerializer<Committable>> committableSerializerFactory) {
         return new CommittableMessageTypeInfo<>(committableSerializerFactory);
     }
 
@@ -79,35 +75,29 @@ public class CommittableMessageTypeInfo<Committable>
     }
 
     @Override
-    public TypeSerializer<CommittableMessage<Committable>> createSerializer(
-            ExecutionConfig executionConfig) {
+    public TypeSerializer<CommittableMessage<Committable>> createSerializer(ExecutionConfig executionConfig) {
         return new SimpleVersionedSerializerTypeSerializerProxy<CommittableMessage<Committable>>(
-                () ->
-                        new org.apache.flink.core.io.SimpleVersionedSerializer<
-                                CommittableMessage<Committable>>() {
-                            private final SimpleVersionedSerializer<Committable>
-                                    committableSerializer = committableSerializerFactory.get();
+                () -> new org.apache.flink.core.io.SimpleVersionedSerializer<CommittableMessage<Committable>>() {
+                    private final SimpleVersionedSerializer<Committable> committableSerializer =
+                            committableSerializerFactory.get();
 
-                            @Override
-                            public int getVersion() {
-                                return committableSerializer.getVersion();
-                            }
+                    @Override
+                    public int getVersion() {
+                        return committableSerializer.getVersion();
+                    }
 
-                            @Override
-                            public byte[] serialize(
-                                    CommittableMessage<Committable> committableCommittableMessage)
-                                    throws IOException {
-                                return committableSerializer.serialize(
-                                        committableCommittableMessage.committable());
-                            }
+                    @Override
+                    public byte[] serialize(CommittableMessage<Committable> committableCommittableMessage)
+                            throws IOException {
+                        return committableSerializer.serialize(committableCommittableMessage.committable());
+                    }
 
-                            @Override
-                            public CommittableMessage<Committable> deserialize(
-                                    int version, byte[] serialized) throws IOException {
-                                return new CommittableMessage<>(
-                                        committableSerializer.deserialize(version, serialized));
-                            }
-                        }) {
+                    @Override
+                    public CommittableMessage<Committable> deserialize(int version, byte[] serialized)
+                            throws IOException {
+                        return new CommittableMessage<>(committableSerializer.deserialize(version, serialized));
+                    }
+                }) {
             // nothing
             @Override
             public CommittableMessage<Committable> copy(CommittableMessage<Committable> from) {

@@ -45,10 +45,9 @@ public class FlinkUnionReadTestBase extends FlinkPaimonTieringTestBase {
         // create table environment
         batchTEnv = StreamTableEnvironment.create(execEnv, EnvironmentSettings.inBatchMode());
         // crate catalog using sql
-        batchTEnv.executeSql(
-                String.format(
-                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
+        batchTEnv.executeSql(String.format(
+                "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
+                CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         batchTEnv.executeSql("use catalog " + CATALOG_NAME);
         batchTEnv.executeSql("use " + DEFAULT_DB);
     }

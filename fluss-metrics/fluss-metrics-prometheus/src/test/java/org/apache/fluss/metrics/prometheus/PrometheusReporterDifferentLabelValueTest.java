@@ -70,17 +70,13 @@ class PrometheusReporterDifferentLabelValueTest {
         final String[] labelValues4 = new String[] {"values4_1", ""};
 
         final MetricGroup metricGroup1 =
-                TestUtils.createTestMetricGroup(
-                        LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, labelValues1));
+                TestUtils.createTestMetricGroup(LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, labelValues1));
         final MetricGroup metricGroup2 =
-                TestUtils.createTestMetricGroup(
-                        LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, labelValues2));
+                TestUtils.createTestMetricGroup(LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, labelValues2));
         final MetricGroup metricGroup3 =
-                TestUtils.createTestMetricGroup(
-                        LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, labelValues3));
+                TestUtils.createTestMetricGroup(LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, labelValues3));
         final MetricGroup metricGroup4 =
-                TestUtils.createTestMetricGroup(
-                        LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, labelValues4));
+                TestUtils.createTestMetricGroup(LOGICAL_SCOPE, TestUtils.toMap(LABEL_NAMES, labelValues4));
 
         return Stream.of(
                 Arguments.of(metricGroup1, labelValues1, metricGroup2, labelValues2),
@@ -104,13 +100,9 @@ class PrometheusReporterDifferentLabelValueTest {
         reporter.notifyOfAddedMetric(counter1, METRIC_NAME, metricGroup1);
         reporter.notifyOfAddedMetric(counter2, METRIC_NAME, metricGroup2);
 
-        assertThat(
-                        reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
+        assertThat(reporter.registry.getSampleValue(getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
                 .isEqualTo(1.);
-        assertThat(
-                        reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
+        assertThat(reporter.registry.getSampleValue(getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
                 .isEqualTo(2.);
     }
 
@@ -127,13 +119,9 @@ class PrometheusReporterDifferentLabelValueTest {
         reporter.notifyOfAddedMetric(gauge1, METRIC_NAME, metricGroup1);
         reporter.notifyOfAddedMetric(gauge2, METRIC_NAME, metricGroup2);
 
-        assertThat(
-                        reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
+        assertThat(reporter.registry.getSampleValue(getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
                 .isEqualTo(3.);
-        assertThat(
-                        reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
+        assertThat(reporter.registry.getSampleValue(getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
                 .isEqualTo(4.);
     }
 
@@ -150,13 +138,9 @@ class PrometheusReporterDifferentLabelValueTest {
         reporter.notifyOfAddedMetric(meter1, METRIC_NAME, metricGroup1);
         reporter.notifyOfAddedMetric(meter2, METRIC_NAME, metricGroup2);
 
-        assertThat(
-                        reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
+        assertThat(reporter.registry.getSampleValue(getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
                 .isEqualTo(meter1.getRate());
-        assertThat(
-                        reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
+        assertThat(reporter.registry.getSampleValue(getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
                 .isEqualTo(meter2.getRate());
     }
 
@@ -177,24 +161,20 @@ class PrometheusReporterDifferentLabelValueTest {
         reporter.notifyOfAddedMetric(histogram2, METRIC_NAME, metricGroup2);
 
         final String exportedMetrics = pollMetrics(reporter.getPort()).getBody();
-        assertThat(exportedMetrics)
-                .contains(formatAsPrometheusLabels(LABEL_NAMES, expectedLabelValues1) + " 1.0");
-        assertThat(exportedMetrics)
-                .contains(formatAsPrometheusLabels(LABEL_NAMES, expectedLabelValues2) + " 2.0");
+        assertThat(exportedMetrics).contains(formatAsPrometheusLabels(LABEL_NAMES, expectedLabelValues1) + " 1.0");
+        assertThat(exportedMetrics).contains(formatAsPrometheusLabels(LABEL_NAMES, expectedLabelValues2) + " 2.0");
 
         final String[] labelNamesWithQuantile = addToArray(LABEL_NAMES, "quantile");
         for (Double quantile : PrometheusReporter.HistogramSummaryProxy.QUANTILES) {
-            assertThat(
-                            reporter.registry.getSampleValue(
-                                    getLogicalScope(METRIC_NAME),
-                                    labelNamesWithQuantile,
-                                    addToArray(expectedLabelValues1, "" + quantile)))
+            assertThat(reporter.registry.getSampleValue(
+                            getLogicalScope(METRIC_NAME),
+                            labelNamesWithQuantile,
+                            addToArray(expectedLabelValues1, "" + quantile)))
                     .isEqualTo(quantile);
-            assertThat(
-                            reporter.registry.getSampleValue(
-                                    getLogicalScope(METRIC_NAME),
-                                    labelNamesWithQuantile,
-                                    addToArray(expectedLabelValues2, "" + quantile)))
+            assertThat(reporter.registry.getSampleValue(
+                            getLogicalScope(METRIC_NAME),
+                            labelNamesWithQuantile,
+                            addToArray(expectedLabelValues2, "" + quantile)))
                     .isEqualTo(quantile);
         }
     }
@@ -214,33 +194,22 @@ class PrometheusReporterDifferentLabelValueTest {
         reporter.notifyOfAddedMetric(counter1, METRIC_NAME, metricGroup1);
         reporter.notifyOfAddedMetric(counter2, METRIC_NAME, metricGroup2);
 
-        assertThat(
-                        reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
+        assertThat(reporter.registry.getSampleValue(getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
                 .isEqualTo(1.);
-        assertThat(
-                        reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
+        assertThat(reporter.registry.getSampleValue(getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
                 .isEqualTo(2.);
 
         reporter.notifyOfRemovedMetric(counter2, METRIC_NAME, metricGroup2);
-        assertThat(
-                        reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
+        assertThat(reporter.registry.getSampleValue(getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues1))
                 .isEqualTo(1.);
 
         reporter.notifyOfRemovedMetric(counter1, METRIC_NAME, metricGroup1);
-        assertThat(
-                        reporter.registry.getSampleValue(
-                                getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
+        assertThat(reporter.registry.getSampleValue(getLogicalScope(METRIC_NAME), LABEL_NAMES, expectedLabelValues2))
                 .isNull();
     }
 
     private static String getLogicalScope(String metricName) {
-        return PrometheusReporter.SCOPE_PREFIX
-                + LOGICAL_SCOPE
-                + PrometheusReporter.SCOPE_SEPARATOR
-                + metricName;
+        return PrometheusReporter.SCOPE_PREFIX + LOGICAL_SCOPE + PrometheusReporter.SCOPE_SEPARATOR + metricName;
     }
 
     private String[] addToArray(String[] array, String element) {

@@ -66,30 +66,23 @@ public class TimestampLtzTest {
 
     @Test
     public void testToString() {
-        assertThat(TimestampLtz.fromEpochMillis(123L).toString())
-                .isEqualTo("1970-01-01T00:00:00.123Z");
-        assertThat(TimestampLtz.fromEpochMillis(123L, 456789).toString())
-                .isEqualTo("1970-01-01T00:00:00.123456789Z");
+        assertThat(TimestampLtz.fromEpochMillis(123L).toString()).isEqualTo("1970-01-01T00:00:00.123Z");
+        assertThat(TimestampLtz.fromEpochMillis(123L, 456789).toString()).isEqualTo("1970-01-01T00:00:00.123456789Z");
 
-        assertThat(TimestampLtz.fromEpochMillis(-123L).toString())
-                .isEqualTo("1969-12-31T23:59:59.877Z");
-        assertThat(TimestampLtz.fromEpochMillis(-123L, 456789).toString())
-                .isEqualTo("1969-12-31T23:59:59.877456789Z");
+        assertThat(TimestampLtz.fromEpochMillis(-123L).toString()).isEqualTo("1969-12-31T23:59:59.877Z");
+        assertThat(TimestampLtz.fromEpochMillis(-123L, 456789).toString()).isEqualTo("1969-12-31T23:59:59.877456789Z");
 
         Instant instant = Instant.ofEpochSecond(0L, 123456789L);
-        assertThat(TimestampLtz.fromInstant(instant).toString())
-                .isEqualTo("1970-01-01T00:00:00.123456789Z");
+        assertThat(TimestampLtz.fromInstant(instant).toString()).isEqualTo("1970-01-01T00:00:00.123456789Z");
     }
 
     @Test
     public void testToMicros() {
         Instant instant = Instant.ofEpochSecond(0L, 123456789L);
-        assertThat(TimestampLtz.fromInstant(instant).toString())
-                .isEqualTo("1970-01-01T00:00:00.123456789Z");
-        assertThat(
-                        TimestampLtz.fromEpochMicros(
-                                        TimestampLtz.fromInstant(instant).toEpochMicros())
-                                .toString())
+        assertThat(TimestampLtz.fromInstant(instant).toString()).isEqualTo("1970-01-01T00:00:00.123456789Z");
+        assertThat(TimestampLtz.fromEpochMicros(
+                                TimestampLtz.fromInstant(instant).toEpochMicros())
+                        .toString())
                 .isEqualTo("1970-01-01T00:00:00.123456Z");
     }
 

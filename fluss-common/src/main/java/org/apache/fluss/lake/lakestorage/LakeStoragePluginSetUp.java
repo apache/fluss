@@ -35,8 +35,7 @@ public class LakeStoragePluginSetUp {
     public static LakeStoragePlugin fromDataLakeFormat(
             final String dataLakeFormat, @Nullable final PluginManager pluginManager) {
         // now, load lake storage plugin
-        Iterator<LakeStoragePlugin> lakeStoragePluginIterator =
-                getAllLakeStoragePlugins(pluginManager);
+        Iterator<LakeStoragePlugin> lakeStoragePluginIterator = getAllLakeStoragePlugins(pluginManager);
 
         while (lakeStoragePluginIterator.hasNext()) {
             LakeStoragePlugin lakeStoragePlugin = lakeStoragePluginIterator.next();
@@ -51,12 +50,10 @@ public class LakeStoragePluginSetUp {
                 "No LakeStoragePlugin can be found for datalake format: " + dataLakeFormat);
     }
 
-    private static Iterator<LakeStoragePlugin> getAllLakeStoragePlugins(
-            @Nullable PluginManager pluginManager) {
-        final Iterator<LakeStoragePlugin> pluginIteratorSPI =
-                ServiceLoader.load(
-                                LakeStoragePlugin.class, LakeStoragePlugin.class.getClassLoader())
-                        .iterator();
+    private static Iterator<LakeStoragePlugin> getAllLakeStoragePlugins(@Nullable PluginManager pluginManager) {
+        final Iterator<LakeStoragePlugin> pluginIteratorSPI = ServiceLoader.load(
+                        LakeStoragePlugin.class, LakeStoragePlugin.class.getClassLoader())
+                .iterator();
         if (pluginManager == null) {
             return pluginIteratorSPI;
         } else {

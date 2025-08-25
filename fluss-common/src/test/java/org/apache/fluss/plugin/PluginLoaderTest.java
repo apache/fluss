@@ -38,11 +38,9 @@ class PluginLoaderTest extends PluginTestBase {
         final URL classpathA = createPluginJarURLFromString(PLUGIN_A);
 
         String[] parentPatterns = {TestSpi.class.getName(), OtherTestSpi.class.getName()};
-        PluginDescriptor pluginDescriptorA =
-                new PluginDescriptor("A", new URL[] {classpathA}, parentPatterns);
+        PluginDescriptor pluginDescriptorA = new PluginDescriptor("A", new URL[] {classpathA}, parentPatterns);
         URLClassLoader pluginClassLoaderA =
-                PluginLoader.createPluginClassLoader(
-                        pluginDescriptorA, PARENT_CLASS_LOADER, new String[0]);
+                PluginLoader.createPluginClassLoader(pluginDescriptorA, PARENT_CLASS_LOADER, new String[0]);
         assertThat(pluginClassLoaderA).isNotEqualTo(PARENT_CLASS_LOADER);
         final PluginLoader pluginLoaderA = new PluginLoader("test-plugin", pluginClassLoaderA);
 
@@ -56,8 +54,7 @@ class PluginLoaderTest extends PluginTestBase {
 
         assertThat(testSpiA.testMethod()).isNotNull();
 
-        assertThat(testSpiA.getClass().getCanonicalName())
-                .isEqualTo(TestServiceA.class.getCanonicalName());
+        assertThat(testSpiA.getClass().getCanonicalName()).isEqualTo(TestServiceA.class.getCanonicalName());
         // The plugin must return the same class loader as the one used to load it.
         assertThat(testSpiA.getClassLoader()).isEqualTo(pluginClassLoaderA);
         assertThat(testSpiA.getClass().getClassLoader()).isEqualTo(pluginClassLoaderA);
@@ -86,11 +83,9 @@ class PluginLoaderTest extends PluginTestBase {
         final URL classpathA = createPluginJarURLFromString(PLUGIN_A);
 
         String[] parentPatterns = {TestSpi.class.getName()};
-        PluginDescriptor pluginDescriptorA =
-                new PluginDescriptor("A", new URL[] {classpathA}, parentPatterns);
+        PluginDescriptor pluginDescriptorA = new PluginDescriptor("A", new URL[] {classpathA}, parentPatterns);
         URLClassLoader pluginClassLoaderA =
-                PluginLoader.createPluginClassLoader(
-                        pluginDescriptorA, PARENT_CLASS_LOADER, new String[0]);
+                PluginLoader.createPluginClassLoader(pluginDescriptorA, PARENT_CLASS_LOADER, new String[0]);
 
         final PluginLoader pluginLoaderA = new PluginLoader("test-plugin", pluginClassLoaderA);
         pluginLoaderA.close();

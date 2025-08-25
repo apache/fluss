@@ -106,11 +106,7 @@ public class LakeTableSnapshot {
     @Override
     public int hashCode() {
         return Objects.hash(
-                snapshotId,
-                tableId,
-                bucketLogStartOffset,
-                bucketLogEndOffset,
-                partitionNameIdByPartitionId);
+                snapshotId, tableId, bucketLogStartOffset, bucketLogEndOffset, partitionNameIdByPartitionId);
     }
 
     @Override

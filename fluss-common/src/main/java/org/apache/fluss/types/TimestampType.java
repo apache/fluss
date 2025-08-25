@@ -54,10 +54,8 @@ public final class TimestampType extends DataType {
     public TimestampType(boolean isNullable, int precision) {
         super(isNullable, DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE);
         if (precision < MIN_PRECISION || precision > MAX_PRECISION) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Timestamp precision must be between %d and %d (both inclusive).",
-                            MIN_PRECISION, MAX_PRECISION));
+            throw new IllegalArgumentException(String.format(
+                    "Timestamp precision must be between %d and %d (both inclusive).", MIN_PRECISION, MAX_PRECISION));
         }
         this.precision = precision;
     }

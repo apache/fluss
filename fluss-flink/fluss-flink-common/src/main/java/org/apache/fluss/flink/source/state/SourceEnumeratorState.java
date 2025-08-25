@@ -33,8 +33,7 @@ public class SourceEnumeratorState {
     // mapping from partition id to partition name
     private final Map<Long, String> assignedPartitions;
 
-    public SourceEnumeratorState(
-            Set<TableBucket> assignedBuckets, Map<Long, String> assignedPartitions) {
+    public SourceEnumeratorState(Set<TableBucket> assignedBuckets, Map<Long, String> assignedPartitions) {
         this.assignedBuckets = assignedBuckets;
         this.assignedPartitions = assignedPartitions;
     }

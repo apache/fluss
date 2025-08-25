@@ -58,16 +58,14 @@ class FlinkSink<InputT> implements Sink<InputT>, SupportsPreWriteTopology<InputT
     @Deprecated
     @Override
     public SinkWriter<InputT> createWriter(InitContext context) throws IOException {
-        FlinkSinkWriter<InputT> flinkSinkWriter =
-                builder.createWriter(context.getMailboxExecutor());
+        FlinkSinkWriter<InputT> flinkSinkWriter = builder.createWriter(context.getMailboxExecutor());
         flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(context.metricGroup()));
         return flinkSinkWriter;
     }
 
     @Override
     public SinkWriter<InputT> createWriter(WriterInitContext context) throws IOException {
-        FlinkSinkWriter<InputT> flinkSinkWriter =
-                builder.createWriter(context.getMailboxExecutor());
+        FlinkSinkWriter<InputT> flinkSinkWriter = builder.createWriter(context.getMailboxExecutor());
         flinkSinkWriter.initialize(InternalSinkWriterMetricGroup.wrap(context.metricGroup()));
         return flinkSinkWriter;
     }
@@ -85,8 +83,7 @@ class FlinkSink<InputT> implements Sink<InputT>, SupportsPreWriteTopology<InputT
     }
 
     @Internal
-    static class AppendSinkWriterBuilder<InputT>
-            implements SinkWriterBuilder<AppendSinkWriter<InputT>, InputT> {
+    static class AppendSinkWriterBuilder<InputT> implements SinkWriterBuilder<AppendSinkWriter<InputT>, InputT> {
 
         private static final long serialVersionUID = 1L;
 
@@ -124,11 +121,7 @@ class FlinkSink<InputT> implements Sink<InputT>, SupportsPreWriteTopology<InputT
         @Override
         public AppendSinkWriter<InputT> createWriter(MailboxExecutor mailboxExecutor) {
             return new AppendSinkWriter<>(
-                    tablePath,
-                    flussConfig,
-                    tableRowType,
-                    mailboxExecutor,
-                    flussSerializationSchema);
+                    tablePath, flussConfig, tableRowType, mailboxExecutor, flussSerializationSchema);
         }
 
         @Override
@@ -152,8 +145,7 @@ class FlinkSink<InputT> implements Sink<InputT>, SupportsPreWriteTopology<InputT
     }
 
     @Internal
-    static class UpsertSinkWriterBuilder<InputT>
-            implements SinkWriterBuilder<UpsertSinkWriter<InputT>, InputT> {
+    static class UpsertSinkWriterBuilder<InputT> implements SinkWriterBuilder<UpsertSinkWriter<InputT>, InputT> {
 
         private static final long serialVersionUID = 1L;
 

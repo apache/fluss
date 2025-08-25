@@ -95,8 +95,7 @@ class CompletedSnapshotStoreTest {
     void testLastSnapshot() throws Exception {
         final TestCompletedSnapshotHandleStore completedSnapshotHandleStore = builder.build();
         CompletedSnapshotStore completedSnapshotStore =
-                createCompletedSnapshotStore(
-                        1, completedSnapshotHandleStore, Collections.emptyList());
+                createCompletedSnapshotStore(1, completedSnapshotHandleStore, Collections.emptyList());
         assertThat(completedSnapshotStore.getLatestSnapshot()).isEmpty();
         CompletedSnapshot snapshot = getSnapshot(1);
         completedSnapshotStore.add(snapshot);
@@ -108,27 +107,25 @@ class CompletedSnapshotStoreTest {
         final int num = 1;
         final CompletableFuture<CompletedSnapshotHandle> addFuture = new CompletableFuture<>();
         List<Tuple2<CompletedSnapshotHandle, String>> snapshotHandles = createSnapshotHandles(num);
-        final TestCompletedSnapshotHandleStore completedSnapshotHandleStore =
-                builder.setAddFunction(
-                                (snapshot) -> {
-                                    addFuture.complete(snapshot);
-                                    return null;
-                                })
-                        .build();
+        final TestCompletedSnapshotHandleStore completedSnapshotHandleStore = builder.setAddFunction((snapshot) -> {
+                    addFuture.complete(snapshot);
+                    return null;
+                })
+                .build();
         final List<CompletedSnapshot> completedSnapshots = mapToCompletedSnapshot(snapshotHandles);
         final CompletedSnapshotStore completedSnapshotStore =
                 createCompletedSnapshotStore(1, completedSnapshotHandleStore, completedSnapshots);
 
         assertThat(completedSnapshotStore.getAllSnapshots()).hasSize(num);
-        assertThat(completedSnapshotStore.getAllSnapshots().get(0).getSnapshotID()).isOne();
+        assertThat(completedSnapshotStore.getAllSnapshots().get(0).getSnapshotID())
+                .isOne();
 
         final long ckpId = 100L;
         final CompletedSnapshot ckp = getSnapshot(ckpId);
         completedSnapshotStore.add(ckp);
 
         // We should persist the completed snapshot to snapshot handle store.
-        final CompletedSnapshotHandle addedCkpHandle =
-                addFuture.get(timeout, TimeUnit.MILLISECONDS);
+        final CompletedSnapshotHandle addedCkpHandle = addFuture.get(timeout, TimeUnit.MILLISECONDS);
 
         assertThat(addedCkpHandle.retrieveCompleteSnapshot().getSnapshotID()).isEqualTo(ckpId);
 
@@ -142,12 +139,10 @@ class CompletedSnapshotStoreTest {
     void testAddSnapshotFailedShouldNotRemoveOldOnes() {
         final int num = 1;
         final String errMsg = "Add to snapshot handle failed.";
-        final TestCompletedSnapshotHandleStore handleStore =
-                builder.setAddFunction(
-                                (ckp) -> {
-                                    throw new FlussException(errMsg);
-                                })
-                        .build();
+        final TestCompletedSnapshotHandleStore handleStore = builder.setAddFunction((ckp) -> {
+                    throw new FlussException(errMsg);
+                })
+                .build();
 
         List<Tuple2<CompletedSnapshotHandle, String>> snapshotHandles = createSnapshotHandles(num);
         final List<CompletedSnapshot> completedSnapshots = mapToCompletedSnapshot(snapshotHandles);
@@ -155,7 +150,8 @@ class CompletedSnapshotStoreTest {
                 createCompletedSnapshotStore(1, handleStore, completedSnapshots);
 
         assertThat(completedSnapshotStore.getAllSnapshots()).hasSize(num);
-        assertThat(completedSnapshotStore.getAllSnapshots().get(0).getSnapshotID()).isOne();
+        assertThat(completedSnapshotStore.getAllSnapshots().get(0).getSnapshotID())
+                .isOne();
 
         final long ckpId = 100L;
         final CompletedSnapshot ckp = getSnapshot(ckpId);
@@ -167,22 +163,22 @@ class CompletedSnapshotStoreTest {
 
         // Check the old snapshot still exists.
         assertThat(completedSnapshotStore.getAllSnapshots()).hasSize(num);
-        assertThat(completedSnapshotStore.getAllSnapshots().get(0).getSnapshotID()).isOne();
-        assertThat(completedSnapshotStore.getLatestSnapshot().get().getSnapshotID()).isOne();
+        assertThat(completedSnapshotStore.getAllSnapshots().get(0).getSnapshotID())
+                .isOne();
+        assertThat(completedSnapshotStore.getLatestSnapshot().get().getSnapshotID())
+                .isOne();
     }
 
     private List<CompletedSnapshot> mapToCompletedSnapshot(
             List<Tuple2<CompletedSnapshotHandle, String>> snapshotHandles) {
         return snapshotHandles.stream()
-                .map(
-                        handle -> {
-                            try {
-                                return handle.f0.retrieveCompleteSnapshot();
-                            } catch (Exception e) {
-                                throw new FlussRuntimeException(
-                                        "Fail to retrieve complete snapshot.");
-                            }
-                        })
+                .map(handle -> {
+                    try {
+                        return handle.f0.retrieveCompleteSnapshot();
+                    } catch (Exception e) {
+                        throw new FlussRuntimeException("Fail to retrieve complete snapshot.");
+                    }
+                })
                 .collect(Collectors.toList());
     }
 
@@ -196,9 +192,7 @@ class CompletedSnapshotStoreTest {
     }
 
     private void testSnapshotRetention(
-            int numToRetain,
-            List<CompletedSnapshot> completed,
-            List<CompletedSnapshot> expectedRetained)
+            int numToRetain, List<CompletedSnapshot> completed, List<CompletedSnapshot> expectedRetained)
             throws Exception {
         List<Tuple2<CompletedSnapshotHandle, String>> snapshotHandles = createSnapshotHandles(3);
         final List<CompletedSnapshot> completedSnapshots = mapToCompletedSnapshot(snapshotHandles);
@@ -219,31 +213,23 @@ class CompletedSnapshotStoreTest {
 
         SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
         return new CompletedSnapshotStore(
-                numToRetain,
-                sharedKvFileRegistry,
-                completedSnapshots,
-                snapshotHandleStore,
-                executorService);
+                numToRetain, sharedKvFileRegistry, completedSnapshots, snapshotHandleStore, executorService);
     }
 
     private List<Tuple2<CompletedSnapshotHandle, String>> createSnapshotHandles(int num) {
         return createSnapshotHandles(num, Collections.emptySet());
     }
 
-    private List<Tuple2<CompletedSnapshotHandle, String>> createSnapshotHandles(
-            int num, Set<Integer> failSnapshots) {
+    private List<Tuple2<CompletedSnapshotHandle, String>> createSnapshotHandles(int num, Set<Integer> failSnapshots) {
         final List<Tuple2<CompletedSnapshotHandle, String>> stateHandles = new ArrayList<>();
         for (int i = 1; i <= num; i++) {
-            final CompletedSnapshot completedSnapshot =
-                    new CompletedSnapshot(
-                            new TableBucket(1, 1),
-                            i,
-                            new FsPath("test_snapshot"),
-                            new KvSnapshotHandle(
-                                    Collections.emptyList(), Collections.emptyList(), -1));
+            final CompletedSnapshot completedSnapshot = new CompletedSnapshot(
+                    new TableBucket(1, 1),
+                    i,
+                    new FsPath("test_snapshot"),
+                    new KvSnapshotHandle(Collections.emptyList(), Collections.emptyList(), -1));
             final CompletedSnapshotHandle snapshotStateHandle =
-                    new TestingCompletedSnapshotHandle(
-                            completedSnapshot, failSnapshots.contains(num));
+                    new TestingCompletedSnapshotHandle(completedSnapshot, failSnapshots.contains(num));
             stateHandles.add(new Tuple2<>(snapshotStateHandle, String.valueOf(i)));
         }
         return stateHandles;

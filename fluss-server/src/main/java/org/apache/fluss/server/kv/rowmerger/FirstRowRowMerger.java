@@ -39,8 +39,7 @@ public class FirstRowRowMerger implements RowMerger {
     @Nullable
     @Override
     public BinaryRow delete(BinaryRow oldRow) {
-        throw new UnsupportedOperationException(
-                "DELETE is not supported for the first_row merge engine.");
+        throw new UnsupportedOperationException("DELETE is not supported for the first_row merge engine.");
     }
 
     @Override
@@ -53,8 +52,7 @@ public class FirstRowRowMerger implements RowMerger {
         if (targetColumns == null) {
             return this;
         } else {
-            throw new UnsupportedOperationException(
-                    "Partial update is not supported for the first_row merge engine.");
+            throw new UnsupportedOperationException("Partial update is not supported for the first_row merge engine.");
         }
     }
 }

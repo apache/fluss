@@ -72,8 +72,7 @@ public class FileLogProjection {
     private static final int ARROW_IPC_CONTINUATION_LENGTH = 4;
     private static final int ARROW_IPC_METADATA_SIZE_OFFSET = ARROW_IPC_CONTINUATION_LENGTH;
     private static final int ARROW_IPC_METADATA_SIZE_LENGTH = 4;
-    private static final int ARROW_HEADER_SIZE =
-            ARROW_IPC_CONTINUATION_LENGTH + ARROW_IPC_METADATA_SIZE_LENGTH;
+    private static final int ARROW_HEADER_SIZE = ARROW_IPC_CONTINUATION_LENGTH + ARROW_IPC_METADATA_SIZE_LENGTH;
 
     final Map<Long, ProjectionInfo> projectionsCache = new HashMap<>();
     ProjectionInfo currentProjection;
@@ -95,10 +94,7 @@ public class FileLogProjection {
     }
 
     public void setCurrentProjection(
-            long tableId,
-            RowType schema,
-            ArrowCompressionInfo compressionInfo,
-            int[] selectedFields) {
+            long tableId, RowType schema, ArrowCompressionInfo compressionInfo, int[] selectedFields) {
         if (projectionsCache.containsKey(tableId)) {
             // the schema and projection should identical for the same table id.
             currentProjection = projectionsCache.get(tableId);
@@ -138,17 +134,15 @@ public class FileLogProjection {
         Schema projectedArrowSchema = ArrowUtils.toArrowSchema(schema.project(selectedFields));
         ArrowBodyCompression bodyCompression =
                 CompressionUtil.createBodyCompression(compressionInfo.createCompressionCodec());
-        int metadataLength =
-                ArrowUtils.estimateArrowMetadataLength(projectedArrowSchema, bodyCompression);
-        currentProjection =
-                new ProjectionInfo(
-                        nodesProjection,
-                        buffersProjection,
-                        bufferIndex,
-                        schema,
-                        metadataLength,
-                        bodyCompression,
-                        selectedFields);
+        int metadataLength = ArrowUtils.estimateArrowMetadataLength(projectedArrowSchema, bodyCompression);
+        currentProjection = new ProjectionInfo(
+                nodesProjection,
+                buffersProjection,
+                bufferIndex,
+                schema,
+                metadataLength,
+                bodyCompression,
+                selectedFields);
         projectionsCache.put(tableId, currentProjection);
     }
 
@@ -158,8 +152,7 @@ public class FileLogProjection {
      *
      * @return the projected records.
      */
-    public BytesViewLogRecords project(FileChannel channel, int start, int end, int maxBytes)
-            throws IOException {
+    public BytesViewLogRecords project(FileChannel channel, int start, int end, int maxBytes) throws IOException {
         checkNotNull(currentProjection, "There is no projection registered yet.");
         MultiBytesView.Builder builder = MultiBytesView.builder();
         int position = start;
@@ -188,8 +181,7 @@ public class FileLogProjection {
                 continue;
             }
 
-            boolean isAppendOnly =
-                    (logHeaderBuffer.get(ATTRIBUTES_OFFSET) & APPEND_ONLY_FLAG_MASK) > 0;
+            boolean isAppendOnly = (logHeaderBuffer.get(ATTRIBUTES_OFFSET) & APPEND_ONLY_FLAG_MASK) > 0;
 
             final int changeTypeBytes;
             final long arrowHeaderOffset;
@@ -209,41 +201,30 @@ public class FileLogProjection {
 
             resizeArrowMetadataBuffer(arrowMetadataSize);
             arrowMetadataBuffer.rewind();
-            readFullyOrFail(
-                    channel,
-                    arrowMetadataBuffer,
-                    arrowHeaderOffset + ARROW_HEADER_SIZE,
-                    "arrow metadata");
+            readFullyOrFail(channel, arrowMetadataBuffer, arrowHeaderOffset + ARROW_HEADER_SIZE, "arrow metadata");
 
             arrowMetadataBuffer.rewind();
             Message metadata = Message.getRootAsMessage(arrowMetadataBuffer);
-            ProjectedArrowBatch projectedArrowBatch =
-                    projectArrowBatch(
-                            metadata,
-                            currentProjection.nodesProjection,
-                            currentProjection.buffersProjection,
-                            currentProjection.bufferCount);
+            ProjectedArrowBatch projectedArrowBatch = projectArrowBatch(
+                    metadata,
+                    currentProjection.nodesProjection,
+                    currentProjection.buffersProjection,
+                    currentProjection.bufferCount);
             long arrowBodyLength = projectedArrowBatch.bodyLength();
 
-            int newBatchSizeInBytes =
-                    RECORD_BATCH_HEADER_SIZE
-                            + changeTypeBytes
-                            + currentProjection.arrowMetadataLength
-                            + (int) arrowBodyLength; // safe to cast to int
+            int newBatchSizeInBytes = RECORD_BATCH_HEADER_SIZE
+                    + changeTypeBytes
+                    + currentProjection.arrowMetadataLength
+                    + (int) arrowBodyLength; // safe to cast to int
             if (newBatchSizeInBytes > maxBytes) {
                 // the remaining bytes in the file are not enough to read a full batch
                 return new BytesViewLogRecords(builder.build());
             }
 
             // 3. create new arrow batch metadata which already projected.
-            byte[] headerMetadata =
-                    serializeArrowRecordBatchMetadata(
-                            projectedArrowBatch,
-                            arrowBodyLength,
-                            currentProjection.bodyCompression);
-            checkState(
-                    headerMetadata.length == currentProjection.arrowMetadataLength,
-                    "Invalid metadata length");
+            byte[] headerMetadata = serializeArrowRecordBatchMetadata(
+                    projectedArrowBatch, arrowBodyLength, currentProjection.bodyCompression);
+            checkState(headerMetadata.length == currentProjection.arrowMetadataLength, "Invalid metadata length");
 
             // 4. update and copy log batch header
             logHeaderBuffer.position(LENGTH_OFFSET);
@@ -261,9 +242,7 @@ public class FileLogProjection {
             builder.addBytes(headerMetadata);
             final long bufferOffset = arrowHeaderOffset + ARROW_HEADER_SIZE + arrowMetadataSize;
             projectedArrowBatch.buffers.forEach(
-                    b ->
-                            builder.addBytes(
-                                    channel, bufferOffset + b.getOffset(), (int) b.getSize()));
+                    b -> builder.addBytes(channel, bufferOffset + b.getOffset(), (int) b.getSize()));
 
             maxBytes -= newBatchSizeInBytes;
             position += batchSizeInBytes;
@@ -285,12 +264,9 @@ public class FileLogProjection {
         }
         long bodyLength = metadata.bodyLength();
         long newOffset = 0L;
-        for (int i = buffersProjection.nextSetBit(0);
-                i >= 0;
-                i = buffersProjection.nextSetBit(i + 1)) {
+        for (int i = buffersProjection.nextSetBit(0); i >= 0; i = buffersProjection.nextSetBit(i + 1)) {
             Buffer buf = recordBatch.buffers(i);
-            long nextOffset =
-                    i < bufferCount - 1 ? recordBatch.buffers(i + 1).offset() : bodyLength;
+            long nextOffset = i < bufferCount - 1 ? recordBatch.buffers(i + 1).offset() : bodyLength;
             long paddedLength = nextOffset - buf.offset();
             selectedBuffers.add(new ArrowBuffer(buf.offset(), paddedLength));
             newBufferLayouts.add(new ArrowBuffer(newOffset, buf.length()));
@@ -308,16 +284,10 @@ public class FileLogProjection {
      * @see ArrowRecordBatch#writeTo(FlatBufferBuilder)
      */
     private byte[] serializeArrowRecordBatchMetadata(
-            ProjectedArrowBatch batch, long arrowBodyLength, ArrowBodyCompression bodyCompression)
-            throws IOException {
+            ProjectedArrowBatch batch, long arrowBodyLength, ArrowBodyCompression bodyCompression) throws IOException {
         outputStream.reset();
         ArrowUtils.serializeArrowRecordBatchMetadata(
-                writeChannel,
-                batch.numRecords,
-                batch.nodes,
-                batch.buffersLayout,
-                bodyCompression,
-                arrowBodyLength);
+                writeChannel, batch.numRecords, batch.nodes, batch.buffersLayout, bodyCompression, arrowBodyLength);
         return outputStream.toByteArray();
     }
 
@@ -332,9 +302,7 @@ public class FileLogProjection {
 
     /** Flatten fields by a pre-order depth-first traversal of the fields in the schema. */
     private void flattenFields(
-            List<Field> arrowFields,
-            BitSet selectedFields,
-            List<Tuple2<Field, Boolean>> flattenedFields) {
+            List<Field> arrowFields, BitSet selectedFields, List<Tuple2<Field, Boolean>> flattenedFields) {
         for (int i = 0; i < arrowFields.size(); i++) {
             Field field = arrowFields.get(i);
             boolean selected = selectedFields.get(i);
@@ -350,19 +318,17 @@ public class FileLogProjection {
         for (int i : selectedIndexes) {
             if (i < prev) {
                 throw new InvalidColumnProjectionException(
-                        "The projection indexes should be in field order, but is "
-                                + Arrays.toString(selectedIndexes));
+                        "The projection indexes should be in field order, but is " + Arrays.toString(selectedIndexes));
             } else if (i == prev) {
                 throw new InvalidColumnProjectionException(
                         "The projection indexes should not contain duplicated fields, but is "
                                 + Arrays.toString(selectedIndexes));
             } else if (i >= length) {
-                throw new InvalidColumnProjectionException(
-                        "Projected fields "
-                                + Arrays.toString(selectedIndexes)
-                                + " is out of bound for schema with "
-                                + length
-                                + " fields.");
+                throw new InvalidColumnProjectionException("Projected fields "
+                        + Arrays.toString(selectedIndexes)
+                        + " is out of bound for schema with "
+                        + length
+                        + " fields.");
             }
             bitset.set(i);
             prev = i;

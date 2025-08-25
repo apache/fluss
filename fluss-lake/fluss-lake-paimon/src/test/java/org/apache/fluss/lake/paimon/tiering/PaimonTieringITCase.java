@@ -87,14 +87,11 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
         // check data in paimon
         checkDataInPaimonPrimayKeyTable(t1, rows);
         // check snapshot property in paimon
-        Map<String, String> properties =
-                new HashMap<String, String>() {
-                    {
-                        put(
-                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                "[{\"bucket_id\":0,\"log_offset\":3}]");
-                    }
-                };
+        Map<String, String> properties = new HashMap<String, String>() {
+            {
+                put(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY, "[{\"bucket_id\":0,\"log_offset\":3}]");
+            }
+        };
         checkSnapshotPropertyInPaimon(t1, properties);
 
         // then, create another log table
@@ -131,15 +128,13 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
 
         // then create partitioned table and wait partitions are ready
         TablePath partitionedTablePath = TablePath.of(DEFAULT_DB, "partitionedTable");
-        Tuple2<Long, TableDescriptor> tableIdAndDescriptor =
-                createPartitionedTable(partitionedTablePath);
+        Tuple2<Long, TableDescriptor> tableIdAndDescriptor = createPartitionedTable(partitionedTablePath);
         Map<Long, String> partitionNameByIds = waitUntilPartitions(partitionedTablePath);
 
         // now, write rows into partitioned table
         TableDescriptor partitionedTableDescriptor = tableIdAndDescriptor.f1;
         Map<String, List<InternalRow>> writtenRowsByPartition =
-                writeRowsIntoPartitionedTable(
-                        partitionedTablePath, partitionedTableDescriptor, partitionNameByIds);
+                writeRowsIntoPartitionedTable(partitionedTablePath, partitionedTableDescriptor, partitionNameByIds);
         long tableId = tableIdAndDescriptor.f0;
 
         // wait until synced to paimon
@@ -159,56 +154,47 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
                     0);
         }
 
-        properties =
-                new HashMap<String, String>() {
-                    {
-                        put(
-                                FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                "["
-                                        + "{\"partition_id\":0,\"bucket_id\":0,\"partition_name\":\"date=2025\",\"log_offset\":3},"
-                                        + "{\"partition_id\":1,\"bucket_id\":0,\"partition_name\":\"date=2026\",\"log_offset\":3}"
-                                        + "]");
-                    }
-                };
+        properties = new HashMap<String, String>() {
+            {
+                put(
+                        FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                        "["
+                                + "{\"partition_id\":0,\"bucket_id\":0,\"partition_name\":\"date=2025\",\"log_offset\":3},"
+                                + "{\"partition_id\":1,\"bucket_id\":0,\"partition_name\":\"date=2026\",\"log_offset\":3}"
+                                + "]");
+            }
+        };
         checkSnapshotPropertyInPaimon(partitionedTablePath, properties);
 
         jobClient.cancel().get();
     }
 
-    private Tuple2<Long, TableDescriptor> createPartitionedTable(TablePath partitionedTablePath)
-            throws Exception {
-        TableDescriptor partitionedTableDescriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("id", DataTypes.INT())
-                                        .column("name", DataTypes.STRING())
-                                        .column("date", DataTypes.STRING())
-                                        .build())
-                        .partitionedBy("date")
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                        .property(
-                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
-                                AutoPartitionTimeUnit.YEAR)
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
-                        .build();
-        return Tuple2.of(
-                createTable(partitionedTablePath, partitionedTableDescriptor),
-                partitionedTableDescriptor);
+    private Tuple2<Long, TableDescriptor> createPartitionedTable(TablePath partitionedTablePath) throws Exception {
+        TableDescriptor partitionedTableDescriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("name", DataTypes.STRING())
+                        .column("date", DataTypes.STRING())
+                        .build())
+                .partitionedBy("date")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR)
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                .build();
+        return Tuple2.of(createTable(partitionedTablePath, partitionedTableDescriptor), partitionedTableDescriptor);
     }
 
     private void checkDataInPaimonAppendOnlyTable(
-            TablePath tablePath, List<InternalRow> expectedRows, long startingOffset)
-            throws Exception {
-        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
-                getPaimonRowCloseableIterator(tablePath);
+            TablePath tablePath, List<InternalRow> expectedRows, long startingOffset) throws Exception {
+        Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator = getPaimonRowCloseableIterator(tablePath);
         Iterator<InternalRow> flussRowIterator = expectedRows.iterator();
         while (paimonRowIterator.hasNext()) {
             org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
             InternalRow flussRow = flussRowIterator.next();
             assertThat(row.getInt(0)).isEqualTo(flussRow.getInt(0));
-            assertThat(row.getString(1).toString()).isEqualTo(flussRow.getString(1).toString());
+            assertThat(row.getString(1).toString())
+                    .isEqualTo(flussRow.getString(1).toString());
             // the idx 2 is __bucket, so use 3
             assertThat(row.getLong(3)).isEqualTo(startingOffset++);
         }
@@ -216,10 +202,7 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
     }
 
     private void checkDataInPaimonAppendOnlyPartitionedTable(
-            TablePath tablePath,
-            Map<String, String> partitionSpec,
-            List<InternalRow> expectedRows,
-            long startingOffset)
+            TablePath tablePath, Map<String, String> partitionSpec, List<InternalRow> expectedRows, long startingOffset)
             throws Exception {
         Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
                 getPaimonRowCloseableIterator(tablePath, partitionSpec);
@@ -228,8 +211,10 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
             org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
             InternalRow flussRow = flussRowIterator.next();
             assertThat(row.getInt(0)).isEqualTo(flussRow.getInt(0));
-            assertThat(row.getString(1).toString()).isEqualTo(flussRow.getString(1).toString());
-            assertThat(row.getString(2).toString()).isEqualTo(flussRow.getString(2).toString());
+            assertThat(row.getString(1).toString())
+                    .isEqualTo(flussRow.getString(1).toString());
+            assertThat(row.getString(2).toString())
+                    .isEqualTo(flussRow.getString(2).toString());
             // the idx 3 is __bucket, so use 4
             assertThat(row.getLong(4)).isEqualTo(startingOffset++);
         }
@@ -238,18 +223,15 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
 
     private CloseableIterator<org.apache.paimon.data.InternalRow> getPaimonRowCloseableIterator(
             TablePath tablePath, Map<String, String> partitionSpec) throws Exception {
-        Identifier tableIdentifier =
-                Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
+        Identifier tableIdentifier = Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
 
         FileStoreTable table = (FileStoreTable) paimonCatalog.getTable(tableIdentifier);
 
-        RecordReader<org.apache.paimon.data.InternalRow> reader =
-                table.newRead()
-                        .createReader(
-                                table.newReadBuilder()
-                                        .withPartitionFilter(partitionSpec)
-                                        .newScan()
-                                        .plan());
+        RecordReader<org.apache.paimon.data.InternalRow> reader = table.newRead()
+                .createReader(table.newReadBuilder()
+                        .withPartitionFilter(partitionSpec)
+                        .newScan()
+                        .plan());
         return reader.toCloseableIterator();
     }
 }

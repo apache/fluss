@@ -39,35 +39,29 @@ import java.util.stream.Stream;
 public class DependencyParser {
 
     private static final Pattern DEPENDENCY_COPY_NEXT_MODULE_PATTERN =
-            Pattern.compile(
-                    ".*maven-dependency-plugin:[^:]+:copy .* @ (?<module>[^ _]+)(?:_[0-9.]+)? --.*");
+            Pattern.compile(".*maven-dependency-plugin:[^:]+:copy .* @ (?<module>[^ _]+)(?:_[0-9.]+)? --.*");
 
     private static final Pattern DEPENDENCY_TREE_NEXT_MODULE_PATTERN =
-            Pattern.compile(
-                    ".*maven-dependency-plugin:[^:]+:tree .* @ (?<module>[^ _]+)(?:_[0-9.]+)? --.*");
+            Pattern.compile(".*maven-dependency-plugin:[^:]+:tree .* @ (?<module>[^ _]+)(?:_[0-9.]+)? --.*");
 
     /** See {@code DependencyParserTreeTest} for examples. */
-    private static final Pattern DEPENDENCY_TREE_ITEM_PATTERN =
-            Pattern.compile(
-                    ".* +"
-                            + "(?<groupId>.*?):"
-                            + "(?<artifactId>.*?):"
-                            + "(?<type>.*?):"
-                            + "(?:(?<classifier>.*?):)?"
-                            + "(?<version>.*?):"
-                            + "(?<scope>[^ ]*)"
-                            + "(?<optional> \\(optional\\))?");
+    private static final Pattern DEPENDENCY_TREE_ITEM_PATTERN = Pattern.compile(".* +"
+            + "(?<groupId>.*?):"
+            + "(?<artifactId>.*?):"
+            + "(?<type>.*?):"
+            + "(?:(?<classifier>.*?):)?"
+            + "(?<version>.*?):"
+            + "(?<scope>[^ ]*)"
+            + "(?<optional> \\(optional\\))?");
 
     /** See {@code DependencyParserCopyTest} for examples. */
-    private static final Pattern DEPENDENCY_COPY_ITEM_PATTERN =
-            Pattern.compile(
-                    ".* Configured Artifact: +"
-                            + "(?<groupId>.*?):"
-                            + "(?<artifactId>.*?):"
-                            + "(?:(?<classifier>.*?):)?"
-                            + "(?<version>.*?):"
-                            + "(?:\\?:)?" // unknown cause; e.g.: javax.xml.bind:jaxb-api:?:jar
-                            + "(?<type>.*)");
+    private static final Pattern DEPENDENCY_COPY_ITEM_PATTERN = Pattern.compile(".* Configured Artifact: +"
+            + "(?<groupId>.*?):"
+            + "(?<artifactId>.*?):"
+            + "(?:(?<classifier>.*?):)?"
+            + "(?<version>.*?):"
+            + "(?:\\?:)?" // unknown cause; e.g.: javax.xml.bind:jaxb-api:?:jar
+            + "(?<type>.*)");
 
     /**
      * Parses the output of a Maven build where {@code dependency:copy} was used, and returns a set
@@ -75,8 +69,7 @@ public class DependencyParser {
      *
      * <p>The returned dependencies will NEVER contain the scope or optional flag.
      */
-    public static Map<String, Set<Dependency>> parseDependencyCopyOutput(Path buildOutput)
-            throws IOException {
+    public static Map<String, Set<Dependency>> parseDependencyCopyOutput(Path buildOutput) throws IOException {
         return processLines(buildOutput, DependencyParser::parseDependencyCopyOutput);
     }
 
@@ -84,13 +77,11 @@ public class DependencyParser {
      * Parses the output of a Maven build where {@code dependency:tree} was used, and returns a set
      * of dependencies for each module.
      */
-    public static Map<String, DependencyTree> parseDependencyTreeOutput(Path buildOutput)
-            throws IOException {
+    public static Map<String, DependencyTree> parseDependencyTreeOutput(Path buildOutput) throws IOException {
         return processLines(buildOutput, DependencyParser::parseDependencyTreeOutput);
     }
 
-    private static <X> X processLines(Path buildOutput, Function<Stream<String>, X> processor)
-            throws IOException {
+    private static <X> X processLines(Path buildOutput, Function<Stream<String>, X> processor) throws IOException {
         try (Stream<String> lines = Files.lines(buildOutput)) {
             return processor.apply(lines.filter(line -> line.contains("[INFO]")));
         }
@@ -98,16 +89,12 @@ public class DependencyParser {
 
     static Map<String, Set<Dependency>> parseDependencyCopyOutput(Stream<String> lines) {
         return ParserUtils.parsePluginOutput(
-                lines,
-                DEPENDENCY_COPY_NEXT_MODULE_PATTERN,
-                DependencyParser::parseCopyDependencyBlock);
+                lines, DEPENDENCY_COPY_NEXT_MODULE_PATTERN, DependencyParser::parseCopyDependencyBlock);
     }
 
     static Map<String, DependencyTree> parseDependencyTreeOutput(Stream<String> lines) {
         return ParserUtils.parsePluginOutput(
-                lines,
-                DEPENDENCY_TREE_NEXT_MODULE_PATTERN,
-                DependencyParser::parseTreeDependencyBlock);
+                lines, DEPENDENCY_TREE_NEXT_MODULE_PATTERN, DependencyParser::parseTreeDependencyBlock);
     }
 
     private static Set<Dependency> parseCopyDependencyBlock(Iterator<String> block) {
@@ -179,12 +166,11 @@ public class DependencyParser {
             return Optional.empty();
         }
 
-        return Optional.of(
-                Dependency.create(
-                        dependencyMatcher.group("groupId"),
-                        dependencyMatcher.group("artifactId"),
-                        dependencyMatcher.group("version"),
-                        dependencyMatcher.group("classifier")));
+        return Optional.of(Dependency.create(
+                dependencyMatcher.group("groupId"),
+                dependencyMatcher.group("artifactId"),
+                dependencyMatcher.group("version"),
+                dependencyMatcher.group("classifier")));
     }
 
     static Optional<Dependency> parseTreeDependency(String line) {
@@ -193,14 +179,13 @@ public class DependencyParser {
             return Optional.empty();
         }
 
-        return Optional.of(
-                Dependency.create(
-                        dependencyMatcher.group("groupId"),
-                        dependencyMatcher.group("artifactId"),
-                        dependencyMatcher.group("version"),
-                        dependencyMatcher.group("classifier"),
-                        dependencyMatcher.group("scope"),
-                        dependencyMatcher.group("optional") != null));
+        return Optional.of(Dependency.create(
+                dependencyMatcher.group("groupId"),
+                dependencyMatcher.group("artifactId"),
+                dependencyMatcher.group("version"),
+                dependencyMatcher.group("classifier"),
+                dependencyMatcher.group("scope"),
+                dependencyMatcher.group("optional") != null));
     }
 
     /**

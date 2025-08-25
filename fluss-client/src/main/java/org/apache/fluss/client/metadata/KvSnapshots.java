@@ -36,7 +36,8 @@ public class KvSnapshots {
 
     private final long tableId;
 
-    @Nullable private final Long partitionId;
+    @Nullable
+    private final Long partitionId;
 
     // map from bucket id to the latest snapshot id,
     // null or empty if there is no snapshot for this bucket
@@ -48,10 +49,7 @@ public class KvSnapshots {
     private final Map<Integer, Long> logOffsets;
 
     public KvSnapshots(
-            long tableId,
-            @Nullable Long partitionId,
-            Map<Integer, Long> snapshotIds,
-            Map<Integer, Long> logOffsets) {
+            long tableId, @Nullable Long partitionId, Map<Integer, Long> snapshotIds, Map<Integer, Long> logOffsets) {
         this.tableId = tableId;
         this.partitionId = partitionId;
         this.snapshotIds = snapshotIds;

@@ -67,33 +67,28 @@ public class RemoteLogTestBase extends ReplicaTestBase {
     protected LogTablet makeLogTabletAndAddSegments(boolean partitionTable) throws Exception {
         if (partitionTable) {
             return makeReplicaAndAddSegments(
-                            DATA1_PHYSICAL_TABLE_PATH_PA_2024,
-                            new TableBucket(DATA1_TABLE_ID, (long) 0, 0),
-                            5)
+                            DATA1_PHYSICAL_TABLE_PATH_PA_2024, new TableBucket(DATA1_TABLE_ID, (long) 0, 0), 5)
                     .getLogTablet();
         } else {
-            return makeReplicaAndAddSegments(
-                            DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 0), 5)
+            return makeReplicaAndAddSegments(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 0), 5)
                     .getLogTablet();
         }
     }
 
-    private Replica makeReplicaAndAddSegments(
-            PhysicalTablePath physicalTablePath, TableBucket tb, int segmentSize) throws Exception {
+    private Replica makeReplicaAndAddSegments(PhysicalTablePath physicalTablePath, TableBucket tb, int segmentSize)
+            throws Exception {
         Replica replica = makeLogReplica(physicalTablePath, tb);
-        replica.makeLeader(
-                new NotifyLeaderAndIsrData(
-                        physicalTablePath,
-                        tb,
-                        Collections.singletonList(0),
-                        new LeaderAndIsr(0, 0, Collections.singletonList(0), 0, 0)));
+        replica.makeLeader(new NotifyLeaderAndIsrData(
+                physicalTablePath,
+                tb,
+                Collections.singletonList(0),
+                new LeaderAndIsr(0, 0, Collections.singletonList(0), 0, 0)));
         addMultiSegmentsToLogTablet(replica.getLogTablet(), segmentSize);
         return replica;
     }
 
     protected static RemoteLogSegment copyLogSegmentToRemote(
-            LogTablet logTablet, RemoteLogStorage remoteLogStorage, int segmentIndex)
-            throws Exception {
+            LogTablet logTablet, RemoteLogStorage remoteLogStorage, int segmentIndex) throws Exception {
         PhysicalTablePath tp = logTablet.getPhysicalTablePath();
         TableBucket tb = logTablet.getTableBucket();
         List<LogSegment> segments = logTablet.getSegments();
@@ -102,24 +97,22 @@ public class RemoteLogTestBase extends ReplicaTestBase {
         long nextOffset = segments.get(segmentIndex + 1).getBaseOffset();
         File writerIdSnapshotFile =
                 logTablet.writerStateManager().fetchSnapshot(nextOffset).orElse(null);
-        LogSegmentFiles logSegmentFiles =
-                new LogSegmentFiles(
-                        segment.getFileLogRecords().file().toPath(),
-                        segment.offsetIndex().file().toPath(),
-                        segment.timeIndex().file().toPath(),
-                        writerIdSnapshotFile.toPath());
+        LogSegmentFiles logSegmentFiles = new LogSegmentFiles(
+                segment.getFileLogRecords().file().toPath(),
+                segment.offsetIndex().file().toPath(),
+                segment.timeIndex().file().toPath(),
+                writerIdSnapshotFile.toPath());
 
         UUID remoteLogSegmentId = UUID.randomUUID();
-        RemoteLogSegment remoteLogSegment =
-                RemoteLogSegment.Builder.builder()
-                        .remoteLogSegmentId(remoteLogSegmentId)
-                        .remoteLogStartOffset(segment.getBaseOffset())
-                        .remoteLogEndOffset(nextOffset)
-                        .maxTimestamp(segment.maxTimestampSoFar())
-                        .segmentSizeInBytes(segment.getFileLogRecords().sizeInBytes())
-                        .tableBucket(tb)
-                        .physicalTablePath(tp)
-                        .build();
+        RemoteLogSegment remoteLogSegment = RemoteLogSegment.Builder.builder()
+                .remoteLogSegmentId(remoteLogSegmentId)
+                .remoteLogStartOffset(segment.getBaseOffset())
+                .remoteLogEndOffset(nextOffset)
+                .maxTimestamp(segment.maxTimestampSoFar())
+                .segmentSizeInBytes(segment.getFileLogRecords().sizeInBytes())
+                .tableBucket(tb)
+                .physicalTablePath(tp)
+                .build();
 
         remoteLogStorage.copyLogSegmentFiles(remoteLogSegment, logSegmentFiles);
         return remoteLogSegment;
@@ -134,23 +127,21 @@ public class RemoteLogTestBase extends ReplicaTestBase {
 
     protected static List<RemoteLogSegment> createRemoteLogSegmentList(LogTablet logTablet) {
         return logTablet.getSegments().stream()
-                .map(
-                        segment -> {
-                            try {
-                                return RemoteLogSegment.Builder.builder()
-                                        .remoteLogSegmentId(UUID.randomUUID())
-                                        .remoteLogStartOffset(segment.getBaseOffset())
-                                        .remoteLogEndOffset(segment.getBaseOffset() + DATA1.size())
-                                        .maxTimestamp(segment.maxTimestampSoFar())
-                                        .segmentSizeInBytes(
-                                                segment.getFileLogRecords().sizeInBytes())
-                                        .tableBucket(logTablet.getTableBucket())
-                                        .physicalTablePath(logTablet.getPhysicalTablePath())
-                                        .build();
-                            } catch (IOException e) {
-                                throw new RuntimeException(e);
-                            }
-                        })
+                .map(segment -> {
+                    try {
+                        return RemoteLogSegment.Builder.builder()
+                                .remoteLogSegmentId(UUID.randomUUID())
+                                .remoteLogStartOffset(segment.getBaseOffset())
+                                .remoteLogEndOffset(segment.getBaseOffset() + DATA1.size())
+                                .maxTimestamp(segment.maxTimestampSoFar())
+                                .segmentSizeInBytes(segment.getFileLogRecords().sizeInBytes())
+                                .tableBucket(logTablet.getTableBucket())
+                                .physicalTablePath(logTablet.getPhysicalTablePath())
+                                .build();
+                    } catch (IOException e) {
+                        throw new RuntimeException(e);
+                    }
+                })
                 .collect(Collectors.toList());
     }
 }

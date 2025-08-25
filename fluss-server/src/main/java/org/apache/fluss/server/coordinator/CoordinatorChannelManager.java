@@ -85,16 +85,10 @@ public class CoordinatorChannelManager {
     }
 
     public void removeTabletServer(Integer serverId) {
-        rpcGatewayManager
-                .removeServer(serverId)
-                .exceptionally(
-                        throwable -> {
-                            LOG.debug(
-                                    "Failed to remove the server {} from server gateway manager.",
-                                    serverId,
-                                    throwable);
-                            return null;
-                        });
+        rpcGatewayManager.removeServer(serverId).exceptionally(throwable -> {
+            LOG.debug("Failed to remove the server {} from server gateway manager.", serverId, throwable);
+            return null;
+        });
     }
 
     /** Send NotifyLeaderAndIsr request to the server and handle the response. */
@@ -103,10 +97,7 @@ public class CoordinatorChannelManager {
             NotifyLeaderAndIsrRequest notifyLeaderAndIsrRequest,
             BiConsumer<NotifyLeaderAndIsrResponse, ? super Throwable> responseConsumer) {
         sendRequest(
-                receiveServerId,
-                notifyLeaderAndIsrRequest,
-                TabletServerGateway::notifyLeaderAndIsr,
-                responseConsumer);
+                receiveServerId, notifyLeaderAndIsrRequest, TabletServerGateway::notifyLeaderAndIsr, responseConsumer);
     }
 
     /** Send StopBucketReplicaRequest to the server and handle the response. */
@@ -114,11 +105,7 @@ public class CoordinatorChannelManager {
             int receiveServerId,
             StopReplicaRequest stopReplicaRequest,
             BiConsumer<StopReplicaResponse, ? super Throwable> responseConsumer) {
-        sendRequest(
-                receiveServerId,
-                stopReplicaRequest,
-                TabletServerGateway::stopReplica,
-                responseConsumer);
+        sendRequest(receiveServerId, stopReplicaRequest, TabletServerGateway::stopReplica, responseConsumer);
     }
 
     /** Send UpdateMetadataRequest to the server and handle the response. */
@@ -126,11 +113,7 @@ public class CoordinatorChannelManager {
             int receiveServerId,
             UpdateMetadataRequest updateMetadataRequest,
             BiConsumer<UpdateMetadataResponse, ? super Throwable> responseConsumer) {
-        sendRequest(
-                receiveServerId,
-                updateMetadataRequest,
-                TabletServerGateway::updateMetadata,
-                responseConsumer);
+        sendRequest(receiveServerId, updateMetadataRequest, TabletServerGateway::updateMetadata, responseConsumer);
     }
 
     /** Send NotifyRemoteLogOffsetsRequest to the server and handle the response. */
@@ -174,8 +157,7 @@ public class CoordinatorChannelManager {
             Request request,
             RequestSendFunction<Request, Response> requestFunction,
             BiConsumer<Response, ? super Throwable> responseConsumer) {
-        Optional<TabletServerGateway> optionalTabletServerGateway =
-                getTabletServerGateway(targetServerId);
+        Optional<TabletServerGateway> optionalTabletServerGateway = getTabletServerGateway(targetServerId);
         if (!optionalTabletServerGateway.isPresent()) {
             LOG.warn(
                     "Can't not send {} to the tablet server {} as the server is offline.",

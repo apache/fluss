@@ -77,8 +77,7 @@ public final class MemorySegment {
      * Constant that flags the byte order. Because this is a boolean constant, the JIT compiler can
      * use this well to aggressively eliminate the non-applicable code paths.
      */
-    public static final boolean LITTLE_ENDIAN =
-            (ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN);
+    public static final boolean LITTLE_ENDIAN = (ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN);
 
     // ------------------------------------------------------------------------
 
@@ -90,13 +89,15 @@ public final class MemorySegment {
      * segment will point to undefined addresses outside the heap and may in out-of-order execution
      * cases cause segmentation faults.
      */
-    @Nullable private final byte[] heapMemory;
+    @Nullable
+    private final byte[] heapMemory;
 
     /**
      * The direct byte buffer that wraps the off-heap memory. This memory segment holds a reference
      * to that buffer, so as long as this memory segment lives, the memory will not be released.
      */
-    @Nullable private final ByteBuffer offHeapBuffer;
+    @Nullable
+    private final ByteBuffer offHeapBuffer;
 
     /**
      * The address to the data, relative to the heap memory byte array. If the heap memory byte
@@ -119,11 +120,7 @@ public final class MemorySegment {
      * <p>Since the byte array is backed by on-heap memory, this memory segment holds its data on
      * heap. The buffer must be at least of size 8 bytes.
      */
-    private MemorySegment(
-            @Nullable byte[] heapMemory,
-            @Nullable ByteBuffer offHeapBuffer,
-            long address,
-            int size) {
+    private MemorySegment(@Nullable byte[] heapMemory, @Nullable ByteBuffer offHeapBuffer, long address, int size) {
         this.heapMemory = heapMemory;
         this.offHeapBuffer = offHeapBuffer;
         this.address = address;
@@ -322,8 +319,7 @@ public final class MemorySegment {
             throw new IllegalStateException("segment has been freed");
         } else {
             // index is in fact invalid
-            throw new IndexOutOfBoundsException(
-                    "capacity: " + size + ", index: " + index + ", put length: 1");
+            throw new IndexOutOfBoundsException("capacity: " + size + ", index: " + index + ", put length: 1");
         }
     }
 
@@ -381,9 +377,7 @@ public final class MemorySegment {
             throw new IllegalStateException("segment has been freed");
         } else {
             throw new IndexOutOfBoundsException(
-                    String.format(
-                            "pos: %d, length: %d, index: %d, offset: %d",
-                            pos, length, index, offset));
+                    String.format("pos: %d, length: %d, index: %d, offset: %d", pos, length, index, offset));
         }
     }
 
@@ -414,8 +408,7 @@ public final class MemorySegment {
             throw new IllegalStateException("segment has been freed");
         } else {
             // index is in fact invalid
-            throw new IndexOutOfBoundsException(
-                    "capacity: " + size + ", index: " + index + ", put length: " + length);
+            throw new IndexOutOfBoundsException("capacity: " + size + ", index: " + index + ", put length: " + length);
         }
     }
 
@@ -544,8 +537,7 @@ public final class MemorySegment {
             throw new IllegalStateException("segment has been freed");
         } else {
             // index is in fact invalid
-            throw new IndexOutOfBoundsException(
-                    "capacity: " + size + ", index: " + index + ", put length: 1");
+            throw new IndexOutOfBoundsException("capacity: " + size + ", index: " + index + ", put length: 1");
         }
     }
 
@@ -671,8 +663,7 @@ public final class MemorySegment {
             throw new IllegalStateException("segment has been freed");
         } else {
             // index is in fact invalid
-            throw new IndexOutOfBoundsException(
-                    "capacity: " + size + ", index: " + index + ", put length: 2");
+            throw new IndexOutOfBoundsException("capacity: " + size + ", index: " + index + ", put length: 2");
         }
     }
 
@@ -818,8 +809,7 @@ public final class MemorySegment {
             throw new IllegalStateException("segment has been freed");
         } else {
             // index is in fact invalid
-            throw new IndexOutOfBoundsException(
-                    "capacity: " + size + ", index: " + index + ", put length: 4");
+            throw new IndexOutOfBoundsException("capacity: " + size + ", index: " + index + ", put length: 4");
         }
     }
 
@@ -953,8 +943,7 @@ public final class MemorySegment {
             throw new IllegalStateException("segment has been freed");
         } else {
             // index is in fact invalid
-            throw new IndexOutOfBoundsException(
-                    "capacity: " + size + ", index: " + index + ", put length: 8");
+            throw new IndexOutOfBoundsException("capacity: " + size + ", index: " + index + ", put length: 8");
         }
     }
 
@@ -1294,8 +1283,7 @@ public final class MemorySegment {
             target.position(targetOffset + numBytes);
         } else {
             // other types of byte buffers
-            throw new IllegalArgumentException(
-                    "The target buffer is not direct, and has no array.");
+            throw new IllegalArgumentException("The target buffer is not direct, and has no array.");
         }
     }
 
@@ -1377,17 +1365,15 @@ public final class MemorySegment {
         if ((numBytes | offset | targetOffset) >= 0
                 && thisPointer <= this.addressLimit - numBytes
                 && otherPointer <= target.addressLimit - numBytes) {
-            UNSAFE.copyMemory(
-                    this.heapMemory, thisPointer, target.heapMemory, otherPointer, numBytes);
+            UNSAFE.copyMemory(this.heapMemory, thisPointer, target.heapMemory, otherPointer, numBytes);
         } else if (this.address > this.addressLimit) {
             throw new IllegalStateException("this memory segment has been freed.");
         } else if (target.address > target.addressLimit) {
             throw new IllegalStateException("target memory segment has been freed.");
         } else {
-            throw new IndexOutOfBoundsException(
-                    String.format(
-                            "offset=%d, targetOffset=%d, numBytes=%d, address=%d, targetAddress=%d",
-                            offset, targetOffset, numBytes, this.address, target.address));
+            throw new IndexOutOfBoundsException(String.format(
+                    "offset=%d, targetOffset=%d, numBytes=%d, address=%d, targetAddress=%d",
+                    offset, targetOffset, numBytes, this.address, target.address));
         }
     }
 
@@ -1407,8 +1393,7 @@ public final class MemorySegment {
         final long thisPointer = this.address + offset;
         if (thisPointer + numBytes > addressLimit) {
             throw new IndexOutOfBoundsException(
-                    String.format(
-                            "offset=%d, numBytes=%d, address=%d", offset, numBytes, this.address));
+                    String.format("offset=%d, numBytes=%d, address=%d", offset, numBytes, this.address));
         }
         UNSAFE.copyMemory(this.heapMemory, thisPointer, target, targetPointer, numBytes);
     }
@@ -1428,8 +1413,7 @@ public final class MemorySegment {
         final long thisPointer = this.address + offset;
         if (thisPointer + numBytes > addressLimit) {
             throw new IndexOutOfBoundsException(
-                    String.format(
-                            "offset=%d, numBytes=%d, address=%d", offset, numBytes, this.address));
+                    String.format("offset=%d, numBytes=%d, address=%d", offset, numBytes, this.address));
         }
         UNSAFE.copyMemory(source, sourcePointer, this.heapMemory, thisPointer, numBytes);
     }
@@ -1499,23 +1483,20 @@ public final class MemorySegment {
      * @param offset2 Offset of seg2 to start swapping
      * @param len Length of the swapped memory region
      */
-    public void swapBytes(
-            byte[] tempBuffer, MemorySegment seg2, int offset1, int offset2, int len) {
+    public void swapBytes(byte[] tempBuffer, MemorySegment seg2, int offset1, int offset2, int len) {
         if ((offset1 | offset2 | len | (tempBuffer.length - len)) >= 0) {
             final long thisPos = this.address + offset1;
             final long otherPos = seg2.address + offset2;
 
             if (thisPos <= this.addressLimit - len && otherPos <= seg2.addressLimit - len) {
                 // this -> temp buffer
-                UNSAFE.copyMemory(
-                        this.heapMemory, thisPos, tempBuffer, BYTE_ARRAY_BASE_OFFSET, len);
+                UNSAFE.copyMemory(this.heapMemory, thisPos, tempBuffer, BYTE_ARRAY_BASE_OFFSET, len);
 
                 // other -> this
                 UNSAFE.copyMemory(seg2.heapMemory, otherPos, this.heapMemory, thisPos, len);
 
                 // temp buffer -> other
-                UNSAFE.copyMemory(
-                        tempBuffer, BYTE_ARRAY_BASE_OFFSET, seg2.heapMemory, otherPos, len);
+                UNSAFE.copyMemory(tempBuffer, BYTE_ARRAY_BASE_OFFSET, seg2.heapMemory, otherPos, len);
                 return;
             } else if (this.address > this.addressLimit) {
                 throw new IllegalStateException("this memory segment has been freed.");
@@ -1525,10 +1506,9 @@ public final class MemorySegment {
         }
 
         // index is in fact invalid
-        throw new IndexOutOfBoundsException(
-                String.format(
-                        "offset1=%d, offset2=%d, len=%d, bufferSize=%d, address1=%d, address2=%d",
-                        offset1, offset2, len, tempBuffer.length, this.address, seg2.address));
+        throw new IndexOutOfBoundsException(String.format(
+                "offset1=%d, offset2=%d, len=%d, bufferSize=%d, address1=%d, address2=%d",
+                offset1, offset2, len, tempBuffer.length, this.address, seg2.address));
     }
 
     /**

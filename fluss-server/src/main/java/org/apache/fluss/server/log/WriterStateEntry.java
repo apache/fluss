@@ -41,8 +41,7 @@ public class WriterStateEntry {
 
     private long lastTimestamp;
 
-    public WriterStateEntry(
-            long writerId, long lastTimestamp, @Nullable BatchMetadata firstBatchMetadata) {
+    public WriterStateEntry(long writerId, long lastTimestamp, @Nullable BatchMetadata firstBatchMetadata) {
         this.writerId = writerId;
         this.lastTimestamp = lastTimestamp;
         if (firstBatchMetadata != null) {
@@ -87,8 +86,7 @@ public class WriterStateEntry {
     }
 
     public void addBath(int batchSequence, long lastOffset, int offsetDelta, long timestamp) {
-        addBatchMetadata(
-                new BatchMetadata(writerId, batchSequence, lastOffset, offsetDelta, timestamp));
+        addBatchMetadata(new BatchMetadata(writerId, batchSequence, lastOffset, offsetDelta, timestamp));
         this.lastTimestamp = timestamp;
     }
 
@@ -124,8 +122,7 @@ public class WriterStateEntry {
      * Returns a new instance with the provided parameters and the values from the current instance
      * otherwise.
      */
-    public WriterStateEntry withWriterIdAndBatchMetadata(
-            long writerId, @Nullable BatchMetadata batchMetadata) {
+    public WriterStateEntry withWriterIdAndBatchMetadata(long writerId, @Nullable BatchMetadata batchMetadata) {
         return new WriterStateEntry(writerId, this.lastTimestamp, batchMetadata);
     }
 
@@ -137,12 +134,7 @@ public class WriterStateEntry {
         public final int offsetDelta;
         public final long timestamp;
 
-        public BatchMetadata(
-                long writerId,
-                int batchSequence,
-                long lastOffset,
-                int offsetDelta,
-                long timestamp) {
+        public BatchMetadata(long writerId, int batchSequence, long lastOffset, int offsetDelta, long timestamp) {
             this.writerId = writerId;
             this.batchSequence = batchSequence;
             this.lastOffset = lastOffset;

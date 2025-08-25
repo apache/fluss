@@ -48,37 +48,29 @@ class PartitionUtilsTest {
     void testValidatePartitionValues() {
         assertThatThrownBy(() -> validatePartitionValues(Arrays.asList("$1", "2")))
                 .isInstanceOf(InvalidPartitionException.class)
-                .hasMessageContaining(
-                        "The partition value $1 is invalid: '$1' contains one "
-                                + "or more characters other than ASCII alphanumerics, '_' and '-'");
+                .hasMessageContaining("The partition value $1 is invalid: '$1' contains one "
+                        + "or more characters other than ASCII alphanumerics, '_' and '-'");
 
         assertThatThrownBy(() -> validatePartitionValues(Arrays.asList("?1", "2")))
                 .isInstanceOf(InvalidPartitionException.class)
-                .hasMessageContaining(
-                        "The partition value ?1 is invalid: '?1' contains one or more "
-                                + "characters other than ASCII alphanumerics, '_' and '-'");
+                .hasMessageContaining("The partition value ?1 is invalid: '?1' contains one or more "
+                        + "characters other than ASCII alphanumerics, '_' and '-'");
 
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(DATA1_SCHEMA)
-                        .distributedBy(3)
-                        .partitionedBy("b")
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                        .property(
-                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
-                                AutoPartitionTimeUnit.YEAR)
-                        .build();
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(DATA1_SCHEMA)
+                .distributedBy(3)
+                .partitionedBy("b")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR)
+                .build();
         TableInfo tableInfo = TableInfo.of(DATA1_TABLE_PATH, 1L, 1, descriptor, 1L, 1L);
-        assertThatThrownBy(
-                        () ->
-                                validatePartitionSpec(
-                                        tableInfo.getTablePath(),
-                                        tableInfo.getPartitionKeys(),
-                                        new PartitionSpec(Collections.emptyMap())))
+        assertThatThrownBy(() -> validatePartitionSpec(
+                        tableInfo.getTablePath(),
+                        tableInfo.getPartitionKeys(),
+                        new PartitionSpec(Collections.emptyMap())))
                 .isInstanceOf(InvalidPartitionException.class)
-                .hasMessageContaining(
-                        "PartitionSpec size is not equal to partition keys size for "
-                                + "partitioned table test_db_1.test_non_pk_table_1.");
+                .hasMessageContaining("PartitionSpec size is not equal to partition keys size for "
+                        + "partitioned table test_db_1.test_non_pk_table_1.");
     }
 
     @Test
@@ -89,47 +81,32 @@ class PartitionUtilsTest {
 
         // for year
         testGenerateAutoPartitionName(
-                zonedDateTime,
-                AutoPartitionTimeUnit.YEAR,
-                new int[] {-1, 0, 1, 2, 3},
-                new String[] {"2023", "2024", "2025", "2026", "2027"});
+                zonedDateTime, AutoPartitionTimeUnit.YEAR, new int[] {-1, 0, 1, 2, 3}, new String[] {
+                    "2023", "2024", "2025", "2026", "2027"
+                });
 
         // for quarter
         testGenerateAutoPartitionName(
-                zonedDateTime,
-                AutoPartitionTimeUnit.QUARTER,
-                new int[] {-1, 0, 1, 2, 3},
-                new String[] {"20243", "20244", "20251", "20252", "20253"});
+                zonedDateTime, AutoPartitionTimeUnit.QUARTER, new int[] {-1, 0, 1, 2, 3}, new String[] {
+                    "20243", "20244", "20251", "20252", "20253"
+                });
 
         // for month
         testGenerateAutoPartitionName(
-                zonedDateTime,
-                AutoPartitionTimeUnit.MONTH,
-                new int[] {-1, 0, 1, 2, 3},
-                new String[] {"202410", "202411", "202412", "202501", "202502"});
+                zonedDateTime, AutoPartitionTimeUnit.MONTH, new int[] {-1, 0, 1, 2, 3}, new String[] {
+                    "202410", "202411", "202412", "202501", "202502"
+                });
 
         // for day
         testGenerateAutoPartitionName(
-                zonedDateTime,
-                AutoPartitionTimeUnit.DAY,
-                new int[] {-1, 0, 1, 2, 3, 20},
-                new String[] {
+                zonedDateTime, AutoPartitionTimeUnit.DAY, new int[] {-1, 0, 1, 2, 3, 20}, new String[] {
                     "20241110", "20241111", "20241112", "20241113", "20241114", "20241201"
                 });
 
         // for hour
         testGenerateAutoPartitionName(
-                zonedDateTime,
-                AutoPartitionTimeUnit.HOUR,
-                new int[] {-2, -1, 0, 1, 2, 3, 13},
-                new String[] {
-                    "2024111109",
-                    "2024111110",
-                    "2024111111",
-                    "2024111112",
-                    "2024111113",
-                    "2024111114",
-                    "2024111200"
+                zonedDateTime, AutoPartitionTimeUnit.HOUR, new int[] {-2, -1, 0, 1, 2, 3, 13}, new String[] {
+                    "2024111109", "2024111110", "2024111111", "2024111112", "2024111113", "2024111114", "2024111200"
                 });
     }
 
@@ -139,12 +116,8 @@ class PartitionUtilsTest {
             int[] offsets,
             String[] expected) {
         for (int i = 0; i < offsets.length; i++) {
-            ResolvedPartitionSpec resolvedPartitionSpec =
-                    generateAutoPartition(
-                            Collections.singletonList("dt"),
-                            zonedDateTime,
-                            offsets[i],
-                            autoPartitionTimeUnit);
+            ResolvedPartitionSpec resolvedPartitionSpec = generateAutoPartition(
+                    Collections.singletonList("dt"), zonedDateTime, offsets[i], autoPartitionTimeUnit);
             assertThat(resolvedPartitionSpec.getPartitionName()).isEqualTo(expected[i]);
         }
     }

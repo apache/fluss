@@ -66,11 +66,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 abstract class FlinkCatalogITCase {
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(1)
-                    .setClusterConf(initClusterConf())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(1)
+            .setClusterConf(initClusterConf())
+            .build();
 
     static Configuration initClusterConf() {
         Configuration clusterConf = new Configuration();
@@ -90,13 +89,12 @@ abstract class FlinkCatalogITCase {
         // open a catalog so that we can get table from the catalog
         Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
         String bootstrapServers = String.join(",", flussConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
-        catalog =
-                new FlinkCatalog(
-                        CATALOG_NAME,
-                        DEFAULT_DB,
-                        bootstrapServers,
-                        Thread.currentThread().getContextClassLoader(),
-                        Collections.emptyMap());
+        catalog = new FlinkCatalog(
+                CATALOG_NAME,
+                DEFAULT_DB,
+                bootstrapServers,
+                Thread.currentThread().getContextClassLoader(),
+                Collections.emptyMap());
         catalog.open();
     }
 
@@ -112,12 +110,9 @@ abstract class FlinkCatalogITCase {
         // create table environment
         tEnv = TableEnvironment.create(EnvironmentSettings.inStreamingMode());
         // crate catalog using sql
-        tEnv.executeSql(
-                String.format(
-                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                        CATALOG_NAME,
-                        BOOTSTRAP_SERVERS.key(),
-                        FLUSS_CLUSTER_EXTENSION.getBootstrapServers()));
+        tEnv.executeSql(String.format(
+                "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
+                CATALOG_NAME, BOOTSTRAP_SERVERS.key(), FLUSS_CLUSTER_EXTENSION.getBootstrapServers()));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
         // we don't need to "USE fluss" explicitly as it is the default database
     }
@@ -131,27 +126,26 @@ abstract class FlinkCatalogITCase {
     @Test
     void testCreateTable() throws Exception {
         // create a table will all supported data types
-        tEnv.executeSql(
-                "create table test_table "
-                        + "(a int not null primary key not enforced,"
-                        + " b CHAR(3),"
-                        + " c STRING not null COMMENT 'STRING COMMENT',"
-                        + " d STRING,"
-                        + " e BOOLEAN,"
-                        + " f BINARY(2),"
-                        + " g BYTES COMMENT 'BYTES',"
-                        + " h BYTES,"
-                        + " i DECIMAL(12, 2),"
-                        + " j TINYINT,"
-                        + " k SMALLINT,"
-                        + " l BIGINT,"
-                        + " m FLOAT,"
-                        + " n DOUBLE,"
-                        + " o DATE,"
-                        + " p TIME,"
-                        + " q TIMESTAMP,"
-                        + " r TIMESTAMP_LTZ,"
-                        + " s ROW<a INT>) COMMENT 'a test table'");
+        tEnv.executeSql("create table test_table "
+                + "(a int not null primary key not enforced,"
+                + " b CHAR(3),"
+                + " c STRING not null COMMENT 'STRING COMMENT',"
+                + " d STRING,"
+                + " e BOOLEAN,"
+                + " f BINARY(2),"
+                + " g BYTES COMMENT 'BYTES',"
+                + " h BYTES,"
+                + " i DECIMAL(12, 2),"
+                + " j TINYINT,"
+                + " k SMALLINT,"
+                + " l BIGINT,"
+                + " m FLOAT,"
+                + " n DOUBLE,"
+                + " o DATE,"
+                + " p TIME,"
+                + " q TIMESTAMP,"
+                + " r TIMESTAMP_LTZ,"
+                + " s ROW<a INT>) COMMENT 'a test table'");
         Schema.Builder schemaBuilder = Schema.newBuilder();
         schemaBuilder
                 .column("a", DataTypes.INT().notNull())
@@ -177,25 +171,20 @@ abstract class FlinkCatalogITCase {
                 .column("s", DataTypes.ROW(DataTypes.FIELD("a", DataTypes.INT())))
                 .primaryKey("a");
         Schema expectedSchema = schemaBuilder.build();
-        CatalogTable table =
-                (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, "test_table"));
+        CatalogTable table = (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, "test_table"));
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
     }
 
     @Test
     void testCreateUnSupportedTable() {
         // test invalid property
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                        "create table test_arrow_compression"
-                                                + " (a int, b int) with ("
-                                                + " 'table.log.format' = 'arrow',"
-                                                + " 'table.log.arrow.compression.type' = 'zstd',"
-                                                + " 'table.log.arrow.compression.zstd.level' = '0')"))
+        assertThatThrownBy(() -> tEnv.executeSql("create table test_arrow_compression"
+                        + " (a int, b int) with ("
+                        + " 'table.log.format' = 'arrow',"
+                        + " 'table.log.arrow.compression.type' = 'zstd',"
+                        + " 'table.log.arrow.compression.zstd.level' = '0')"))
                 .cause()
-                .hasRootCauseMessage(
-                        "Invalid ZSTD compression level: 0. Expected a value between 1 and 22.");
+                .hasRootCauseMessage("Invalid ZSTD compression level: 0. Expected a value between 1 and 22.");
     }
 
     @Test
@@ -204,8 +193,7 @@ abstract class FlinkCatalogITCase {
         Schema.Builder schemaBuilder = Schema.newBuilder();
         schemaBuilder.column("a", DataTypes.INT()).column("b", DataTypes.INT());
         Schema expectedSchema = schemaBuilder.build();
-        CatalogTable table =
-                (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, "append_only_table"));
+        CatalogTable table = (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, "append_only_table"));
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
         Map<String, String> expectedOptions = new HashMap<>();
         expectedOptions.put("bucket.num", "10");
@@ -217,8 +205,7 @@ abstract class FlinkCatalogITCase {
         ObjectPath objectPath = new ObjectPath(DEFAULT_DB, "test_partitioned_table");
 
         // 1. first create.
-        tEnv.executeSql(
-                "create table test_partitioned_table (a int, b string, dt string) partitioned by (b,dt)");
+        tEnv.executeSql("create table test_partitioned_table (a int, b string, dt string) partitioned by (b,dt)");
         Schema.Builder schemaBuilder = Schema.newBuilder();
         schemaBuilder
                 .column("a", DataTypes.INT())
@@ -234,8 +221,7 @@ abstract class FlinkCatalogITCase {
         tEnv.executeSql("alter table test_partitioned_table add partition (b = 1,dt = 1)");
         tEnv.executeSql("alter table test_partitioned_table add partition (b = 2,dt = 1)");
         tEnv.executeSql("alter table test_partitioned_table add partition (b = 3,dt = 1)");
-        List<String> expectedShowPartitionsResult =
-                Arrays.asList("+I[b=1/dt=1]", "+I[b=2/dt=1]", "+I[b=3/dt=1]");
+        List<String> expectedShowPartitionsResult = Arrays.asList("+I[b=1/dt=1]", "+I[b=2/dt=1]", "+I[b=3/dt=1]");
         CloseableIterator<Row> showPartitionIterator =
                 tEnv.executeSql("show partitions test_partitioned_table").collect();
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
@@ -243,25 +229,23 @@ abstract class FlinkCatalogITCase {
         // 3. drop partitions.
         tEnv.executeSql("alter table test_partitioned_table drop partition (b = 1,dt = 1)");
         expectedShowPartitionsResult = Arrays.asList("+I[b=2/dt=1]", "+I[b=3/dt=1]");
-        showPartitionIterator = tEnv.executeSql("show partitions test_partitioned_table").collect();
+        showPartitionIterator =
+                tEnv.executeSql("show partitions test_partitioned_table").collect();
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
 
         // 4. show partitions with spec.
-        showPartitionIterator =
-                tEnv.executeSql("show partitions test_partitioned_table partition (dt = 1)")
-                        .collect();
+        showPartitionIterator = tEnv.executeSql("show partitions test_partitioned_table partition (dt = 1)")
+                .collect();
         expectedShowPartitionsResult = Arrays.asList("+I[b=2/dt=1]", "+I[b=3/dt=1]");
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
 
-        showPartitionIterator =
-                tEnv.executeSql("show partitions test_partitioned_table partition (b = 3)")
-                        .collect();
+        showPartitionIterator = tEnv.executeSql("show partitions test_partitioned_table partition (b = 3)")
+                .collect();
         expectedShowPartitionsResult = Arrays.asList("+I[b=3/dt=1]");
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
 
-        showPartitionIterator =
-                tEnv.executeSql("show partitions test_partitioned_table partition (dt = 1,b = 3)")
-                        .collect();
+        showPartitionIterator = tEnv.executeSql("show partitions test_partitioned_table partition (dt = 1,b = 3)")
+                .collect();
         expectedShowPartitionsResult = Arrays.asList("+I[b=3/dt=1]");
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
     }
@@ -271,10 +255,9 @@ abstract class FlinkCatalogITCase {
         ObjectPath objectPath = new ObjectPath(DEFAULT_DB, "test_auto_partitioned_table");
 
         // 1. test add table.
-        tEnv.executeSql(
-                "create table test_auto_partitioned_table (a int, b string) partitioned by (b) "
-                        + "with ('table.auto-partition.enabled' = 'true',"
-                        + " 'table.auto-partition.time-unit' = 'year')");
+        tEnv.executeSql("create table test_auto_partitioned_table (a int, b string) partitioned by (b) "
+                + "with ('table.auto-partition.enabled' = 'true',"
+                + " 'table.auto-partition.time-unit' = 'year')");
         Schema.Builder schemaBuilder = Schema.newBuilder();
         schemaBuilder.column("a", DataTypes.INT()).column("b", DataTypes.STRING());
         Schema expectedSchema = schemaBuilder.build();
@@ -294,27 +277,18 @@ abstract class FlinkCatalogITCase {
 
         // 2. test add partitions.
         tEnv.executeSql(
-                String.format(
-                        "alter table test_auto_partitioned_table add partition (b = '%s')",
-                        currentYear + 10));
-        expectedShowPartitionsResult =
-                Arrays.asList(
-                        "+I[b=" + currentYear + "]",
-                        "+I[b=" + (currentYear + 1) + "]",
-                        "+I[b=" + (currentYear + 10) + "]");
+                String.format("alter table test_auto_partitioned_table add partition (b = '%s')", currentYear + 10));
+        expectedShowPartitionsResult = Arrays.asList(
+                "+I[b=" + currentYear + "]", "+I[b=" + (currentYear + 1) + "]", "+I[b=" + (currentYear + 10) + "]");
         showPartitionIterator =
                 tEnv.executeSql("show partitions test_auto_partitioned_table").collect();
         assertResultsIgnoreOrder(showPartitionIterator, expectedShowPartitionsResult, true);
 
         // 3. test drop partitions.
         tEnv.executeSql(
-                String.format(
-                        "alter table test_auto_partitioned_table drop partition (b = '%s')",
-                        currentYear + 1));
+                String.format("alter table test_auto_partitioned_table drop partition (b = '%s')", currentYear + 1));
         tEnv.executeSql(
-                String.format(
-                        "alter table test_auto_partitioned_table drop partition (b = '%s')",
-                        currentYear + 10));
+                String.format("alter table test_auto_partitioned_table drop partition (b = '%s')", currentYear + 10));
         expectedShowPartitionsResult = Collections.singletonList("+I[b=" + currentYear + "]");
         showPartitionIterator =
                 tEnv.executeSql("show partitions test_auto_partitioned_table").collect();
@@ -325,41 +299,35 @@ abstract class FlinkCatalogITCase {
     void testInvalidAutoPartitionedTableWithMultiPartitionKeys() {
         // 1. test invalid auto partition table.
         // not specify auto partition key
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                        "create table test_invalid_auto_partitioned_table_with_multi_partition_keys (a int, b string, c string, dt string) partitioned by (b,c,dt) "
-                                                + "with ('table.auto-partition.enabled' = 'true',"
-                                                + " 'table.auto-partition.time-unit' = 'day'"
-                                                + ")"))
+        assertThatThrownBy(() -> tEnv.executeSql(
+                        "create table test_invalid_auto_partitioned_table_with_multi_partition_keys (a int, b string, c string, dt string) partitioned by (b,c,dt) "
+                                + "with ('table.auto-partition.enabled' = 'true',"
+                                + " 'table.auto-partition.time-unit' = 'day'"
+                                + ")"))
                 .cause()
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessage(
                         "Currently, auto partitioned table must set one auto partition key when it has multiple partition keys. Please set table property 'table.auto-partition.key'.");
 
         // specified auto partition key not in partition keys
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                        "create table test_invalid_auto_partitioned_table_with_multi_partition_keys (a int, b string, c string, dt string) partitioned by (b,c,dt) "
-                                                + "with ('table.auto-partition.enabled' = 'true',"
-                                                + " 'table.auto-partition.time-unit' = 'day',"
-                                                + " 'table.auto-partition.key' = 'a'"
-                                                + ")"))
+        assertThatThrownBy(() -> tEnv.executeSql(
+                        "create table test_invalid_auto_partitioned_table_with_multi_partition_keys (a int, b string, c string, dt string) partitioned by (b,c,dt) "
+                                + "with ('table.auto-partition.enabled' = 'true',"
+                                + " 'table.auto-partition.time-unit' = 'day',"
+                                + " 'table.auto-partition.key' = 'a'"
+                                + ")"))
                 .cause()
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessage(
                         "The specified key for auto partitioned table is not a partition key. Your key 'a' is not in key list [b, c, dt]");
 
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                        "create table test_invalid_auto_partitioned_table_with_multi_partition_keys (a int, b string, c string, dt string) partitioned by (b,c,dt) "
-                                                + "with ('table.auto-partition.enabled' = 'true',"
-                                                + " 'table.auto-partition.time-unit' = 'day',"
-                                                + " 'table.auto-partition.key' = 'dt',"
-                                                + " 'table.auto-partition.num-precreate' = '2'"
-                                                + ")"))
+        assertThatThrownBy(() -> tEnv.executeSql(
+                        "create table test_invalid_auto_partitioned_table_with_multi_partition_keys (a int, b string, c string, dt string) partitioned by (b,c,dt) "
+                                + "with ('table.auto-partition.enabled' = 'true',"
+                                + " 'table.auto-partition.time-unit' = 'day',"
+                                + " 'table.auto-partition.key' = 'dt',"
+                                + " 'table.auto-partition.num-precreate' = '2'"
+                                + ")"))
                 .cause()
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessage(
@@ -372,14 +340,13 @@ abstract class FlinkCatalogITCase {
         ObjectPath objectPath = new ObjectPath(DEFAULT_DB, tblName);
 
         // 1. test add table.
-        tEnv.executeSql(
-                "create table "
-                        + tblName
-                        + " (a int, b string, c string, hh string) partitioned by (b,c,hh) "
-                        + "with ('table.auto-partition.enabled' = 'true',"
-                        + " 'table.auto-partition.key' = 'hh',"
-                        + " 'table.auto-partition.num-retention' = '2',"
-                        + " 'table.auto-partition.time-unit' = 'hour')");
+        tEnv.executeSql("create table "
+                + tblName
+                + " (a int, b string, c string, hh string) partitioned by (b,c,hh) "
+                + "with ('table.auto-partition.enabled' = 'true',"
+                + " 'table.auto-partition.key' = 'hh',"
+                + " 'table.auto-partition.num-retention' = '2',"
+                + " 'table.auto-partition.time-unit' = 'hour')");
         Schema.Builder schemaBuilder = Schema.newBuilder();
         schemaBuilder
                 .column("a", DataTypes.INT())
@@ -395,49 +362,26 @@ abstract class FlinkCatalogITCase {
                 .isEqualTo("0");
         TablePath tablePath = new TablePath(DEFAULT_DB, tblName);
         String datetimePattern = "yyyyMMddHH";
-        String minus3hour =
-                LocalDateTime.now()
-                        .minusHours(3)
-                        .format(DateTimeFormatter.ofPattern(datetimePattern));
-        String minus2hour =
-                LocalDateTime.now()
-                        .minusHours(2)
-                        .format(DateTimeFormatter.ofPattern(datetimePattern));
-        String minus1hour =
-                LocalDateTime.now()
-                        .minusHours(1)
-                        .format(DateTimeFormatter.ofPattern(datetimePattern));
+        String minus3hour = LocalDateTime.now().minusHours(3).format(DateTimeFormatter.ofPattern(datetimePattern));
+        String minus2hour = LocalDateTime.now().minusHours(2).format(DateTimeFormatter.ofPattern(datetimePattern));
+        String minus1hour = LocalDateTime.now().minusHours(1).format(DateTimeFormatter.ofPattern(datetimePattern));
 
         // 2. test add partitions.
-        tEnv.executeSql(
-                String.format(
-                        "alter table %s add partition (b = 1,c = 1,hh = %s)", tblName, minus3hour));
-        tEnv.executeSql(
-                String.format(
-                        "alter table %s add partition (b = 1,c = 2,hh = %s)", tblName, minus3hour));
-        tEnv.executeSql(
-                String.format(
-                        "alter table %s add partition (b = 1,c = 1,hh = %s)", tblName, minus2hour));
-        tEnv.executeSql(
-                String.format(
-                        "alter table %s add partition (b = 1,c = 2,hh = %s)", tblName, minus2hour));
-        tEnv.executeSql(
-                String.format(
-                        "alter table %s add partition (b = 1,c = 1,hh = %s)", tblName, minus1hour));
-        tEnv.executeSql(
-                String.format(
-                        "alter table %s add partition (b = 1,c = 2,hh = %s)", tblName, minus1hour));
+        tEnv.executeSql(String.format("alter table %s add partition (b = 1,c = 1,hh = %s)", tblName, minus3hour));
+        tEnv.executeSql(String.format("alter table %s add partition (b = 1,c = 2,hh = %s)", tblName, minus3hour));
+        tEnv.executeSql(String.format("alter table %s add partition (b = 1,c = 1,hh = %s)", tblName, minus2hour));
+        tEnv.executeSql(String.format("alter table %s add partition (b = 1,c = 2,hh = %s)", tblName, minus2hour));
+        tEnv.executeSql(String.format("alter table %s add partition (b = 1,c = 1,hh = %s)", tblName, minus1hour));
+        tEnv.executeSql(String.format("alter table %s add partition (b = 1,c = 2,hh = %s)", tblName, minus1hour));
         List<String> expectDroppedPartitions =
-                Arrays.asList(
-                        String.format("1$1$%s", minus3hour), String.format("1$2$%s", minus3hour));
+                Arrays.asList(String.format("1$1$%s", minus3hour), String.format("1$2$%s", minus3hour));
         FLUSS_CLUSTER_EXTENSION.waitUntilPartitionsDropped(tablePath, expectDroppedPartitions);
 
-        List<String> expectedShowPartitionsResult =
-                Arrays.asList(
-                        "+I[b=1/c=1/hh=" + minus1hour + "]",
-                        "+I[b=1/c=2/hh=" + minus1hour + "]",
-                        "+I[b=1/c=1/hh=" + minus2hour + "]",
-                        "+I[b=1/c=2/hh=" + minus2hour + "]");
+        List<String> expectedShowPartitionsResult = Arrays.asList(
+                "+I[b=1/c=1/hh=" + minus1hour + "]",
+                "+I[b=1/c=2/hh=" + minus1hour + "]",
+                "+I[b=1/c=1/hh=" + minus2hour + "]",
+                "+I[b=1/c=2/hh=" + minus2hour + "]");
 
         CloseableIterator<Row> showPartitionIterator =
                 tEnv.executeSql("show partitions " + tblName).collect();
@@ -447,18 +391,16 @@ abstract class FlinkCatalogITCase {
     @Test
     void testTableWithExpression() throws Exception {
         // create a table with watermark and computed column
-        tEnv.executeSql(
-                "CREATE TABLE expression_test (\n"
-                        + "    `user` BIGINT not null primary key not enforced,\n"
-                        + "    product STRING COMMENT 'comment1',\n"
-                        + "    price DOUBLE,\n"
-                        + "    quantity DOUBLE,\n"
-                        + "    cost AS price * quantity,\n"
-                        + "    order_time TIMESTAMP(3),\n"
-                        + "    WATERMARK FOR order_time AS order_time - INTERVAL '5' SECOND\n"
-                        + ") with ('k1' = 'v1')");
-        CatalogTable table =
-                (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, "expression_test"));
+        tEnv.executeSql("CREATE TABLE expression_test (\n"
+                + "    `user` BIGINT not null primary key not enforced,\n"
+                + "    product STRING COMMENT 'comment1',\n"
+                + "    price DOUBLE,\n"
+                + "    quantity DOUBLE,\n"
+                + "    cost AS price * quantity,\n"
+                + "    order_time TIMESTAMP(3),\n"
+                + "    WATERMARK FOR order_time AS order_time - INTERVAL '5' SECOND\n"
+                + ") with ('k1' = 'v1')");
+        CatalogTable table = (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, "expression_test"));
         Schema.Builder schemaBuilder = Schema.newBuilder();
         schemaBuilder
                 .column("user", DataTypes.BIGINT().notNull())
@@ -482,28 +424,19 @@ abstract class FlinkCatalogITCase {
     @Test
     void testCreateWithUnSupportDataType() {
         // create a table with varchar datatype
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                        "create table test_table_unsupported (a varchar(10))"))
+        assertThatThrownBy(() -> tEnv.executeSql("create table test_table_unsupported (a varchar(10))"))
                 .cause()
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage("Unsupported data type: VARCHAR(10)");
 
         // create a table with varbinary datatype
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                        "create table test_table_unsupported (a varbinary(10))"))
+        assertThatThrownBy(() -> tEnv.executeSql("create table test_table_unsupported (a varbinary(10))"))
                 .cause()
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage("Unsupported data type: VARBINARY(10)");
 
         // create a table with multiset datatype
-        assertThatThrownBy(
-                        () ->
-                                tEnv.executeSql(
-                                        "create table test_table_unsupported (a multiset<int>)"))
+        assertThatThrownBy(() -> tEnv.executeSql("create table test_table_unsupported (a multiset<int>)"))
                 .cause()
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage("Unsupported data type: MULTISET<INT>");
@@ -516,19 +449,18 @@ abstract class FlinkCatalogITCase {
                 CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect());
 
         assertThat(databases.stream().map(Row::toString).collect(Collectors.toList()))
-                .containsExactlyInAnyOrderElementsOf(
-                        Arrays.asList(String.format("+I[%s]", DEFAULT_DB), "+I[test_db]"));
+                .containsExactlyInAnyOrderElementsOf(Arrays.asList(String.format("+I[%s]", DEFAULT_DB), "+I[test_db]"));
         tEnv.executeSql("drop database test_db");
-        databases = CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect());
+        databases =
+                CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect());
         assertThat(databases.toString()).isEqualTo(String.format("[+I[%s]]", DEFAULT_DB));
     }
 
     @Test
     void testFactoryCannotFindForCreateTemporaryTable() {
         // create fluss temporary table is not supported
-        tEnv.executeSql(
-                "create temporary table test_temp_table (a int, b int)"
-                        + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092')");
+        tEnv.executeSql("create temporary table test_temp_table (a int, b int)"
+                + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092')");
         assertThatThrownBy(() -> tEnv.executeSql("insert into test_temp_table values (1, 2)"))
                 .cause()
                 .isInstanceOf(ValidationException.class)
@@ -539,9 +471,8 @@ abstract class FlinkCatalogITCase {
     void testFactoryCannotFindForCreateCatalogTable() {
         // create fluss table under non-fluss catalog is not supported
         tEnv.executeSql("use catalog " + TableConfigOptions.TABLE_CATALOG_NAME.defaultValue());
-        tEnv.executeSql(
-                "create table test_catalog_table (a int, b int)"
-                        + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092')");
+        tEnv.executeSql("create table test_catalog_table (a int, b int)"
+                + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092')");
         assertThatThrownBy(() -> tEnv.executeSql("insert into test_catalog_table values (1, 2)"))
                 .cause()
                 .isInstanceOf(ValidationException.class)
@@ -558,14 +489,12 @@ abstract class FlinkCatalogITCase {
         // test table as source
         String sourcePlan = tEnv.explainSql("select * from test_table_unknown_options");
         assertThat(sourcePlan)
-                .contains(
-                        "TableSourceScan(table=[[testcatalog, fluss, test_table_unknown_options]], fields=[a, b])");
+                .contains("TableSourceScan(table=[[testcatalog, fluss, test_table_unknown_options]], fields=[a, b])");
 
         // test table as sink
         String sinkPlan = tEnv.explainSql("insert into test_table_unknown_options values (1, 2)");
         assertThat(sinkPlan)
-                .contains(
-                        "Sink(table=[testcatalog.fluss.test_table_unknown_options], fields=[EXPR$0, EXPR$1])");
+                .contains("Sink(table=[testcatalog.fluss.test_table_unknown_options], fields=[EXPR$0, EXPR$1])");
 
         // create fluss table with other invalid unknown option
         tEnv.executeSql(
@@ -579,10 +508,7 @@ abstract class FlinkCatalogITCase {
                 .hasMessageContaining("Unsupported options found for 'fluss'");
 
         // test invalid table as sink
-        assertThatThrownBy(
-                        () ->
-                                tEnv.explainSql(
-                                        "insert into test_table_other_unknown_options values (1, 2)"))
+        assertThatThrownBy(() -> tEnv.explainSql("insert into test_table_other_unknown_options values (1, 2)"))
                 .cause()
                 .isInstanceOf(ValidationException.class)
                 .hasMessageContaining("Unsupported options found for 'fluss'");
@@ -600,33 +526,25 @@ abstract class FlinkCatalogITCase {
                         + "    user_root=\"password\" "
                         + "    user_guest=\"password2\";");
         serverConfig.setString(ConfigOptions.SUPER_USERS.key(), "USER:root");
-        FlussClusterExtension flussClusterExtension =
-                FlussClusterExtension.builder()
-                        .setCoordinatorServerListeners(
-                                String.format(
-                                        "%s://localhost:0, %s://localhost:0",
-                                        DEFAULT_LISTENER_NAME, clientListenerName))
-                        .setTabletServerListeners(
-                                String.format(
-                                        "%s://localhost:0, %s://localhost:0",
-                                        DEFAULT_LISTENER_NAME, clientListenerName))
-                        .setClusterConf(serverConfig)
-                        .build();
+        FlussClusterExtension flussClusterExtension = FlussClusterExtension.builder()
+                .setCoordinatorServerListeners(
+                        String.format("%s://localhost:0, %s://localhost:0", DEFAULT_LISTENER_NAME, clientListenerName))
+                .setTabletServerListeners(
+                        String.format("%s://localhost:0, %s://localhost:0", DEFAULT_LISTENER_NAME, clientListenerName))
+                .setClusterConf(serverConfig)
+                .build();
         Catalog authenticateCatalog = null;
         try {
             flussClusterExtension.start();
-            ServerNode coordinatorServerNode =
-                    flussClusterExtension.getCoordinatorServerNode(clientListenerName);
+            ServerNode coordinatorServerNode = flussClusterExtension.getCoordinatorServerNode(clientListenerName);
             String bootstrapServers =
-                    String.format(
-                            "%s:%d", coordinatorServerNode.host(), coordinatorServerNode.port());
-            authenticateCatalog =
-                    new FlinkCatalog(
-                            CATALOG_NAME,
-                            DEFAULT_DB,
-                            bootstrapServers,
-                            Thread.currentThread().getContextClassLoader(),
-                            Collections.emptyMap());
+                    String.format("%s:%d", coordinatorServerNode.host(), coordinatorServerNode.port());
+            authenticateCatalog = new FlinkCatalog(
+                    CATALOG_NAME,
+                    DEFAULT_DB,
+                    bootstrapServers,
+                    Thread.currentThread().getContextClassLoader(),
+                    Collections.emptyMap());
             Catalog finalAuthenticateCatalog = authenticateCatalog;
             assertThatThrownBy(finalAuthenticateCatalog::open)
                     .cause()
@@ -638,13 +556,12 @@ abstract class FlinkCatalogITCase {
             clientConfig.put(ConfigOptions.CLIENT_SASL_MECHANISM.key(), "plain");
             clientConfig.put("client.security.sasl.username", "root");
             clientConfig.put("client.security.sasl.password", "password");
-            authenticateCatalog =
-                    new FlinkCatalog(
-                            CATALOG_NAME,
-                            DEFAULT_DB,
-                            bootstrapServers,
-                            Thread.currentThread().getContextClassLoader(),
-                            clientConfig);
+            authenticateCatalog = new FlinkCatalog(
+                    CATALOG_NAME,
+                    DEFAULT_DB,
+                    bootstrapServers,
+                    Thread.currentThread().getContextClassLoader(),
+                    clientConfig);
             authenticateCatalog.open();
             assertThat(authenticateCatalog.listDatabases())
                     .containsExactlyInAnyOrderElementsOf(Collections.singletonList(DEFAULT_DB));
@@ -657,8 +574,7 @@ abstract class FlinkCatalogITCase {
         }
     }
 
-    private static void assertOptionsEqual(
-            Map<String, String> actualOptions, Map<String, String> expectedOptions) {
+    private static void assertOptionsEqual(Map<String, String> actualOptions, Map<String, String> expectedOptions) {
         actualOptions.remove(ConfigOptions.BOOTSTRAP_SERVERS.key());
         actualOptions.remove(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
         assertThat(actualOptions.size()).isEqualTo(expectedOptions.size());

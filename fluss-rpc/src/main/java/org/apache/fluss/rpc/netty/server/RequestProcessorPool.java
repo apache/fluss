@@ -77,8 +77,7 @@ final class RequestProcessorPool {
 
     public synchronized void start() {
         this.workerPool =
-                Executors.newFixedThreadPool(
-                        processors.length, new ExecutorThreadFactory("fluss-netty-server-worker"));
+                Executors.newFixedThreadPool(processors.length, new ExecutorThreadFactory("fluss-netty-server-worker"));
         for (RequestProcessor processor : processors) {
             workerPool.execute(processor);
         }
@@ -97,30 +96,26 @@ final class RequestProcessorPool {
                 shutdownFutures.add(processor.getShutdownFuture());
             }
         }
-        return FutureUtils.runAfterwards(
-                FutureUtils.completeAll(shutdownFutures),
-                () -> {
-                    if (workerPool != null) {
-                        workerPool.shutdown();
-                    }
-                });
+        return FutureUtils.runAfterwards(FutureUtils.completeAll(shutdownFutures), () -> {
+            if (workerPool != null) {
+                workerPool.shutdown();
+            }
+        });
         // service and requestChannel shutdown is handled outside.
     }
 
     private RequestHandler<?>[] initializeRequestHandlers(
             List<NetworkProtocolPlugin> protocolPlugins, RpcGatewayService service) {
-        int maxRequestTypeId =
-                Arrays.stream(RequestType.values())
-                        .mapToInt(type -> type.id)
-                        .max()
-                        .orElseThrow(() -> new IllegalStateException("No response type found."));
+        int maxRequestTypeId = Arrays.stream(RequestType.values())
+                .mapToInt(type -> type.id)
+                .max()
+                .orElseThrow(() -> new IllegalStateException("No response type found."));
         RequestHandler<?>[] requestHandlers = new RequestHandler[maxRequestTypeId + 1];
         for (NetworkProtocolPlugin protocol : protocolPlugins) {
             RequestHandler<?> requestHandler = protocol.createRequestHandler(service);
             int id = requestHandler.requestType().id;
             if (requestHandlers[id] != null) {
-                throw new IllegalStateException(
-                        "Duplicate protocol found for request type id " + id + ".");
+                throw new IllegalStateException("Duplicate protocol found for request type id " + id + ".");
             }
             requestHandlers[id] = requestHandler;
         }

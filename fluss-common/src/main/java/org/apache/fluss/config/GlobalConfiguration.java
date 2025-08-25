@@ -79,29 +79,26 @@ public class GlobalConfiguration {
             dynamicProperties.removeConfig(SERVER_CONFIG_FILE);
             yamlConfigFile = new File(configFileName);
             if (!yamlConfigFile.exists() && !yamlConfigFile.isFile()) {
-                throw new IllegalConfigurationException(
-                        "The given configuration file name '"
-                                + configFileName
-                                + "' ("
-                                + yamlConfigFile.getAbsolutePath()
-                                + ") does not describe an existing file.");
+                throw new IllegalConfigurationException("The given configuration file name '"
+                        + configFileName
+                        + "' ("
+                        + yamlConfigFile.getAbsolutePath()
+                        + ") does not describe an existing file.");
             }
         }
 
         if (yamlConfigFile == null) {
             // try to load from the default conf dir
             if (defaultConfigDir == null) {
-                throw new IllegalArgumentException(
-                        "Given configuration directory is null, cannot load configuration");
+                throw new IllegalArgumentException("Given configuration directory is null, cannot load configuration");
             }
             final File confDirFile = new File(defaultConfigDir);
             if (!(confDirFile.exists())) {
-                throw new IllegalConfigurationException(
-                        "The given configuration directory name '"
-                                + defaultConfigDir
-                                + "' ("
-                                + confDirFile.getAbsolutePath()
-                                + ") does not describe an existing directory.");
+                throw new IllegalConfigurationException("The given configuration directory name '"
+                        + defaultConfigDir
+                        + "' ("
+                        + confDirFile.getAbsolutePath()
+                        + ") does not describe an existing directory.");
             }
             // get Fluss yaml configuration file from dir
             yamlConfigFile = new File(confDirFile, FLUSS_CONF_FILENAME);
@@ -120,13 +117,11 @@ public class GlobalConfiguration {
     }
 
     private static void logConfiguration(String prefix, Configuration config) {
-        config.confData.forEach(
-                (key, value) ->
-                        LOG.info(
-                                "{} configuration property: {}={}",
-                                prefix,
-                                key,
-                                value instanceof Password ? Password.HIDDEN_CONTENT : value));
+        config.confData.forEach((key, value) -> LOG.info(
+                "{} configuration property: {}={}",
+                prefix,
+                key,
+                value instanceof Password ? Password.HIDDEN_CONTENT : value));
     }
 
     /**
@@ -153,8 +148,7 @@ public class GlobalConfiguration {
     private static Configuration loadYAMLResource(File file) {
         final Configuration config = new Configuration();
 
-        try (BufferedReader reader =
-                new BufferedReader(new InputStreamReader(new FileInputStream(file)))) {
+        try (BufferedReader reader = new BufferedReader(new InputStreamReader(new FileInputStream(file)))) {
 
             String line;
             int lineNo = 0;
@@ -170,12 +164,11 @@ public class GlobalConfiguration {
 
                     // skip line with no valid key-value pair
                     if (kv.length == 1) {
-                        LOG.warn(
-                                "Error while trying to split key and value in configuration file "
-                                        + file
-                                        + ":"
-                                        + lineNo
-                                        + ": Line is not a key-value pair (missing space after ':'?)");
+                        LOG.warn("Error while trying to split key and value in configuration file "
+                                + file
+                                + ":"
+                                + lineNo
+                                + ": Line is not a key-value pair (missing space after ':'?)");
                         continue;
                     }
 
@@ -184,12 +177,11 @@ public class GlobalConfiguration {
 
                     // sanity check
                     if (key.length() == 0 || value.length() == 0) {
-                        LOG.warn(
-                                "Error after splitting key and value in configuration file "
-                                        + file
-                                        + ":"
-                                        + lineNo
-                                        + ": Key or value was empty");
+                        LOG.warn("Error after splitting key and value in configuration file "
+                                + file
+                                + ":"
+                                + lineNo
+                                + ": Key or value was empty");
                         continue;
                     }
 

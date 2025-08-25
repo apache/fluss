@@ -61,8 +61,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
     private static final ObjectMapper OBJECT_MAPPER = new ObjectMapper();
     private static final ThreadLocal<Long> currentCommitSnapshotId = new ThreadLocal<>();
 
-    public IcebergLakeCommitter(IcebergCatalogProvider icebergCatalogProvider, TablePath tablePath)
-            throws IOException {
+    public IcebergLakeCommitter(IcebergCatalogProvider icebergCatalogProvider, TablePath tablePath) throws IOException {
         this.icebergCatalog = icebergCatalogProvider.get();
         this.icebergTable = getTable(tablePath);
         // register iceberg listener
@@ -91,8 +90,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
     }
 
     @Override
-    public long commit(IcebergCommittable committable, Map<String, String> snapshotProperties)
-            throws IOException {
+    public long commit(IcebergCommittable committable, Map<String, String> snapshotProperties) throws IOException {
         try {
             // Refresh table to get latest metadata
             icebergTable.refresh();
@@ -130,15 +128,13 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             Long commitSnapshotId = currentCommitSnapshotId.get();
             currentCommitSnapshotId.remove();
 
-            return checkNotNull(
-                    commitSnapshotId, "Iceberg committed snapshot id must be non-null.");
+            return checkNotNull(commitSnapshotId, "Iceberg committed snapshot id must be non-null.");
         } catch (Exception e) {
             throw new IOException("Failed to commit to Iceberg table.", e);
         }
     }
 
-    private void addFlussProperties(
-            SnapshotUpdate<?> operation, Map<String, String> snapshotProperties) {
+    private void addFlussProperties(SnapshotUpdate<?> operation, Map<String, String> snapshotProperties) {
         operation.set("commit-user", FLUSS_LAKE_TIERING_COMMIT_USER);
         for (Map.Entry<String, String> entry : snapshotProperties.entrySet()) {
             operation.set(entry.getKey(), entry.getValue());
@@ -147,52 +143,44 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
 
     @Override
     public void abort(IcebergCommittable committable) {
-        List<String> dataFilesToDelete =
-                committable.getDataFiles().stream()
-                        .map(file -> file.path().toString())
-                        .collect(Collectors.toList());
+        List<String> dataFilesToDelete = committable.getDataFiles().stream()
+                .map(file -> file.path().toString())
+                .collect(Collectors.toList());
         CatalogUtil.deleteFiles(icebergTable.io(), dataFilesToDelete, "data file", true);
 
-        List<String> deleteFilesToDelete =
-                committable.getDeleteFiles().stream()
-                        .map(file -> file.path().toString())
-                        .collect(Collectors.toList());
+        List<String> deleteFilesToDelete = committable.getDeleteFiles().stream()
+                .map(file -> file.path().toString())
+                .collect(Collectors.toList());
         CatalogUtil.deleteFiles(icebergTable.io(), deleteFilesToDelete, "delete file", true);
     }
 
     @Nullable
     @Override
-    public CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss)
-            throws IOException {
+    public CommittedLakeSnapshot getMissingLakeSnapshot(@Nullable Long latestLakeSnapshotIdOfFluss) throws IOException {
         // todo: may refactor to common methods?
-        Snapshot latestLakeSnapshot =
-                getCommittedLatestSnapshotOfLake(FLUSS_LAKE_TIERING_COMMIT_USER);
+        Snapshot latestLakeSnapshot = getCommittedLatestSnapshotOfLake(FLUSS_LAKE_TIERING_COMMIT_USER);
 
         if (latestLakeSnapshot == null) {
             return null;
         }
 
         // Check if there's a gap between Fluss and Iceberg snapshots
-        if (latestLakeSnapshotIdOfFluss != null
-                && latestLakeSnapshot.snapshotId() <= latestLakeSnapshotIdOfFluss) {
+        if (latestLakeSnapshotIdOfFluss != null && latestLakeSnapshot.snapshotId() <= latestLakeSnapshotIdOfFluss) {
             return null;
         }
 
-        CommittedLakeSnapshot committedLakeSnapshot =
-                new CommittedLakeSnapshot(latestLakeSnapshot.snapshotId());
+        CommittedLakeSnapshot committedLakeSnapshot = new CommittedLakeSnapshot(latestLakeSnapshot.snapshotId());
 
         // Reconstruct bucket offsets from snapshot properties
         Map<String, String> properties = latestLakeSnapshot.summary();
         if (properties == null) {
-            throw new IOException(
-                    "Failed to load committed lake snapshot properties from Iceberg.");
+            throw new IOException("Failed to load committed lake snapshot properties from Iceberg.");
         }
 
         String flussOffsetProperties = properties.get(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY);
         if (flussOffsetProperties == null) {
-            throw new IllegalArgumentException(
-                    "Cannot resume tiering from snapshot without bucket offset properties. "
-                            + "The snapshot was committed to Iceberg but missing Fluss metadata.");
+            throw new IllegalArgumentException("Cannot resume tiering from snapshot without bucket offset properties. "
+                    + "The snapshot was committed to Iceberg but missing Fluss metadata.");
         }
 
         for (JsonNode node : OBJECT_MAPPER.readTree(flussOffsetProperties)) {
@@ -204,8 +192,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                         bucketOffset.getBucket(),
                         bucketOffset.getLogOffset());
             } else {
-                committedLakeSnapshot.addBucket(
-                        bucketOffset.getBucket(), bucketOffset.getLogOffset());
+                committedLakeSnapshot.addBucket(bucketOffset.getBucket(), bucketOffset.getLogOffset());
             }
         }
 
@@ -243,8 +230,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
         for (Snapshot snapshot : snapshots) {
             Map<String, String> summary = snapshot.summary();
             if (summary != null && commitUser.equals(summary.get("commit-user"))) {
-                if (latestFlussSnapshot == null
-                        || snapshot.snapshotId() > latestFlussSnapshot.snapshotId()) {
+                if (latestFlussSnapshot == null || snapshot.snapshotId() > latestFlussSnapshot.snapshotId()) {
                     latestFlussSnapshot = snapshot;
                 }
             }

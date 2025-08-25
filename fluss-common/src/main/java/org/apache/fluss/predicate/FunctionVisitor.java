@@ -38,9 +38,7 @@ public interface FunctionVisitor<T> extends PredicateVisitor<T> {
                 .function()
                 .visit(
                         this,
-                        predicate.children().stream()
-                                .map(p -> p.visit(this))
-                                .collect(Collectors.toList()));
+                        predicate.children().stream().map(p -> p.visit(this)).collect(Collectors.toList()));
     }
 
     // ----------------- Unary functions ------------------------

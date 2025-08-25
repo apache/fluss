@@ -64,10 +64,8 @@ public class AuthenticationFactory {
      *     definitions.
      * @return A supplier for creating the client authenticator.
      */
-    public static Supplier<ClientAuthenticator> loadClientAuthenticatorSupplier(
-            Configuration configuration) {
-        String clientAuthenticateProtocol =
-                configuration.getString(ConfigOptions.CLIENT_SECURITY_PROTOCOL);
+    public static Supplier<ClientAuthenticator> loadClientAuthenticatorSupplier(Configuration configuration) {
+        String clientAuthenticateProtocol = configuration.getString(ConfigOptions.CLIENT_SECURITY_PROTOCOL);
         ClientAuthenticationPlugin authenticatorPlugin =
                 discoverPlugin(clientAuthenticateProtocol, ClientAuthenticationPlugin.class, null);
         return () -> authenticatorPlugin.createClientAuthenticator(configuration);
@@ -86,19 +84,14 @@ public class AuthenticationFactory {
             Configuration configuration) {
         PluginManager pluginManager = PluginUtils.createPluginManagerFromRootFolder(configuration);
         Map<String, Supplier<ServerAuthenticator>> serverAuthenticators = new HashMap<>();
-        Map<String, String> protocolMap =
-                configuration.getMap(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP);
+        Map<String, String> protocolMap = configuration.getMap(ConfigOptions.SERVER_SECURITY_PROTOCOL_MAP);
         for (Map.Entry<String, String> protocolEntry : protocolMap.entrySet()) {
             String serverAuthenticateProtocol = protocolEntry.getValue();
             ServerAuthenticationPlugin serverAuthenticatorPlugin =
-                    discoverPlugin(
-                            serverAuthenticateProtocol,
-                            ServerAuthenticationPlugin.class,
-                            pluginManager);
+                    discoverPlugin(serverAuthenticateProtocol, ServerAuthenticationPlugin.class, pluginManager);
 
             serverAuthenticators.put(
-                    protocolEntry.getKey(),
-                    () -> serverAuthenticatorPlugin.createServerAuthenticator(configuration));
+                    protocolEntry.getKey(), () -> serverAuthenticatorPlugin.createServerAuthenticator(configuration));
         }
         return serverAuthenticators;
     }
@@ -119,11 +112,8 @@ public class AuthenticationFactory {
 
         Collection<Supplier<Iterator<AuthenticationPlugin>>> pluginSuppliers = new ArrayList<>(2);
         pluginSuppliers.add(
-                () ->
-                        ServiceLoader.load(
-                                        AuthenticationPlugin.class,
-                                        AuthenticationPlugin.class.getClassLoader())
-                                .iterator());
+                () -> ServiceLoader.load(AuthenticationPlugin.class, AuthenticationPlugin.class.getClassLoader())
+                        .iterator());
         if (pluginManager != null) {
             pluginSuppliers.add(() -> pluginManager.load(AuthenticationPlugin.class));
         }
@@ -141,23 +131,20 @@ public class AuthenticationFactory {
         }
         if (matchingPlugins.isEmpty()) {
             throw new ValidationException(
-                    String.format(
-                            "No plugin for the protocol '%s' is found in the classpath.",
-                            protocol));
+                    String.format("No plugin for the protocol '%s' is found in the classpath.", protocol));
         }
 
         if (matchingPlugins.size() > 1) {
-            throw new ValidationException(
-                    String.format(
-                            "Multiple plugins for the same protocol '%s' are found in the classpath.\n\n"
-                                    + "Available plugins are:\n\n"
-                                    + "%s",
-                            protocol,
-                            matchingPlugins.stream()
-                                    .map(f -> f.getClass().getName())
-                                    .distinct()
-                                    .sorted()
-                                    .collect(Collectors.joining("\n"))));
+            throw new ValidationException(String.format(
+                    "Multiple plugins for the same protocol '%s' are found in the classpath.\n\n"
+                            + "Available plugins are:\n\n"
+                            + "%s",
+                    protocol,
+                    matchingPlugins.stream()
+                            .map(f -> f.getClass().getName())
+                            .distinct()
+                            .sorted()
+                            .collect(Collectors.joining("\n"))));
         }
 
         return matchingPlugins.get(0);

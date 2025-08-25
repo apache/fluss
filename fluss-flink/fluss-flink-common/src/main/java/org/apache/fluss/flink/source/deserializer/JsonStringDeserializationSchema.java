@@ -116,8 +116,7 @@ public class JsonStringDeserializationSchema implements FlussDeserializationSche
     public void open(InitializationContext context) throws Exception {
         if (runtimeConverter == null) {
             this.runtimeConverter =
-                    new FlussRowToJsonConverters(timestampFormat)
-                            .createNullableConverter(context.getRowSchema());
+                    new FlussRowToJsonConverters(timestampFormat).createNullableConverter(context.getRowSchema());
         }
         objectMapper = new ObjectMapper();
 

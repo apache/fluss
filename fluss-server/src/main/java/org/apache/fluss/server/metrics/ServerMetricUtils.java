@@ -69,7 +69,8 @@ public class ServerMetricUtils {
     static final String MEMORY_COMMITTED = "committed";
     static final String MEMORY_MAX = "max";
 
-    @VisibleForTesting static final String METRIC_GROUP_MEMORY = "memory";
+    @VisibleForTesting
+    static final String METRIC_GROUP_MEMORY = "memory";
 
     public static CoordinatorMetricGroup createCoordinatorGroup(
             MetricRegistry registry, String clusterId, String hostname, String serverId) {
@@ -80,11 +81,7 @@ public class ServerMetricUtils {
     }
 
     public static TabletServerMetricGroup createTabletServerGroup(
-            MetricRegistry registry,
-            String clusterId,
-            @Nullable String rack,
-            String hostname,
-            int serverId) {
+            MetricRegistry registry, String clusterId, @Nullable String rack, String hostname, int serverId) {
         TabletServerMetricGroup tabletServerMetricGroup =
                 new TabletServerMetricGroup(registry, clusterId, rack, hostname, serverId);
         createAndInitializeStatusMetricGroup(tabletServerMetricGroup);
@@ -99,8 +96,7 @@ public class ServerMetricUtils {
         return zkRoot.substring(1);
     }
 
-    private static void createAndInitializeStatusMetricGroup(
-            AbstractMetricGroup parentMetricGroup) {
+    private static void createAndInitializeStatusMetricGroup(AbstractMetricGroup parentMetricGroup) {
         MetricGroup statusGroup = parentMetricGroup.addGroup(METRIC_GROUP_STATUS_NAME);
         instantiateStatusMetrics(statusGroup);
     }
@@ -108,8 +104,7 @@ public class ServerMetricUtils {
     private static void instantiateStatusMetrics(MetricGroup metricGroup) {
         MetricGroup jvm = metricGroup.addGroup("JVM");
         instantiateClassLoaderMetrics(jvm.addGroup("classLoader"));
-        instantiateGarbageCollectorMetrics(
-                jvm.addGroup("GC"), ManagementFactory.getGarbageCollectorMXBeans());
+        instantiateGarbageCollectorMetrics(jvm.addGroup("GC"), ManagementFactory.getGarbageCollectorMXBeans());
         instantiateMemoryMetrics(jvm.addGroup(METRIC_GROUP_MEMORY));
         instantiateThreadMetrics(jvm.addGroup("threads"));
         instantiateCPUMetrics(jvm.addGroup("CPU"));
@@ -129,16 +124,12 @@ public class ServerMetricUtils {
             Gauge<Long> timeGauge = gcGroup.gauge("time", garbageCollector::getCollectionTime);
             gcGroup.meter("timeMsPerSecond", new MeterView(timeGauge));
         }
-        Gauge<Long> totalGcTime =
-                () ->
-                        garbageCollectors.stream()
-                                .mapToLong(GarbageCollectorMXBean::getCollectionTime)
-                                .sum();
-        Gauge<Long> totalGcCount =
-                () ->
-                        garbageCollectors.stream()
-                                .mapToLong(GarbageCollectorMXBean::getCollectionCount)
-                                .sum();
+        Gauge<Long> totalGcTime = () -> garbageCollectors.stream()
+                .mapToLong(GarbageCollectorMXBean::getCollectionTime)
+                .sum();
+        Gauge<Long> totalGcCount = () -> garbageCollectors.stream()
+                .mapToLong(GarbageCollectorMXBean::getCollectionCount)
+                .sum();
         MetricGroup allGroup = metrics.addGroup("all");
         allGroup.gauge("count", totalGcCount);
         Gauge<Long> totalTime = allGroup.gauge("time", totalGcTime);
@@ -154,13 +145,11 @@ public class ServerMetricUtils {
         try {
             final ObjectName directObjectName = new ObjectName(directBufferPoolName);
             MetricGroup direct = metrics.addGroup("direct");
-            direct.<Long, Gauge<Long>>gauge(
-                    "count", new AttributeGauge<>(con, directObjectName, "Count", -1L));
+            direct.<Long, Gauge<Long>>gauge("count", new AttributeGauge<>(con, directObjectName, "Count", -1L));
             direct.<Long, Gauge<Long>>gauge(
                     "memoryUsed", new AttributeGauge<>(con, directObjectName, "MemoryUsed", -1L));
             direct.<Long, Gauge<Long>>gauge(
-                    "totalCapacity",
-                    new AttributeGauge<>(con, directObjectName, "TotalCapacity", -1L));
+                    "totalCapacity", new AttributeGauge<>(con, directObjectName, "TotalCapacity", -1L));
         } catch (MalformedObjectNameException e) {
             LOG.warn("Could not create object name {}.", directBufferPoolName, e);
         }
@@ -168,13 +157,11 @@ public class ServerMetricUtils {
         try {
             final ObjectName mappedObjectName = new ObjectName(mappedBufferPoolName);
             MetricGroup mapped = metrics.addGroup("mapped");
-            mapped.<Long, Gauge<Long>>gauge(
-                    "count", new AttributeGauge<>(con, mappedObjectName, "Count", -1L));
+            mapped.<Long, Gauge<Long>>gauge("count", new AttributeGauge<>(con, mappedObjectName, "Count", -1L));
             mapped.<Long, Gauge<Long>>gauge(
                     "memoryUsed", new AttributeGauge<>(con, mappedObjectName, "MemoryUsed", -1L));
             mapped.<Long, Gauge<Long>>gauge(
-                    "totalCapacity",
-                    new AttributeGauge<>(con, mappedObjectName, "TotalCapacity", -1L));
+                    "totalCapacity", new AttributeGauge<>(con, mappedObjectName, "TotalCapacity", -1L));
         } catch (MalformedObjectNameException e) {
             LOG.warn("Could not create object name {}.", mappedBufferPoolName, e);
         }
@@ -194,10 +181,9 @@ public class ServerMetricUtils {
 
     @VisibleForTesting
     static void instantiateMetaspaceMemoryMetrics(final MetricGroup parentMetricGroup) {
-        final List<MemoryPoolMXBean> memoryPoolMXBeans =
-                ManagementFactory.getMemoryPoolMXBeans().stream()
-                        .filter(bean -> "Metaspace".equals(bean.getName()))
-                        .collect(Collectors.toList());
+        final List<MemoryPoolMXBean> memoryPoolMXBeans = ManagementFactory.getMemoryPoolMXBeans().stream()
+                .filter(bean -> "Metaspace".equals(bean.getName()))
+                .collect(Collectors.toList());
         if (memoryPoolMXBeans.isEmpty()) {
             LOG.info(
                     "The '{}' metrics will not be exposed because no pool named 'Metaspace' could be found. This might be caused by the used JVM.",
@@ -221,7 +207,8 @@ public class ServerMetricUtils {
                 MEMORY_USED, () -> memoryUsageSupplier.get().getUsed());
         metricGroup.<Long, Gauge<Long>>gauge(
                 MEMORY_COMMITTED, () -> memoryUsageSupplier.get().getCommitted());
-        metricGroup.<Long, Gauge<Long>>gauge(MEMORY_MAX, () -> memoryUsageSupplier.get().getMax());
+        metricGroup.<Long, Gauge<Long>>gauge(
+                MEMORY_MAX, () -> memoryUsageSupplier.get().getMax());
     }
 
     private static void instantiateThreadMetrics(MetricGroup metrics) {
@@ -232,8 +219,7 @@ public class ServerMetricUtils {
     private static void instantiateCPUMetrics(MetricGroup metrics) {
         try {
             final com.sun.management.OperatingSystemMXBean mxBean =
-                    (com.sun.management.OperatingSystemMXBean)
-                            ManagementFactory.getOperatingSystemMXBean();
+                    (com.sun.management.OperatingSystemMXBean) ManagementFactory.getOperatingSystemMXBean();
             metrics.<Double, Gauge<Double>>gauge("load", mxBean::getProcessCpuLoad);
             metrics.<Long, Gauge<Long>>gauge("time", mxBean::getProcessCpuTime);
         } catch (Exception e) {
@@ -250,8 +236,7 @@ public class ServerMetricUtils {
         private final String attributeName;
         private final T errorValue;
 
-        private AttributeGauge(
-                MBeanServer server, ObjectName objectName, String attributeName, T errorValue) {
+        private AttributeGauge(MBeanServer server, ObjectName objectName, String attributeName, T errorValue) {
             this.server = checkNotNull(server);
             this.objectName = checkNotNull(objectName);
             this.attributeName = checkNotNull(attributeName);
@@ -263,10 +248,7 @@ public class ServerMetricUtils {
         public T getValue() {
             try {
                 return (T) server.getAttribute(objectName, attributeName);
-            } catch (MBeanException
-                    | AttributeNotFoundException
-                    | InstanceNotFoundException
-                    | ReflectionException e) {
+            } catch (MBeanException | AttributeNotFoundException | InstanceNotFoundException | ReflectionException e) {
                 LOG.warn("Could not read attribute {}.", attributeName, e);
                 return errorValue;
             }

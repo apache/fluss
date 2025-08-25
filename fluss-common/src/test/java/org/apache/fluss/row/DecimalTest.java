@@ -46,19 +46,16 @@ public class DecimalTest {
         assertThat(Decimal.fromUnscaledBytes(bigDecimal2.unscaledValue().toByteArray(), 23, 10))
                 .isEqualTo(Decimal.fromBigDecimal(bigDecimal2, 23, 10));
         // toUnscaledBytes
-        assertThat(
-                        Decimal.fromUnscaledBytes(bigDecimal1.unscaledValue().toByteArray(), 15, 5)
-                                .toUnscaledBytes())
+        assertThat(Decimal.fromUnscaledBytes(bigDecimal1.unscaledValue().toByteArray(), 15, 5)
+                        .toUnscaledBytes())
                 .isEqualTo(bigDecimal1.unscaledValue().toByteArray());
-        assertThat(
-                        Decimal.fromUnscaledBytes(bigDecimal2.unscaledValue().toByteArray(), 23, 10)
-                                .toUnscaledBytes())
+        assertThat(Decimal.fromUnscaledBytes(bigDecimal2.unscaledValue().toByteArray(), 23, 10)
+                        .toUnscaledBytes())
                 .isEqualTo(bigDecimal2.unscaledValue().toByteArray());
 
         Decimal decimal1 = Decimal.fromUnscaledLong(10, 5, 0);
         Decimal decimal2 = Decimal.fromUnscaledLong(15, 5, 0);
-        assertThat(Decimal.fromBigDecimal(new BigDecimal(10), 5, 0).hashCode())
-                .isEqualTo(decimal1.hashCode());
+        assertThat(Decimal.fromBigDecimal(new BigDecimal(10), 5, 0).hashCode()).isEqualTo(decimal1.hashCode());
         assertThat(decimal1.copy()).isEqualTo(decimal1);
         assertThat(Decimal.fromUnscaledLong(decimal1.toUnscaledLong(), 5, 0)).isEqualTo(decimal1);
         assertThat(Decimal.fromUnscaledBytes(decimal1.toUnscaledBytes(), 5, 0)).isEqualTo(decimal1);
@@ -67,14 +64,13 @@ public class DecimalTest {
         assertThat(doubleValue(castFrom("123456789012345678901234567890123456789", 39, 0)))
                 .isCloseTo(1.2345678901234568E38, Offset.offset(0.01));
         assertThat(add(decimal1, decimal2, 5, 0).toUnscaledLong()).isEqualTo(25);
-        assertThat(
-                        add(
-                                        castFrom("123456789012345678901234567890123456789", 39, 0),
-                                        castFrom("123456789012345678901234567890123456789", 39, 0),
-                                        39,
-                                        0)
-                                .toBigDecimal()
-                                .intValue())
+        assertThat(add(
+                                castFrom("123456789012345678901234567890123456789", 39, 0),
+                                castFrom("123456789012345678901234567890123456789", 39, 0),
+                                39,
+                                0)
+                        .toBigDecimal()
+                        .intValue())
                 .isEqualTo(1551041066);
         assertThat(castToIntegral(decimal1)).isEqualTo(10);
         assertThat(castToBoolean(decimal1)).isTrue();
@@ -100,12 +96,10 @@ public class DecimalTest {
     public void testNotCompact() {
         Decimal decimal1 = Decimal.fromBigDecimal(new BigDecimal(10), 20, 0);
         Decimal decimal2 = Decimal.fromBigDecimal(new BigDecimal(15), 20, 0);
-        assertThat(Decimal.fromBigDecimal(new BigDecimal(10), 20, 0).hashCode())
-                .isEqualTo(decimal1.hashCode());
+        assertThat(Decimal.fromBigDecimal(new BigDecimal(10), 20, 0).hashCode()).isEqualTo(decimal1.hashCode());
         assertThat(decimal1.copy()).isEqualTo(decimal1);
         assertThat(Decimal.fromBigDecimal(decimal1.toBigDecimal(), 20, 0)).isEqualTo(decimal1);
-        assertThat(Decimal.fromUnscaledBytes(decimal1.toUnscaledBytes(), 20, 0))
-                .isEqualTo(decimal1);
+        assertThat(Decimal.fromUnscaledBytes(decimal1.toUnscaledBytes(), 20, 0)).isEqualTo(decimal1);
         assertThat(decimal1.compareTo(decimal2)).isLessThan(0);
         assertThat(doubleValue(castFrom(10.5, 20, 1))).isEqualTo(10.5);
         assertThat(add(decimal1, decimal2, 20, 0).toBigDecimal().longValue()).isEqualTo(25);

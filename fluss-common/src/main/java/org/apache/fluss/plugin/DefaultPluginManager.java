@@ -66,12 +66,8 @@ public class DefaultPluginManager implements PluginManager {
     /** List of patterns for classes that should always be resolved from the parent ClassLoader. */
     private final String[] alwaysParentFirstPatterns;
 
-    public DefaultPluginManager(
-            Collection<PluginDescriptor> pluginDescriptors, String[] alwaysParentFirstPatterns) {
-        this(
-                pluginDescriptors,
-                DefaultPluginManager.class.getClassLoader(),
-                alwaysParentFirstPatterns);
+    public DefaultPluginManager(Collection<PluginDescriptor> pluginDescriptors, String[] alwaysParentFirstPatterns) {
+        this(pluginDescriptors, DefaultPluginManager.class.getClassLoader(), alwaysParentFirstPatterns);
     }
 
     public DefaultPluginManager(
@@ -90,28 +86,18 @@ public class DefaultPluginManager implements PluginManager {
         ArrayList<Iterator<P>> combinedIterators = new ArrayList<>(pluginDescriptors.size());
         for (PluginDescriptor pluginDescriptor : pluginDescriptors) {
             String pluginId = pluginDescriptor.getPluginId();
-            PluginLoader pluginLoader =
-                    inLock(
-                            pluginLoadersLock,
-                            () -> {
-                                if (pluginLoaders.containsKey(pluginId)) {
-                                    LOG.info(
-                                            "Plugin loader with ID found, reusing it: {}",
-                                            pluginId);
-                                    return pluginLoaders.get(pluginId);
-                                } else {
-                                    LOG.info(
-                                            "Plugin loader with ID not found, creating it: {}",
-                                            pluginId);
-                                    PluginLoader newPluginLoader =
-                                            PluginLoader.create(
-                                                    pluginDescriptor,
-                                                    parentClassLoader,
-                                                    alwaysParentFirstPatterns);
-                                    pluginLoaders.putIfAbsent(pluginId, newPluginLoader);
-                                    return newPluginLoader;
-                                }
-                            });
+            PluginLoader pluginLoader = inLock(pluginLoadersLock, () -> {
+                if (pluginLoaders.containsKey(pluginId)) {
+                    LOG.info("Plugin loader with ID found, reusing it: {}", pluginId);
+                    return pluginLoaders.get(pluginId);
+                } else {
+                    LOG.info("Plugin loader with ID not found, creating it: {}", pluginId);
+                    PluginLoader newPluginLoader =
+                            PluginLoader.create(pluginDescriptor, parentClassLoader, alwaysParentFirstPatterns);
+                    pluginLoaders.putIfAbsent(pluginId, newPluginLoader);
+                    return newPluginLoader;
+                }
+            });
             combinedIterators.add(pluginLoader.load(service));
         }
         return Iterators.concat(combinedIterators.iterator());

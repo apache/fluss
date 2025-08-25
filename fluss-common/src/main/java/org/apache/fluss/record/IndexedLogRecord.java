@@ -94,8 +94,7 @@ public class IndexedLogRecord implements LogRecord {
         }
 
         IndexedLogRecord that = (IndexedLogRecord) o;
-        return sizeInBytes == that.sizeInBytes
-                && segment.equalTo(that.segment, offset, that.offset, sizeInBytes);
+        return sizeInBytes == that.sizeInBytes && segment.equalTo(that.segment, offset, that.offset, sizeInBytes);
     }
 
     @Override
@@ -124,16 +123,11 @@ public class IndexedLogRecord implements LogRecord {
         int rowOffset = LENGTH_LENGTH + ATTRIBUTES_LENGTH;
         // TODO currently, we only support indexed row.
         return deserializeInternalRow(
-                sizeInBytes - rowOffset,
-                segment,
-                offset + rowOffset,
-                fieldTypes,
-                LogFormat.INDEXED);
+                sizeInBytes - rowOffset, segment, offset + rowOffset, fieldTypes, LogFormat.INDEXED);
     }
 
     /** Write the record to input `target` and return its size. */
-    public static int writeTo(OutputView outputView, ChangeType changeType, IndexedRow row)
-            throws IOException {
+    public static int writeTo(OutputView outputView, ChangeType changeType, IndexedRow row) throws IOException {
         int sizeInBytes = calculateSizeInBytes(row);
 
         // TODO using varint instead int to reduce storage size.
@@ -150,11 +144,7 @@ public class IndexedLogRecord implements LogRecord {
     }
 
     public static IndexedLogRecord readFrom(
-            MemorySegment segment,
-            int position,
-            long logOffset,
-            long logTimestamp,
-            DataType[] colTypes) {
+            MemorySegment segment, int position, long logOffset, long logTimestamp, DataType[] colTypes) {
         int sizeInBytes = segment.getInt(position);
         IndexedLogRecord logRecord = new IndexedLogRecord(logOffset, logTimestamp, colTypes);
         logRecord.pointTo(segment, position, sizeInBytes + LENGTH_LENGTH);
@@ -172,24 +162,18 @@ public class IndexedLogRecord implements LogRecord {
         return size;
     }
 
-    private static void serializeInternalRow(OutputView outputView, IndexedRow row)
-            throws IOException {
+    private static void serializeInternalRow(OutputView outputView, IndexedRow row) throws IOException {
         IndexedRowWriter.serializeIndexedRow(row, outputView);
     }
 
     private static InternalRow deserializeInternalRow(
-            int length,
-            MemorySegment segment,
-            int position,
-            DataType[] fieldTypes,
-            LogFormat logFormat) {
+            int length, MemorySegment segment, int position, DataType[] fieldTypes, LogFormat logFormat) {
         if (logFormat == LogFormat.INDEXED) {
             IndexedRow indexedRow = new IndexedRow(fieldTypes);
             indexedRow.pointTo(segment, position, length);
             return indexedRow;
         } else {
-            throw new IllegalArgumentException(
-                    "No such internal row deserializer for: " + logFormat);
+            throw new IllegalArgumentException("No such internal row deserializer for: " + logFormat);
         }
     }
 }

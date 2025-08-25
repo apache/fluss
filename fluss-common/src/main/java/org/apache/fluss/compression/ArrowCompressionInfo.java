@@ -26,8 +26,7 @@ public class ArrowCompressionInfo {
 
     public static final ArrowCompressionInfo DEFAULT_COMPRESSION =
             new ArrowCompressionInfo(ArrowCompressionType.ZSTD, 3);
-    public static final ArrowCompressionInfo NO_COMPRESSION =
-            new ArrowCompressionInfo(ArrowCompressionType.NONE, -1);
+    public static final ArrowCompressionInfo NO_COMPRESSION = new ArrowCompressionInfo(ArrowCompressionType.NONE, -1);
 
     private final ArrowCompressionType compressionType;
     private final int compressionLevel;
@@ -52,27 +51,21 @@ public class ArrowCompressionInfo {
     /** Create an Arrow compression codec based on the compression type and level. */
     public CompressionCodec createCompressionCodec() {
         return ArrowCompressionFactory.INSTANCE.createCodec(
-                ArrowCompressionFactory.toArrowCompressionCodecType(compressionType),
-                compressionLevel);
+                ArrowCompressionFactory.toArrowCompressionCodecType(compressionType), compressionLevel);
     }
 
     @Override
     public String toString() {
-        return compressionLevel == -1
-                ? compressionType.toString()
-                : compressionType + "-" + compressionLevel;
+        return compressionLevel == -1 ? compressionType.toString() : compressionType + "-" + compressionLevel;
     }
 
     public static ArrowCompressionInfo fromConf(Configuration conf) {
-        ArrowCompressionType compressionType =
-                conf.get(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE);
+        ArrowCompressionType compressionType = conf.get(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE);
         if (compressionType == ArrowCompressionType.ZSTD) {
             int compressionLevel = conf.get(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL);
             if (compressionLevel < 1 || compressionLevel > 22) {
                 throw new IllegalArgumentException(
-                        "Invalid ZSTD compression level: "
-                                + compressionLevel
-                                + ". Expected a value between 1 and 22.");
+                        "Invalid ZSTD compression level: " + compressionLevel + ". Expected a value between 1 and 22.");
             }
             return new ArrowCompressionInfo(compressionType, compressionLevel);
         } else {

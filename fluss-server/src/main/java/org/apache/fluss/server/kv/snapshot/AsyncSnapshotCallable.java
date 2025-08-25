@@ -63,13 +63,15 @@ public abstract class AsyncSnapshotCallable<T> implements Callable<T> {
     private static final Logger LOG = LoggerFactory.getLogger(AsyncSnapshotCallable.class);
 
     /** This is used to atomically claim ownership for the resource cleanup. */
-    @Nonnull private final AtomicBoolean resourceCleanupOwnershipTaken;
+    @Nonnull
+    private final AtomicBoolean resourceCleanupOwnershipTaken;
 
     /**
      * Registers streams that can block in I/O during snapshot. Forwards close from
      * taskCancelCloseableRegistry.
      */
-    @Nonnull protected final CloseableRegistry snapshotCloseableRegistry;
+    @Nonnull
+    protected final CloseableRegistry snapshotCloseableRegistry;
 
     protected AsyncSnapshotCallable() {
         this.snapshotCloseableRegistry = new CloseableRegistry();
@@ -110,8 +112,7 @@ public abstract class AsyncSnapshotCallable<T> implements Callable<T> {
      * Creates a future task from this and registers it with the given {@link CloseableRegistry}.
      * The task is unregistered again in FutureTask#done().
      */
-    public AsyncSnapshotTask toAsyncSnapshotFutureTask(@Nonnull CloseableRegistry taskRegistry)
-            throws IOException {
+    public AsyncSnapshotTask toAsyncSnapshotFutureTask(@Nonnull CloseableRegistry taskRegistry) throws IOException {
         return new AsyncSnapshotTask(taskRegistry);
     }
 
@@ -121,9 +122,11 @@ public abstract class AsyncSnapshotCallable<T> implements Callable<T> {
      */
     public class AsyncSnapshotTask extends FutureTask<T> {
 
-        @Nonnull private final CloseableRegistry taskRegistry;
+        @Nonnull
+        private final CloseableRegistry taskRegistry;
 
-        @Nonnull private final Closeable cancelOnClose;
+        @Nonnull
+        private final Closeable cancelOnClose;
 
         private AsyncSnapshotTask(@Nonnull CloseableRegistry taskRegistry) throws IOException {
             super(AsyncSnapshotCallable.this);

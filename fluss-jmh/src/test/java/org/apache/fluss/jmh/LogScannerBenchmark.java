@@ -86,18 +86,17 @@ public class LogScannerBenchmark {
         Admin admin = conn.getAdmin();
 
         // create table
-        TableDescriptor descriptor =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("small_str", DataTypes.STRING())
-                                        .column("bi", DataTypes.BIGINT())
-                                        .column("long_str", DataTypes.STRING())
-                                        .build())
-                        .distributedBy(1) // 1 bucket for benchmark
-                        .build();
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(Schema.newBuilder()
+                        .column("small_str", DataTypes.STRING())
+                        .column("bi", DataTypes.BIGINT())
+                        .column("long_str", DataTypes.STRING())
+                        .build())
+                .distributedBy(1) // 1 bucket for benchmark
+                .build();
         admin.createDatabase("benchmark_db", DatabaseDescriptor.EMPTY, false).get();
-        admin.createTable(TablePath.of("benchmark_db", "benchmark_table"), descriptor, false).get();
+        admin.createTable(TablePath.of("benchmark_db", "benchmark_table"), descriptor, false)
+                .get();
 
         // produce logs
         this.table = conn.getTable(TablePath.of("benchmark_db", "benchmark_table"));
@@ -129,11 +128,10 @@ public class LogScannerBenchmark {
     }
 
     public static void main(String[] args) throws RunnerException {
-        Options opt =
-                new OptionsBuilder()
-                        .verbosity(VerboseMode.NORMAL)
-                        .include(".*" + LogScannerBenchmark.class.getCanonicalName() + ".*")
-                        .build();
+        Options opt = new OptionsBuilder()
+                .verbosity(VerboseMode.NORMAL)
+                .include(".*" + LogScannerBenchmark.class.getCanonicalName() + ".*")
+                .build();
 
         new Runner(opt).run();
     }

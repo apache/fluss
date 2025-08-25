@@ -34,18 +34,15 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public class LakeSourceUtils {
 
     @SuppressWarnings("unchecked")
-    public static LakeSource<LakeSplit> createLakeSource(
-            TablePath tablePath, Map<String, String> properties) {
+    public static LakeSource<LakeSplit> createLakeSource(TablePath tablePath, Map<String, String> properties) {
         Map<String, String> catalogProperties =
                 DataLakeUtils.extractLakeCatalogProperties(Configuration.fromMap(properties));
         Configuration lakeConfig = Configuration.fromMap(catalogProperties);
 
-        String dataLake =
-                Configuration.fromMap(properties)
-                        .get(ConfigOptions.TABLE_DATALAKE_FORMAT)
-                        .toString();
-        LakeStoragePlugin lakeStoragePlugin =
-                LakeStoragePluginSetUp.fromDataLakeFormat(dataLake, null);
+        String dataLake = Configuration.fromMap(properties)
+                .get(ConfigOptions.TABLE_DATALAKE_FORMAT)
+                .toString();
+        LakeStoragePlugin lakeStoragePlugin = LakeStoragePluginSetUp.fromDataLakeFormat(dataLake, null);
         LakeStorage lakeStorage = checkNotNull(lakeStoragePlugin).createLakeStorage(lakeConfig);
         return (LakeSource<LakeSplit>) lakeStorage.createLakeSource(tablePath);
     }

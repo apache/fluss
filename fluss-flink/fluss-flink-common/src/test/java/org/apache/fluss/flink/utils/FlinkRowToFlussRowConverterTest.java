@@ -47,8 +47,7 @@ public class FlinkRowToFlussRowConverterTest {
         RowType flussRowType = createAllRowType();
 
         // test indexed row converter
-        try (FlinkRowToFlussRowConverter converter =
-                FlinkRowToFlussRowConverter.create(toFlinkRowType(flussRowType))) {
+        try (FlinkRowToFlussRowConverter converter = FlinkRowToFlussRowConverter.create(toFlinkRowType(flussRowType))) {
             InternalRow internalRow = converter.toInternalRow(genRowDataForAllType());
             assertThat(internalRow.getFieldCount()).isEqualTo(19);
             assertAllTypeEquals(internalRow);
@@ -56,8 +55,7 @@ public class FlinkRowToFlussRowConverterTest {
 
         // test compacted row converter
         try (FlinkRowToFlussRowConverter converter =
-                FlinkRowToFlussRowConverter.create(
-                        toFlinkRowType(flussRowType), KvFormat.COMPACTED)) {
+                FlinkRowToFlussRowConverter.create(toFlinkRowType(flussRowType), KvFormat.COMPACTED)) {
             InternalRow internalRow = converter.toInternalRow(genRowDataForAllType());
             assertThat(internalRow.getFieldCount()).isEqualTo(19);
             assertAllTypeEquals(internalRow);
@@ -83,9 +81,7 @@ public class FlinkRowToFlussRowConverterTest {
         genericRowData.setField(14, DecimalData.fromBigDecimal(new BigDecimal(10), 20, 0));
         genericRowData.setField(15, TimestampData.fromEpochMillis(1698235273182L, 0));
         genericRowData.setField(16, TimestampData.fromEpochMillis(1698235273182L, 0));
-        genericRowData.setField(
-                17,
-                TimestampData.fromLocalDateTime(LocalDateTime.parse("2023-10-25T12:01:13.182")));
+        genericRowData.setField(17, TimestampData.fromLocalDateTime(LocalDateTime.parse("2023-10-25T12:01:13.182")));
         genericRowData.setField(18, null);
         return genericRowData;
     }

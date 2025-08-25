@@ -51,9 +51,7 @@ class TabletServerChangeWatcherTest {
     @Test
     void testServetChanges() throws Exception {
         ZooKeeperClient zookeeperClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+                ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getZooKeeperClient(NOPErrorHandler.INSTANCE);
         TestingEventManager eventManager = new TestingEventManager();
         TabletServerChangeWatcher tabletServerChangeWatcher =
                 new TabletServerChangeWatcher(zookeeperClient, eventManager);
@@ -62,26 +60,20 @@ class TabletServerChangeWatcherTest {
         // register new servers
         List<CoordinatorEvent> expectedEvents = new ArrayList<>();
         for (int i = 0; i < 10; i++) {
-            TabletServerRegistration tabletServerRegistration =
-                    new TabletServerRegistration(
-                            "rack" + i,
-                            Collections.singletonList(new Endpoint("host" + i, 1234, "CLIENT")),
-                            System.currentTimeMillis());
-            expectedEvents.add(
-                    new NewTabletServerEvent(
-                            new ServerInfo(
-                                    i,
-                                    tabletServerRegistration.getRack(),
-                                    tabletServerRegistration.getEndpoints(),
-                                    ServerType.TABLET_SERVER)));
+            TabletServerRegistration tabletServerRegistration = new TabletServerRegistration(
+                    "rack" + i,
+                    Collections.singletonList(new Endpoint("host" + i, 1234, "CLIENT")),
+                    System.currentTimeMillis());
+            expectedEvents.add(new NewTabletServerEvent(new ServerInfo(
+                    i,
+                    tabletServerRegistration.getRack(),
+                    tabletServerRegistration.getEndpoints(),
+                    ServerType.TABLET_SERVER)));
             zookeeperClient.registerTabletServer(i, tabletServerRegistration);
         }
 
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventManager.getEvents())
-                                .containsExactlyInAnyOrderElementsOf(expectedEvents));
+        retry(Duration.ofMinutes(1), () -> assertThat(eventManager.getEvents())
+                .containsExactlyInAnyOrderElementsOf(expectedEvents));
 
         // close it to mock the servers become down
         zookeeperClient.close();
@@ -91,11 +83,8 @@ class TabletServerChangeWatcherTest {
             expectedEvents.add(new DeadTabletServerEvent(i));
         }
 
-        retry(
-                Duration.ofMinutes(1),
-                () ->
-                        assertThat(eventManager.getEvents())
-                                .containsExactlyInAnyOrderElementsOf(expectedEvents));
+        retry(Duration.ofMinutes(1), () -> assertThat(eventManager.getEvents())
+                .containsExactlyInAnyOrderElementsOf(expectedEvents));
 
         tabletServerChangeWatcher.stop();
     }

@@ -28,6 +28,5 @@ public interface CompletedKvSnapshotCommitter {
      * @param bucketLeaderEpoch the bucket leader epoch when the snapshot is triggered
      * @throws Exception if report completed snapshot failed
      */
-    void commitKvSnapshot(CompletedSnapshot snapshot, int coordinatorEpoch, int bucketLeaderEpoch)
-            throws Exception;
+    void commitKvSnapshot(CompletedSnapshot snapshot, int coordinatorEpoch, int bucketLeaderEpoch) throws Exception;
 }

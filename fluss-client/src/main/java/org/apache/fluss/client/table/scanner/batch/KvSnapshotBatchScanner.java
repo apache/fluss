@@ -69,13 +69,14 @@ public class KvSnapshotBatchScanner implements BatchScanner {
 
     private static final Logger LOG = LoggerFactory.getLogger(KvSnapshotBatchScanner.class);
 
-    public static final CloseableIterator<InternalRow> NO_DATA_AVAILABLE =
-            CloseableIterator.emptyIterator();
+    public static final CloseableIterator<InternalRow> NO_DATA_AVAILABLE = CloseableIterator.emptyIterator();
 
     private final RowType tableRowType;
     private final TableBucket tableBucket;
     private final List<FsPathAndFileName> fsPathAndFileNames;
-    @Nullable private final int[] projectedFields;
+
+    @Nullable
+    private final int[] projectedFields;
 
     private final Path snapshotLocalDirectory;
     private final RemoteFileDownloader remoteFileDownloader;
@@ -90,7 +91,8 @@ public class KvSnapshotBatchScanner implements BatchScanner {
 
     private volatile SnapshotFilesReader snapshotFilesReader;
 
-    @Nullable private volatile Throwable initSnapshotFilesReaderException = null;
+    @Nullable
+    private volatile Throwable initSnapshotFilesReaderException = null;
 
     public KvSnapshotBatchScanner(
             RowType tableRowType,
@@ -106,8 +108,7 @@ public class KvSnapshotBatchScanner implements BatchScanner {
         this.projectedFields = projectedFields;
         this.kvFormat = kvFormat;
         // create a directory to store the snapshot files
-        this.snapshotLocalDirectory =
-                Paths.get(scannerTmpDir, String.format("kv-snapshots-%s", UUID.randomUUID()));
+        this.snapshotLocalDirectory = Paths.get(scannerTmpDir, String.format("kv-snapshots-%s", UUID.randomUUID()));
         this.remoteFileDownloader = remoteFileDownloader;
         this.closed = new AtomicBoolean(false);
         initReaderAsynchronously();
@@ -130,24 +131,21 @@ public class KvSnapshotBatchScanner implements BatchScanner {
         // the scanner will be closed by source reader thread after finished reading all records,
         // but the fetcher thread may still calling poll method
         ensureNoException();
-        return inLock(
-                lock,
-                () -> {
-                    try {
-                        if (snapshotFilesReader == null) {
-                            // wait for the reader to be ready,
-                            if (!readerIsReady.await(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
-                                // reader is still not ready
-                                return NO_DATA_AVAILABLE;
-                            }
-                        }
-                        return snapshotFilesReader.hasNext() ? snapshotFilesReader : null;
-                    } catch (InterruptedException e) {
-                        Thread.currentThread().interrupt();
-                        throw new FlussRuntimeException(
-                                "Interrupted when waiting for snapshot files reader.", e);
+        return inLock(lock, () -> {
+            try {
+                if (snapshotFilesReader == null) {
+                    // wait for the reader to be ready,
+                    if (!readerIsReady.await(timeout.toMillis(), TimeUnit.MILLISECONDS)) {
+                        // reader is still not ready
+                        return NO_DATA_AVAILABLE;
                     }
-                });
+                }
+                return snapshotFilesReader.hasNext() ? snapshotFilesReader : null;
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new FlussRuntimeException("Interrupted when waiting for snapshot files reader.", e);
+            }
+        });
     }
 
     /**
@@ -159,8 +157,7 @@ public class KvSnapshotBatchScanner implements BatchScanner {
     private void ensureNoException() {
         if (initSnapshotFilesReaderException != null) {
             throw new FlussRuntimeException(
-                    "Failed to initialize snapshot files reader.",
-                    initSnapshotFilesReaderException);
+                    "Failed to initialize snapshot files reader.", initSnapshotFilesReaderException);
         }
     }
 
@@ -173,51 +170,35 @@ public class KvSnapshotBatchScanner implements BatchScanner {
     }
 
     private void initReaderAsynchronously() {
-        CompletableFuture.runAsync(
-                () ->
-                        inLock(
-                                lock,
-                                () -> {
-                                    CloseableRegistry closeableRegistry = new CloseableRegistry();
-                                    try {
-                                        if (!snapshotLocalDirectory.toFile().mkdirs()) {
-                                            throw new IOException(
-                                                    String.format(
-                                                            "Failed to create directory %s for storing kv snapshot files.",
-                                                            snapshotLocalDirectory));
-                                        }
-                                        closeableRegistry.registerCloseable(
-                                                () ->
-                                                        FileUtils.deleteDirectoryQuietly(
-                                                                snapshotLocalDirectory.toFile()));
-                                        // todo: refactor transferAllToDirectory method to
-                                        // return a future so that we won't need to runAsync using
-                                        // the default thread pool
-                                        LOG.info(
-                                                "Start to download kv snapshot files to local directory for bucket {}.",
-                                                tableBucket);
-                                        long startTime = System.currentTimeMillis();
-                                        remoteFileDownloader.transferAllToDirectory(
-                                                fsPathAndFileNames,
-                                                snapshotLocalDirectory,
-                                                closeableRegistry);
-                                        LOG.info(
-                                                "Download kv snapshot files to local directory for bucket {} cost {} ms.",
-                                                tableBucket,
-                                                System.currentTimeMillis() - startTime);
-                                        snapshotFilesReader =
-                                                new SnapshotFilesReader(
-                                                        kvFormat,
-                                                        snapshotLocalDirectory,
-                                                        tableRowType,
-                                                        projectedFields);
-                                        readerIsReady.signalAll();
-                                    } catch (Throwable e) {
-                                        IOUtils.closeQuietly(closeableRegistry);
-                                        initSnapshotFilesReaderException = e;
-                                    } finally {
-                                        IOUtils.closeQuietly(closeableRegistry);
-                                    }
-                                }));
+        CompletableFuture.runAsync(() -> inLock(lock, () -> {
+            CloseableRegistry closeableRegistry = new CloseableRegistry();
+            try {
+                if (!snapshotLocalDirectory.toFile().mkdirs()) {
+                    throw new IOException(String.format(
+                            "Failed to create directory %s for storing kv snapshot files.", snapshotLocalDirectory));
+                }
+                closeableRegistry.registerCloseable(
+                        () -> FileUtils.deleteDirectoryQuietly(snapshotLocalDirectory.toFile()));
+                // todo: refactor transferAllToDirectory method to
+                // return a future so that we won't need to runAsync using
+                // the default thread pool
+                LOG.info("Start to download kv snapshot files to local directory for bucket {}.", tableBucket);
+                long startTime = System.currentTimeMillis();
+                remoteFileDownloader.transferAllToDirectory(
+                        fsPathAndFileNames, snapshotLocalDirectory, closeableRegistry);
+                LOG.info(
+                        "Download kv snapshot files to local directory for bucket {} cost {} ms.",
+                        tableBucket,
+                        System.currentTimeMillis() - startTime);
+                snapshotFilesReader =
+                        new SnapshotFilesReader(kvFormat, snapshotLocalDirectory, tableRowType, projectedFields);
+                readerIsReady.signalAll();
+            } catch (Throwable e) {
+                IOUtils.closeQuietly(closeableRegistry);
+                initSnapshotFilesReaderException = e;
+            } finally {
+                IOUtils.closeQuietly(closeableRegistry);
+            }
+        }));
     }
 }

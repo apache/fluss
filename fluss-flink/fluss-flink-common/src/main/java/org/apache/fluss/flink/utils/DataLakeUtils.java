@@ -36,17 +36,14 @@ public class DataLakeUtils {
     public static Map<String, String> extractLakeCatalogProperties(Configuration tableOptions) {
         DataLakeFormat datalakeFormat = tableOptions.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
         if (datalakeFormat == null) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "The datalake format is not set, please set it by %s",
-                            ConfigOptions.TABLE_DATALAKE_FORMAT.key()));
+            throw new IllegalArgumentException(String.format(
+                    "The datalake format is not set, please set it by %s", ConfigOptions.TABLE_DATALAKE_FORMAT.key()));
         }
 
         if (datalakeFormat != DataLakeFormat.PAIMON) {
-            throw new UnsupportedOperationException(
-                    String.format(
-                            "The datalake format %s " + " is not supported. Only %s is supported.",
-                            datalakeFormat, DataLakeFormat.PAIMON));
+            throw new UnsupportedOperationException(String.format(
+                    "The datalake format %s " + " is not supported. Only %s is supported.",
+                    datalakeFormat, DataLakeFormat.PAIMON));
         }
 
         // currently, extract datalake catalog config
@@ -55,8 +52,7 @@ public class DataLakeUtils {
     }
 
     public static Optional<DataLakeFormat> getDatalakeFormat(ReadableConfig tableOptions) {
-        Optional<DataLakeFormat> tableOptional =
-                tableOptions.getOptional(toFlinkOption(TABLE_DATALAKE_FORMAT));
+        Optional<DataLakeFormat> tableOptional = tableOptions.getOptional(toFlinkOption(TABLE_DATALAKE_FORMAT));
         if (tableOptional.isPresent()) {
             return tableOptional;
         }

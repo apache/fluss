@@ -63,11 +63,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** ITCase for {@link LogScannerImpl} as scan log from remote. */
 public class RemoteLogScannerITCase {
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(initConfig())
+            .build();
 
     private Connection conn;
     private Admin admin;
@@ -118,19 +117,17 @@ public class RemoteLogScannerITCase {
     @ParameterizedTest
     @ValueSource(strings = {"INDEXED", "ARROW"})
     void testScanFromRemoteAndProject(String format) throws Exception {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.INT())
-                        .column("c", DataTypes.STRING())
-                        .column("d", DataTypes.BIGINT())
-                        .build();
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .distributedBy(1)
-                        .logFormat(LogFormat.fromString(format))
-                        .build();
+        Schema schema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.INT())
+                .column("c", DataTypes.STRING())
+                .column("d", DataTypes.BIGINT())
+                .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(schema)
+                .distributedBy(1)
+                .logFormat(LogFormat.fromString(format))
+                .build();
         long tableId = createTable(DATA1_TABLE_PATH, tableDescriptor);
 
         // append a batch of data.
@@ -160,8 +157,7 @@ public class RemoteLogScannerITCase {
                 assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
                 assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
                 if (count % 2 == 0) {
-                    assertThat(scanRecord.getRow().getString(1).toString())
-                            .isEqualTo("hello, friend" + count);
+                    assertThat(scanRecord.getRow().getString(1).toString()).isEqualTo("hello, friend" + count);
                 } else {
                     // check null values
                     assertThat(scanRecord.getRow().isNullAt(1)).isTrue();
@@ -183,8 +179,7 @@ public class RemoteLogScannerITCase {
                 assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
                 assertThat(scanRecord.getRow().getInt(1)).isEqualTo(count);
                 if (count % 2 == 0) {
-                    assertThat(scanRecord.getRow().getString(0).toString())
-                            .isEqualTo("hello, friend" + count);
+                    assertThat(scanRecord.getRow().getString(0).toString()).isEqualTo("hello, friend" + count);
                 } else {
                     // check null values
                     assertThat(scanRecord.getRow().isNullAt(0)).isTrue();
@@ -198,30 +193,25 @@ public class RemoteLogScannerITCase {
 
     @Test
     void testPartitionTableFetchFromRemote() throws Exception {
-        final Schema data2NonPkSchema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .withComment("a is first column")
-                        .column("b", DataTypes.STRING())
-                        .withComment("b is second column")
-                        .column("c", DataTypes.STRING())
-                        .withComment("c is adding column")
-                        .build();
+        final Schema data2NonPkSchema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .withComment("a is first column")
+                .column("b", DataTypes.STRING())
+                .withComment("b is second column")
+                .column("c", DataTypes.STRING())
+                .withComment("c is adding column")
+                .build();
         final TablePath tablePath = DATA2_TABLE_PATH;
 
-        TableDescriptor partitionTableDescriptor =
-                TableDescriptor.builder()
-                        .schema(data2NonPkSchema)
-                        .distributedBy(1)
-                        .partitionedBy("c")
-                        .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
-                        .property(
-                                ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT,
-                                AutoPartitionTimeUnit.YEAR)
-                        .build();
+        TableDescriptor partitionTableDescriptor = TableDescriptor.builder()
+                .schema(data2NonPkSchema)
+                .distributedBy(1)
+                .partitionedBy("c")
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true)
+                .property(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR)
+                .build();
         long tableId = createTable(tablePath, partitionTableDescriptor);
-        Map<String, Long> partitionIdByNames =
-                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
+        Map<String, Long> partitionIdByNames = FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
         Table table = conn.getTable(tablePath);
         AppendWriter appendWriter = table.newAppend().createWriter();
         int recordsPerPartition = 5;
@@ -237,12 +227,10 @@ public class RemoteLogScannerITCase {
         }
 
         for (long id : partitionIdByNames.values()) {
-            FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(
-                    new TableBucket(tableId, id, 0));
+            FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(new TableBucket(tableId, id, 0));
         }
 
-        ClientToServerITCaseBase.verifyPartitionLogs(
-                table, DATA2_ROW_TYPE, expectPartitionAppendRows);
+        ClientToServerITCaseBase.verifyPartitionLogs(table, DATA2_ROW_TYPE, expectPartitionAppendRows);
     }
 
     @AfterEach
@@ -258,9 +246,9 @@ public class RemoteLogScannerITCase {
         }
     }
 
-    private long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
-            throws Exception {
-        admin.createDatabase(tablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, false).get();
+    private long createTable(TablePath tablePath, TableDescriptor tableDescriptor) throws Exception {
+        admin.createDatabase(tablePath.getDatabaseName(), DatabaseDescriptor.EMPTY, false)
+                .get();
         admin.createTable(tablePath, tableDescriptor, false).get();
         return admin.getTableInfo(tablePath).get().getTableId();
     }

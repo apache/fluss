@@ -20,15 +20,13 @@ package org.apache.fluss.flink.tiering.source;
 import org.apache.flink.api.common.typeutils.TypeInformationTestBase;
 
 /** Test for {@link TableBucketWriteResultTypeInfo}. */
-class TableBucketWriteResultTypeInfoTest
-        extends TypeInformationTestBase<TableBucketWriteResultTypeInfo<?>> {
+class TableBucketWriteResultTypeInfoTest extends TypeInformationTestBase<TableBucketWriteResultTypeInfo<?>> {
 
     @SuppressWarnings("rawtypes")
     @Override
     protected TableBucketWriteResultTypeInfo<?>[] getTestData() {
         return new TableBucketWriteResultTypeInfo<?>[] {
-            (TableBucketWriteResultTypeInfo)
-                    TableBucketWriteResultTypeInfo.of(TestingWriteResultSerializer::new)
+            (TableBucketWriteResultTypeInfo) TableBucketWriteResultTypeInfo.of(TestingWriteResultSerializer::new)
         };
     }
 }

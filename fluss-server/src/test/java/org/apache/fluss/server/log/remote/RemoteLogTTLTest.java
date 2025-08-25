@@ -77,8 +77,7 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         // NotifyRemoteLogOffsetsRequest do.
         logTablet.updateRemoteLogStartOffset(40L);
         logTablet.updateRemoteLogEndOffset(40L);
-        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
-                new CompletableFuture<>();
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future = new CompletableFuture<>();
         replicaManager.fetchLogRecords(
                 new FetchParams(-1, Integer.MAX_VALUE),
                 Collections.singletonMap(tb, new FetchReqInfo(tb.getTableId(), 0L, 1024 * 1024)),
@@ -86,7 +85,6 @@ final class RemoteLogTTLTest extends RemoteLogTestBase {
         Map<TableBucket, FetchLogResultForBucket> result = future.get();
         assertThat(result.size()).isEqualTo(1);
         FetchLogResultForBucket resultForBucket = result.get(tb);
-        assertThat(resultForBucket.getErrorCode())
-                .isEqualTo(Errors.LOG_OFFSET_OUT_OF_RANGE_EXCEPTION.code());
+        assertThat(resultForBucket.getErrorCode()).isEqualTo(Errors.LOG_OFFSET_OUT_OF_RANGE_EXCEPTION.code());
     }
 }

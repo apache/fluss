@@ -97,10 +97,7 @@ public class ReplicaFetcherThreadTest {
 
     @BeforeAll
     static void baseBeforeAll() {
-        zkClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+        zkClient = ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getZooKeeperClient(NOPErrorHandler.INSTANCE);
     }
 
     @BeforeEach
@@ -111,18 +108,10 @@ public class ReplicaFetcherThreadTest {
         leaderRM = createReplicaManager(leaderServerId);
         followerRM = createReplicaManager(followerServerId);
         // with local test leader end point.
-        leader =
-                new ServerNode(
-                        leaderServerId, "localhost", 9099, ServerType.TABLET_SERVER, "rack1");
-        ServerNode follower =
-                new ServerNode(
-                        followerServerId, "localhost", 10001, ServerType.TABLET_SERVER, "rack2");
-        followerFetcher =
-                new ReplicaFetcherThread(
-                        "test-fetcher-thread",
-                        followerRM,
-                        new TestingLeaderEndpoint(conf, leaderRM, follower),
-                        1000);
+        leader = new ServerNode(leaderServerId, "localhost", 9099, ServerType.TABLET_SERVER, "rack1");
+        ServerNode follower = new ServerNode(followerServerId, "localhost", 10001, ServerType.TABLET_SERVER, "rack2");
+        followerFetcher = new ReplicaFetcherThread(
+                "test-fetcher-thread", followerRM, new TestingLeaderEndpoint(conf, leaderRM, follower), 1000);
 
         registerTableInZkClient();
         // make the tb(table, 0) to be leader in leaderRM and to be follower in followerRM.
@@ -134,39 +123,27 @@ public class ReplicaFetcherThreadTest {
         // append records to leader.
         CompletableFuture<List<ProduceLogResultForBucket>> future = new CompletableFuture<>();
         leaderRM.appendRecordsToLog(
-                1000,
-                1,
-                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
-                future::complete);
+                1000, 1, Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)), future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0, 10L));
 
-        followerFetcher.addBuckets(
-                Collections.singletonMap(
-                        tb,
-                        new InitialFetchStatus(DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 0L)));
+        followerFetcher.addBuckets(Collections.singletonMap(
+                tb, new InitialFetchStatus(DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 0L)));
         assertThat(followerRM.getReplicaOrException(tb).getLocalLogEndOffset()).isEqualTo(0L);
 
         // begin fetcher thread.
         followerFetcher.start();
-        retry(
-                Duration.ofSeconds(20),
-                () ->
-                        assertThat(followerRM.getReplicaOrException(tb).getLocalLogEndOffset())
-                                .isEqualTo(10L));
+        retry(Duration.ofSeconds(20), () -> assertThat(
+                        followerRM.getReplicaOrException(tb).getLocalLogEndOffset())
+                .isEqualTo(10L));
 
         // append again.
         future = new CompletableFuture<>();
         leaderRM.appendRecordsToLog(
-                1000,
-                1,
-                Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
-                future::complete);
+                1000, 1, Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)), future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 10L, 20L));
-        retry(
-                Duration.ofSeconds(20),
-                () ->
-                        assertThat(followerRM.getReplicaOrException(tb).getLocalLogEndOffset())
-                                .isEqualTo(20L));
+        retry(Duration.ofSeconds(20), () -> assertThat(
+                        followerRM.getReplicaOrException(tb).getLocalLogEndOffset())
+                .isEqualTo(20L));
     }
 
     @Test
@@ -174,10 +151,8 @@ public class ReplicaFetcherThreadTest {
         Replica leaderReplica = leaderRM.getReplicaOrException(tb);
         Replica followerReplica = followerRM.getReplicaOrException(tb);
 
-        followerFetcher.addBuckets(
-                Collections.singletonMap(
-                        tb,
-                        new InitialFetchStatus(DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 0L)));
+        followerFetcher.addBuckets(Collections.singletonMap(
+                tb, new InitialFetchStatus(DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 0L)));
         assertThat(leaderReplica.getLocalLogEndOffset()).isEqualTo(0L);
         assertThat(leaderReplica.getLogHighWatermark()).isEqualTo(0L);
         assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(0L);
@@ -194,13 +169,9 @@ public class ReplicaFetcherThreadTest {
                     1, // don't wait ack
                     Collections.singletonMap(tb, genMemoryLogRecordsByObject(DATA1)),
                     future::complete);
-            assertThat(future.get())
-                    .containsOnly(new ProduceLogResultForBucket(tb, baseOffset, baseOffset + 10L));
-            retry(
-                    Duration.ofSeconds(20),
-                    () ->
-                            assertThat(followerReplica.getLocalLogEndOffset())
-                                    .isEqualTo(baseOffset + 10L));
+            assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, baseOffset, baseOffset + 10L));
+            retry(Duration.ofSeconds(20), () -> assertThat(followerReplica.getLocalLogEndOffset())
+                    .isEqualTo(baseOffset + 10L));
             assertThat(followerReplica.getLogHighWatermark())
                     .isGreaterThanOrEqualTo(leaderReplica.getLogHighWatermark());
         }
@@ -223,12 +194,9 @@ public class ReplicaFetcherThreadTest {
                 leaderRM.appendRecordsToLog(
                         1000,
                         1,
-                        Collections.singletonMap(
-                                tb, genMemoryLogRecordsWithWriterId(DATA1, writerId, i, 0)),
+                        Collections.singletonMap(tb, genMemoryLogRecordsWithWriterId(DATA1, writerId, i, 0)),
                         future::complete);
-                assertThat(future.get())
-                        .containsOnly(
-                                new ProduceLogResultForBucket(tb, baseOffset, baseOffset + 10L));
+                assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, baseOffset, baseOffset + 10L));
 
                 followerReplica.appendRecordsToFollower(
                         genMemoryLogRecordsWithWriterId(DATA1, writerId, i, baseOffset));
@@ -239,17 +207,13 @@ public class ReplicaFetcherThreadTest {
 
         // 2. append one batch to follower with (writerId=100L, batchSequence=5 offset=100L) to mock
         // follower have one batch ahead of leader.
-        followerReplica.appendRecordsToFollower(
-                genMemoryLogRecordsWithWriterId(DATA1, 100L, 5, 100L));
+        followerReplica.appendRecordsToFollower(genMemoryLogRecordsWithWriterId(DATA1, 100L, 5, 100L));
         assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(110L);
 
         // 3. mock becomeLeaderAndFollower as follower end.
         leaderReplica.updateLeaderEndOffsetSnapshot();
-        followerFetcher.addBuckets(
-                Collections.singletonMap(
-                        tb,
-                        new InitialFetchStatus(
-                                DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 110L)));
+        followerFetcher.addBuckets(Collections.singletonMap(
+                tb, new InitialFetchStatus(DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 110L)));
         followerFetcher.start();
 
         // 4. mock append to leader with different writer id (writerId=101L, batchSequence=5
@@ -272,47 +236,42 @@ public class ReplicaFetcherThreadTest {
                 Collections.singletonMap(tb, genMemoryLogRecordsWithWriterId(DATA1, 100L, 5, 110L)),
                 future::complete);
         assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 110L, 120L));
-        retry(
-                Duration.ofSeconds(20),
-                () -> assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(120L));
+        retry(Duration.ofSeconds(20), () -> assertThat(followerReplica.getLocalLogEndOffset())
+                .isEqualTo(120L));
     }
 
     private void registerTableInZkClient() throws Exception {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
-        zkClient.registerTable(
-                DATA1_TABLE_PATH,
-                TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
+        zkClient.registerTable(DATA1_TABLE_PATH, TableRegistration.newTable(DATA1_TABLE_ID, DATA1_TABLE_DESCRIPTOR));
         zkClient.registerSchema(DATA1_TABLE_PATH, DATA1_SCHEMA);
     }
 
     private void makeLeaderAndFollower() {
         leaderRM.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
-                Collections.singletonList(
-                        new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                tb,
+                Collections.singletonList(new NotifyLeaderAndIsrData(
+                        PhysicalTablePath.of(DATA1_TABLE_PATH),
+                        tb,
+                        Arrays.asList(leaderServerId, followerServerId),
+                        new LeaderAndIsr(
+                                leaderServerId,
+                                INITIAL_LEADER_EPOCH,
                                 Arrays.asList(leaderServerId, followerServerId),
-                                new LeaderAndIsr(
-                                        leaderServerId,
-                                        INITIAL_LEADER_EPOCH,
-                                        Arrays.asList(leaderServerId, followerServerId),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                INITIAL_COORDINATOR_EPOCH,
+                                INITIAL_BUCKET_EPOCH))),
                 result -> {});
         followerRM.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
-                Collections.singletonList(
-                        new NotifyLeaderAndIsrData(
-                                PhysicalTablePath.of(DATA1_TABLE_PATH),
-                                tb,
+                Collections.singletonList(new NotifyLeaderAndIsrData(
+                        PhysicalTablePath.of(DATA1_TABLE_PATH),
+                        tb,
+                        Arrays.asList(leaderServerId, followerServerId),
+                        new LeaderAndIsr(
+                                leaderServerId,
+                                INITIAL_LEADER_EPOCH,
                                 Arrays.asList(leaderServerId, followerServerId),
-                                new LeaderAndIsr(
-                                        leaderServerId,
-                                        INITIAL_LEADER_EPOCH,
-                                        Arrays.asList(leaderServerId, followerServerId),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                INITIAL_COORDINATOR_EPOCH,
+                                INITIAL_BUCKET_EPOCH))),
                 result -> {});
     }
 
@@ -322,21 +281,19 @@ public class ReplicaFetcherThreadTest {
         Scheduler scheduler = new FlussScheduler(2);
         scheduler.startup();
 
-        LogManager logManager =
-                LogManager.create(conf, zkClient, scheduler, SystemClock.getInstance());
+        LogManager logManager = LogManager.create(conf, zkClient, scheduler, SystemClock.getInstance());
         logManager.startup();
-        ReplicaManager replicaManager =
-                new TestingReplicaManager(
-                        conf,
-                        scheduler,
-                        logManager,
-                        null,
-                        zkClient,
-                        serverId,
-                        new TabletServerMetadataCache(new MetadataManager(null, conf), null),
-                        RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
-                        TestingMetricGroups.TABLET_SERVER_METRICS,
-                        SystemClock.getInstance());
+        ReplicaManager replicaManager = new TestingReplicaManager(
+                conf,
+                scheduler,
+                logManager,
+                null,
+                zkClient,
+                serverId,
+                new TabletServerMetadataCache(new MetadataManager(null, conf), null),
+                RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
+                TestingMetricGroups.TABLET_SERVER_METRICS,
+                SystemClock.getInstance());
         replicaManager.startup();
         return replicaManager;
     }

@@ -73,8 +73,7 @@ public enum ApiKeys {
     LAKE_TIERING_HEARTBEAT(1042, 0, 0, PRIVATE);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
-            Arrays.stream(ApiKeys.values())
-                    .collect(Collectors.toMap(key -> (int) key.id, Function.identity()));
+            Arrays.stream(ApiKeys.values()).collect(Collectors.toMap(key -> (int) key.id, Function.identity()));
 
     /** the permanent and immutable id of an API - this can't change ever. */
     public final short id;
@@ -83,11 +82,7 @@ public enum ApiKeys {
     public final short highestSupportedVersion;
     public final ApiVisibility visibility;
 
-    ApiKeys(
-            int apiKey,
-            int lowestSupportedVersion,
-            int highestSupportedVersion,
-            ApiVisibility visibility) {
+    ApiKeys(int apiKey, int lowestSupportedVersion, int highestSupportedVersion, ApiVisibility visibility) {
         this.id = (short) apiKey;
         this.lowestSupportedVersion = (short) lowestSupportedVersion;
         this.highestSupportedVersion = (short) highestSupportedVersion;

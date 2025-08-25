@@ -38,8 +38,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 /** Collection of utilities about time intervals. */
 public class TimeUtils {
 
-    private static final Map<String, ChronoUnit> LABEL_TO_UNIT_MAP =
-            Collections.unmodifiableMap(initMap());
+    private static final Map<String, ChronoUnit> LABEL_TO_UNIT_MAP = Collections.unmodifiableMap(initMap());
 
     /**
      * Parse the given string to a java {@link Duration}. The string is in format "{length
@@ -85,29 +84,25 @@ public class TimeUtils {
             value = Long.parseLong(number); // this throws a NumberFormatException on overflow
         } catch (NumberFormatException e) {
             throw new IllegalArgumentException(
-                    "The value '"
-                            + number
-                            + "' cannot be re represented as 64bit number (numeric overflow).");
+                    "The value '" + number + "' cannot be re represented as 64bit number (numeric overflow).");
         }
 
         if (unitLabel.isEmpty()) {
-            throw new IllegalArgumentException(
-                    "The time value '"
-                            + text
-                            + "' does not specify a time unit. "
-                            + "Time must be specified with units milliseconds (ms), seconds (s), "
-                            + "minutes (min), hour (h), or day (d). E.g. 50ms, 100s, 3h.");
+            throw new IllegalArgumentException("The time value '"
+                    + text
+                    + "' does not specify a time unit. "
+                    + "Time must be specified with units milliseconds (ms), seconds (s), "
+                    + "minutes (min), hour (h), or day (d). E.g. 50ms, 100s, 3h.");
         }
 
         ChronoUnit unit = LABEL_TO_UNIT_MAP.get(unitLabel);
         if (unit != null) {
             return Duration.of(value, unit);
         } else {
-            throw new IllegalArgumentException(
-                    "Time interval unit label '"
-                            + unitLabel
-                            + "' does not match any of the recognized units: "
-                            + TimeUnit.getAllUnits());
+            throw new IllegalArgumentException("Time interval unit label '"
+                    + unitLabel
+                    + "' does not match any of the recognized units: "
+                    + TimeUnit.getAllUnits());
         }
     }
 
@@ -144,34 +139,28 @@ public class TimeUtils {
     public static String formatWithHighestUnit(Duration duration) {
         long nanos = duration.toNanos();
 
-        List<TimeUnit> orderedUnits =
-                Arrays.asList(
-                        TimeUnit.NANOSECONDS,
-                        TimeUnit.MICROSECONDS,
-                        TimeUnit.MILLISECONDS,
-                        TimeUnit.SECONDS,
-                        TimeUnit.MINUTES,
-                        TimeUnit.HOURS,
-                        TimeUnit.DAYS);
+        List<TimeUnit> orderedUnits = Arrays.asList(
+                TimeUnit.NANOSECONDS,
+                TimeUnit.MICROSECONDS,
+                TimeUnit.MILLISECONDS,
+                TimeUnit.SECONDS,
+                TimeUnit.MINUTES,
+                TimeUnit.HOURS,
+                TimeUnit.DAYS);
 
-        TimeUnit highestIntegerUnit =
-                IntStream.range(0, orderedUnits.size())
-                        .sequential()
-                        .filter(
-                                idx ->
-                                        nanos % orderedUnits.get(idx).unit.getDuration().toNanos()
-                                                != 0)
-                        .boxed()
-                        .findFirst()
-                        .map(
-                                idx -> {
-                                    if (idx == 0) {
-                                        return orderedUnits.get(0);
-                                    } else {
-                                        return orderedUnits.get(idx - 1);
-                                    }
-                                })
-                        .orElse(TimeUnit.MILLISECONDS);
+        TimeUnit highestIntegerUnit = IntStream.range(0, orderedUnits.size())
+                .sequential()
+                .filter(idx -> nanos % orderedUnits.get(idx).unit.getDuration().toNanos() != 0)
+                .boxed()
+                .findFirst()
+                .map(idx -> {
+                    if (idx == 0) {
+                        return orderedUnits.get(0);
+                    } else {
+                        return orderedUnits.get(idx - 1);
+                    }
+                })
+                .orElse(TimeUnit.MILLISECONDS);
 
         return String.format(
                 "%d %s",
@@ -197,8 +186,7 @@ public class TimeUtils {
 
         TimeUnit(ChronoUnit unit, String[]... labels) {
             this.unit = unit;
-            this.labels =
-                    Arrays.stream(labels).flatMap(Arrays::stream).collect(Collectors.toList());
+            this.labels = Arrays.stream(labels).flatMap(Arrays::stream).collect(Collectors.toList());
         }
 
         /**

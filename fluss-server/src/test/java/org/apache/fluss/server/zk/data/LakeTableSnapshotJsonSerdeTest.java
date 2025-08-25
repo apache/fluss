@@ -34,12 +34,7 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
     @Override
     protected LakeTableSnapshot[] createObjects() {
         LakeTableSnapshot lakeTableSnapshot1 =
-                new LakeTableSnapshot(
-                        1,
-                        1L,
-                        Collections.emptyMap(),
-                        Collections.emptyMap(),
-                        Collections.emptyMap());
+                new LakeTableSnapshot(1, 1L, Collections.emptyMap(), Collections.emptyMap(), Collections.emptyMap());
 
         long tableId = 4;
         Map<TableBucket, Long> bucketLogStartOffset = new HashMap<>();
@@ -50,12 +45,7 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
         bucketLogEndOffset.put(new TableBucket(tableId, 2), 4L);
 
         LakeTableSnapshot lakeTableSnapshot2 =
-                new LakeTableSnapshot(
-                        2,
-                        tableId,
-                        bucketLogStartOffset,
-                        bucketLogEndOffset,
-                        Collections.emptyMap());
+                new LakeTableSnapshot(2, tableId, bucketLogStartOffset, bucketLogEndOffset, Collections.emptyMap());
 
         tableId = 5;
         bucketLogStartOffset = new HashMap<>();
@@ -69,13 +59,8 @@ class LakeTableSnapshotJsonSerdeTest extends JsonSerdeTestBase<LakeTableSnapshot
         bucketLogEndOffset.put(new TableBucket(tableId, 1L, 1), 3L);
         bucketLogEndOffset.put(new TableBucket(tableId, 2L, 1), 4L);
 
-        LakeTableSnapshot lakeTableSnapshot3 =
-                new LakeTableSnapshot(
-                        3,
-                        tableId,
-                        bucketLogStartOffset,
-                        bucketLogEndOffset,
-                        partitionNameIdByPartitionId);
+        LakeTableSnapshot lakeTableSnapshot3 = new LakeTableSnapshot(
+                3, tableId, bucketLogStartOffset, bucketLogEndOffset, partitionNameIdByPartitionId);
 
         return new LakeTableSnapshot[] {
             lakeTableSnapshot1, lakeTableSnapshot2, lakeTableSnapshot3,

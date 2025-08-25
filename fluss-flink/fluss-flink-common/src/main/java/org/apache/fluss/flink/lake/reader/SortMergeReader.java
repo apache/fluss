@@ -54,8 +54,7 @@ class SortMergeReader {
             CloseableIterator<KeyValueRow> changeLogIterator) {
         this.userKeyComparator = userKeyComparator;
         this.snapshotProjectedPkRow = ProjectedRow.from(pkIndexes);
-        this.lakeRecordIterator =
-                ConcatRecordIterator.wrap(lakeRecordIterators, userKeyComparator, pkIndexes);
+        this.lakeRecordIterator = ConcatRecordIterator.wrap(lakeRecordIterators, userKeyComparator, pkIndexes);
         this.changeLogIterator = changeLogIterator;
         this.changeLogIteratorWrapper = new ChangeLogIteratorWrapper();
         this.snapshotMergedRowIteratorWrapper = new SnapshotMergedRowIteratorWrapper();
@@ -66,9 +65,7 @@ class SortMergeReader {
     @Nullable
     public CloseableIterator<InternalRow> readBatch() {
         if (!lakeRecordIterator.hasNext()) {
-            return changeLogIterator.hasNext()
-                    ? changeLogIteratorWrapper.replace(changeLogIterator)
-                    : null;
+            return changeLogIterator.hasNext() ? changeLogIteratorWrapper.replace(changeLogIterator) : null;
         } else {
             CloseableIterator<SortMergeRows> mergedRecordIterator =
                     transform(lakeRecordIterator, this::sortMergeWithChangeLog);
@@ -84,39 +81,29 @@ class SortMergeReader {
         private final ProjectedRow snapshotProjectedPkRow2;
 
         public ConcatRecordIterator(
-                List<CloseableIterator<LogRecord>> iteratorList,
-                int[] pkIndexes,
-                Comparator<InternalRow> comparator) {
+                List<CloseableIterator<LogRecord>> iteratorList, int[] pkIndexes, Comparator<InternalRow> comparator) {
             this.snapshotProjectedPkRow1 = ProjectedRow.from(pkIndexes);
             this.snapshotProjectedPkRow2 = ProjectedRow.from(pkIndexes);
-            this.priorityQueue =
-                    new PriorityQueue<>(
-                            Math.max(1, iteratorList.size()),
-                            (s1, s2) ->
-                                    comparator.compare(
-                                            getComparableRow(s1, snapshotProjectedPkRow1),
-                                            getComparableRow(s2, snapshotProjectedPkRow2)));
+            this.priorityQueue = new PriorityQueue<>(
+                    Math.max(1, iteratorList.size()),
+                    (s1, s2) -> comparator.compare(
+                            getComparableRow(s1, snapshotProjectedPkRow1),
+                            getComparableRow(s2, snapshotProjectedPkRow2)));
             iteratorList.stream()
                     .filter(Iterator::hasNext)
-                    .map(
-                            iterator ->
-                                    SingleElementHeadIterator.addElementToHead(
-                                            iterator.next(), iterator))
+                    .map(iterator -> SingleElementHeadIterator.addElementToHead(iterator.next(), iterator))
                     .forEach(priorityQueue::add);
         }
 
         public static CloseableIterator<LogRecord> wrap(
-                List<CloseableIterator<LogRecord>> iteratorList,
-                Comparator<InternalRow> comparator,
-                int[] pkIndexes) {
+                List<CloseableIterator<LogRecord>> iteratorList, Comparator<InternalRow> comparator, int[] pkIndexes) {
             if (iteratorList.isEmpty()) {
                 return CloseableIterator.wrap(Collections.emptyIterator());
             }
             return new ConcatRecordIterator(iteratorList, pkIndexes, comparator);
         }
 
-        private InternalRow getComparableRow(
-                SingleElementHeadIterator<LogRecord> iterator, ProjectedRow projectedRow) {
+        private InternalRow getComparableRow(SingleElementHeadIterator<LogRecord> iterator, ProjectedRow projectedRow) {
             return projectedRow.replaceRow(iterator.peek().getRow());
         }
 
@@ -156,9 +143,7 @@ class SortMergeReader {
         KeyValueRow logKeyValueRow = changeLogIterator.next();
         // now, let's compare with the snapshot row with log row
         int compareResult =
-                userKeyComparator.compare(
-                        snapshotProjectedPkRow.replaceRow(lakeSnapshotRow),
-                        logKeyValueRow.keyRow());
+                userKeyComparator.compare(snapshotProjectedPkRow.replaceRow(lakeSnapshotRow), logKeyValueRow.keyRow());
         if (compareResult == 0) {
             // record of snapshot is equal to log, but the log record is delete,
             // we shouldn't emit record
@@ -175,8 +160,7 @@ class SortMergeReader {
         if (compareResult < 0) {
             // need to put back the log record to log iterator to make the log record
             // can be advanced again
-            changeLogIterator =
-                    SingleElementHeadIterator.addElementToHead(logKeyValueRow, changeLogIterator);
+            changeLogIterator = SingleElementHeadIterator.addElementToHead(logKeyValueRow, changeLogIterator);
             return new SortMergeRows(lakeSnapshotRow);
         } else {
             // snapshot record > log record
@@ -189,16 +173,12 @@ class SortMergeReader {
                 // get the next log record
                 logKeyValueRow = changeLogIterator.next();
                 // compare with the snapshot row,
-                compareResult =
-                        userKeyComparator.compare(
-                                snapshotProjectedPkRow.replaceRow(lakeSnapshotRow),
-                                logKeyValueRow.keyRow());
+                compareResult = userKeyComparator.compare(
+                        snapshotProjectedPkRow.replaceRow(lakeSnapshotRow), logKeyValueRow.keyRow());
                 // if snapshot record < the log record
                 if (compareResult < 0) {
                     // we can break the loop
-                    changeLogIterator =
-                            SingleElementHeadIterator.addElementToHead(
-                                    logKeyValueRow, changeLogIterator);
+                    changeLogIterator = SingleElementHeadIterator.addElementToHead(logKeyValueRow, changeLogIterator);
                     break;
                 } else if (compareResult > 0) {
                     // snapshot record > the log record
@@ -285,8 +265,7 @@ class SortMergeReader {
 
         public ChangeLogIteratorWrapper() {}
 
-        public ChangeLogIteratorWrapper replace(
-                CloseableIterator<KeyValueRow> changeLogRecordIterator) {
+        public ChangeLogIteratorWrapper replace(CloseableIterator<KeyValueRow> changeLogRecordIterator) {
             this.changeLogRecordIterator = changeLogRecordIterator;
             return this;
         }
@@ -317,8 +296,7 @@ class SortMergeReader {
         // the row to be returned
         private @Nullable InternalRow returnedRow;
 
-        public SnapshotMergedRowIteratorWrapper replace(
-                CloseableIterator<SortMergeRows> currentLakeSnapshotRecords) {
+        public SnapshotMergedRowIteratorWrapper replace(CloseableIterator<SortMergeRows> currentLakeSnapshotRecords) {
             this.currentLakeSnapshotRecords = currentLakeSnapshotRecords;
             this.returnedRow = null;
             this.currentMergedRows = null;
@@ -339,9 +317,7 @@ class SortMergeReader {
                 // if currentMergedRows is null, we need to get the next mergedRows
                 if (currentMergedRows == null) {
                     SortMergeRows sortMergeRows =
-                            currentLakeSnapshotRecords.hasNext()
-                                    ? currentLakeSnapshotRecords.next()
-                                    : null;
+                            currentLakeSnapshotRecords.hasNext() ? currentLakeSnapshotRecords.next() : null;
                     //  next mergedRows is not null and is not empty, set the currentMergedRows
                     if (sortMergeRows != null && !sortMergeRows.mergedRows.isEmpty()) {
                         currentMergedRows = sortMergeRows.mergedRows.iterator();
@@ -361,9 +337,7 @@ class SortMergeReader {
         @Override
         public InternalRow next() {
             InternalRow returnedRow =
-                    projectedRow == null
-                            ? this.returnedRow
-                            : projectedRow.replaceRow(this.returnedRow);
+                    projectedRow == null ? this.returnedRow : projectedRow.replaceRow(this.returnedRow);
             // now, we can set the internalRow to null,
             // if no any row remain in current merged row, set the currentMergedRows to null
             // to enable fetch next merged rows
@@ -391,8 +365,7 @@ class SortMergeReader {
     }
 
     private <R> CloseableIterator<R> transform(
-            CloseableIterator<LogRecord> originElementIterator,
-            final Function<InternalRow, R> function) {
+            CloseableIterator<LogRecord> originElementIterator, final Function<InternalRow, R> function) {
         return new CloseableIterator<R>() {
             private final CloseableIterator<LogRecord> inner = originElementIterator;
 

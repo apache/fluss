@@ -49,7 +49,8 @@ public class BinarySegmentUtilsTest {
         segments2[0] = MemorySegment.wrap(new byte[] {6, 0, 2, 5});
         segments2[1] = MemorySegment.wrap(new byte[] {6, 12, 15, 18});
 
-        assertThat(BinarySegmentUtils.equalsMultiSegments(segments1, 0, segments2, 0, 0)).isTrue();
+        assertThat(BinarySegmentUtils.equalsMultiSegments(segments1, 0, segments2, 0, 0))
+                .isTrue();
         assertThat(BinarySegmentUtils.equals(segments1, 0, segments2, 1, 3)).isTrue();
         assertThat(BinarySegmentUtils.equals(segments1, 0, segments2, 1, 6)).isTrue();
         assertThat(BinarySegmentUtils.equals(segments1, 0, segments2, 1, 7)).isFalse();
@@ -90,7 +91,8 @@ public class BinarySegmentUtilsTest {
             MemorySegment[] segments2 = new MemorySegment[] {MemorySegment.wrap(bytes)};
 
             BinarySegmentUtils.copyToBytes(segments1, 0, bytes, 0, 64);
-            assertThat(BinarySegmentUtils.equals(segments1, 0, segments2, 0, 64)).isTrue();
+            assertThat(BinarySegmentUtils.equals(segments1, 0, segments2, 0, 64))
+                    .isTrue();
         }
 
         {
@@ -98,7 +100,8 @@ public class BinarySegmentUtilsTest {
             MemorySegment[] segments2 = new MemorySegment[] {MemorySegment.wrap(bytes)};
 
             BinarySegmentUtils.copyToBytes(segments1, 32, bytes, 0, 14);
-            assertThat(BinarySegmentUtils.equals(segments1, 32, segments2, 0, 14)).isTrue();
+            assertThat(BinarySegmentUtils.equals(segments1, 32, segments2, 0, 14))
+                    .isTrue();
         }
 
         {
@@ -106,7 +109,8 @@ public class BinarySegmentUtilsTest {
             MemorySegment[] segments2 = new MemorySegment[] {MemorySegment.wrap(bytes)};
 
             BinarySegmentUtils.copyToBytes(segments1, 34, bytes, 0, 14);
-            assertThat(BinarySegmentUtils.equals(segments1, 34, segments2, 0, 14)).isTrue();
+            assertThat(BinarySegmentUtils.equals(segments1, 34, segments2, 0, 14))
+                    .isTrue();
         }
     }
 

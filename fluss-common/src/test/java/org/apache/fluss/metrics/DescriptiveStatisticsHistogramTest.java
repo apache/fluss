@@ -50,8 +50,7 @@ class DescriptiveStatisticsHistogramTest {
         assertOperations(copy);
     }
 
-    private static void assertOperations(
-            DescriptiveStatisticsHistogramStatistics.CommonMetricsSnapshot statistics) {
+    private static void assertOperations(DescriptiveStatisticsHistogramStatistics.CommonMetricsSnapshot statistics) {
         assertThat(statistics.getPercentile(0.5)).isOne();
         assertThat(statistics.getCount()).isEqualTo(9);
         assertThat(statistics.getMin()).isOne();

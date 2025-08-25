@@ -106,15 +106,14 @@ final class LogLoader {
         // Additionally, using 0 versus using logStartOffset does not affect correctness—they both
         // can restore the complete WriterState. The only difference is that using logStartOffset
         // can potentially skip over more segments.
-        LogTablet.rebuildWriterState(
-                writerStateManager, logSegments, 0, nextOffset, isCleanShutdown);
+        LogTablet.rebuildWriterState(writerStateManager, logSegments, 0, nextOffset, isCleanShutdown);
 
         LogSegment activeSegment = logSegments.lastSegment().get();
-        activeSegment.resizeIndexes((int) conf.get(ConfigOptions.LOG_INDEX_FILE_SIZE).getBytes());
+        activeSegment.resizeIndexes(
+                (int) conf.get(ConfigOptions.LOG_INDEX_FILE_SIZE).getBytes());
         return new LoadedLogOffsets(
                 newRecoveryPoint,
-                new LogOffsetMetadata(
-                        nextOffset, activeSegment.getBaseOffset(), activeSegment.getSizeInBytes()));
+                new LogOffsetMetadata(nextOffset, activeSegment.getBaseOffset(), activeSegment.getSizeInBytes()));
     }
 
     /**
@@ -155,8 +154,7 @@ final class LogLoader {
                         }
                     } else if (LocalLog.isLogFile(file)) {
                         long baseOffset = FlussPaths.offsetFromFile(file);
-                        LogSegment segment =
-                                LogSegment.open(logTabletDir, baseOffset, conf, true, 0, logFormat);
+                        LogSegment segment = LogSegment.open(logTabletDir, baseOffset, conf, true, 0, logFormat);
                         logSegments.add(segment);
                     }
                 }

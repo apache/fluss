@@ -48,9 +48,7 @@ public final class RowType extends DataType {
 
     public RowType(boolean isNullable, List<DataField> fields) {
         super(isNullable, DataTypeRoot.ROW);
-        this.fields =
-                Collections.unmodifiableList(
-                        new ArrayList<>(checkNotNull(fields, "Fields must not be null.")));
+        this.fields = Collections.unmodifiableList(new ArrayList<>(checkNotNull(fields, "Fields must not be null.")));
 
         validateFields(fields);
     }
@@ -117,24 +115,19 @@ public final class RowType extends DataType {
 
     @Override
     public DataType copy(boolean isNullable) {
-        return new RowType(
-                isNullable, fields.stream().map(DataField::copy).collect(Collectors.toList()));
+        return new RowType(isNullable, fields.stream().map(DataField::copy).collect(Collectors.toList()));
     }
 
     @Override
     public String asSummaryString() {
         return withNullability(
-                FORMAT,
-                fields.stream().map(DataField::asSummaryString).collect(Collectors.joining(", ")));
+                FORMAT, fields.stream().map(DataField::asSummaryString).collect(Collectors.joining(", ")));
     }
 
     @Override
     public String asSerializableString() {
         return withNullability(
-                FORMAT,
-                fields.stream()
-                        .map(DataField::asSerializableString)
-                        .collect(Collectors.joining(", ")));
+                FORMAT, fields.stream().map(DataField::asSerializableString).collect(Collectors.joining(", ")));
     }
 
     @Override
@@ -171,16 +164,13 @@ public final class RowType extends DataType {
     // --------------------------------------------------------------------------------------------
 
     private static void validateFields(List<DataField> fields) {
-        final List<String> fieldNames =
-                fields.stream().map(DataField::getName).collect(Collectors.toList());
+        final List<String> fieldNames = fields.stream().map(DataField::getName).collect(Collectors.toList());
         if (fieldNames.stream().anyMatch(StringUtils::isNullOrWhitespaceOnly)) {
-            throw new IllegalArgumentException(
-                    "Field names must contain at least one non-whitespace character.");
+            throw new IllegalArgumentException("Field names must contain at least one non-whitespace character.");
         }
-        final Set<String> duplicates =
-                fieldNames.stream()
-                        .filter(n -> Collections.frequency(fieldNames, n) > 1)
-                        .collect(Collectors.toSet());
+        final Set<String> duplicates = fieldNames.stream()
+                .filter(n -> Collections.frequency(fieldNames, n) > 1)
+                .collect(Collectors.toSet());
         if (!duplicates.isEmpty()) {
             throw new IllegalArgumentException(
                     String.format("Field names must be unique. Found duplicates: %s", duplicates));

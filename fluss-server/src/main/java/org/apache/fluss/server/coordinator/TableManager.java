@@ -87,14 +87,9 @@ public class TableManager {
      * @param tableId the table id
      * @param tableAssignment the assignment for the table.
      */
-    public void onCreateNewTable(
-            TablePath tablePath, long tableId, TableAssignment tableAssignment) {
+    public void onCreateNewTable(TablePath tablePath, long tableId, TableAssignment tableAssignment) {
         coordinatorContext.putTablePath(tableId, tablePath);
-        LOG.info(
-                "New table: {} with id {}, new table bucket assignment {}.",
-                tablePath,
-                tableId,
-                tableAssignment);
+        LOG.info("New table: {} with id {}, new table bucket assignment {}.", tablePath, tableId, tableAssignment);
         for (Map.Entry<Integer, BucketAssignment> assignment :
                 tableAssignment.getBucketAssignments().entrySet()) {
             int bucket = assignment.getKey();
@@ -135,18 +130,14 @@ public class TableManager {
             // put the bucket of the partition to context
             TableBucket tableBucket = new TableBucket(tableId, partitionId, bucket);
             coordinatorContext.updateBucketReplicaAssignment(tableBucket, replicas);
-            coordinatorContext.putPartition(
-                    partitionId, PhysicalTablePath.of(tablePath, partitionName));
+            coordinatorContext.putPartition(partitionId, PhysicalTablePath.of(tablePath, partitionName));
             newTableBuckets.add(tableBucket);
         }
         onCreateNewTableBucket(tableId, newTableBuckets);
     }
 
     private void onCreateNewTableBucket(long tableId, Set<TableBucket> tableBuckets) {
-        LOG.info(
-                "New table buckets: {} for table {}.",
-                tableBuckets,
-                coordinatorContext.getTablePathById(tableId));
+        LOG.info("New table buckets: {} for table {}.", tableBuckets, coordinatorContext.getTablePathById(tableId));
         // first, we transmit it to state NewBucket
         tableBucketStateMachine.handleStateChange(tableBuckets, BucketState.NewBucket);
         // then get all the replicas of the all table buckets
@@ -169,8 +160,7 @@ public class TableManager {
 
     /** Invoked with partitions of a table to be deleted. */
     public void onDeletePartition(long tableId, long partitionId) {
-        Set<TableBucket> deleteBuckets =
-                coordinatorContext.getAllBucketsForPartition(tableId, partitionId);
+        Set<TableBucket> deleteBuckets = coordinatorContext.getAllBucketsForPartition(tableId, partitionId);
         tableBucketStateMachine.handleStateChange(deleteBuckets, BucketState.OfflineBucket);
         tableBucketStateMachine.handleStateChange(deleteBuckets, BucketState.NonExistentBucket);
         onDeleteTableBucket(coordinatorContext.getAllReplicasForPartition(tableId, partitionId));
@@ -208,8 +198,7 @@ public class TableManager {
 
         for (long tableId : tablesToBeDeleted) {
             // if all replicas are marked as deleted successfully, then table deletion is done
-            if (coordinatorContext.areAllReplicasInState(
-                    tableId, ReplicaState.ReplicaDeletionSuccessful)) {
+            if (coordinatorContext.areAllReplicasInState(tableId, ReplicaState.ReplicaDeletionSuccessful)) {
                 completeDeleteTable(tableId);
                 LOG.info("Deletion of table with id {} successfully completed.", tableId);
             }
@@ -225,14 +214,12 @@ public class TableManager {
     }
 
     private void resumePartitionDeletions() {
-        Set<TablePartition> partitionsToDelete =
-                new HashSet<>(coordinatorContext.getPartitionsToBeDeleted());
+        Set<TablePartition> partitionsToDelete = new HashSet<>(coordinatorContext.getPartitionsToBeDeleted());
         Set<TablePartition> eligiblePartitionDeletion = new HashSet<>();
 
         for (TablePartition partition : partitionsToDelete) {
             // if all replicas are marked as deleted successfully, then partition deletion is done
-            if (coordinatorContext.areAllReplicasInState(
-                    partition, ReplicaState.ReplicaDeletionSuccessful)) {
+            if (coordinatorContext.areAllReplicasInState(partition, ReplicaState.ReplicaDeletionSuccessful)) {
                 completeDeletePartition(partition);
                 LOG.info("Deletion of partition {} successfully completed.", partition);
             }
@@ -260,9 +247,8 @@ public class TableManager {
     }
 
     private void completeDeletePartition(TablePartition tablePartition) {
-        Set<TableBucketReplica> replicas =
-                coordinatorContext.getAllReplicasForPartition(
-                        tablePartition.getTableId(), tablePartition.getPartitionId());
+        Set<TableBucketReplica> replicas = coordinatorContext.getAllReplicasForPartition(
+                tablePartition.getTableId(), tablePartition.getPartitionId());
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NonExistentReplica);
         deleteRemoteDirectory(tablePartition);
         try {
@@ -278,8 +264,7 @@ public class TableManager {
         // we can't delete the remote dir since we don't know tablePath now
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
         if (tableInfo != null) {
-            remoteStorageCleaner.deleteTableRemoteDir(
-                    tableInfo.getTablePath(), tableInfo.hasPrimaryKey(), tableId);
+            remoteStorageCleaner.deleteTableRemoteDir(tableInfo.getTablePath(), tableInfo.hasPrimaryKey(), tableId);
         }
     }
 
@@ -288,8 +273,7 @@ public class TableManager {
         // we can't delete the remote dir since we don't tablePath and partition name now
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tablePartition.getTableId());
         if (tableInfo != null) {
-            String partitionName =
-                    coordinatorContext.getPartitionName(tablePartition.getPartitionId());
+            String partitionName = coordinatorContext.getPartitionName(tablePartition.getPartitionId());
             if (partitionName != null) {
                 remoteStorageCleaner.deletePartitionRemoteDir(
                         PhysicalTablePath.of(tableInfo.getTablePath(), partitionName),
@@ -303,15 +287,13 @@ public class TableManager {
         // the table is queued for deletion and
         // no any replica is in state deletion started
         return coordinatorContext.isTableQueuedForDeletion(tableId)
-                && !coordinatorContext.isAnyReplicaInState(
-                        tableId, ReplicaState.ReplicaDeletionStarted);
+                && !coordinatorContext.isAnyReplicaInState(tableId, ReplicaState.ReplicaDeletionStarted);
     }
 
     private boolean isEligibleForDeletion(TablePartition tablePartition) {
         // the partition is queued for deletion and
         // no any replica is in state deletion started
         return coordinatorContext.isPartitionQueuedForDeletion(tablePartition)
-                && !coordinatorContext.isAnyReplicaInState(
-                        tablePartition, ReplicaState.ReplicaDeletionStarted);
+                && !coordinatorContext.isAnyReplicaInState(tablePartition, ReplicaState.ReplicaDeletionStarted);
     }
 }

@@ -64,44 +64,39 @@ public class NoticeFileChecker {
     // or
     // "This project bundles "net.jcip:jcip-annotations:1.0".
     private static final Pattern NOTICE_DEPENDENCY_PATTERN =
-            Pattern.compile(
-                    "- ([^ :]+):([^:]+):([^ ]+)($| )|.*bundles \"([^:]+):([^:]+):([^\"]+)\".*");
+            Pattern.compile("- ([^ :]+):([^:]+):([^ ]+)($| )|.*bundles \"([^:]+):([^:]+):([^\"]+)\".*");
 
     static int run(File buildResult, Path root) throws IOException {
         // parse included dependencies from build output
-        final Map<String, Set<Dependency>> modulesWithBundledDependencies =
-                combineDependencies(
-                        ShadeParser.parseShadeOutput(buildResult.toPath()),
-                        DependencyParser.parseDependencyCopyOutput(buildResult.toPath()));
+        final Map<String, Set<Dependency>> modulesWithBundledDependencies = combineDependencies(
+                ShadeParser.parseShadeOutput(buildResult.toPath()),
+                DependencyParser.parseDependencyCopyOutput(buildResult.toPath()));
 
         final Set<String> deployedModules = DeployParser.parseDeployOutput(buildResult);
 
-        LOG.info(
-                "Extracted "
-                        + deployedModules.size()
-                        + " modules that were deployed and "
-                        + modulesWithBundledDependencies.keySet().size()
-                        + " modules which bundle dependencies with a total of "
-                        + modulesWithBundledDependencies.values().stream().mapToInt(Set::size).sum()
-                        + " dependencies");
+        LOG.info("Extracted "
+                + deployedModules.size()
+                + " modules that were deployed and "
+                + modulesWithBundledDependencies.keySet().size()
+                + " modules which bundle dependencies with a total of "
+                + modulesWithBundledDependencies.values().stream()
+                        .mapToInt(Set::size)
+                        .sum()
+                + " dependencies");
 
         // find modules producing a shaded-jar
         List<Path> noticeFiles = findNoticeFiles(root);
         LOG.info("Found {} NOTICE files to check", noticeFiles.size());
 
-        final Map<String, Optional<NoticeContents>> moduleToNotice =
-                noticeFiles.stream()
-                        .collect(
-                                Collectors.toMap(
-                                        NoticeFileChecker::getModuleFromNoticeFile,
-                                        noticeFile -> {
-                                            try {
-                                                return NoticeParser.parseNoticeFile(noticeFile);
-                                            } catch (IOException e) {
-                                                // some machine issue
-                                                throw new RuntimeException(e);
-                                            }
-                                        }));
+        final Map<String, Optional<NoticeContents>> moduleToNotice = noticeFiles.stream()
+                .collect(Collectors.toMap(NoticeFileChecker::getModuleFromNoticeFile, noticeFile -> {
+                    try {
+                        return NoticeParser.parseNoticeFile(noticeFile);
+                    } catch (IOException e) {
+                        // some machine issue
+                        throw new RuntimeException(e);
+                    }
+                }));
 
         return run(modulesWithBundledDependencies, deployedModules, moduleToNotice);
     }
@@ -113,31 +108,22 @@ public class NoticeFileChecker {
             throws IOException {
         int severeIssueCount = 0;
 
-        final Set<String> modulesSkippingDeployment =
-                new HashSet<>(modulesWithBundledDependencies.keySet());
+        final Set<String> modulesSkippingDeployment = new HashSet<>(modulesWithBundledDependencies.keySet());
         modulesSkippingDeployment.removeAll(deployedModules);
 
         LOG.debug(
                 "The following {} modules are skipping deployment: {}",
                 modulesSkippingDeployment.size(),
-                modulesSkippingDeployment.stream()
-                        .sorted()
-                        .collect(Collectors.joining("\n\t", "\n\t", "")));
+                modulesSkippingDeployment.stream().sorted().collect(Collectors.joining("\n\t", "\n\t", "")));
 
         for (String moduleSkippingDeployment : modulesSkippingDeployment) {
             // TODO: this doesn't work for modules requiring a NOTICE that are bundled indirectly
             // TODO: via another non-deployed module
-            boolean bundledByDeployedModule =
-                    modulesWithBundledDependencies.entrySet().stream()
-                            .filter(
-                                    entry ->
-                                            entry.getValue().stream()
-                                                    .map(Dependency::getArtifactId)
-                                                    .anyMatch(
-                                                            artifactId ->
-                                                                    artifactId.equals(
-                                                                            moduleSkippingDeployment)))
-                            .anyMatch(entry -> !modulesSkippingDeployment.contains(entry.getKey()));
+            boolean bundledByDeployedModule = modulesWithBundledDependencies.entrySet().stream()
+                    .filter(entry -> entry.getValue().stream()
+                            .map(Dependency::getArtifactId)
+                            .anyMatch(artifactId -> artifactId.equals(moduleSkippingDeployment)))
+                    .anyMatch(entry -> !modulesSkippingDeployment.contains(entry.getKey()));
 
             if (!bundledByDeployedModule) {
                 modulesWithBundledDependencies.remove(moduleSkippingDeployment);
@@ -152,16 +138,14 @@ public class NoticeFileChecker {
         modulesWithBundledDependencies = filterFlussDependencies(modulesWithBundledDependencies);
 
         // check that all required NOTICE files exists
-        severeIssueCount +=
-                ensureRequiredNoticeFiles(modulesWithBundledDependencies, noticeFiles.keySet());
+        severeIssueCount += ensureRequiredNoticeFiles(modulesWithBundledDependencies, noticeFiles.keySet());
 
         // check each NOTICE file
         for (Map.Entry<String, Optional<NoticeContents>> noticeFile : noticeFiles.entrySet()) {
-            severeIssueCount +=
-                    checkNoticeFileAndLogProblems(
-                            modulesWithBundledDependencies,
-                            noticeFile.getKey(),
-                            noticeFile.getValue().orElse(null));
+            severeIssueCount += checkNoticeFileAndLogProblems(
+                    modulesWithBundledDependencies,
+                    noticeFile.getKey(),
+                    noticeFile.getValue().orElse(null));
         }
 
         return severeIssueCount;
@@ -176,14 +160,12 @@ public class NoticeFileChecker {
         Stream.concat(
                         modulesWithBundledDependencies.entrySet().stream(),
                         modulesWithCopiedDependencies.entrySet().stream())
-                .forEach(
-                        (entry) -> {
-                            final Set<Dependency> dependencies =
-                                    combinedAndFiltered.computeIfAbsent(
-                                            entry.getKey(), ignored -> new LinkedHashSet<>());
+                .forEach((entry) -> {
+                    final Set<Dependency> dependencies =
+                            combinedAndFiltered.computeIfAbsent(entry.getKey(), ignored -> new LinkedHashSet<>());
 
-                            dependencies.addAll(entry.getValue());
-                        });
+                    dependencies.addAll(entry.getValue());
+                });
 
         return combinedAndFiltered;
     }
@@ -191,22 +173,13 @@ public class NoticeFileChecker {
     private static Map<String, Set<Dependency>> filterFlussDependencies(
             Map<String, Set<Dependency>> modulesWithBundledDependencies) {
         return modulesWithBundledDependencies.entrySet().stream()
-                .collect(
-                        Collectors.toMap(
-                                Map.Entry::getKey,
-                                entry ->
-                                        entry.getValue().stream()
-                                                .filter(
-                                                        dependency ->
-                                                                !dependency
-                                                                        .getGroupId()
-                                                                        .equals("org.apache.fluss"))
-                                                .collect(Collectors.toSet())));
+                .collect(Collectors.toMap(Map.Entry::getKey, entry -> entry.getValue().stream()
+                        .filter(dependency -> !dependency.getGroupId().equals("org.apache.fluss"))
+                        .collect(Collectors.toSet())));
     }
 
     private static int ensureRequiredNoticeFiles(
-            Map<String, Set<Dependency>> modulesWithShadedDependencies,
-            Collection<String> modulesWithNoticeFile) {
+            Map<String, Set<Dependency>> modulesWithShadedDependencies, Collection<String> modulesWithNoticeFile) {
         int severeIssueCount = 0;
         Set<String> shadingModules = new HashSet<>(modulesWithShadedDependencies.keySet());
         shadingModules.removeAll(modulesWithNoticeFile);
@@ -227,13 +200,12 @@ public class NoticeFileChecker {
     }
 
     private static String getModuleFromNoticeFile(Path noticeFile) {
-        Path moduleDirectory =
-                noticeFile
-                        .getParent() // META-INF
-                        .getParent() // resources
-                        .getParent() // main
-                        .getParent() // src
-                        .getParent(); // <-- module name
+        Path moduleDirectory = noticeFile
+                .getParent() // META-INF
+                .getParent() // resources
+                .getParent() // main
+                .getParent() // src
+                .getParent(); // <-- module name
         return moduleDirectory.getFileName().toString();
     }
 
@@ -246,8 +218,7 @@ public class NoticeFileChecker {
         final Map<Severity, List<String>> problemsBySeverity =
                 checkNoticeFile(modulesWithShadedDependencies, moduleName, noticeContents);
 
-        final List<String> severeProblems =
-                problemsBySeverity.getOrDefault(Severity.CRITICAL, Collections.emptyList());
+        final List<String> severeProblems = problemsBySeverity.getOrDefault(Severity.CRITICAL, Collections.emptyList());
 
         if (!problemsBySeverity.isEmpty()) {
             final List<String> toleratedProblems =
@@ -259,8 +230,7 @@ public class NoticeFileChecker {
                     "Problems were detected for a NOTICE file.\n" + "\t{}:\n" + "{}{}{}",
                     moduleName,
                     convertProblemsToIndentedString(
-                            severeProblems,
-                            "These issue are legally problematic and MUST be fixed:"),
+                            severeProblems, "These issue are legally problematic and MUST be fixed:"),
                     convertProblemsToIndentedString(
                             toleratedProblems,
                             "These issues are mistakes that aren't legally problematic. They SHOULD be fixed at some point, but we don't have to:"),
@@ -304,12 +274,8 @@ public class NoticeFileChecker {
 
             // find all dependencies missing from NOTICE file
             Collection<Dependency> expectedDependencies =
-                    modulesWithShadedDependencies
-                            .getOrDefault(moduleName, Collections.emptySet())
-                            .stream()
-                            .filter(
-                                    dependency ->
-                                            !dependency.getGroupId().equals("org.apache.fluss"))
+                    modulesWithShadedDependencies.getOrDefault(moduleName, Collections.emptySet()).stream()
+                            .filter(dependency -> !dependency.getGroupId().equals("org.apache.fluss"))
                             .collect(Collectors.toList());
 
             for (Dependency expectedDependency : expectedDependencies) {
@@ -321,22 +287,17 @@ public class NoticeFileChecker {
                 }
             }
 
-            boolean moduleDefinesExcessDependencies =
-                    MODULES_DEFINING_EXCESS_DEPENDENCIES.contains(moduleName);
+            boolean moduleDefinesExcessDependencies = MODULES_DEFINING_EXCESS_DEPENDENCIES.contains(moduleName);
 
             // find all dependencies defined in NOTICE file, which were not expected
             for (Dependency declaredDependency : declaredDependencies) {
                 if (!expectedDependencies.contains(declaredDependency)) {
                     final Severity severity =
-                            moduleDefinesExcessDependencies
-                                    ? Severity.SUPPRESSED
-                                    : Severity.TOLERATED;
+                            moduleDefinesExcessDependencies ? Severity.SUPPRESSED : Severity.TOLERATED;
                     addProblem(
                             problemsBySeverity,
                             severity,
-                            String.format(
-                                    "Dependency %s is not bundled, but listed.",
-                                    declaredDependency));
+                            String.format("Dependency %s is not bundled, but listed.", declaredDependency));
                 }
             }
         }
@@ -344,9 +305,10 @@ public class NoticeFileChecker {
         return problemsBySeverity;
     }
 
-    private static void addProblem(
-            Map<Severity, List<String>> problemsBySeverity, Severity severity, String problem) {
-        problemsBySeverity.computeIfAbsent(severity, ignored -> new ArrayList<>()).add(problem);
+    private static void addProblem(Map<Severity, List<String>> problemsBySeverity, Severity severity, String problem) {
+        problemsBySeverity
+                .computeIfAbsent(severity, ignored -> new ArrayList<>())
+                .add(problem);
     }
 
     enum Severity {
@@ -369,30 +331,24 @@ public class NoticeFileChecker {
 
     private static List<Path> findNoticeFiles(Path root) throws IOException {
         return Files.walk(root)
-                .filter(
-                        file -> {
-                            int nameCount = file.getNameCount();
-                            return file.getName(nameCount - 3).toString().equals("resources")
-                                    && file.getName(nameCount - 2).toString().equals("META-INF")
-                                    && file.getName(nameCount - 1).toString().equals("NOTICE");
-                        })
+                .filter(file -> {
+                    int nameCount = file.getNameCount();
+                    return file.getName(nameCount - 3).toString().equals("resources")
+                            && file.getName(nameCount - 2).toString().equals("META-INF")
+                            && file.getName(nameCount - 1).toString().equals("NOTICE");
+                })
                 .collect(Collectors.toList());
     }
 
     private static List<String> loadFromResources(String fileName) {
         try {
-            try (BufferedReader bufferedReader =
-                    new BufferedReader(
-                            new InputStreamReader(
-                                    Objects.requireNonNull(
-                                            NoticeFileChecker.class.getResourceAsStream(
-                                                    "/" + fileName))))) {
+            try (BufferedReader bufferedReader = new BufferedReader(new InputStreamReader(
+                    Objects.requireNonNull(NoticeFileChecker.class.getResourceAsStream("/" + fileName))))) {
 
-                List<String> result =
-                        bufferedReader
-                                .lines()
-                                .filter(line -> !line.startsWith("#") && !line.isEmpty())
-                                .collect(Collectors.toList());
+                List<String> result = bufferedReader
+                        .lines()
+                        .filter(line -> !line.startsWith("#") && !line.isEmpty())
+                        .collect(Collectors.toList());
                 LOG.debug("Loaded {} items from resource {}", result.size(), fileName);
                 return result;
             }

@@ -137,10 +137,9 @@ public class ArrowUtils {
 
     /** Returns the Arrow schema of the specified type. */
     public static Schema toArrowSchema(RowType rowType) {
-        List<Field> fields =
-                rowType.getFields().stream()
-                        .map(f -> toArrowField(f.getName(), f.getType()))
-                        .collect(Collectors.toList());
+        List<Field> fields = rowType.getFields().stream()
+                .map(f -> toArrowField(f.getName(), f.getType()))
+                .collect(Collectors.toList());
         return new Schema(fields);
     }
 
@@ -155,17 +154,14 @@ public class ArrowUtils {
             BufferAllocator allocator,
             RowType rowType) {
         ByteBuffer arrowBatchBuffer = segment.wrap(arrowOffset, arrowLength);
-        try (ReadChannel channel =
-                        new ReadChannel(new ByteBufferReadableChannel(arrowBatchBuffer));
+        try (ReadChannel channel = new ReadChannel(new ByteBufferReadableChannel(arrowBatchBuffer));
                 ArrowRecordBatch batch = deserializeRecordBatch(channel, allocator)) {
-            VectorLoader vectorLoader =
-                    new VectorLoader(schemaRoot, ArrowCompressionFactory.INSTANCE);
+            VectorLoader vectorLoader = new VectorLoader(schemaRoot, ArrowCompressionFactory.INSTANCE);
             vectorLoader.load(batch);
             List<ColumnVector> columnVectors = new ArrayList<>();
             List<FieldVector> fieldVectors = schemaRoot.getFieldVectors();
             for (int i = 0; i < fieldVectors.size(); i++) {
-                columnVectors.add(
-                        createArrowColumnVector(fieldVectors.get(i), rowType.getTypeAt(i)));
+                columnVectors.add(createArrowColumnVector(fieldVectors.get(i), rowType.getTypeAt(i)));
             }
             return new ArrowReader(schemaRoot, columnVectors.toArray(new ColumnVector[0]));
         } catch (IOException e) {
@@ -209,20 +205,14 @@ public class ArrowUtils {
             RecordBatch.addCompression(builder, compressOffset);
         }
         int batchOffset = RecordBatch.endRecordBatch(builder);
-        ByteBuffer metadata =
-                MessageSerializer.serializeMessage(
-                        builder,
-                        MessageHeader.RecordBatch,
-                        batchOffset,
-                        arrowBodyLength,
-                        IpcOption.DEFAULT);
+        ByteBuffer metadata = MessageSerializer.serializeMessage(
+                builder, MessageHeader.RecordBatch, batchOffset, arrowBodyLength, IpcOption.DEFAULT);
 
         return MessageSerializer.writeMessageBuffer(writeChannel, metadata.remaining(), metadata);
     }
 
     /** Estimates the size of {@link ArrowRecordBatch} metadata for the given schema. */
-    public static int estimateArrowMetadataLength(
-            Schema arrowSchema, ArrowBodyCompression bodyCompression) {
+    public static int estimateArrowMetadataLength(Schema arrowSchema, ArrowBodyCompression bodyCompression) {
         List<Field> fields = flattenFields(arrowSchema.getFields());
         List<ArrowFieldNode> nodes = createFieldNodes(fields);
         List<ArrowBuffer> buffersLayout = createBuffersLayout(fields);
@@ -280,8 +270,7 @@ public class ArrowUtils {
         return buffers;
     }
 
-    public static ArrowFieldWriter<InternalRow> createArrowFieldWriter(
-            ValueVector vector, DataType dataType) {
+    public static ArrowFieldWriter<InternalRow> createArrowFieldWriter(ValueVector vector, DataType dataType) {
         if (vector instanceof TinyIntVector) {
             return ArrowTinyIntWriter.forField((TinyIntVector) vector);
         } else if (vector instanceof SmallIntVector) {
@@ -304,8 +293,7 @@ public class ArrowUtils {
             return ArrowVarBinaryWriter.forField((VarBinaryVector) vector);
         } else if (vector instanceof DecimalVector) {
             DecimalVector decimalVector = (DecimalVector) vector;
-            return ArrowDecimalWriter.forField(
-                    decimalVector, getPrecision(decimalVector), decimalVector.getScale());
+            return ArrowDecimalWriter.forField(decimalVector, getPrecision(decimalVector), decimalVector.getScale());
         } else if (vector instanceof DateDayVector) {
             return ArrowDateWriter.forField((DateDayVector) vector);
         } else if (vector instanceof TimeSecVector
@@ -324,8 +312,7 @@ public class ArrowUtils {
                 return ArrowTimestampNtzWriter.forField(vector, precision);
             }
         } else {
-            throw new UnsupportedOperationException(
-                    String.format("Unsupported type %s.", dataType));
+            throw new UnsupportedOperationException(String.format("Unsupported type %s.", dataType));
         }
     }
 
@@ -367,24 +354,19 @@ public class ArrowUtils {
                 return new ArrowTimestampNtzColumnVector(vector);
             }
         } else {
-            throw new UnsupportedOperationException(
-                    String.format("Unsupported type %s.", dataType));
+            throw new UnsupportedOperationException(String.format("Unsupported type %s.", dataType));
         }
     }
 
     private static Field toArrowField(String fieldName, DataType logicalType) {
-        FieldType fieldType =
-                new FieldType(
-                        logicalType.isNullable(),
-                        logicalType.accept(DataTypeToArrowTypeConverter.INSTANCE),
-                        null);
+        FieldType fieldType = new FieldType(
+                logicalType.isNullable(), logicalType.accept(DataTypeToArrowTypeConverter.INSTANCE), null);
         return new Field(fieldName, fieldType, null);
     }
 
     private static class DataTypeToArrowTypeConverter extends DataTypeDefaultVisitor<ArrowType> {
 
-        private static final DataTypeToArrowTypeConverter INSTANCE =
-                new DataTypeToArrowTypeConverter();
+        private static final DataTypeToArrowTypeConverter INSTANCE = new DataTypeToArrowTypeConverter();
 
         @Override
         public ArrowType visit(TinyIntType tinyIntType) {
@@ -468,11 +450,9 @@ public class ArrowUtils {
         public ArrowType visit(LocalZonedTimestampType localZonedTimestampType) {
             if (localZonedTimestampType.getPrecision() == 0) {
                 return new ArrowType.Timestamp(TimeUnit.SECOND, null);
-            } else if (localZonedTimestampType.getPrecision() >= 1
-                    && localZonedTimestampType.getPrecision() <= 3) {
+            } else if (localZonedTimestampType.getPrecision() >= 1 && localZonedTimestampType.getPrecision() <= 3) {
                 return new ArrowType.Timestamp(TimeUnit.MILLISECOND, null);
-            } else if (localZonedTimestampType.getPrecision() >= 4
-                    && localZonedTimestampType.getPrecision() <= 6) {
+            } else if (localZonedTimestampType.getPrecision() >= 4 && localZonedTimestampType.getPrecision() <= 6) {
                 return new ArrowType.Timestamp(TimeUnit.MICROSECOND, null);
             } else {
                 return new ArrowType.Timestamp(TimeUnit.NANOSECOND, null);
@@ -495,16 +475,14 @@ public class ArrowUtils {
         @Override
         protected ArrowType defaultMethod(DataType dataType) {
             throw new UnsupportedOperationException(
-                    String.format(
-                            "Unsupported data type %s currently.", dataType.asSummaryString()));
+                    String.format("Unsupported data type %s currently.", dataType.asSummaryString()));
         }
     }
 
     private static int getPrecision(DecimalVector decimalVector) {
         int precision = -1;
         try {
-            java.lang.reflect.Field precisionField =
-                    decimalVector.getClass().getDeclaredField("precision");
+            java.lang.reflect.Field precisionField = decimalVector.getClass().getDeclaredField("precision");
             precisionField.setAccessible(true);
             precision = (int) precisionField.get(decimalVector);
         } catch (NoSuchFieldException | IllegalAccessException e) {

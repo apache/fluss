@@ -73,7 +73,10 @@ public class FlinkTableSink
     private final int[] primaryKeyIndexes;
     private final List<String> partitionKeys;
     private final boolean streaming;
-    @Nullable private final MergeEngineType mergeEngineType;
+
+    @Nullable
+    private final MergeEngineType mergeEngineType;
+
     private final boolean ignoreDelete;
     private final int numBucket;
     private final List<String> bucketKeys;
@@ -81,7 +84,9 @@ public class FlinkTableSink
     private final @Nullable DataLakeFormat lakeFormat;
 
     private boolean appliedUpdates = false;
-    @Nullable private GenericRow deleteRow;
+
+    @Nullable
+    private GenericRow deleteRow;
 
     public FlinkTableSink(
             TablePath tablePath,
@@ -150,11 +155,10 @@ public class FlinkTableSink
                                     + "number of specified columns in INSERT INTO matches columns of the Fluss table.");
                 }
                 if (mergeEngineType != null) {
-                    throw new ValidationException(
-                            String.format(
-                                    "Table %s uses the '%s' merge engine which does not support partial updates. Please make sure the "
-                                            + "number of specified columns in INSERT INTO matches columns of the Fluss table.",
-                                    tablePath, mergeEngineType));
+                    throw new ValidationException(String.format(
+                            "Table %s uses the '%s' merge engine which does not support partial updates. Please make sure the "
+                                    + "number of specified columns in INSERT INTO matches columns of the Fluss table.",
+                            tablePath, mergeEngineType));
                 }
                 int[][] targetColumns = context.getTargetColumns().get();
                 targetColumnIndexes = new int[targetColumns.length];
@@ -170,13 +174,12 @@ public class FlinkTableSink
                 for (int primaryKeyIndex : primaryKeyIndexes) {
                     if (Arrays.stream(targetColumnIndexes)
                             .noneMatch(targetColumIndex -> targetColumIndex == primaryKeyIndex)) {
-                        throw new ValidationException(
-                                String.format(
-                                        "Fluss table sink does not support partial updates without fully specifying the primary key columns. "
-                                                + "The insert columns are %s, but the primary key columns are %s. "
-                                                + "Please make sure the specified columns in INSERT INTO contains "
-                                                + "the primary key columns.",
-                                        columns(targetColumnIndexes), columns(primaryKeyIndexes)));
+                        throw new ValidationException(String.format(
+                                "Fluss table sink does not support partial updates without fully specifying the primary key columns. "
+                                        + "The insert columns are %s, but the primary key columns are %s. "
+                                        + "Please make sure the specified columns in INSERT INTO contains "
+                                        + "the primary key columns.",
+                                columns(targetColumnIndexes), columns(primaryKeyIndexes)));
                     }
                 }
             }
@@ -225,20 +228,19 @@ public class FlinkTableSink
 
     @Override
     public DynamicTableSink copy() {
-        FlinkTableSink sink =
-                new FlinkTableSink(
-                        tablePath,
-                        flussConfig,
-                        tableRowType,
-                        primaryKeyIndexes,
-                        partitionKeys,
-                        streaming,
-                        mergeEngineType,
-                        lakeFormat,
-                        ignoreDelete,
-                        numBucket,
-                        bucketKeys,
-                        shuffleByBucketId);
+        FlinkTableSink sink = new FlinkTableSink(
+                tablePath,
+                flussConfig,
+                tableRowType,
+                primaryKeyIndexes,
+                partitionKeys,
+                streaming,
+                mergeEngineType,
+                lakeFormat,
+                ignoreDelete,
+                numBucket,
+                bucketKeys,
+                shuffleByBucketId);
         sink.appliedUpdates = appliedUpdates;
         sink.deleteRow = deleteRow;
         return sink;
@@ -265,13 +267,8 @@ public class FlinkTableSink
         List<ResolvedExpression> acceptedFilters = new ArrayList<>();
         List<ResolvedExpression> remainingFilters = new ArrayList<>();
         Map<Integer, LogicalType> primaryKeyTypes = getPrimaryKeyTypes();
-        List<FieldEqual> fieldEquals =
-                extractFieldEquals(
-                        filters,
-                        primaryKeyTypes,
-                        acceptedFilters,
-                        remainingFilters,
-                        ValueConversion.FLUSS_INTERNAL_VALUE);
+        List<FieldEqual> fieldEquals = extractFieldEquals(
+                filters, primaryKeyTypes, acceptedFilters, remainingFilters, ValueConversion.FLUSS_INTERNAL_VALUE);
         if (!remainingFilters.isEmpty()) {
             // only supports delete on primary key
             return false;
@@ -313,23 +310,18 @@ public class FlinkTableSink
 
     @Override
     public RowLevelUpdateInfo applyRowLevelUpdate(
-            List<Column> updatedColumns,
-            @Nullable RowLevelModificationScanContext rowLevelModificationScanContext) {
+            List<Column> updatedColumns, @Nullable RowLevelModificationScanContext rowLevelModificationScanContext) {
         validateUpdatableAndDeletable();
         Set<String> primaryKeys = getPrimaryKeyNames();
-        updatedColumns.forEach(
-                column -> {
-                    if (primaryKeys.contains(column.getName())) {
-                        String errMsg =
-                                String.format(
-                                        "Updates to primary keys are not supported, primaryKeys (%s), updatedColumns (%s)",
-                                        primaryKeys,
-                                        updatedColumns.stream()
-                                                .map(Column::getName)
-                                                .collect(Collectors.toList()));
-                        throw new UnsupportedOperationException(errMsg);
-                    }
-                });
+        updatedColumns.forEach(column -> {
+            if (primaryKeys.contains(column.getName())) {
+                String errMsg = String.format(
+                        "Updates to primary keys are not supported, primaryKeys (%s), updatedColumns (%s)",
+                        primaryKeys,
+                        updatedColumns.stream().map(Column::getName).collect(Collectors.toList()));
+                throw new UnsupportedOperationException(errMsg);
+            }
+        });
 
         appliedUpdates = true;
         return new RowLevelUpdateInfo() {
@@ -349,16 +341,13 @@ public class FlinkTableSink
 
     private void validateUpdatableAndDeletable() {
         if (primaryKeyIndexes.length == 0) {
-            throw new UnsupportedOperationException(
-                    String.format(
-                            "Table %s is a Log Table. Log Table doesn't support DELETE and UPDATE statements.",
-                            tablePath));
+            throw new UnsupportedOperationException(String.format(
+                    "Table %s is a Log Table. Log Table doesn't support DELETE and UPDATE statements.", tablePath));
         }
         if (mergeEngineType != null) {
-            throw new UnsupportedOperationException(
-                    String.format(
-                            "Table %s uses the '%s' merge engine which does not support DELETE or UPDATE statements.",
-                            tablePath, mergeEngineType));
+            throw new UnsupportedOperationException(String.format(
+                    "Table %s uses the '%s' merge engine which does not support DELETE or UPDATE statements.",
+                    tablePath, mergeEngineType));
         }
     }
 

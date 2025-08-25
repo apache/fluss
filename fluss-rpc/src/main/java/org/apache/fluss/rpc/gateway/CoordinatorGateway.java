@@ -61,8 +61,7 @@ public interface CoordinatorGateway extends RpcGateway, AdminGateway {
      * @return commit remote log manifest response.
      */
     @RPC(api = ApiKeys.COMMIT_REMOTE_LOG_MANIFEST)
-    CompletableFuture<CommitRemoteLogManifestResponse> commitRemoteLogManifest(
-            CommitRemoteLogManifestRequest request);
+    CompletableFuture<CommitRemoteLogManifestResponse> commitRemoteLogManifest(CommitRemoteLogManifestRequest request);
 
     /**
      * Commit lakehouse table snapshot to Fluss.
@@ -71,11 +70,9 @@ public interface CoordinatorGateway extends RpcGateway, AdminGateway {
      * @return commit lakehouse data response.
      */
     @RPC(api = ApiKeys.COMMIT_LAKE_TABLE_SNAPSHOT)
-    CompletableFuture<CommitLakeTableSnapshotResponse> commitLakeTableSnapshot(
-            CommitLakeTableSnapshotRequest request);
+    CompletableFuture<CommitLakeTableSnapshotResponse> commitLakeTableSnapshot(CommitLakeTableSnapshotRequest request);
 
     /** Report lake tiering heartbeats to Fluss for lake tiering service. */
     @RPC(api = ApiKeys.LAKE_TIERING_HEARTBEAT)
-    CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(
-            LakeTieringHeartbeatRequest request);
+    CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(LakeTieringHeartbeatRequest request);
 }

@@ -52,8 +52,7 @@ public class RemoteStorageCleaner {
         try {
             this.remoteFileSystem = remoteKvDir.getFileSystem();
         } catch (IOException e) {
-            throw new FlussRuntimeException(
-                    "Fail to get remote file system for path " + remoteKvDir, e);
+            throw new FlussRuntimeException("Fail to get remote file system for path " + remoteKvDir, e);
         }
     }
 
@@ -67,23 +66,20 @@ public class RemoteStorageCleaner {
     public void deletePartitionRemoteDir(
             PhysicalTablePath physicalTablePath, boolean isKvTable, TablePartition tablePartition) {
         if (isKvTable) {
-            asyncDeleteDir(
-                    FlussPaths.remotePartitionDir(remoteKvDir, physicalTablePath, tablePartition));
+            asyncDeleteDir(FlussPaths.remotePartitionDir(remoteKvDir, physicalTablePath, tablePartition));
         }
-        asyncDeleteDir(
-                FlussPaths.remotePartitionDir(remoteLogDir, physicalTablePath, tablePartition));
+        asyncDeleteDir(FlussPaths.remotePartitionDir(remoteLogDir, physicalTablePath, tablePartition));
     }
 
     private void asyncDeleteDir(FsPath fsPath) {
-        ioExecutor.submit(
-                () -> {
-                    try {
-                        if (remoteFileSystem.exists(fsPath)) {
-                            remoteFileSystem.delete(fsPath, true);
-                        }
-                    } catch (IOException e) {
-                        LOG.error("Delete remote data dir {} failed.", fsPath, e);
-                    }
-                });
+        ioExecutor.submit(() -> {
+            try {
+                if (remoteFileSystem.exists(fsPath)) {
+                    remoteFileSystem.delete(fsPath, true);
+                }
+            } catch (IOException e) {
+                LOG.error("Delete remote data dir {} failed.", fsPath, e);
+            }
+        });
     }
 }

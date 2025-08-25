@@ -36,18 +36,15 @@ import java.util.stream.Stream;
 public final class ShadeParser {
 
     private static final Pattern SHADE_NEXT_MODULE_PATTERN =
-            Pattern.compile(
-                    ".*:shade \\((?:shade-fluss|shade-dist|default)\\) @ (?<module>[^ _]+)(?:_[0-9.]+)? --.*");
+            Pattern.compile(".*:shade \\((?:shade-fluss|shade-dist|default)\\) @ (?<module>[^ _]+)(?:_[0-9.]+)? --.*");
 
-    private static final Pattern SHADE_INCLUDE_MODULE_PATTERN =
-            Pattern.compile(
-                    ".* "
-                            + "(?<groupId>.*?):"
-                            + "(?<artifactId>.*?):"
-                            + "(?<type>.*?):"
-                            + "(?:(?<classifier>.*?):)?"
-                            + "(?<version>.*?)"
-                            + " in the shaded jar");
+    private static final Pattern SHADE_INCLUDE_MODULE_PATTERN = Pattern.compile(".* "
+            + "(?<groupId>.*?):"
+            + "(?<artifactId>.*?):"
+            + "(?<type>.*?):"
+            + "(?:(?<classifier>.*?):)?"
+            + "(?<version>.*?)"
+            + " in the shaded jar");
 
     /**
      * Parses the output of a Maven build where {@code shade:shade} was used, and returns a set of
@@ -60,8 +57,7 @@ public final class ShadeParser {
      * executions. In other words, all artifacts from other executions are only used internally by
      * the module that created them.
      */
-    public static Map<String, Set<Dependency>> parseShadeOutput(Path buildOutput)
-            throws IOException {
+    public static Map<String, Set<Dependency>> parseShadeOutput(Path buildOutput) throws IOException {
         try (Stream<String> lines = Files.lines(buildOutput)) {
             return parseShadeOutput(lines);
         }
@@ -97,12 +93,11 @@ public final class ShadeParser {
             return Optional.empty();
         }
 
-        return Optional.of(
-                Dependency.create(
-                        dependencyMatcher.group("groupId"),
-                        dependencyMatcher.group("artifactId"),
-                        dependencyMatcher.group("version"),
-                        dependencyMatcher.group("classifier")));
+        return Optional.of(Dependency.create(
+                dependencyMatcher.group("groupId"),
+                dependencyMatcher.group("artifactId"),
+                dependencyMatcher.group("version"),
+                dependencyMatcher.group("classifier")));
     }
 
     private ShadeParser() {}

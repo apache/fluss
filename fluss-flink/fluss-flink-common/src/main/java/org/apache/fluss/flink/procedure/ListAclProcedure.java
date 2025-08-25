@@ -43,18 +43,9 @@ public class ListAclProcedure extends AbstractAclProcedure {
     @ProcedureHint(
             argument = {
                 @ArgumentHint(name = "resource", type = @DataTypeHint("STRING")),
-                @ArgumentHint(
-                        name = "permission",
-                        type = @DataTypeHint("STRING"),
-                        isOptional = true),
-                @ArgumentHint(
-                        name = "principal",
-                        type = @DataTypeHint("STRING"),
-                        isOptional = true),
-                @ArgumentHint(
-                        name = "operation",
-                        type = @DataTypeHint("STRING"),
-                        isOptional = true),
+                @ArgumentHint(name = "permission", type = @DataTypeHint("STRING"), isOptional = true),
+                @ArgumentHint(name = "principal", type = @DataTypeHint("STRING"), isOptional = true),
+                @ArgumentHint(name = "operation", type = @DataTypeHint("STRING"), isOptional = true),
                 @ArgumentHint(name = "host", type = @DataTypeHint("STRING"), isOptional = true)
             })
     public String[] call(
@@ -76,20 +67,15 @@ public class ListAclProcedure extends AbstractAclProcedure {
             OperationType operationType,
             String host)
             throws Exception {
-        Collection<AclBinding> aclBindings =
-                admin.listAcls(
-                                new AclBindingFilter(
-                                        new ResourceFilter(resource.getType(), resource.getName()),
-                                        new AccessControlEntryFilter(
-                                                flussPrincipal, host, operationType, permission)))
-                        .get();
+        Collection<AclBinding> aclBindings = admin.listAcls(new AclBindingFilter(
+                        new ResourceFilter(resource.getType(), resource.getName()),
+                        new AccessControlEntryFilter(flussPrincipal, host, operationType, permission)))
+                .get();
         return aclBindingsToStrings(aclBindings);
     }
 
     private static String[] aclBindingsToStrings(Collection<AclBinding> aclBindings) {
-        return aclBindings.stream()
-                .map(ListAclProcedure::aclBindingToString)
-                .toArray(String[]::new);
+        return aclBindings.stream().map(ListAclProcedure::aclBindingToString).toArray(String[]::new);
     }
 
     private static String aclBindingToString(AclBinding binding) {
@@ -104,21 +90,19 @@ public class ListAclProcedure extends AbstractAclProcedure {
             return "";
         }
 
-        String principal =
-                ace.getPrincipal() != null
-                        ? (ace.getPrincipal().getType() + ":" + ace.getPrincipal().getName())
-                        : null;
-        String resourceName =
-                FLUSS_CLUSTER.equals(resource.getName())
-                        ? "cluster"
-                        : "cluster." + resource.getName();
+        String principal = ace.getPrincipal() != null
+                ? (ace.getPrincipal().getType() + ":" + ace.getPrincipal().getName())
+                : null;
+        String resourceName = FLUSS_CLUSTER.equals(resource.getName()) ? "cluster" : "cluster." + resource.getName();
 
         return String.join(
                 ";",
                 formatEntry("resource", resourceName),
                 formatEntry(
                         "permission",
-                        ace.getPermissionType() != null ? ace.getPermissionType().name() : null),
+                        ace.getPermissionType() != null
+                                ? ace.getPermissionType().name()
+                                : null),
                 formatEntry("principal", principal),
                 formatEntry(
                         "operation",

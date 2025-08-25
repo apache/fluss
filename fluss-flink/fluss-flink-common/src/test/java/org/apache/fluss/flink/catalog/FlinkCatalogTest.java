@@ -103,14 +103,12 @@ class FlinkCatalogTest {
         return newCatalogTable(resolvedSchema, options);
     }
 
-    private CatalogTable newCatalogTable(
-            ResolvedSchema resolvedSchema, Map<String, String> options) {
-        CatalogTable origin =
-                CatalogTable.of(
-                        Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
-                        "test comment",
-                        Collections.emptyList(),
-                        options);
+    private CatalogTable newCatalogTable(ResolvedSchema resolvedSchema, Map<String, String> options) {
+        CatalogTable origin = CatalogTable.of(
+                Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
+                "test comment",
+                Collections.emptyList(),
+                options);
         return new ResolvedCatalogTable(origin, resolvedSchema);
     }
 
@@ -118,13 +116,12 @@ class FlinkCatalogTest {
     static void beforeAll() {
         // set fluss conf
         Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
-        catalog =
-                new FlinkCatalog(
-                        CATALOG_NAME,
-                        DEFAULT_DB,
-                        String.join(",", flussConf.get(BOOTSTRAP_SERVERS)),
-                        Thread.currentThread().getContextClassLoader(),
-                        Collections.emptyMap());
+        catalog = new FlinkCatalog(
+                CATALOG_NAME,
+                DEFAULT_DB,
+                String.join(",", flussConf.get(BOOTSTRAP_SERVERS)),
+                Thread.currentThread().getContextClassLoader(),
+                Collections.emptyMap());
         catalog.open();
     }
 
@@ -142,8 +139,7 @@ class FlinkCatalogTest {
             catalog.dropDatabase(DEFAULT_DB, true, true);
         }
         try {
-            catalog.createDatabase(
-                    DEFAULT_DB, new CatalogDatabaseImpl(Collections.emptyMap(), null), true);
+            catalog.createDatabase(DEFAULT_DB, new CatalogDatabaseImpl(Collections.emptyMap(), null), true);
         } catch (CatalogException e) {
             // the auto partitioned manager may create the db zk node
             // in an another thread, so if exception is NodeExistsException, just ignore
@@ -159,28 +155,21 @@ class FlinkCatalogTest {
         Map<String, String> options = new HashMap<>();
         assertThatThrownBy(() -> catalog.getTable(tableInDefaultDb))
                 .isInstanceOf(TableNotExistException.class)
-                .hasMessage(
-                        String.format(
-                                "Table (or view) %s does not exist in Catalog %s.",
-                                tableInDefaultDb, CATALOG_NAME));
+                .hasMessage(String.format(
+                        "Table (or view) %s does not exist in Catalog %s.", tableInDefaultDb, CATALOG_NAME));
         CatalogTable table = this.newCatalogTable(options);
         catalog.createTable(this.tableInDefaultDb, table, false);
         assertThat(catalog.tableExists(this.tableInDefaultDb)).isTrue();
         // test invalid table
-        assertThatThrownBy(
-                        () ->
-                                catalog.createTable(
-                                        new ObjectPath(DEFAULT_DB, "**invalid"), table, false))
+        assertThatThrownBy(() -> catalog.createTable(new ObjectPath(DEFAULT_DB, "**invalid"), table, false))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessage(
                         "Table name **invalid is invalid: '**invalid' contains one or more characters other than ASCII alphanumerics, '_' and '-'");
         // create the table again, should throw exception with ignore if exist = false
         assertThatThrownBy(() -> catalog.createTable(this.tableInDefaultDb, table, false))
                 .isInstanceOf(TableAlreadyExistException.class)
-                .hasMessage(
-                        String.format(
-                                "Table (or view) %s already exists in Catalog %s.",
-                                this.tableInDefaultDb, CATALOG_NAME));
+                .hasMessage(String.format(
+                        "Table (or view) %s already exists in Catalog %s.", this.tableInDefaultDb, CATALOG_NAME));
         // should be ok since we set ignore if exist = true
         catalog.createTable(this.tableInDefaultDb, table, true);
         // get the table and check
@@ -203,10 +192,8 @@ class FlinkCatalogTest {
         // drop the table again, should throw exception with ignoreIfNotExists = false
         assertThatThrownBy(() -> catalog.dropTable(this.tableInDefaultDb, false))
                 .isInstanceOf(TableNotExistException.class)
-                .hasMessage(
-                        String.format(
-                                "Table (or view) %s does not exist in Catalog %s.",
-                                this.tableInDefaultDb, CATALOG_NAME));
+                .hasMessage(String.format(
+                        "Table (or view) %s does not exist in Catalog %s.", this.tableInDefaultDb, CATALOG_NAME));
         // should be ok since we set ignoreIfNotExists = true
         catalog.dropTable(this.tableInDefaultDb, true);
         // create table from an non-exist db
@@ -217,21 +204,19 @@ class FlinkCatalogTest {
         assertThatThrownBy(() -> catalog.createTable(nonExistDbPath, table, false))
                 .isInstanceOf(DatabaseNotExistException.class)
                 .hasMessage(
-                        "Database %s does not exist in Catalog %s.",
-                        nonExistDbPath.getDatabaseName(), CATALOG_NAME);
+                        "Database %s does not exist in Catalog %s.", nonExistDbPath.getDatabaseName(), CATALOG_NAME);
 
         // test create partition table
         options.put(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key(), "true");
         options.put(ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key(), "day");
         ResolvedSchema resolvedSchema = this.createSchema();
-        CatalogTable table2 =
-                new ResolvedCatalogTable(
-                        CatalogTable.of(
-                                Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
-                                "test comment",
-                                Collections.singletonList("first"),
-                                options),
-                        resolvedSchema);
+        CatalogTable table2 = new ResolvedCatalogTable(
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
+                        "test comment",
+                        Collections.singletonList("first"),
+                        options),
+                resolvedSchema);
         catalog.createTable(this.tableInDefaultDb, table2, false);
         tableCreated = catalog.getTable(this.tableInDefaultDb);
         // need to over write the option
@@ -291,25 +276,21 @@ class FlinkCatalogTest {
         Map<String, String> options = new HashMap<>();
         options.put("k1", "v1");
         options.put(BUCKET_NUMBER.key(), "10");
-        ResolvedExpression waterMark =
-                new ResolvedExpressionMock(DataTypes.TIMESTAMP(9), () -> "second");
+        ResolvedExpression waterMark = new ResolvedExpressionMock(DataTypes.TIMESTAMP(9), () -> "second");
         ResolvedExpressionMock colExpr =
                 new ResolvedExpressionMock(DataTypes.STRING().notNull(), () -> "first");
-        ResolvedSchema resolvedSchema =
-                new ResolvedSchema(
-                        Arrays.asList(
-                                Column.physical("first", DataTypes.STRING().notNull()),
-                                Column.physical("second", DataTypes.TIMESTAMP()),
-                                Column.computed("third", colExpr)),
-                        Collections.singletonList(WatermarkSpec.of("second", waterMark)),
-                        UniqueConstraint.primaryKey(
-                                "PK_first", Collections.singletonList("first")));
-        CatalogTable origin =
-                CatalogTable.of(
-                        Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
-                        "test comment",
-                        Collections.emptyList(),
-                        new HashMap<>(options));
+        ResolvedSchema resolvedSchema = new ResolvedSchema(
+                Arrays.asList(
+                        Column.physical("first", DataTypes.STRING().notNull()),
+                        Column.physical("second", DataTypes.TIMESTAMP()),
+                        Column.computed("third", colExpr)),
+                Collections.singletonList(WatermarkSpec.of("second", waterMark)),
+                UniqueConstraint.primaryKey("PK_first", Collections.singletonList("first")));
+        CatalogTable origin = CatalogTable.of(
+                Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
+                "test comment",
+                Collections.emptyList(),
+                new HashMap<>(options));
         CatalogTable originResolvedTable = new ResolvedCatalogTable(origin, resolvedSchema);
         ObjectPath path = new ObjectPath(DEFAULT_DB, "t2");
         catalog.createTable(path, originResolvedTable, false);
@@ -326,8 +307,7 @@ class FlinkCatalogTest {
         // not need to check schema now
         // put bucket key option
         CatalogTable expectedTable =
-                addOptions(
-                        originResolvedTable, Collections.singletonMap(BUCKET_KEY.key(), "first"));
+                addOptions(originResolvedTable, Collections.singletonMap(BUCKET_KEY.key(), "first"));
         checkEqualsIgnoreSchema(tableCreated, expectedTable);
         catalog.dropTable(path, false);
     }
@@ -344,14 +324,10 @@ class FlinkCatalogTest {
         options = new HashMap<>();
         // test create with meta column
         Column metaDataCol = Column.metadata("second", DataTypes.INT(), "k1", true);
-        ResolvedSchema resolvedSchema =
-                new ResolvedSchema(
-                        Arrays.asList(
-                                Column.physical("first", DataTypes.STRING().notNull()),
-                                metaDataCol),
-                        Collections.emptyList(),
-                        UniqueConstraint.primaryKey(
-                                "PK_first", Collections.singletonList("first")));
+        ResolvedSchema resolvedSchema = new ResolvedSchema(
+                Arrays.asList(Column.physical("first", DataTypes.STRING().notNull()), metaDataCol),
+                Collections.emptyList(),
+                UniqueConstraint.primaryKey("PK_first", Collections.singletonList("first")));
         CatalogTable table1 = this.newCatalogTable(resolvedSchema, options);
         assertThatThrownBy(() -> catalog.createTable(this.tableInDefaultDb, table1, false))
                 .isInstanceOf(CatalogException.class)
@@ -365,15 +341,12 @@ class FlinkCatalogTest {
         // test create db2
         catalog.createDatabase(
                 "db2",
-                new CatalogDatabaseImpl(
-                        Collections.singletonMap(SCAN_STARTUP_MODE.key(), "earliest"),
-                        "test comment"),
+                new CatalogDatabaseImpl(Collections.singletonMap(SCAN_STARTUP_MODE.key(), "earliest"), "test comment"),
                 false);
         assertThat(catalog.databaseExists("db2")).isTrue();
         CatalogDatabase db2 = catalog.getDatabase("db2");
         assertThat(db2.getComment()).isEqualTo("test comment");
-        assertThat(db2.getProperties())
-                .isEqualTo(Collections.singletonMap(SCAN_STARTUP_MODE.key(), "earliest"));
+        assertThat(db2.getProperties()).isEqualTo(Collections.singletonMap(SCAN_STARTUP_MODE.key(), "earliest"));
         // test DatabaseNotExistException when get db
         String notExistDb = "db3";
         assertThatThrownBy(() -> catalog.getDatabase(notExistDb))
@@ -381,19 +354,13 @@ class FlinkCatalogTest {
                 .hasMessage("Database %s does not exist in Catalog %s.", notExistDb, CATALOG_NAME);
 
         // create the database again should throw exception with ignore if exist = false
-        assertThatThrownBy(
-                () ->
-                        catalog.createDatabase(
-                                "db2",
-                                new CatalogDatabaseImpl(Collections.emptyMap(), "test comment"),
-                                false));
+        assertThatThrownBy(() ->
+                catalog.createDatabase("db2", new CatalogDatabaseImpl(Collections.emptyMap(), "test comment"), false));
         // should be ok since we set ignore if exist = true
-        catalog.createDatabase(
-                "db2", new CatalogDatabaseImpl(Collections.emptyMap(), "test comment2"), true);
+        catalog.createDatabase("db2", new CatalogDatabaseImpl(Collections.emptyMap(), "test comment2"), true);
         db2 = catalog.getDatabase("db2");
         assertThat(db2.getComment()).isEqualTo("test comment");
-        assertThat(db2.getProperties())
-                .isEqualTo(Collections.singletonMap(SCAN_STARTUP_MODE.key(), "earliest"));
+        assertThat(db2.getProperties()).isEqualTo(Collections.singletonMap(SCAN_STARTUP_MODE.key(), "earliest"));
         // test create table in db1
         ObjectPath path1 = new ObjectPath("db1", "t1");
         CatalogTable table = this.newCatalogTable(new HashMap<>());
@@ -407,8 +374,7 @@ class FlinkCatalogTest {
         CatalogTable expectedTable = addOptions(table, addedOptions);
         checkEqualsRespectSchema((CatalogTable) tableCreated, expectedTable);
         assertThat(catalog.listTables("db1")).isEqualTo(Collections.singletonList("t1"));
-        assertThat(catalog.listDatabases())
-                .isEqualTo(Arrays.asList(DEFAULT_DB, "db1", "db2", "fluss"));
+        assertThat(catalog.listDatabases()).isEqualTo(Arrays.asList(DEFAULT_DB, "db1", "db2", "fluss"));
         // test drop db1;
         // should throw exception since db1 is not empty and we set cascade = false
         assertThatThrownBy(() -> catalog.dropDatabase("db1", false, false))
@@ -438,16 +404,12 @@ class FlinkCatalogTest {
 
         // Test catalog with null default database
         Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
-        assertThatThrownBy(
-                        () ->
-                                new FlinkCatalog(
-                                        "test-catalog-no-default",
-                                        null, // null default database
-                                        String.join(
-                                                ",",
-                                                flussConf.get(ConfigOptions.BOOTSTRAP_SERVERS)),
-                                        Thread.currentThread().getContextClassLoader(),
-                                        Collections.emptyMap()))
+        assertThatThrownBy(() -> new FlinkCatalog(
+                        "test-catalog-no-default",
+                        null, // null default database
+                        String.join(",", flussConf.get(ConfigOptions.BOOTSTRAP_SERVERS)),
+                        Thread.currentThread().getContextClassLoader(),
+                        Collections.emptyMap()))
                 .hasMessageContaining("defaultDatabase cannot be null or empty");
     }
 
@@ -456,8 +418,7 @@ class FlinkCatalogTest {
         catalog.createDatabase("db1", new CatalogDatabaseImpl(Collections.emptyMap(), null), false);
         assertThatThrownBy(() -> catalog.listPartitions(new ObjectPath("db1", "unkown_table")))
                 .isInstanceOf(TableNotExistException.class)
-                .hasMessage(
-                        "Table (or view) db1.unkown_table does not exist in Catalog test-catalog.");
+                .hasMessage("Table (or view) db1.unkown_table does not exist in Catalog test-catalog.");
 
         // create a none partitioned table.
         CatalogTable table = this.newCatalogTable(Collections.emptyMap());
@@ -470,34 +431,27 @@ class FlinkCatalogTest {
         // create partition table and list partitions.
         ObjectPath path2 = new ObjectPath(DEFAULT_DB, "partitioned_t1");
         ResolvedSchema resolvedSchema = this.createSchema();
-        CatalogTable table2 =
-                new ResolvedCatalogTable(
-                        CatalogTable.of(
-                                Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
-                                "test comment",
-                                Collections.singletonList("first"),
-                                Collections.emptyMap()),
-                        resolvedSchema);
+        CatalogTable table2 = new ResolvedCatalogTable(
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
+                        "test comment",
+                        Collections.singletonList("first"),
+                        Collections.emptyMap()),
+                resolvedSchema);
         catalog.createTable(path2, table2, false);
-        catalog.createPartition(
-                path2,
-                new CatalogPartitionSpec(Collections.singletonMap("first", "1")),
-                null,
-                false);
+        catalog.createPartition(path2, new CatalogPartitionSpec(Collections.singletonMap("first", "1")), null, false);
 
         List<CatalogPartitionSpec> catalogPartitionSpecs = catalog.listPartitions(path2);
         assertThat(catalogPartitionSpecs).hasSize(1);
         assertThat(catalogPartitionSpecs.get(0).getPartitionSpec()).containsEntry("first", "1");
 
-        CatalogPartitionSpec testSpec =
-                new CatalogPartitionSpec(Collections.singletonMap("first", "1"));
+        CatalogPartitionSpec testSpec = new CatalogPartitionSpec(Collections.singletonMap("first", "1"));
         List<CatalogPartitionSpec> catalogPartitionSpecs1 = catalog.listPartitions(path2, testSpec);
         assertThat(catalogPartitionSpecs1).hasSize(1);
         assertThat(catalogPartitionSpecs1.get(0).getPartitionSpec()).containsEntry("first", "1");
 
         // test list partition by partitionSpec
-        CatalogPartitionSpec invalidTestSpec =
-                new CatalogPartitionSpec(Collections.singletonMap("second", ""));
+        CatalogPartitionSpec invalidTestSpec = new CatalogPartitionSpec(Collections.singletonMap("second", ""));
         assertThatThrownBy(() -> catalog.listPartitions(path2, invalidTestSpec))
                 .isInstanceOf(CatalogException.class)
                 .hasMessage(
@@ -514,11 +468,9 @@ class FlinkCatalogTest {
         catalog.createPartition(path2, firstPartSpec, null, false);
 
         // Test dropping non-existent partition
-        CatalogPartitionSpec nonExistentSpec =
-                new CatalogPartitionSpec(Collections.singletonMap("first", "999"));
+        CatalogPartitionSpec nonExistentSpec = new CatalogPartitionSpec(Collections.singletonMap("first", "999"));
         assertThatThrownBy(() -> catalog.dropPartition(path2, nonExistentSpec, false))
-                .isInstanceOf(
-                        org.apache.flink.table.catalog.exceptions.PartitionNotExistException.class)
+                .isInstanceOf(org.apache.flink.table.catalog.exceptions.PartitionNotExistException.class)
                 .hasMessage(
                         "Partition CatalogPartitionSpec{{first=999}} of table default.partitioned_t1 in catalog test-catalog does not exist.");
 
@@ -547,58 +499,44 @@ class FlinkCatalogTest {
         ObjectPath nonPartitionedPath = new ObjectPath(DEFAULT_DB, "non_partitioned_table1");
         ResolvedSchema resolvedSchema = this.createSchema();
         // test TableNotExistException
-        assertThatThrownBy(
-                        () ->
-                                catalog.createPartition(
-                                        nonPartitionedPath,
-                                        new CatalogPartitionSpec(
-                                                Collections.singletonMap("first", "1")),
-                                        null,
-                                        false))
+        assertThatThrownBy(() -> catalog.createPartition(
+                        nonPartitionedPath,
+                        new CatalogPartitionSpec(Collections.singletonMap("first", "1")),
+                        null,
+                        false))
                 .isInstanceOf(TableNotExistException.class)
-                .hasMessage(
-                        "Table (or view) %s does not exist in Catalog %s.",
-                        nonPartitionedPath, CATALOG_NAME);
+                .hasMessage("Table (or view) %s does not exist in Catalog %s.", nonPartitionedPath, CATALOG_NAME);
 
         // create non-partition table
         CatalogTable nonPartitionedTable = this.newCatalogTable(Collections.emptyMap());
         catalog.createTable(nonPartitionedPath, nonPartitionedTable, false);
 
         // test TableNotPartitionedException
-        assertThatThrownBy(
-                        () ->
-                                catalog.createPartition(
-                                        nonPartitionedPath,
-                                        new CatalogPartitionSpec(
-                                                Collections.singletonMap("first", "1")),
-                                        null,
-                                        false))
+        assertThatThrownBy(() -> catalog.createPartition(
+                        nonPartitionedPath,
+                        new CatalogPartitionSpec(Collections.singletonMap("first", "1")),
+                        null,
+                        false))
                 .isInstanceOf(TableNotPartitionedException.class)
-                .hasMessage(
-                        "Table %s in catalog %s is not partitioned.",
-                        nonPartitionedPath, CATALOG_NAME);
+                .hasMessage("Table %s in catalog %s is not partitioned.", nonPartitionedPath, CATALOG_NAME);
 
         // create partition table
         ObjectPath partitionedPath = new ObjectPath(DEFAULT_DB, "partitioned_table1");
-        CatalogTable partitionedTable =
-                new ResolvedCatalogTable(
-                        CatalogTable.of(
-                                Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
-                                "test comment",
-                                Collections.singletonList("first"),
-                                Collections.emptyMap()),
-                        resolvedSchema);
+        CatalogTable partitionedTable = new ResolvedCatalogTable(
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(resolvedSchema).build(),
+                        "test comment",
+                        Collections.singletonList("first"),
+                        Collections.emptyMap()),
+                resolvedSchema);
         catalog.createTable(partitionedPath, partitionedTable, false);
 
         // test InvalidPartitionException
-        assertThatThrownBy(
-                        () ->
-                                catalog.createPartition(
-                                        partitionedPath,
-                                        new CatalogPartitionSpec(
-                                                Collections.singletonMap("first", "**")),
-                                        null,
-                                        false))
+        assertThatThrownBy(() -> catalog.createPartition(
+                        partitionedPath,
+                        new CatalogPartitionSpec(Collections.singletonMap("first", "**")),
+                        null,
+                        false))
                 .rootCause()
                 .isInstanceOf(InvalidPartitionException.class)
                 .hasMessage(
@@ -606,20 +544,14 @@ class FlinkCatalogTest {
 
         // create partition success
         catalog.createPartition(
-                partitionedPath,
-                new CatalogPartitionSpec(Collections.singletonMap("first", "success")),
-                null,
-                false);
+                partitionedPath, new CatalogPartitionSpec(Collections.singletonMap("first", "success")), null, false);
 
         // test PartitionAlreadyExistsException
-        assertThatThrownBy(
-                        () ->
-                                catalog.createPartition(
-                                        partitionedPath,
-                                        new CatalogPartitionSpec(
-                                                Collections.singletonMap("first", "success")),
-                                        null,
-                                        false))
+        assertThatThrownBy(() -> catalog.createPartition(
+                        partitionedPath,
+                        new CatalogPartitionSpec(Collections.singletonMap("first", "success")),
+                        null,
+                        false))
                 .isInstanceOf(PartitionAlreadyExistsException.class)
                 .hasMessage(
                         "Partition CatalogPartitionSpec{{%s}} of table %s in catalog %s already exists.",
@@ -629,13 +561,12 @@ class FlinkCatalogTest {
     @Test
     void testConnectionFailureHandling() {
         // Create a catalog with invalid connection settings
-        Catalog badCatalog =
-                new FlinkCatalog(
-                        "bad-catalog",
-                        "default",
-                        "invalid-bootstrap-server:9092",
-                        Thread.currentThread().getContextClassLoader(),
-                        Collections.emptyMap());
+        Catalog badCatalog = new FlinkCatalog(
+                "bad-catalog",
+                "default",
+                "invalid-bootstrap-server:9092",
+                Thread.currentThread().getContextClassLoader(),
+                Collections.emptyMap());
 
         // Test open() throws proper exception
         assertThatThrownBy(() -> badCatalog.open())
@@ -667,28 +598,25 @@ class FlinkCatalogTest {
 
         // Create partitioned table for partition statistics testing
         ResolvedSchema schema = createSchema();
-        CatalogTable partTable =
-                new ResolvedCatalogTable(
-                        CatalogTable.of(
-                                Schema.newBuilder().fromResolvedSchema(schema).build(),
-                                "partitioned table for stats",
-                                Collections.singletonList("first"),
-                                Collections.emptyMap()),
-                        schema);
+        CatalogTable partTable = new ResolvedCatalogTable(
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(schema).build(),
+                        "partitioned table for stats",
+                        Collections.singletonList("first"),
+                        Collections.emptyMap()),
+                schema);
 
         ObjectPath partTablePath = new ObjectPath(DEFAULT_DB, "partStatsTable");
         catalog.createTable(partTablePath, partTable, false);
 
-        CatalogPartitionSpec partSpec =
-                new CatalogPartitionSpec(Collections.singletonMap("first", "value"));
+        CatalogPartitionSpec partSpec = new CatalogPartitionSpec(Collections.singletonMap("first", "value"));
         catalog.createPartition(partTablePath, partSpec, null, false);
 
         // Test partition statistics - should return UNKNOWN
         CatalogTableStatistics partStats = catalog.getPartitionStatistics(partTablePath, partSpec);
         assertThat(partStats).isEqualTo(CatalogTableStatistics.UNKNOWN);
 
-        CatalogColumnStatistics partColStats =
-                catalog.getPartitionColumnStatistics(partTablePath, partSpec);
+        CatalogColumnStatistics partColStats = catalog.getPartitionColumnStatistics(partTablePath, partSpec);
         assertThat(partColStats).isEqualTo(CatalogColumnStatistics.UNKNOWN);
 
         // Test unsupported statistics operations
@@ -698,16 +626,10 @@ class FlinkCatalogTest {
         assertThatThrownBy(() -> catalog.alterTableColumnStatistics(tablePath, null, false))
                 .isInstanceOf(UnsupportedOperationException.class);
 
-        assertThatThrownBy(
-                        () ->
-                                catalog.alterPartitionStatistics(
-                                        partTablePath, partSpec, null, false))
+        assertThatThrownBy(() -> catalog.alterPartitionStatistics(partTablePath, partSpec, null, false))
                 .isInstanceOf(UnsupportedOperationException.class);
 
-        assertThatThrownBy(
-                        () ->
-                                catalog.alterPartitionColumnStatistics(
-                                        partTablePath, partSpec, null, false))
+        assertThatThrownBy(() -> catalog.alterPartitionColumnStatistics(partTablePath, partSpec, null, false))
                 .isInstanceOf(UnsupportedOperationException.class);
 
         // Clean up
@@ -730,8 +652,7 @@ class FlinkCatalogTest {
         assertThat(catalog.functionExists(functionPath)).isFalse();
 
         // Test getFunction - should always throw FunctionNotExistException
-        assertThatThrownBy(() -> catalog.getFunction(functionPath))
-                .isInstanceOf(FunctionNotExistException.class);
+        assertThatThrownBy(() -> catalog.getFunction(functionPath)).isInstanceOf(FunctionNotExistException.class);
 
         // Test unsupported function operations
         assertThatThrownBy(() -> catalog.createFunction(functionPath, null, false))
@@ -759,18 +680,16 @@ class FlinkCatalogTest {
 
         // Create catalog with security configs
         Configuration flussConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
-        Catalog securedCatalog =
-                new FlinkCatalog(
-                        "secured-catalog",
-                        DEFAULT_DB,
-                        String.join(",", flussConf.get(BOOTSTRAP_SERVERS)),
-                        Thread.currentThread().getContextClassLoader(),
-                        securityConfigs);
+        Catalog securedCatalog = new FlinkCatalog(
+                "secured-catalog",
+                DEFAULT_DB,
+                String.join(",", flussConf.get(BOOTSTRAP_SERVERS)),
+                Thread.currentThread().getContextClassLoader(),
+                securityConfigs);
         securedCatalog.open();
 
         try {
-            securedCatalog.createDatabase(
-                    DEFAULT_DB, new CatalogDatabaseImpl(Collections.emptyMap(), null), true);
+            securedCatalog.createDatabase(DEFAULT_DB, new CatalogDatabaseImpl(Collections.emptyMap(), null), true);
 
             Map<String, String> tableOptions = new HashMap<>();
             CatalogTable table = newCatalogTable(tableOptions);
@@ -790,8 +709,7 @@ class FlinkCatalogTest {
     }
 
     private void createAndCheckAndDropTable(
-            final ResolvedSchema schema, ObjectPath tablePath, Map<String, String> options)
-            throws Exception {
+            final ResolvedSchema schema, ObjectPath tablePath, Map<String, String> options) throws Exception {
         CatalogTable table = newCatalogTable(schema, options);
         catalog.createTable(tablePath, table, false);
         CatalogBaseTable tableCreated = catalog.getTable(tablePath);

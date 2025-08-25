@@ -89,8 +89,7 @@ public class FlinkRowDataChannelComputer<InputT> implements ChannelComputer<Inpu
         // 'partition0-bucket2', and 'partition1-bucket2', whereas in task2, it would only have
         // 'partition0-bucket1' and 'partition1-bucket1'. As partition number increases, this
         // situation becomes even more severe.
-        this.combineShuffleWithPartitionName =
-                partitionGetter != null && numBucket % numChannels != 0;
+        this.combineShuffleWithPartitionName = partitionGetter != null && numBucket % numChannels != 0;
 
         try {
             this.serializationSchema.open(new SerializerInitContextImpl(flussRowType));

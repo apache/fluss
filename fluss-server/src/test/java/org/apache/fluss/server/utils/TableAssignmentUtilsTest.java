@@ -48,98 +48,60 @@ class TableAssignmentUtilsTest {
     @Test
     void testTableAssignmentWithRackUnAware() {
         // should throw exception since servers is empty
-        assertThatThrownBy(
-                        () ->
-                                generateAssignment(
-                                        5,
-                                        -1,
-                                        toTabletServerInfo(
-                                                Collections.emptyMap(), Collections.emptyList())))
+        assertThatThrownBy(() ->
+                        generateAssignment(5, -1, toTabletServerInfo(Collections.emptyMap(), Collections.emptyList())))
                 .isInstanceOf(InvalidReplicationFactorException.class);
 
         // should throw exception since the buckets is less than 0
-        assertThatThrownBy(
-                        () ->
-                                generateAssignment(
-                                        -1,
-                                        3,
-                                        toTabletServerInfo(
-                                                Collections.emptyMap(), Arrays.asList(0, 1))))
+        assertThatThrownBy(() ->
+                        generateAssignment(-1, 3, toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1))))
                 .isInstanceOf(InvalidBucketsException.class);
 
         // should throw exception since the server is less than replication factor
         assertThatThrownBy(
-                        () ->
-                                generateAssignment(
-                                        5,
-                                        3,
-                                        toTabletServerInfo(
-                                                Collections.emptyMap(), Arrays.asList(0, 1))))
+                        () -> generateAssignment(5, 3, toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1))))
                 .isInstanceOf(InvalidReplicationFactorException.class);
 
         // should throw exception since replication factor is less than 0
-        assertThatThrownBy(
-                        () ->
-                                generateAssignment(
-                                        5,
-                                        -1,
-                                        toTabletServerInfo(
-                                                Collections.emptyMap(), Arrays.asList(0, 1))))
+        assertThatThrownBy(() ->
+                        generateAssignment(5, -1, toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1))))
                 .isInstanceOf(InvalidReplicationFactorException.class);
 
         // test replica factor 1
         TableAssignment tableAssignment =
-                generateAssignment(
-                        3,
-                        1,
-                        toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1, 2, 3)),
-                        0,
-                        0);
-        TableAssignment expectedAssignment =
-                TableAssignment.builder()
-                        .add(0, BucketAssignment.of(0))
-                        .add(1, BucketAssignment.of(1))
-                        .add(2, BucketAssignment.of(2))
-                        .build();
+                generateAssignment(3, 1, toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1, 2, 3)), 0, 0);
+        TableAssignment expectedAssignment = TableAssignment.builder()
+                .add(0, BucketAssignment.of(0))
+                .add(1, BucketAssignment.of(1))
+                .add(2, BucketAssignment.of(2))
+                .build();
         assertThat(tableAssignment).isEqualTo(expectedAssignment);
 
         // test replica factor 3
         tableAssignment =
-                generateAssignment(
-                        3,
-                        3,
-                        toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1, 2, 3)),
-                        1,
-                        0);
-        expectedAssignment =
-                TableAssignment.builder()
-                        .add(0, BucketAssignment.of(1, 2, 3))
-                        .add(1, BucketAssignment.of(2, 3, 0))
-                        .add(2, BucketAssignment.of(3, 0, 1))
-                        .build();
+                generateAssignment(3, 3, toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1, 2, 3)), 1, 0);
+        expectedAssignment = TableAssignment.builder()
+                .add(0, BucketAssignment.of(1, 2, 3))
+                .add(1, BucketAssignment.of(2, 3, 0))
+                .add(2, BucketAssignment.of(3, 0, 1))
+                .build();
         assertThat(tableAssignment).isEqualTo(expectedAssignment);
 
         // test with 10 buckets and 3 replies
-        tableAssignment =
-                generateAssignment(
-                        10,
-                        3,
-                        toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1, 2, 3, 4)),
-                        0,
-                        0);
-        expectedAssignment =
-                TableAssignment.builder()
-                        .add(0, BucketAssignment.of(0, 1, 2))
-                        .add(1, BucketAssignment.of(1, 2, 3))
-                        .add(2, BucketAssignment.of(2, 3, 4))
-                        .add(3, BucketAssignment.of(3, 4, 0))
-                        .add(4, BucketAssignment.of(4, 0, 1))
-                        .add(5, BucketAssignment.of(0, 2, 3))
-                        .add(6, BucketAssignment.of(1, 3, 4))
-                        .add(7, BucketAssignment.of(2, 4, 0))
-                        .add(8, BucketAssignment.of(3, 0, 1))
-                        .add(9, BucketAssignment.of(4, 1, 2))
-                        .build();
+        tableAssignment = generateAssignment(
+                10, 3, toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1, 2, 3, 4)), 0, 0);
+        expectedAssignment = TableAssignment.builder()
+                .add(0, BucketAssignment.of(0, 1, 2))
+                .add(1, BucketAssignment.of(1, 2, 3))
+                .add(2, BucketAssignment.of(2, 3, 4))
+                .add(3, BucketAssignment.of(3, 4, 0))
+                .add(4, BucketAssignment.of(4, 0, 1))
+                .add(5, BucketAssignment.of(0, 2, 3))
+                .add(6, BucketAssignment.of(1, 3, 4))
+                .add(7, BucketAssignment.of(2, 4, 0))
+                .add(8, BucketAssignment.of(3, 0, 1))
+                .add(9, BucketAssignment.of(4, 1, 2))
+                .build();
         assertThat(tableAssignment).isEqualTo(expectedAssignment);
     }
 
@@ -163,18 +125,16 @@ class TableAssignmentUtilsTest {
         assertThat(newList).containsExactly(0, 3, 1, 4, 2);
 
         TableAssignment tableAssignment =
-                generateAssignment(
-                        7, 3, toTabletServerInfo(rackMap, Collections.emptyList()), 0, 0);
-        TableAssignment expectedAssignment =
-                TableAssignment.builder()
-                        .add(0, BucketAssignment.of(0, 3, 1))
-                        .add(1, BucketAssignment.of(3, 1, 5))
-                        .add(2, BucketAssignment.of(1, 5, 4))
-                        .add(3, BucketAssignment.of(5, 4, 2))
-                        .add(4, BucketAssignment.of(4, 2, 0))
-                        .add(5, BucketAssignment.of(2, 0, 3))
-                        .add(6, BucketAssignment.of(0, 4, 2))
-                        .build();
+                generateAssignment(7, 3, toTabletServerInfo(rackMap, Collections.emptyList()), 0, 0);
+        TableAssignment expectedAssignment = TableAssignment.builder()
+                .add(0, BucketAssignment.of(0, 3, 1))
+                .add(1, BucketAssignment.of(3, 1, 5))
+                .add(2, BucketAssignment.of(1, 5, 4))
+                .add(3, BucketAssignment.of(5, 4, 2))
+                .add(4, BucketAssignment.of(4, 2, 0))
+                .add(5, BucketAssignment.of(2, 0, 3))
+                .add(6, BucketAssignment.of(0, 4, 2))
+                .build();
         assertThat(tableAssignment).isEqualTo(expectedAssignment);
     }
 
@@ -190,13 +150,8 @@ class TableAssignmentUtilsTest {
 
         int nBuckets = 6;
         int replicationFactor = 3;
-        TableAssignment tableAssignment =
-                generateAssignment(
-                        nBuckets,
-                        replicationFactor,
-                        toTabletServerInfo(rackMap, Collections.emptyList()),
-                        2,
-                        0);
+        TableAssignment tableAssignment = generateAssignment(
+                nBuckets, replicationFactor, toTabletServerInfo(rackMap, Collections.emptyList()), 2, 0);
         checkTableAssignment(tableAssignment, rackMap, 6, nBuckets, replicationFactor);
     }
 
@@ -213,10 +168,7 @@ class TableAssignmentUtilsTest {
         int nBuckets = 6;
         int replicationFactor = 3;
         TableAssignment tableAssignment =
-                generateAssignment(
-                        nBuckets,
-                        replicationFactor,
-                        toTabletServerInfo(rackMap, Collections.emptyList()));
+                generateAssignment(nBuckets, replicationFactor, toTabletServerInfo(rackMap, Collections.emptyList()));
         checkTableAssignment(tableAssignment, rackMap, 6, nBuckets, replicationFactor);
     }
 
@@ -232,15 +184,9 @@ class TableAssignmentUtilsTest {
 
         int nBuckets = 13;
         int replicationFactor = 3;
-        TableAssignment tableAssignment =
-                generateAssignment(
-                        nBuckets,
-                        replicationFactor,
-                        toTabletServerInfo(rackMap, Collections.emptyList()),
-                        0,
-                        0);
-        checkTableAssignment(
-                tableAssignment, rackMap, 6, nBuckets, replicationFactor, true, false, false);
+        TableAssignment tableAssignment = generateAssignment(
+                nBuckets, replicationFactor, toTabletServerInfo(rackMap, Collections.emptyList()), 0, 0);
+        checkTableAssignment(tableAssignment, rackMap, 6, nBuckets, replicationFactor, true, false, false);
     }
 
     @Test
@@ -256,12 +202,8 @@ class TableAssignmentUtilsTest {
         int nBuckets = 12;
         int replicationFactor = 3;
         TableAssignment tableAssignment =
-                generateAssignment(
-                        nBuckets,
-                        replicationFactor,
-                        toTabletServerInfo(rackMap, Collections.emptyList()));
-        checkTableAssignment(
-                tableAssignment, rackMap, 6, nBuckets, replicationFactor, true, true, false);
+                generateAssignment(nBuckets, replicationFactor, toTabletServerInfo(rackMap, Collections.emptyList()));
+        checkTableAssignment(tableAssignment, rackMap, 6, nBuckets, replicationFactor, true, true, false);
     }
 
     @Test
@@ -277,10 +219,7 @@ class TableAssignmentUtilsTest {
         int nBuckets = 12;
         int replicationFactor = 2;
         TableAssignment tableAssignment =
-                generateAssignment(
-                        nBuckets,
-                        replicationFactor,
-                        toTabletServerInfo(rackMap, Collections.emptyList()));
+                generateAssignment(nBuckets, replicationFactor, toTabletServerInfo(rackMap, Collections.emptyList()));
         checkTableAssignment(tableAssignment, rackMap, 6, nBuckets, replicationFactor);
     }
 
@@ -296,13 +235,8 @@ class TableAssignmentUtilsTest {
 
         int nBuckets = 12;
         int replicationFactor = 2;
-        TableAssignment tableAssignment =
-                generateAssignment(
-                        nBuckets,
-                        replicationFactor,
-                        toTabletServerInfo(rackMap, Collections.emptyList()),
-                        0,
-                        12);
+        TableAssignment tableAssignment = generateAssignment(
+                nBuckets, replicationFactor, toTabletServerInfo(rackMap, Collections.emptyList()), 0, 12);
         checkTableAssignment(tableAssignment, rackMap, 6, nBuckets, replicationFactor);
     }
 
@@ -319,10 +253,7 @@ class TableAssignmentUtilsTest {
         int nBuckets = 6;
         int replicationFactor = 2;
         TableAssignment tableAssignment =
-                generateAssignment(
-                        nBuckets,
-                        replicationFactor,
-                        toTabletServerInfo(rackMap, Collections.emptyList()));
+                generateAssignment(nBuckets, replicationFactor, toTabletServerInfo(rackMap, Collections.emptyList()));
         checkTableAssignment(tableAssignment, rackMap, 6, nBuckets, replicationFactor);
     }
 
@@ -336,10 +267,7 @@ class TableAssignmentUtilsTest {
         int nBuckets = 6;
         int replicationFactor = 2;
         TableAssignment tableAssignment =
-                generateAssignment(
-                        nBuckets,
-                        replicationFactor,
-                        toTabletServerInfo(rackMap, Collections.emptyList()));
+                generateAssignment(nBuckets, replicationFactor, toTabletServerInfo(rackMap, Collections.emptyList()));
         checkTableAssignment(tableAssignment, rackMap, 3, nBuckets, replicationFactor);
     }
 
@@ -362,10 +290,7 @@ class TableAssignmentUtilsTest {
         int nBuckets = 96;
         int replicationFactor = 3;
         TableAssignment tableAssignment =
-                generateAssignment(
-                        nBuckets,
-                        replicationFactor,
-                        toTabletServerInfo(rackMap, Collections.emptyList()));
+                generateAssignment(nBuckets, replicationFactor, toTabletServerInfo(rackMap, Collections.emptyList()));
         checkTableAssignment(tableAssignment, rackMap, 12, nBuckets, replicationFactor);
     }
 
@@ -382,13 +307,11 @@ class TableAssignmentUtilsTest {
         int nBuckets = 6;
         int replicationFactor = 5;
         TableAssignment tableAssignment =
-                generateAssignment(
-                        nBuckets,
-                        replicationFactor,
-                        toTabletServerInfo(rackMap, Collections.emptyList()));
+                generateAssignment(nBuckets, replicationFactor, toTabletServerInfo(rackMap, Collections.emptyList()));
         ReplicaDistributions distribution = getReplicaDistribution(tableAssignment, rackMap);
         for (int bucket = 0; bucket < nBuckets; bucket++) {
-            Set<String> racksForBucket = new HashSet<>(distribution.getBucketRacks().get(bucket));
+            Set<String> racksForBucket =
+                    new HashSet<>(distribution.getBucketRacks().get(bucket));
             assertThat(racksForBucket.size()).isEqualTo(3);
         }
     }
@@ -406,13 +329,11 @@ class TableAssignmentUtilsTest {
         int nBuckets = 6;
         int replicationFactor = 2;
         TableAssignment tableAssignment =
-                generateAssignment(
-                        nBuckets,
-                        replicationFactor,
-                        toTabletServerInfo(rackMap, Collections.emptyList()));
+                generateAssignment(nBuckets, replicationFactor, toTabletServerInfo(rackMap, Collections.emptyList()));
         ReplicaDistributions distribution = getReplicaDistribution(tableAssignment, rackMap);
         for (int bucket = 0; bucket <= 5; bucket++) {
-            Set<String> racksForBucket = new HashSet<>(distribution.getBucketRacks().get(bucket));
+            Set<String> racksForBucket =
+                    new HashSet<>(distribution.getBucketRacks().get(bucket));
             assertThat(racksForBucket.size()).isEqualTo(2);
         }
     }
@@ -430,13 +351,11 @@ class TableAssignmentUtilsTest {
         int nBuckets = 6;
         int replicationFactor = 3;
         TableAssignment tableAssignment =
-                generateAssignment(
-                        nBuckets,
-                        replicationFactor,
-                        toTabletServerInfo(rackMap, Collections.emptyList()));
+                generateAssignment(nBuckets, replicationFactor, toTabletServerInfo(rackMap, Collections.emptyList()));
         ReplicaDistributions distribution = getReplicaDistribution(tableAssignment, rackMap);
         for (int bucket = 0; bucket < nBuckets; bucket++) {
-            Set<String> racksForBucket = new HashSet<>(distribution.getBucketRacks().get(bucket));
+            Set<String> racksForBucket =
+                    new HashSet<>(distribution.getBucketRacks().get(bucket));
             assertThat(racksForBucket.size()).isEqualTo(1);
         }
 
@@ -456,15 +375,9 @@ class TableAssignmentUtilsTest {
 
         int nBuckets = 6;
         int replicationFactor = 4;
-        TableAssignment tableAssignment =
-                generateAssignment(
-                        nBuckets,
-                        replicationFactor,
-                        toTabletServerInfo(rackMap, Collections.emptyList()),
-                        2,
-                        0);
-        checkTableAssignment(
-                tableAssignment, rackMap, 12, nBuckets, replicationFactor, false, false, false);
+        TableAssignment tableAssignment = generateAssignment(
+                nBuckets, replicationFactor, toTabletServerInfo(rackMap, Collections.emptyList()), 2, 0);
+        checkTableAssignment(tableAssignment, rackMap, 12, nBuckets, replicationFactor, false, false, false);
     }
 
     @Test
@@ -476,13 +389,9 @@ class TableAssignmentUtilsTest {
         rackMap.put(3, null);
         rackMap.put(4, "rack3");
 
-        assertThatThrownBy(
-                        () ->
-                                generateAssignment(
-                                        6, 3, toTabletServerInfo(rackMap, Collections.emptyList())))
+        assertThatThrownBy(() -> generateAssignment(6, 3, toTabletServerInfo(rackMap, Collections.emptyList())))
                 .isInstanceOf(InvalidServerRackInfoException.class)
-                .hasMessageContaining(
-                        "Not all tabletServers have rack information for replica rack aware assignment.");
+                .hasMessageContaining("Not all tabletServers have rack information for replica rack aware assignment.");
     }
 
     private static void checkTableAssignment(
@@ -492,14 +401,7 @@ class TableAssignmentUtilsTest {
             int nBuckets,
             int replicationFactor) {
         checkTableAssignment(
-                assignment,
-                serverRackMapping,
-                numTabletServers,
-                nBuckets,
-                replicationFactor,
-                true,
-                true,
-                true);
+                assignment, serverRackMapping, numTabletServers, nBuckets, replicationFactor, true, true, true);
     }
 
     private static void checkTableAssignment(
@@ -524,10 +426,9 @@ class TableAssignmentUtilsTest {
         if (verifyRackAware) {
             Map<Integer, List<String>> bucketRackMap = distribution.getBucketRacks();
             List<Integer> expectedRackCounts = Collections.nCopies(nBuckets, replicationFactor);
-            List<Integer> actualRackCounts =
-                    bucketRackMap.values().stream()
-                            .map(racks -> new HashSet<>(racks).size())
-                            .collect(Collectors.toList());
+            List<Integer> actualRackCounts = bucketRackMap.values().stream()
+                    .map(racks -> new HashSet<>(racks).size())
+                    .collect(Collectors.toList());
             assertThat(expectedRackCounts).isEqualTo(actualRackCounts);
         }
 
@@ -535,8 +436,7 @@ class TableAssignmentUtilsTest {
         if (verifyLeaderDistribution) {
             Map<Integer, Integer> leaderCount = distribution.getServerLeaderCount();
             int leaderCountPerServer = nBuckets / numTabletServers;
-            List<Integer> expectedLeaderCounts =
-                    Collections.nCopies(numTabletServers, leaderCountPerServer);
+            List<Integer> expectedLeaderCounts = Collections.nCopies(numTabletServers, leaderCountPerServer);
             List<Integer> actualLeaderCounts =
                     leaderCount.values().stream().sorted().collect(Collectors.toList());
             assertThat(expectedLeaderCounts).isEqualTo(actualLeaderCounts);
@@ -546,8 +446,7 @@ class TableAssignmentUtilsTest {
         if (verifyReplicaDistribution) {
             Map<Integer, Integer> replicasCount = distribution.getServerReplicasCount();
             int numReplicasPerServer = (nBuckets * replicationFactor) / numTabletServers;
-            List<Integer> expectedReplicaCounts =
-                    Collections.nCopies(numTabletServers, numReplicasPerServer);
+            List<Integer> expectedReplicaCounts = Collections.nCopies(numTabletServers, numReplicasPerServer);
             List<Integer> actualReplicaCounts =
                     replicasCount.values().stream().sorted().collect(Collectors.toList());
             assertThat(expectedReplicaCounts).isEqualTo(actualReplicaCounts);

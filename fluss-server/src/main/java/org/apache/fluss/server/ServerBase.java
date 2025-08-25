@@ -125,34 +125,27 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
 
             startServices();
         } catch (Throwable t) {
-            final Throwable strippedThrowable =
-                    ExceptionUtils.stripException(t, UndeclaredThrowableException.class);
+            final Throwable strippedThrowable = ExceptionUtils.stripException(t, UndeclaredThrowableException.class);
             try {
                 // clean up any partial state
-                closeAsync(Result.FAILURE)
-                        .get(INITIALIZATION_SHUTDOWN_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                closeAsync(Result.FAILURE).get(INITIALIZATION_SHUTDOWN_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
             } catch (InterruptedException | ExecutionException | TimeoutException e) {
                 strippedThrowable.addSuppressed(e);
             }
             LOG.error("Could not start the {}.", getServerName(), strippedThrowable);
-            throw new FlussException(
-                    String.format("Failed to start the %s.", getServerName()), strippedThrowable);
+            throw new FlussException(String.format("Failed to start the %s.", getServerName()), strippedThrowable);
         }
     }
 
     private void addShutDownHook() {
-        shutDownHook =
-                ShutdownHookUtil.addShutdownHook(
-                        () -> this.closeAsync(Result.JVM_SHUTDOWN).join(), getServerName(), LOG);
+        shutDownHook = ShutdownHookUtil.addShutdownHook(
+                () -> this.closeAsync(Result.JVM_SHUTDOWN).join(), getServerName(), LOG);
     }
 
     @Override
     public void onFatalError(Throwable exception) {
         // todo, enrich coordinator server error like Flink
-        LOG.error(
-                "Fatal error occurred while running the {}. Shutting it down...",
-                getServerName(),
-                exception);
+        LOG.error("Fatal error occurred while running the {}. Shutting it down...", getServerName(), exception);
         if (ExceptionUtils.isJvmFatalError(exception)) {
             System.exit(-1);
         } else {

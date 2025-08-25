@@ -112,8 +112,7 @@ public class PaimonRowAsFlussRow implements InternalRow {
         if (TimestampNtz.isCompact(precision)) {
             return TimestampNtz.fromMillis(timestamp.getMillisecond());
         } else {
-            return TimestampNtz.fromMillis(
-                    timestamp.getMillisecond(), timestamp.getNanoOfMillisecond());
+            return TimestampNtz.fromMillis(timestamp.getMillisecond(), timestamp.getNanoOfMillisecond());
         }
     }
 
@@ -123,8 +122,7 @@ public class PaimonRowAsFlussRow implements InternalRow {
         if (TimestampLtz.isCompact(precision)) {
             return TimestampLtz.fromEpochMillis(timestamp.getMillisecond());
         } else {
-            return TimestampLtz.fromEpochMillis(
-                    timestamp.getMillisecond(), timestamp.getNanoOfMillisecond());
+            return TimestampLtz.fromEpochMillis(timestamp.getMillisecond(), timestamp.getNanoOfMillisecond());
         }
     }
 

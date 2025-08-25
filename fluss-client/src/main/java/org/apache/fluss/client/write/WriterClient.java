@@ -88,10 +88,7 @@ public class WriterClient {
     private final DynamicPartitionCreator dynamicPartitionCreator;
 
     public WriterClient(
-            Configuration conf,
-            MetadataUpdater metadataUpdater,
-            ClientMetricGroup clientMetricGroup,
-            Admin admin) {
+            Configuration conf, MetadataUpdater metadataUpdater, ClientMetricGroup clientMetricGroup, Admin admin) {
         try {
             this.conf = conf;
             this.metadataUpdater = metadataUpdater;
@@ -103,18 +100,16 @@ public class WriterClient {
             short acks = configureAcks(idempotenceManager.idempotenceEnabled());
             int retries = configureRetries(idempotenceManager.idempotenceEnabled());
             this.accumulator =
-                    new RecordAccumulator(
-                            conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
+                    new RecordAccumulator(conf, idempotenceManager, writerMetricGroup, SystemClock.getInstance());
             this.sender = newSender(acks, retries);
             this.ioThreadPool = createThreadPool();
             ioThreadPool.submit(sender);
 
-            this.dynamicPartitionCreator =
-                    new DynamicPartitionCreator(
-                            metadataUpdater,
-                            admin,
-                            conf.get(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED),
-                            this::maybeAbortBatches);
+            this.dynamicPartitionCreator = new DynamicPartitionCreator(
+                    metadataUpdater,
+                    admin,
+                    conf.get(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED),
+                    this::maybeAbortBatches);
         } catch (Throwable t) {
             close(Duration.ofMillis(0));
             throw new FlussRuntimeException("Failed to construct writer", t);
@@ -150,9 +145,7 @@ public class WriterClient {
         } catch (InterruptedException e) {
             throw new FlussRuntimeException("Flush interrupted." + e);
         }
-        LOG.trace(
-                "Flushed accumulated records in writer in {} ms.",
-                System.currentTimeMillis() - start);
+        LOG.trace("Flushed accumulated records in writer in {} ms.", System.currentTimeMillis() - start);
     }
 
     private void doSend(WriteRecord record, WriteCallback callback) {
@@ -164,17 +157,14 @@ public class WriterClient {
 
             // maybe create bucket assigner.
             Cluster cluster = metadataUpdater.getCluster();
-            BucketAssigner bucketAssigner =
-                    bucketAssignerMap.computeIfAbsent(
-                            physicalTablePath,
-                            k -> createBucketAssigner(physicalTablePath, conf, cluster));
+            BucketAssigner bucketAssigner = bucketAssignerMap.computeIfAbsent(
+                    physicalTablePath, k -> createBucketAssigner(physicalTablePath, conf, cluster));
 
             // Append the record to the accumulator.
             int bucketId = bucketAssigner.assignBucket(record.getBucketKey(), cluster);
 
             RecordAppendResult result =
-                    accumulator.append(
-                            record, callback, cluster, bucketId, bucketAssigner.abortIfBatchFull());
+                    accumulator.append(record, callback, cluster, bucketId, bucketAssigner.abortIfBatchFull());
 
             if (result.abortRecordForNewBatch) {
                 int prevBucketId = bucketId;
@@ -211,25 +201,19 @@ public class WriterClient {
     // writer has already been closed.
     private void throwIfWriterClosed() {
         if (sender == null || !sender.isRunning()) {
-            throw new IllegalStateException(
-                    "Cannot perform operation after writer has been closed");
+            throw new IllegalStateException("Cannot perform operation after writer has been closed");
         }
     }
 
     private IdempotenceManager buildIdempotenceManager() {
-        boolean idempotenceEnabled =
-                conf.getBoolean(ConfigOptions.CLIENT_WRITER_ENABLE_IDEMPOTENCE);
-        int maxInflightRequestPerBucket =
-                conf.getInt(ConfigOptions.CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET);
-        if (idempotenceEnabled
-                && maxInflightRequestPerBucket
-                        > MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE) {
-            throw new IllegalConfigurationException(
-                    "The value of "
-                            + ConfigOptions.CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET.key()
-                            + " should be less than or equal to "
-                            + MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE
-                            + " when idempotence writer enabled to ensure message ordering.");
+        boolean idempotenceEnabled = conf.getBoolean(ConfigOptions.CLIENT_WRITER_ENABLE_IDEMPOTENCE);
+        int maxInflightRequestPerBucket = conf.getInt(ConfigOptions.CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET);
+        if (idempotenceEnabled && maxInflightRequestPerBucket > MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE) {
+            throw new IllegalConfigurationException("The value of "
+                    + ConfigOptions.CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET.key()
+                    + " should be less than or equal to "
+                    + MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE
+                    + " when idempotence writer enabled to ensure message ordering.");
         }
 
         TabletServerGateway tabletServerGateway = metadataUpdater.newRandomTabletServerClient();
@@ -248,11 +232,10 @@ public class WriterClient {
         }
 
         if (idempotenceEnabled && ack != -1) {
-            throw new IllegalConfigurationException(
-                    "Must set "
-                            + ConfigOptions.CLIENT_WRITER_ACKS.key()
-                            + " to 'all' in order to use the idempotent writer. Otherwise "
-                            + "we cannot guarantee idempotence.");
+            throw new IllegalConfigurationException("Must set "
+                    + ConfigOptions.CLIENT_WRITER_ACKS.key()
+                    + " to 'all' in order to use the idempotent writer. Otherwise "
+                    + "we cannot guarantee idempotence.");
         }
 
         return ack;
@@ -261,11 +244,10 @@ public class WriterClient {
     private int configureRetries(boolean idempotenceEnabled) {
         int retries = conf.getInt(ConfigOptions.CLIENT_WRITER_RETRIES);
         if (idempotenceEnabled && retries == 0) {
-            throw new IllegalConfigurationException(
-                    "Must set "
-                            + ConfigOptions.CLIENT_WRITER_RETRIES.key()
-                            + " to non-zero when using the idempotent writer. Otherwise "
-                            + "we cannot guarantee idempotence.");
+            throw new IllegalConfigurationException("Must set "
+                    + ConfigOptions.CLIENT_WRITER_RETRIES.key()
+                    + " to non-zero when using the idempotent writer. Otherwise "
+                    + "we cannot guarantee idempotence.");
         }
         return retries;
     }
@@ -324,20 +306,17 @@ public class WriterClient {
         int bucketNumber = tableInfo.getNumBuckets();
         List<String> bucketKeys = tableInfo.getBucketKeys();
         if (!bucketKeys.isEmpty()) {
-            BucketingFunction function =
-                    BucketingFunction.of(
-                            tableInfo.getTableConfig().getDataLakeFormat().orElse(null));
+            BucketingFunction function = BucketingFunction.of(
+                    tableInfo.getTableConfig().getDataLakeFormat().orElse(null));
             return new HashBucketAssigner(bucketNumber, function);
         } else {
-            ConfigOptions.NoKeyAssigner noKeyAssigner =
-                    conf.get(ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER);
+            ConfigOptions.NoKeyAssigner noKeyAssigner = conf.get(ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER);
             if (noKeyAssigner == ROUND_ROBIN) {
                 return new RoundRobinBucketAssigner(physicalTablePath);
             } else if (noKeyAssigner == STICKY) {
                 return new StickyBucketAssigner(physicalTablePath);
             } else {
-                throw new IllegalArgumentException(
-                        "Unsupported append only row bucket assigner: " + noKeyAssigner);
+                throw new IllegalArgumentException("Unsupported append only row bucket assigner: " + noKeyAssigner);
             }
         }
     }

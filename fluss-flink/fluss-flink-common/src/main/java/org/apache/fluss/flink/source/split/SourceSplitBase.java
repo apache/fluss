@@ -33,15 +33,15 @@ public abstract class SourceSplitBase implements SourceSplit {
 
     protected final TableBucket tableBucket;
 
-    @Nullable protected final String partitionName;
+    @Nullable
+    protected final String partitionName;
 
     public SourceSplitBase(TableBucket tableBucket, @Nullable String partitionName) {
         this.tableBucket = tableBucket;
         this.partitionName = partitionName;
         if ((tableBucket.getPartitionId() == null && partitionName != null)
                 || (tableBucket.getPartitionId() != null && partitionName == null)) {
-            throw new IllegalArgumentException(
-                    "Partition name and partition id must be both null or both not null.");
+            throw new IllegalArgumentException("Partition name and partition id must be both null or both not null.");
         }
     }
 

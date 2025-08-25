@@ -31,8 +31,7 @@ public class NotifyLeaderAndIsrResponseReceivedEvent implements CoordinatorEvent
     private final int responseServerId;
 
     public NotifyLeaderAndIsrResponseReceivedEvent(
-            List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets,
-            int responseServerId) {
+            List<NotifyLeaderAndIsrResultForBucket> notifyLeaderAndIsrResultForBuckets, int responseServerId) {
         this.notifyLeaderAndIsrResultForBuckets = notifyLeaderAndIsrResultForBuckets;
         this.responseServerId = responseServerId;
     }

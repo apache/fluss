@@ -75,11 +75,11 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
     public DefaultRemoteLogStorage(Configuration conf) throws IOException {
         this.remoteLogDir = FlussPaths.remoteLogDir(conf);
         this.fileSystem = remoteLogDir.getFileSystem();
-        this.writeBufferSize = (int) conf.get(ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE).getBytes();
-        this.dataTransferThreadPool =
-                Executors.newFixedThreadPool(
-                        conf.getInt(ConfigOptions.REMOTE_LOG_DATA_TRANSFER_THREAD_NUM),
-                        new ExecutorThreadFactory("fluss-remote-log-data-transfer"));
+        this.writeBufferSize =
+                (int) conf.get(ConfigOptions.REMOTE_FS_WRITE_BUFFER_SIZE).getBytes();
+        this.dataTransferThreadPool = Executors.newFixedThreadPool(
+                conf.getInt(ConfigOptions.REMOTE_LOG_DATA_TRANSFER_THREAD_NUM),
+                new ExecutorThreadFactory("fluss-remote-log-data-transfer"));
     }
 
     @Override
@@ -98,32 +98,24 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
      * </pre>
      */
     @Override
-    public void copyLogSegmentFiles(
-            RemoteLogSegment remoteLogSegment, LogSegmentFiles logSegmentFiles)
+    public void copyLogSegmentFiles(RemoteLogSegment remoteLogSegment, LogSegmentFiles logSegmentFiles)
             throws RemoteStorageException {
         LOG.debug("copying log segment and indexes for remoteLogSegment: {}", remoteLogSegment);
         try {
-            List<CompletableFuture<Void>> futures =
-                    createUploadFutures(remoteLogSegment, logSegmentFiles);
+            List<CompletableFuture<Void>> futures = createUploadFutures(remoteLogSegment, logSegmentFiles);
             FutureUtils.waitForAll(futures).get();
         } catch (ExecutionException e) {
             Throwable throwable = ExceptionUtils.stripExecutionException(e);
             throwable = ExceptionUtils.stripException(throwable, RuntimeException.class);
             throw new RemoteStorageException(
-                    "Failed to copy log segment and indexes to remote dir for path: "
-                            + remoteLogSegment,
-                    throwable);
+                    "Failed to copy log segment and indexes to remote dir for path: " + remoteLogSegment, throwable);
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             throw new RemoteStorageException(
-                    "Interrupted while copying log segment and indexes to remote for path: "
-                            + remoteLogSegment,
-                    e);
+                    "Interrupted while copying log segment and indexes to remote for path: " + remoteLogSegment, e);
         } catch (Exception e) {
             throw new RemoteStorageException(
-                    "Failed to copy log segment and indexes to remote for path: "
-                            + remoteLogSegment,
-                    e);
+                    "Failed to copy log segment and indexes to remote for path: " + remoteLogSegment, e);
         }
     }
 
@@ -141,8 +133,7 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
      * recursive because the list files operation in object storage is a heavy operation.
      */
     @Override
-    public void deleteLogSegmentFiles(RemoteLogSegment remoteLogSegment)
-            throws RemoteStorageException {
+    public void deleteLogSegmentFiles(RemoteLogSegment remoteLogSegment) throws RemoteStorageException {
         LOG.debug("Deleting log segment and indexes for : {}", remoteLogSegment);
         try {
             FsPath segmentDir = remoteLogSegmentDir(remoteLogDir, remoteLogSegment);
@@ -151,13 +142,9 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
             FsPath offsetIndex = remoteLogIndexFile(segmentDir, baseOffset, INDEX_FILE_SUFFIX);
             FsPath timeIndex = remoteLogIndexFile(segmentDir, baseOffset, TIME_INDEX_FILE_SUFFIX);
             FsPath writerSnapshot =
-                    remoteLogIndexFile(
-                            segmentDir,
-                            remoteLogSegment.remoteLogEndOffset(),
-                            WRITER_SNAPSHOT_FILE_SUFFIX);
+                    remoteLogIndexFile(segmentDir, remoteLogSegment.remoteLogEndOffset(), WRITER_SNAPSHOT_FILE_SUFFIX);
             // delete dir at last
-            for (FsPath path :
-                    Arrays.asList(logFile, offsetIndex, timeIndex, writerSnapshot, segmentDir)) {
+            for (FsPath path : Arrays.asList(logFile, offsetIndex, timeIndex, writerSnapshot, segmentDir)) {
                 fileSystem.delete(path, false);
             }
             LOG.debug("Successful delete log segment and indexes for : {}", remoteLogSegment);
@@ -172,30 +159,23 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
             throws RemoteStorageException {
         FsPath remoteLogSegmentIndexFile;
         if (indexType == IndexType.WRITER_ID_SNAPSHOT) {
-            remoteLogSegmentIndexFile =
-                    FlussPaths.remoteWriterSnapshotFile(
-                            remoteLogDir, remoteLogSegment, IndexType.getFileSuffix(indexType));
+            remoteLogSegmentIndexFile = FlussPaths.remoteWriterSnapshotFile(
+                    remoteLogDir, remoteLogSegment, IndexType.getFileSuffix(indexType));
         } else {
-            remoteLogSegmentIndexFile =
-                    FlussPaths.remoteOffsetIndexFile(
-                            remoteLogDir, remoteLogSegment, IndexType.getFileSuffix(indexType));
+            remoteLogSegmentIndexFile = FlussPaths.remoteOffsetIndexFile(
+                    remoteLogDir, remoteLogSegment, IndexType.getFileSuffix(indexType));
         }
 
         try {
             return fileSystem.open(remoteLogSegmentIndexFile);
         } catch (IOException e) {
             throw new RemoteStorageException(
-                    "Failed to fetch index file type: "
-                            + indexType
-                            + " from path: "
-                            + remoteLogSegmentIndexFile,
-                    e);
+                    "Failed to fetch index file type: " + indexType + " from path: " + remoteLogSegmentIndexFile, e);
         }
     }
 
     @Override
-    public RemoteLogManifest readRemoteLogManifestSnapshot(FsPath remoteLogManifestPath)
-            throws RemoteStorageException {
+    public RemoteLogManifest readRemoteLogManifestSnapshot(FsPath remoteLogManifestPath) throws RemoteStorageException {
         FSDataInputStream inputStream = null;
         ByteArrayOutputStream outputStream = null;
         try {
@@ -205,9 +185,7 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
             return RemoteLogManifest.fromJsonBytes(outputStream.toByteArray());
         } catch (Exception e) {
             throw new RemoteStorageException(
-                    String.format(
-                            "Failed to read remote log manifest from %s", remoteLogManifestPath),
-                    e);
+                    String.format("Failed to read remote log manifest from %s", remoteLogManifestPath), e);
         } finally {
             IOUtils.closeQuietly(inputStream);
             IOUtils.closeQuietly(outputStream);
@@ -215,55 +193,41 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
     }
 
     @Override
-    public void deleteRemoteLogManifestSnapshot(FsPath remoteLogManifestPath)
-            throws RemoteStorageException {
+    public void deleteRemoteLogManifestSnapshot(FsPath remoteLogManifestPath) throws RemoteStorageException {
         LOG.debug("Deleting remote log segment manifest: {}", remoteLogManifestPath);
         try {
             fileSystem.delete(remoteLogManifestPath, false);
             LOG.debug("Successful delete log segment manifest: {}", remoteLogManifestPath);
         } catch (IOException e) {
-            throw new RemoteStorageException(
-                    "Failed to delete log segment manifest: " + remoteLogManifestPath, e);
+            throw new RemoteStorageException("Failed to delete log segment manifest: " + remoteLogManifestPath, e);
         }
     }
 
     /** Write log manifest snapshot to remote file system. */
     @Override
-    public FsPath writeRemoteLogManifestSnapshot(RemoteLogManifest manifest)
-            throws RemoteStorageException {
-        FsPath manifestFile =
-                FlussPaths.remoteLogManifestFile(
-                        FlussPaths.remoteLogTabletDir(
-                                remoteLogDir,
-                                manifest.getPhysicalTablePath(),
-                                manifest.getTableBucket()),
-                        UUID.randomUUID());
+    public FsPath writeRemoteLogManifestSnapshot(RemoteLogManifest manifest) throws RemoteStorageException {
+        FsPath manifestFile = FlussPaths.remoteLogManifestFile(
+                FlussPaths.remoteLogTabletDir(remoteLogDir, manifest.getPhysicalTablePath(), manifest.getTableBucket()),
+                UUID.randomUUID());
         try {
             return writeToRemote(
-                    new ByteArrayInputStream(manifest.toJsonBytes()),
-                    manifestFile.getParent(),
-                    manifestFile.getName());
+                    new ByteArrayInputStream(manifest.toJsonBytes()), manifestFile.getParent(), manifestFile.getName());
         } catch (Exception e) {
             throw new RemoteStorageException(
-                    String.format(
-                            "Failed to upload the remote log manifest to remote path: %s",
-                            manifestFile),
-                    e);
+                    String.format("Failed to upload the remote log manifest to remote path: %s", manifestFile), e);
         }
     }
 
     @Override
     public void deleteTableBucket(PhysicalTablePath physicalTablePath, TableBucket tableBucket)
             throws RemoteStorageException {
-        FsPath remoteLogTabletDir =
-                FlussPaths.remoteLogTabletDir(remoteLogDir, physicalTablePath, tableBucket);
+        FsPath remoteLogTabletDir = FlussPaths.remoteLogTabletDir(remoteLogDir, physicalTablePath, tableBucket);
         try {
             if (fileSystem.exists(remoteLogTabletDir)) {
                 fileSystem.delete(remoteLogTabletDir, true);
             }
         } catch (Exception e) {
-            throw new RemoteStorageException(
-                    "Failed to delete remote log tablet path: " + remoteLogTabletDir, e);
+            throw new RemoteStorageException("Failed to delete remote log tablet path: " + remoteLogTabletDir, e);
         }
     }
 
@@ -273,15 +237,12 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
         List<Path> localFiles = logSegmentFiles.getAllPaths();
         List<CompletableFuture<Void>> list = new ArrayList<>();
         for (Path localFile : localFiles) {
-            CompletableFuture<Void> voidCompletableFuture =
-                    CompletableFuture.runAsync(
-                            ThrowingRunnable.unchecked(
-                                    () ->
-                                            writeToRemote(
-                                                    Files.newInputStream(localFile),
-                                                    rlsPath,
-                                                    localFile.getFileName().toString())),
-                            dataTransferThreadPool);
+            CompletableFuture<Void> voidCompletableFuture = CompletableFuture.runAsync(
+                    ThrowingRunnable.unchecked(() -> writeToRemote(
+                            Files.newInputStream(localFile),
+                            rlsPath,
+                            localFile.getFileName().toString())),
+                    dataTransferThreadPool);
             list.add(voidCompletableFuture);
         }
         return list;
@@ -295,8 +256,8 @@ public class DefaultRemoteLogStorage implements RemoteLogStorage {
      * @param remoteDir remote dir
      * @return remote file path including file name
      */
-    private @Nullable FsPath writeToRemote(
-            InputStream inputStream, FsPath remoteDir, String remoteFileName) throws IOException {
+    private @Nullable FsPath writeToRemote(InputStream inputStream, FsPath remoteDir, String remoteFileName)
+            throws IOException {
         try (CloseableRegistry closeableRegistry = new CloseableRegistry()) {
             final byte[] buffer = new byte[READ_BUFFER_SIZE];
             closeableRegistry.registerCloseable(inputStream);

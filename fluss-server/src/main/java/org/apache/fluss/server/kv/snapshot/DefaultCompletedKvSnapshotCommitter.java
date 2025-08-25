@@ -37,8 +37,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCommitKvSn
  */
 public class DefaultCompletedKvSnapshotCommitter implements CompletedKvSnapshotCommitter {
 
-    private static final Logger LOG =
-            LoggerFactory.getLogger(DefaultCompletedKvSnapshotCommitter.class);
+    private static final Logger LOG = LoggerFactory.getLogger(DefaultCompletedKvSnapshotCommitter.class);
 
     private final CoordinatorGateway coordinatorGateway;
 
@@ -51,17 +50,14 @@ public class DefaultCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
         CoordinatorServerSupplier coordinatorServerSupplier =
                 new CoordinatorServerSupplier(metadataCache, interListenerName);
         return new DefaultCompletedKvSnapshotCommitter(
-                GatewayClientProxy.createGatewayProxy(
-                        coordinatorServerSupplier, rpcClient, CoordinatorGateway.class));
+                GatewayClientProxy.createGatewayProxy(coordinatorServerSupplier, rpcClient, CoordinatorGateway.class));
     }
 
     @Override
-    public void commitKvSnapshot(
-            CompletedSnapshot snapshot, int coordinatorEpoch, int bucketLeaderEpoch)
+    public void commitKvSnapshot(CompletedSnapshot snapshot, int coordinatorEpoch, int bucketLeaderEpoch)
             throws Exception {
         coordinatorGateway
-                .commitKvSnapshot(
-                        makeCommitKvSnapshotRequest(snapshot, coordinatorEpoch, bucketLeaderEpoch))
+                .commitKvSnapshot(makeCommitKvSnapshotRequest(snapshot, coordinatorEpoch, bucketLeaderEpoch))
                 .get();
     }
 
@@ -72,8 +68,7 @@ public class DefaultCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
         private final ServerMetadataCache metadataCache;
         private final String interListenerName;
 
-        public CoordinatorServerSupplier(
-                ServerMetadataCache metadataCache, String interListenerName) {
+        public CoordinatorServerSupplier(ServerMetadataCache metadataCache, String interListenerName) {
             this.metadataCache = metadataCache;
             this.interListenerName = interListenerName;
         }
@@ -88,8 +83,7 @@ public class DefaultCompletedKvSnapshotCommitter implements CompletedKvSnapshotC
                     Thread.sleep(BACK_OFF_MILLS);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    throw new FlussRuntimeException(
-                            "The thread was interrupted while waiting coordinator providing.");
+                    throw new FlussRuntimeException("The thread was interrupted while waiting coordinator providing.");
                 }
                 return get();
             }

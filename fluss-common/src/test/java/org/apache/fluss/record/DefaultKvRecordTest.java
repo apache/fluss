@@ -54,12 +54,8 @@ class DefaultKvRecordTest extends KvTestBase {
         DefaultKvRecord.writeTo(outputView, key, row);
 
         // Test read from.
-        KvRecord kvRecord =
-                DefaultKvRecord.readFrom(
-                        MemorySegment.wrap(outputView.getCopyOfBuffer()),
-                        0,
-                        schemaId,
-                        kvRecordReadContext);
+        KvRecord kvRecord = DefaultKvRecord.readFrom(
+                MemorySegment.wrap(outputView.getCopyOfBuffer()), 0, schemaId, kvRecordReadContext);
 
         // four byte for length + bytes for key length  + bytes for key +
         // bytes for row
@@ -75,12 +71,8 @@ class DefaultKvRecordTest extends KvTestBase {
         outputView = new MemorySegmentOutputView(100);
         DefaultKvRecord.writeTo(outputView, key, null);
         // Test read from.
-        kvRecord =
-                DefaultKvRecord.readFrom(
-                        MemorySegment.wrap(outputView.getCopyOfBuffer()),
-                        0,
-                        schemaId,
-                        kvRecordReadContext);
+        kvRecord = DefaultKvRecord.readFrom(
+                MemorySegment.wrap(outputView.getCopyOfBuffer()), 0, schemaId, kvRecordReadContext);
         // four byte for length + bytes for key length  + bytes for key
         // 4 + 1 + 2  = 7
         assertThat(kvRecord.getSizeInBytes()).isEqualTo(7);
@@ -102,12 +94,11 @@ class DefaultKvRecordTest extends KvTestBase {
         DataType[] colTypes = rowType.getChildren().toArray(new DataType[0]);
 
         // Test read form.
-        KvRecord kvRecord =
-                DefaultKvRecord.readFrom(
-                        MemorySegment.wrap(outputView.getCopyOfBuffer()),
-                        0,
-                        schemaId,
-                        KvRecordReadContext.createReadContext(KvFormat.COMPACTED, colTypes));
+        KvRecord kvRecord = DefaultKvRecord.readFrom(
+                MemorySegment.wrap(outputView.getCopyOfBuffer()),
+                0,
+                schemaId,
+                KvRecordReadContext.createReadContext(KvFormat.COMPACTED, colTypes));
 
         // check key
         assertThat(keyToBytes(kvRecord)).isEqualTo(key);

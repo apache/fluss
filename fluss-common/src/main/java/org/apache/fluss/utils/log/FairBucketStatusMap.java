@@ -143,8 +143,7 @@ public final class FairBucketStatusMap<S> {
         LinkedHashMap<Long, List<TableBucket>> tableToBuckets = new LinkedHashMap<>();
         for (TableBucket tableBucket : bucketToStatus.keySet()) {
             List<TableBucket> buckets =
-                    tableToBuckets.computeIfAbsent(
-                            tableBucket.getTableId(), k -> new ArrayList<>());
+                    tableToBuckets.computeIfAbsent(tableBucket.getTableId(), k -> new ArrayList<>());
             buckets.add(tableBucket);
         }
         for (Map.Entry<Long, List<TableBucket>> entry : tableToBuckets.entrySet()) {

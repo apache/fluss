@@ -39,17 +39,14 @@ public class AuthenticationFactoryTest {
         Configuration configuration = new Configuration();
         configuration.setString("client.security.protocol", "conflicting");
         configuration.setString("security.protocol.map", "FLUSS:conflicting");
-        String errorMsg =
-                "Multiple plugins for the same protocol 'conflicting' are found in the classpath.\n\n"
-                        + "Available plugins are:\n\n"
-                        + "org.apache.fluss.security.auth.TestConflictingAuthenticationPlugin1\n"
-                        + "org.apache.fluss.security.auth.TestConflictingAuthenticationPlugin2";
-        assertThatThrownBy(
-                        () -> AuthenticationFactory.loadClientAuthenticatorSupplier(configuration))
+        String errorMsg = "Multiple plugins for the same protocol 'conflicting' are found in the classpath.\n\n"
+                + "Available plugins are:\n\n"
+                + "org.apache.fluss.security.auth.TestConflictingAuthenticationPlugin1\n"
+                + "org.apache.fluss.security.auth.TestConflictingAuthenticationPlugin2";
+        assertThatThrownBy(() -> AuthenticationFactory.loadClientAuthenticatorSupplier(configuration))
                 .isExactlyInstanceOf(ValidationException.class)
                 .hasMessageContaining(errorMsg);
-        assertThatThrownBy(
-                        () -> AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration))
+        assertThatThrownBy(() -> AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration))
                 .isExactlyInstanceOf(ValidationException.class)
                 .hasMessageContaining(errorMsg);
     }
@@ -59,14 +56,11 @@ public class AuthenticationFactoryTest {
         Configuration configuration = new Configuration();
         configuration.setString("client.security.protocol", "no_authentication");
         configuration.setString("security.protocol.map", "FLUSS:no_authentication");
-        String errorMsg =
-                "No plugin for the protocol 'no_authentication' is found in the classpath.";
-        assertThatThrownBy(
-                        () -> AuthenticationFactory.loadClientAuthenticatorSupplier(configuration))
+        String errorMsg = "No plugin for the protocol 'no_authentication' is found in the classpath.";
+        assertThatThrownBy(() -> AuthenticationFactory.loadClientAuthenticatorSupplier(configuration))
                 .isExactlyInstanceOf(ValidationException.class)
                 .hasMessageContaining(errorMsg);
-        assertThatThrownBy(
-                        () -> AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration))
+        assertThatThrownBy(() -> AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration))
                 .isExactlyInstanceOf(ValidationException.class)
                 .hasMessageContaining(errorMsg);
     }
@@ -76,29 +70,25 @@ public class AuthenticationFactoryTest {
         Configuration configuration = new Configuration();
         configuration.setString("client.security.protocol", "SSL_TEST");
         configuration.setString("security.protocol.map", "FLUSS:SSL_TEST");
-        assertThat(AuthenticationFactory.loadClientAuthenticatorSupplier(configuration).get())
+        assertThat(AuthenticationFactory.loadClientAuthenticatorSupplier(configuration)
+                        .get())
                 .isInstanceOf(TestIdentifierClientAuthenticator.class);
-        assertThat(
-                        AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration)
-                                .values()
-                                .stream()
-                                .findAny()
-                                .get()
-                                .get())
+        assertThat(AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration).values().stream()
+                        .findAny()
+                        .get()
+                        .get())
                 .isInstanceOf(TestIdentifierServerAuthenticator.class);
 
         Configuration configuration2 = new Configuration();
         configuration2.setString("client.security.protocol", "ssl_test");
         configuration2.setString("security.protocol.map", "FLUSS:ssl_test");
-        assertThat(AuthenticationFactory.loadClientAuthenticatorSupplier(configuration2).get())
+        assertThat(AuthenticationFactory.loadClientAuthenticatorSupplier(configuration2)
+                        .get())
                 .isInstanceOf(TestIdentifierClientAuthenticator.class);
-        assertThat(
-                        AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration)
-                                .values()
-                                .stream()
-                                .findAny()
-                                .get()
-                                .get())
+        assertThat(AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration).values().stream()
+                        .findAny()
+                        .get()
+                        .get())
                 .isInstanceOf(TestIdentifierServerAuthenticator.class);
     }
 
@@ -109,7 +99,8 @@ public class AuthenticationFactoryTest {
             Configuration configuration = new Configuration();
             configuration.setString("client.security.protocol", "SSL_TEST");
             configuration.setString("security.protocol.map", "FLUSS:SSL_TEST");
-            assertThat(AuthenticationFactory.loadClientAuthenticatorSupplier(configuration).get())
+            assertThat(AuthenticationFactory.loadClientAuthenticatorSupplier(configuration)
+                            .get())
                     .isInstanceOf(TestIdentifierClientAuthenticator.class);
         }
     }

@@ -38,8 +38,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
     private final RequestsMetrics requestsMetrics;
     private Configuration conf;
 
-    public FlussProtocolPlugin(
-            ServerType serverType, List<String> listeners, RequestsMetrics requestsMetrics) {
+    public FlussProtocolPlugin(ServerType serverType, List<String> listeners, RequestsMetrics requestsMetrics) {
         this.apiManager = new ApiManager(serverType);
         this.listeners = listeners;
         this.requestsMetrics = requestsMetrics;
@@ -61,8 +60,7 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
     }
 
     @Override
-    public ChannelHandler createChannelHandler(
-            RequestChannel[] requestChannels, String listenerName) {
+    public ChannelHandler createChannelHandler(RequestChannel[] requestChannels, String listenerName) {
         return new ServerChannelInitializer(
                 requestChannels,
                 apiManager,
@@ -70,9 +68,8 @@ public class FlussProtocolPlugin implements NetworkProtocolPlugin {
                 listenerName.equals(conf.get(ConfigOptions.INTERNAL_LISTENER_NAME)),
                 requestsMetrics,
                 conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds(),
-                Optional.ofNullable(
-                                AuthenticationFactory.loadServerAuthenticatorSuppliers(conf)
-                                        .get(listenerName))
+                Optional.ofNullable(AuthenticationFactory.loadServerAuthenticatorSuppliers(conf)
+                                .get(listenerName))
                         .orElse(PlainTextAuthenticationPlugin.PlainTextServerAuthenticator::new));
     }
 

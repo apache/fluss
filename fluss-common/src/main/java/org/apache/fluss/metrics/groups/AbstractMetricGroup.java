@@ -95,8 +95,7 @@ public abstract class AbstractMetricGroup implements MetricGroup {
 
     // ------------------------------------------------------------------------
 
-    public AbstractMetricGroup(
-            MetricRegistry registry, String[] scope, AbstractMetricGroup parent) {
+    public AbstractMetricGroup(MetricRegistry registry, String[] scope, AbstractMetricGroup parent) {
         this.registry = checkNotNull(registry);
         this.scopeComponents = checkNotNull(scope);
         this.parent = parent;
@@ -150,8 +149,7 @@ public abstract class AbstractMetricGroup implements MetricGroup {
      * @return logical scope
      */
     String getLogicalScope(CharacterFilter filter, char delimiter, int reporterIndex) {
-        if (logicalScopeStrings.length == 0
-                || (reporterIndex < 0 || reporterIndex >= logicalScopeStrings.length)) {
+        if (logicalScopeStrings.length == 0 || (reporterIndex < 0 || reporterIndex >= logicalScopeStrings.length)) {
             return createLogicalScope(filter, delimiter);
         } else {
             if (logicalScopeStrings[reporterIndex] == null) {
@@ -266,9 +264,7 @@ public abstract class AbstractMetricGroup implements MetricGroup {
      */
     protected void addMetric(String name, Metric metric) {
         if (metric == null) {
-            LOG.warn(
-                    "Ignoring attempted registration of a metric due to being null for name {}.",
-                    name);
+            LOG.warn("Ignoring attempted registration of a metric due to being null for name {}.", name);
             return;
         }
         // add the metric only if the group is still open

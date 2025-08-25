@@ -40,8 +40,7 @@ public interface KeyEncoder {
      * @param keyFields the key fields to encode
      * @param lakeFormat the datalake format
      */
-    static KeyEncoder of(
-            RowType rowType, List<String> keyFields, @Nullable DataLakeFormat lakeFormat) {
+    static KeyEncoder of(RowType rowType, List<String> keyFields, @Nullable DataLakeFormat lakeFormat) {
         if (lakeFormat == null) {
             // use default compacted key encoder
             return CompactedKeyEncoder.createKeyEncoder(rowType, keyFields);

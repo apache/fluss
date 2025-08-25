@@ -28,8 +28,7 @@ import org.apache.fluss.lake.writer.WriterInitContext;
 import java.io.IOException;
 
 /** Implementation of {@link LakeTieringFactory} for Iceberg. */
-public class IcebergLakeTieringFactory
-        implements LakeTieringFactory<IcebergWriteResult, IcebergCommittable> {
+public class IcebergLakeTieringFactory implements LakeTieringFactory<IcebergWriteResult, IcebergCommittable> {
 
     private static final long serialVersionUID = 1L;
 
@@ -40,8 +39,7 @@ public class IcebergLakeTieringFactory
     }
 
     @Override
-    public LakeWriter<IcebergWriteResult> createLakeWriter(WriterInitContext writerInitContext)
-            throws IOException {
+    public LakeWriter<IcebergWriteResult> createLakeWriter(WriterInitContext writerInitContext) throws IOException {
         return new IcebergLakeWriter(icebergCatalogProvider, writerInitContext);
     }
 

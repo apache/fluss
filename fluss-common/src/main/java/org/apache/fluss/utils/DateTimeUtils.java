@@ -56,14 +56,13 @@ public class DateTimeUtils {
     /** The number of milliseconds in an hour. */
     private static final long MILLIS_PER_HOUR = 3600000L; // = 60 * 60 * 1000
 
-    private static final DateTimeFormatter DEFAULT_TIMESTAMP_FORMATTER =
-            new DateTimeFormatterBuilder()
-                    .appendPattern("yyyy-[MM][M]-[dd][d]")
-                    .optionalStart()
-                    .appendPattern(" [HH][H]:[mm][m]:[ss][s]")
-                    .appendFraction(NANO_OF_SECOND, 0, 9, true)
-                    .optionalEnd()
-                    .toFormatter();
+    private static final DateTimeFormatter DEFAULT_TIMESTAMP_FORMATTER = new DateTimeFormatterBuilder()
+            .appendPattern("yyyy-[MM][M]-[dd][d]")
+            .optionalStart()
+            .appendPattern(" [HH][H]:[mm][m]:[ss][s]")
+            .appendFraction(NANO_OF_SECOND, 0, 9, true)
+            .optionalEnd()
+            .toFormatter();
 
     public static LocalDate toLocalDate(int date) {
         return julianToLocalDate(date + EPOCH_JULIAN);
@@ -105,18 +104,16 @@ public class DateTimeUtils {
         return LocalTime.of(h, m, s, ms * 1000_000);
     }
 
-    public static TimestampNtz parseTimestampData(String dateStr, int precision)
-            throws DateTimeException {
+    public static TimestampNtz parseTimestampData(String dateStr, int precision) throws DateTimeException {
         return TimestampNtz.fromLocalDateTime(
                 fromTemporalAccessor(DEFAULT_TIMESTAMP_FORMATTER.parse(dateStr), precision));
     }
 
     public static TimestampLtz parseTimestampData(String dateStr, int precision, TimeZone timeZone)
             throws DateTimeException {
-        return TimestampLtz.fromInstant(
-                fromTemporalAccessor(DEFAULT_TIMESTAMP_FORMATTER.parse(dateStr), precision)
-                        .atZone(timeZone.toZoneId())
-                        .toInstant());
+        return TimestampLtz.fromInstant(fromTemporalAccessor(DEFAULT_TIMESTAMP_FORMATTER.parse(dateStr), precision)
+                .atZone(timeZone.toZoneId())
+                .toInstant());
     }
 
     public static Integer parseDate(String s) {
@@ -199,7 +196,8 @@ public class DateTimeUtils {
                 if (!isInteger(v.substring(timezone + 1, colon3).trim())) {
                     return null;
                 }
-                timezoneHour = Integer.parseInt(v.substring(timezone + 1, colon3).trim());
+                timezoneHour =
+                        Integer.parseInt(v.substring(timezone + 1, colon3).trim());
                 if (!isInteger(v.substring(colon3 + 1).trim())) {
                     return null;
                 }

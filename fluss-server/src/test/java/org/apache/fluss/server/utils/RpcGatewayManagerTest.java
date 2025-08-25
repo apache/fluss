@@ -33,14 +33,11 @@ class RpcGatewayManagerTest {
 
     @Test
     void testRpcGatewayManage() throws Exception {
-        RpcGatewayManager<TabletServerGateway> gatewayRpcGatewayManager =
-                new RpcGatewayManager<>(
-                        new NettyClient(
-                                new Configuration(), TestingClientMetricGroup.newInstance(), false),
-                        TabletServerGateway.class);
+        RpcGatewayManager<TabletServerGateway> gatewayRpcGatewayManager = new RpcGatewayManager<>(
+                new NettyClient(new Configuration(), TestingClientMetricGroup.newInstance(), false),
+                TabletServerGateway.class);
 
-        ServerNode serverNode1 =
-                new ServerNode(1, "localhost", 1234, ServerType.TABLET_SERVER, "rack1");
+        ServerNode serverNode1 = new ServerNode(1, "localhost", 1234, ServerType.TABLET_SERVER, "rack1");
         // should be empty at the beginning
         assertThat(gatewayRpcGatewayManager.getRpcGateway(serverNode1.id())).isEmpty();
         gatewayRpcGatewayManager.addServer(serverNode1);
@@ -52,8 +49,7 @@ class RpcGatewayManagerTest {
         assertThat(gatewayRpcGatewayManager.getRpcGateway(serverNode1.id())).isPresent();
 
         // add another server2
-        ServerNode serverNode2 =
-                new ServerNode(2, "localhost", 1234, ServerType.TABLET_SERVER, "rack2");
+        ServerNode serverNode2 = new ServerNode(2, "localhost", 1234, ServerType.TABLET_SERVER, "rack2");
         gatewayRpcGatewayManager.addServer(serverNode2);
         assertThat(gatewayRpcGatewayManager.getRpcGateway(serverNode2.id())).isPresent();
 

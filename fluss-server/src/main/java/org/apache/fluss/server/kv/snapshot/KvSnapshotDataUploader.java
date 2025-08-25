@@ -61,13 +61,8 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
             CloseableRegistry tmpResourcesRegistry)
             throws Exception {
 
-        List<CompletableFuture<KvFileHandleAndLocalPath>> futures =
-                createUploadFutures(
-                        files,
-                        snapshotLocation,
-                        snapshotFileScope,
-                        closeableRegistry,
-                        tmpResourcesRegistry);
+        List<CompletableFuture<KvFileHandleAndLocalPath>> futures = createUploadFutures(
+                files, snapshotLocation, snapshotFileScope, closeableRegistry, tmpResourcesRegistry);
 
         List<KvFileHandleAndLocalPath> handles = new ArrayList<>(files.size());
 
@@ -97,18 +92,10 @@ public class KvSnapshotDataUploader extends KvSnapshotDataTransfer {
             CloseableRegistry closeableRegistry,
             CloseableRegistry tmpResourcesRegistry) {
         return files.stream()
-                .map(
-                        e ->
-                                CompletableFuture.supplyAsync(
-                                        CheckedSupplier.unchecked(
-                                                () ->
-                                                        uploadLocalFileToSnapshotLocation(
-                                                                e,
-                                                                snapshotLocation,
-                                                                snapshotFileScope,
-                                                                closeableRegistry,
-                                                                tmpResourcesRegistry)),
-                                        dataTransferThreadPool))
+                .map(e -> CompletableFuture.supplyAsync(
+                        CheckedSupplier.unchecked(() -> uploadLocalFileToSnapshotLocation(
+                                e, snapshotLocation, snapshotFileScope, closeableRegistry, tmpResourcesRegistry)),
+                        dataTransferThreadPool))
                 .collect(Collectors.toList());
     }
 

@@ -28,9 +28,7 @@ class TablePartitionJsonSerdeTest extends JsonSerdeTestBase<TablePartition> {
 
     @Override
     protected TablePartition[] createObjects() {
-        return new TablePartition[] {
-            new TablePartition(1, 2), new TablePartition(3, 4), new TablePartition(5, 6)
-        };
+        return new TablePartition[] {new TablePartition(1, 2), new TablePartition(3, 4), new TablePartition(5, 6)};
     }
 
     @Override

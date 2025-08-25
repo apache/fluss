@@ -64,25 +64,18 @@ public class FlussTable implements Table {
 
     @Override
     public Lookup newLookup() {
-        return new TableLookup(
-                tableInfo, conn.getMetadataUpdater(), conn.getOrCreateLookupClient());
+        return new TableLookup(tableInfo, conn.getMetadataUpdater(), conn.getOrCreateLookupClient());
     }
 
     @Override
     public Append newAppend() {
-        checkState(
-                !hasPrimaryKey,
-                "Table %s is not a Log Table and doesn't support AppendWriter.",
-                tablePath);
+        checkState(!hasPrimaryKey, "Table %s is not a Log Table and doesn't support AppendWriter.", tablePath);
         return new TableAppend(tablePath, tableInfo, conn.getOrCreateWriterClient());
     }
 
     @Override
     public Upsert newUpsert() {
-        checkState(
-                hasPrimaryKey,
-                "Table %s is not a Primary Key Table and doesn't support UpsertWriter.",
-                tablePath);
+        checkState(hasPrimaryKey, "Table %s is not a Primary Key Table and doesn't support UpsertWriter.", tablePath);
         return new TableUpsert(tablePath, tableInfo, conn.getOrCreateWriterClient());
     }
 

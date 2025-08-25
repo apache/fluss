@@ -84,28 +84,25 @@ public final class NettyClient implements RpcClient {
 
     private volatile boolean isClosed = false;
 
-    public NettyClient(
-            Configuration conf, ClientMetricGroup clientMetricGroup, boolean isInnerClient) {
+    public NettyClient(Configuration conf, ClientMetricGroup clientMetricGroup, boolean isInnerClient) {
         this.connections = MapUtils.newConcurrentHashMap();
 
         // build bootstrap
-        this.eventGroup =
-                NettyUtils.newEventLoopGroup(
-                        conf.getInt(ConfigOptions.NETTY_CLIENT_NUM_NETWORK_THREADS),
-                        "fluss-netty-client");
-        int connectTimeoutMs = (int) conf.get(ConfigOptions.CLIENT_CONNECT_TIMEOUT).toMillis();
+        this.eventGroup = NettyUtils.newEventLoopGroup(
+                conf.getInt(ConfigOptions.NETTY_CLIENT_NUM_NETWORK_THREADS), "fluss-netty-client");
+        int connectTimeoutMs =
+                (int) conf.get(ConfigOptions.CLIENT_CONNECT_TIMEOUT).toMillis();
         int connectionMaxIdle =
                 (int) conf.get(ConfigOptions.NETTY_CONNECTION_MAX_IDLE_TIME).getSeconds();
         PooledByteBufAllocator pooledAllocator = PooledByteBufAllocator.DEFAULT;
-        this.bootstrap =
-                new Bootstrap()
-                        .group(eventGroup)
-                        .channel(NettyUtils.getClientSocketChannelClass(eventGroup))
-                        .option(ChannelOption.ALLOCATOR, pooledAllocator)
-                        .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs)
-                        .option(ChannelOption.TCP_NODELAY, true)
-                        .option(ChannelOption.SO_KEEPALIVE, true)
-                        .handler(new ClientChannelInitializer(connectionMaxIdle));
+        this.bootstrap = new Bootstrap()
+                .group(eventGroup)
+                .channel(NettyUtils.getClientSocketChannelClass(eventGroup))
+                .option(ChannelOption.ALLOCATOR, pooledAllocator)
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, connectTimeoutMs)
+                .option(ChannelOption.TCP_NODELAY, true)
+                .option(ChannelOption.SO_KEEPALIVE, true)
+                .handler(new ClientChannelInitializer(connectionMaxIdle));
         this.isInnerClient = isInnerClient;
         this.clientMetricGroup = clientMetricGroup;
         this.authenticatorSupplier = AuthenticationFactory.loadClientAuthenticatorSupplier(conf);
@@ -161,8 +158,7 @@ public final class NettyClient implements RpcClient {
 
     /** Send an RPC request to the given server and return a future for the response. */
     @Override
-    public CompletableFuture<ApiMessage> sendRequest(
-            ServerNode node, ApiKeys apiKey, ApiMessage request) {
+    public CompletableFuture<ApiMessage> sendRequest(ServerNode node, ApiKeys apiKey, ApiMessage request) {
         checkArgument(!isClosed, "Netty client is closed.");
         return getOrCreateConnection(node).send(apiKey, request);
     }
@@ -188,20 +184,13 @@ public final class NettyClient implements RpcClient {
 
     private ServerConnection getOrCreateConnection(ServerNode node) {
         String serverId = node.uid();
-        return connections.computeIfAbsent(
-                serverId,
-                ignored -> {
-                    LOG.debug("Creating connection to server {}.", node);
-                    ServerConnection connection =
-                            new ServerConnection(
-                                    bootstrap,
-                                    node,
-                                    clientMetricGroup,
-                                    authenticatorSupplier.get(),
-                                    isInnerClient);
-                    connection.whenClose(ignore -> connections.remove(serverId, connection));
-                    return connection;
-                });
+        return connections.computeIfAbsent(serverId, ignored -> {
+            LOG.debug("Creating connection to server {}.", node);
+            ServerConnection connection = new ServerConnection(
+                    bootstrap, node, clientMetricGroup, authenticatorSupplier.get(), isInnerClient);
+            connection.whenClose(ignore -> connections.remove(serverId, connection));
+            return connection;
+        });
     }
 
     @VisibleForTesting

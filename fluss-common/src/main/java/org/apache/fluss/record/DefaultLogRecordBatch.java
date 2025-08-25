@@ -158,21 +158,19 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     public void ensureValid() {
         int sizeInBytes = sizeInBytes();
         if (sizeInBytes < RECORD_BATCH_HEADER_SIZE) {
-            throw new CorruptMessageException(
-                    "Record batch is corrupt (the size "
-                            + sizeInBytes
-                            + " is smaller than the minimum allowed overhead "
-                            + RECORD_BATCH_HEADER_SIZE
-                            + ")");
+            throw new CorruptMessageException("Record batch is corrupt (the size "
+                    + sizeInBytes
+                    + " is smaller than the minimum allowed overhead "
+                    + RECORD_BATCH_HEADER_SIZE
+                    + ")");
         }
 
         if (!isValid()) {
-            throw new CorruptMessageException(
-                    "Record batch is corrupt (stored crc = "
-                            + checksum()
-                            + ", computed crc = "
-                            + computeChecksum()
-                            + ")");
+            throw new CorruptMessageException("Record batch is corrupt (stored crc = "
+                    + checksum()
+                    + ", computed crc = "
+                    + computeChecksum()
+                    + ")");
         }
     }
 
@@ -243,10 +241,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         switch (logFormat) {
             case ARROW:
                 return columnRecordIterator(
-                        rowType,
-                        context.getVectorSchemaRoot(schemaId),
-                        context.getBufferAllocator(),
-                        timestamp);
+                        rowType, context.getVectorSchemaRoot(schemaId), context.getBufferAllocator(), timestamp);
             case INDEXED:
                 return rowRecordIterator(rowType, timestamp);
             default:
@@ -266,8 +261,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
         DefaultLogRecordBatch that = (DefaultLogRecordBatch) o;
         int sizeInBytes = sizeInBytes();
-        return sizeInBytes == that.sizeInBytes()
-                && segment.equalTo(that.segment, position, that.position, sizeInBytes);
+        return sizeInBytes == that.sizeInBytes() && segment.equalTo(that.segment, position, that.position, sizeInBytes);
     }
 
     @Override
@@ -284,8 +278,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             @Override
             protected LogRecord readNext(long baseOffset) {
                 IndexedLogRecord logRecord =
-                        IndexedLogRecord.readFrom(
-                                segment, position, baseOffset + rowId, timestamp, fieldTypes);
+                        IndexedLogRecord.readFrom(segment, position, baseOffset + rowId, timestamp, fieldTypes);
                 rowId++;
                 position += logRecord.getSizeInBytes();
                 return logRecord;
@@ -310,8 +303,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             int arrowOffset = position + RECORD_BATCH_HEADER_SIZE;
             int arrowLength = sizeInBytes() - RECORD_BATCH_HEADER_SIZE;
             ArrowReader reader =
-                    ArrowUtils.createArrowReader(
-                            segment, arrowOffset, arrowLength, root, allocator, rowType);
+                    ArrowUtils.createArrowReader(segment, arrowOffset, arrowLength, root, allocator, rowType);
             return new ArrowLogRecordIterator(reader, timestamp) {
                 @Override
                 protected ChangeType getChangeType(int rowId) {
@@ -322,14 +314,11 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             // with change type, decode the change type vector first,
             // the arrow data starts after the change type vector
             int changeTypeOffset = position + ARROW_CHANGETYPE_OFFSET;
-            ChangeTypeVector changeTypeVector =
-                    new ChangeTypeVector(segment, changeTypeOffset, getRecordCount());
+            ChangeTypeVector changeTypeVector = new ChangeTypeVector(segment, changeTypeOffset, getRecordCount());
             int arrowOffset = changeTypeOffset + changeTypeVector.sizeInBytes();
-            int arrowLength =
-                    sizeInBytes() - ARROW_CHANGETYPE_OFFSET - changeTypeVector.sizeInBytes();
+            int arrowLength = sizeInBytes() - ARROW_CHANGETYPE_OFFSET - changeTypeVector.sizeInBytes();
             ArrowReader reader =
-                    ArrowUtils.createArrowReader(
-                            segment, arrowOffset, arrowLength, root, allocator, rowType);
+                    ArrowUtils.createArrowReader(segment, arrowOffset, arrowLength, root, allocator, rowType);
             return new ArrowLogRecordIterator(reader, timestamp) {
                 @Override
                 protected ChangeType getChangeType(int rowId) {
@@ -360,11 +349,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         @Override
         protected LogRecord readNext(long baseOffset) {
             LogRecord record =
-                    new GenericRecord(
-                            baseOffset + rowId,
-                            timestamp,
-                            getChangeType(rowId),
-                            reader.read(rowId));
+                    new GenericRecord(baseOffset + rowId, timestamp, getChangeType(rowId), reader.read(rowId));
             rowId++;
             return record;
         }
@@ -391,11 +376,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
             int numRecords = getRecordCount();
             if (numRecords < 0) {
                 throw new IllegalArgumentException(
-                        "Found invalid record count "
-                                + numRecords
-                                + " in magic v"
-                                + magic()
-                                + " batch");
+                        "Found invalid record count " + numRecords + " in magic v" + magic() + " batch");
             }
             this.numRecords = numRecords;
         }

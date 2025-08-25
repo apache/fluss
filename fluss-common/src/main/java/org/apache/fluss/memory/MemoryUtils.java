@@ -42,8 +42,7 @@ public class MemoryUtils {
     /** The native byte order of the platform on which the system currently runs. */
     public static final ByteOrder NATIVE_BYTE_ORDER = ByteOrder.nativeOrder();
 
-    private static final long BUFFER_ADDRESS_FIELD_OFFSET =
-            getClassFieldOffset(Buffer.class, "address");
+    private static final long BUFFER_ADDRESS_FIELD_OFFSET = getClassFieldOffset(Buffer.class, "address");
 
     @SuppressWarnings("restriction")
     private static sun.misc.Unsafe getUnsafe() {
@@ -52,9 +51,7 @@ public class MemoryUtils {
             unsafeField.setAccessible(true);
             return (sun.misc.Unsafe) unsafeField.get(null);
         } catch (SecurityException e) {
-            throw new Error(
-                    "Could not access the sun.misc.Unsafe handle, permission denied by security manager.",
-                    e);
+            throw new Error("Could not access the sun.misc.Unsafe handle, permission denied by security manager.", e);
         } catch (NoSuchFieldException e) {
             throw new Error("The static handle field in sun.misc.Unsafe was not found.", e);
         } catch (IllegalArgumentException e) {
@@ -62,34 +59,25 @@ public class MemoryUtils {
         } catch (IllegalAccessException e) {
             throw new Error("Access to sun.misc.Unsafe is forbidden by the runtime.", e);
         } catch (Throwable t) {
-            throw new Error(
-                    "Unclassified error while trying to access the sun.misc.Unsafe handle.", t);
+            throw new Error("Unclassified error while trying to access the sun.misc.Unsafe handle.", t);
         }
     }
 
-    private static long getClassFieldOffset(
-            @SuppressWarnings("SameParameterValue") Class<?> cl, String fieldName) {
+    private static long getClassFieldOffset(@SuppressWarnings("SameParameterValue") Class<?> cl, String fieldName) {
         try {
             return UNSAFE.objectFieldOffset(cl.getDeclaredField(fieldName));
         } catch (SecurityException e) {
             throw new Error(
-                    getClassFieldOffsetErrorMessage(cl, fieldName)
-                            + ", permission denied by security manager.",
-                    e);
+                    getClassFieldOffsetErrorMessage(cl, fieldName) + ", permission denied by security manager.", e);
         } catch (NoSuchFieldException e) {
             throw new Error(getClassFieldOffsetErrorMessage(cl, fieldName), e);
         } catch (Throwable t) {
-            throw new Error(
-                    getClassFieldOffsetErrorMessage(cl, fieldName) + ", unclassified error", t);
+            throw new Error(getClassFieldOffsetErrorMessage(cl, fieldName) + ", unclassified error", t);
         }
     }
 
     private static String getClassFieldOffsetErrorMessage(Class<?> cl, String fieldName) {
-        return "Could not get field '"
-                + fieldName
-                + "' offset in class '"
-                + cl
-                + "' for unsafe operations";
+        return "Could not get field '" + fieldName + "' offset in class '" + cl + "' for unsafe operations";
     }
 
     /**

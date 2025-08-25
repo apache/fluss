@@ -32,8 +32,7 @@ public class LoginManagerTest {
     @BeforeEach
     void before() {
         dynamicDigestContext =
-                DigestLoginModule.class.getName()
-                        + " required username=\"digestuser\" password=\"digest-secret\";";
+                DigestLoginModule.class.getName() + " required username=\"digestuser\" password=\"digest-secret\";";
         TestJaasConfig.createConfiguration("DIGEST-MD5", Collections.singletonList("DIGEST-MD5"));
     }
 
@@ -67,29 +66,25 @@ public class LoginManagerTest {
     @Test
     public void testServerLoginManager() throws Exception {
         String listenerName = "listener1";
-        JaasContext digestJaasContext =
-                JaasContext.loadServerContext(listenerName, dynamicDigestContext);
+        JaasContext digestJaasContext = JaasContext.loadServerContext(listenerName, dynamicDigestContext);
         JaasContext plainJaasContext = JaasContext.loadServerContext(listenerName, null);
 
         LoginManager digestLoginManager = LoginManager.acquireLoginManager(digestJaasContext);
         LoginManager plainLoginManager = LoginManager.acquireLoginManager(plainJaasContext);
         assertThat(digestLoginManager.cacheKey()).isEqualTo(digestJaasContext.dynamicJaasConfig());
         assertThat(plainLoginManager.cacheKey()).isEqualTo("FlussServer");
-        assertThat(digestLoginManager.subject().getPublicCredentials())
-                .containsExactly("digestuser");
-        assertThat(digestLoginManager.subject().getPrivateCredentials())
-                .containsExactly("digest-secret");
+        assertThat(digestLoginManager.subject().getPublicCredentials()).containsExactly("digestuser");
+        assertThat(digestLoginManager.subject().getPrivateCredentials()).containsExactly("digest-secret");
 
         // test cache
-        assertThat(LoginManager.acquireLoginManager(digestJaasContext))
-                .isEqualTo(digestLoginManager);
+        assertThat(LoginManager.acquireLoginManager(digestJaasContext)).isEqualTo(digestLoginManager);
         assertThat(LoginManager.acquireLoginManager(plainJaasContext)).isEqualTo(plainLoginManager);
         verifyLoginManagerRelease(digestLoginManager, 2, digestJaasContext);
         verifyLoginManagerRelease(plainLoginManager, 2, plainJaasContext);
     }
 
-    private void verifyLoginManagerRelease(
-            LoginManager loginManager, int acquireCount, JaasContext jaasContext) throws Exception {
+    private void verifyLoginManagerRelease(LoginManager loginManager, int acquireCount, JaasContext jaasContext)
+            throws Exception {
         // Release all except one reference and verify that the loginManager is still cached
         for (int i = 0; i < acquireCount - 1; i++) {
             loginManager.release();

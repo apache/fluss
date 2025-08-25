@@ -52,10 +52,8 @@ class CoordinatorChannelManagerTest {
     @Test
     void testCoordinatorChannelManager() throws Exception {
         Configuration configuration = new Configuration();
-        CoordinatorChannelManager coordinatorChannelManager =
-                new CoordinatorChannelManager(
-                        RpcClient.create(
-                                configuration, TestingClientMetricGroup.newInstance(), false));
+        CoordinatorChannelManager coordinatorChannelManager = new CoordinatorChannelManager(
+                RpcClient.create(configuration, TestingClientMetricGroup.newInstance(), false));
         List<ServerNode> tabletServersNode = FLUSS_CLUSTER_EXTENSION.getTabletServerNodes();
 
         // test start up using server 0
@@ -84,19 +82,13 @@ class CoordinatorChannelManagerTest {
     }
 
     private void checkSendRequest(
-            CoordinatorChannelManager coordinatorChannelManager,
-            int targetServerId,
-            boolean expectCanSend) {
+            CoordinatorChannelManager coordinatorChannelManager, int targetServerId, boolean expectCanSend) {
         // 0 represents not send, 1 represents prepare to send, 2 represents success(received the
         // success response)
         AtomicInteger sendFlag = new AtomicInteger(0);
         // we use update metadata request to test for simplicity
-        UpdateMetadataRequest updateMetadataRequest =
-                makeUpdateMetadataRequest(
-                        null,
-                        Collections.emptySet(),
-                        Collections.emptyList(),
-                        Collections.emptyList());
+        UpdateMetadataRequest updateMetadataRequest = makeUpdateMetadataRequest(
+                null, Collections.emptySet(), Collections.emptyList(), Collections.emptyList());
         coordinatorChannelManager.sendRequest(
                 targetServerId,
                 updateMetadataRequest,

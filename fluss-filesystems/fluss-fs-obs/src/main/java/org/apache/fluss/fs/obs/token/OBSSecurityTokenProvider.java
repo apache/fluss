@@ -59,21 +59,17 @@ public class OBSSecurityTokenProvider {
         String accessKeySecret = conf.get(ACCESS_KEY_SECRET);
         region = conf.get(REGION_KEY);
         // Create IAM client
-        ICredential credentials =
-                new GlobalCredentials().withAk(accessKeyId).withSk(accessKeySecret);
+        ICredential credentials = new GlobalCredentials().withAk(accessKeyId).withSk(accessKeySecret);
 
-        iamClient =
-                IamClient.newBuilder()
-                        .withCredential(credentials)
-                        .withRegion(IamRegion.valueOf(region))
-                        .build();
+        iamClient = IamClient.newBuilder()
+                .withCredential(credentials)
+                .withRegion(IamRegion.valueOf(region))
+                .build();
     }
 
     public ObtainedSecurityToken obtainSecurityToken(String scheme) {
-        final CreateTemporaryAccessKeyByTokenRequest request =
-                new CreateTemporaryAccessKeyByTokenRequest();
-        CreateTemporaryAccessKeyByTokenRequestBody body =
-                new CreateTemporaryAccessKeyByTokenRequestBody();
+        final CreateTemporaryAccessKeyByTokenRequest request = new CreateTemporaryAccessKeyByTokenRequest();
+        CreateTemporaryAccessKeyByTokenRequestBody body = new CreateTemporaryAccessKeyByTokenRequestBody();
         // todo: may consider make token duration time configurable, we don't set it now
         // token duration time is 1 hour by default
         IdentityToken tokenIdentity = new IdentityToken();
@@ -86,8 +82,7 @@ public class OBSSecurityTokenProvider {
         authbody.withIdentity(identityAuth);
         body.withAuth(authbody);
         request.withBody(body);
-        final CreateTemporaryAccessKeyByTokenResponse response =
-                iamClient.createTemporaryAccessKeyByToken(request);
+        final CreateTemporaryAccessKeyByTokenResponse response = iamClient.createTemporaryAccessKeyByToken(request);
         Credential credential = response.getCredential();
         Map<String, String> additionInfo = new HashMap<>();
         // we need to put endpoint as addition info
@@ -102,10 +97,7 @@ public class OBSSecurityTokenProvider {
 
     private byte[] toJson(Credential credential) {
         Credentials credentials =
-                new Credentials(
-                        credential.getAccess(),
-                        credential.getSecret(),
-                        credential.getSecuritytoken());
+                new Credentials(credential.getAccess(), credential.getSecret(), credential.getSecuritytoken());
         return CredentialsJsonSerde.toJson(credentials);
     }
 }

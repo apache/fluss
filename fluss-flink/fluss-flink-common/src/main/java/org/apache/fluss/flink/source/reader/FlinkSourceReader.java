@@ -48,8 +48,7 @@ import java.util.function.Consumer;
 
 /** The source reader for Fluss. */
 public class FlinkSourceReader<OUT>
-        extends SingleThreadMultiplexSourceReaderBaseAdapter<
-                RecordAndPos, OUT, SourceSplitBase, SourceSplitState> {
+        extends SingleThreadMultiplexSourceReaderBaseAdapter<RecordAndPos, OUT, SourceSplitBase, SourceSplitState> {
 
     public FlinkSourceReader(
             FutureCompletingBlockingQueue<RecordsWithSplitIds<RecordAndPos>> elementsQueue,
@@ -65,14 +64,13 @@ public class FlinkSourceReader<OUT>
                 elementsQueue,
                 new FlinkSourceFetcherManager(
                         elementsQueue,
-                        () ->
-                                new FlinkSourceSplitReader(
-                                        flussConfig,
-                                        tablePath,
-                                        sourceOutputType,
-                                        projectedFields,
-                                        flinkSourceReaderMetrics,
-                                        lakeSource),
+                        () -> new FlinkSourceSplitReader(
+                                flussConfig,
+                                tablePath,
+                                sourceOutputType,
+                                projectedFields,
+                                flinkSourceReaderMetrics,
+                                lakeSource),
                         (ignore) -> {}),
                 recordEmitter,
                 context.getConfiguration(),
@@ -88,16 +86,12 @@ public class FlinkSourceReader<OUT>
     public void handleSourceEvents(SourceEvent sourceEvent) {
         if (sourceEvent instanceof PartitionsRemovedEvent) {
             PartitionsRemovedEvent partitionsRemovedEvent = (PartitionsRemovedEvent) sourceEvent;
-            Consumer<Set<TableBucket>> unsubscribeTableBucketsCallback =
-                    (unsubscribedTableBuckets) -> {
-                        // send remove partitions ack event to coordinator
-                        context.sendSourceEventToCoordinator(
-                                new PartitionBucketsUnsubscribedEvent(unsubscribedTableBuckets));
-                    };
+            Consumer<Set<TableBucket>> unsubscribeTableBucketsCallback = (unsubscribedTableBuckets) -> {
+                // send remove partitions ack event to coordinator
+                context.sendSourceEventToCoordinator(new PartitionBucketsUnsubscribedEvent(unsubscribedTableBuckets));
+            };
             ((FlinkSourceFetcherManager) splitFetcherManager)
-                    .removePartitions(
-                            partitionsRemovedEvent.getRemovedPartitions(),
-                            unsubscribeTableBucketsCallback);
+                    .removePartitions(partitionsRemovedEvent.getRemovedPartitions(), unsubscribeTableBucketsCallback);
         }
     }
 

@@ -48,8 +48,7 @@ public class LakeTableSnapshotJsonSerde
     private static final int VERSION = 1;
 
     @Override
-    public void serialize(LakeTableSnapshot lakeTableSnapshot, JsonGenerator generator)
-            throws IOException {
+    public void serialize(LakeTableSnapshot lakeTableSnapshot, JsonGenerator generator) throws IOException {
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, VERSION);
         generator.writeNumberField(SNAPSHOT_ID, lakeTableSnapshot.getSnapshotId());
@@ -63,9 +62,7 @@ public class LakeTableSnapshotJsonSerde
                 generator.writeNumberField(PARTITION_ID, tableBucket.getPartitionId());
                 // have partition name
                 String partitionName =
-                        lakeTableSnapshot
-                                .getPartitionNameIdByPartitionId()
-                                .get(tableBucket.getPartitionId());
+                        lakeTableSnapshot.getPartitionNameIdByPartitionId().get(tableBucket.getPartitionId());
                 if (partitionName != null) {
                     generator.writeStringField(PARTITION_NAME, partitionName);
                 }
@@ -74,12 +71,14 @@ public class LakeTableSnapshotJsonSerde
 
             if (lakeTableSnapshot.getLogStartOffset(tableBucket).isPresent()) {
                 generator.writeNumberField(
-                        LOG_START_OFFSET, lakeTableSnapshot.getLogStartOffset(tableBucket).get());
+                        LOG_START_OFFSET,
+                        lakeTableSnapshot.getLogStartOffset(tableBucket).get());
             }
 
             if (lakeTableSnapshot.getLogEndOffset(tableBucket).isPresent()) {
                 generator.writeNumberField(
-                        LOG_END_OFFSET, lakeTableSnapshot.getLogEndOffset(tableBucket).get());
+                        LOG_END_OFFSET,
+                        lakeTableSnapshot.getLogEndOffset(tableBucket).get());
             }
 
             generator.writeEndObject();
@@ -106,10 +105,12 @@ public class LakeTableSnapshotJsonSerde
             TableBucket tableBucket;
             Long partitionId =
                     bucket.get(PARTITION_ID) != null ? bucket.get(PARTITION_ID).asLong() : null;
-            tableBucket = new TableBucket(tableId, partitionId, bucket.get(BUCKET_ID).asInt());
+            tableBucket =
+                    new TableBucket(tableId, partitionId, bucket.get(BUCKET_ID).asInt());
 
             if (bucket.get(LOG_START_OFFSET) != null) {
-                bucketLogStartOffset.put(tableBucket, bucket.get(LOG_START_OFFSET).asLong());
+                bucketLogStartOffset.put(
+                        tableBucket, bucket.get(LOG_START_OFFSET).asLong());
             } else {
                 bucketLogStartOffset.put(tableBucket, null);
             }
@@ -126,10 +127,6 @@ public class LakeTableSnapshotJsonSerde
             }
         }
         return new LakeTableSnapshot(
-                snapshotId,
-                tableId,
-                bucketLogStartOffset,
-                bucketLogEndOffset,
-                partitionNameIdByPartitionId);
+                snapshotId, tableId, bucketLogStartOffset, bucketLogEndOffset, partitionNameIdByPartitionId);
     }
 }

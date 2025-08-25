@@ -45,13 +45,11 @@ public class ServerInfo {
     private final Map<String, Endpoint> endpointMap;
     private final ServerType serverType;
 
-    public ServerInfo(
-            Integer id, @Nullable String rack, List<Endpoint> endpoints, ServerType serverType) {
+    public ServerInfo(Integer id, @Nullable String rack, List<Endpoint> endpoints, ServerType serverType) {
         this.id = id;
         this.rack = rack;
         this.endpointMap =
-                endpoints.stream()
-                        .collect(Collectors.toMap(Endpoint::getListenerName, endpoint -> endpoint));
+                endpoints.stream().collect(Collectors.toMap(Endpoint::getListenerName, endpoint -> endpoint));
         this.serverType = serverType;
     }
 
@@ -71,10 +69,9 @@ public class ServerInfo {
     public Endpoint endpointOrThrow(String listenerName) {
         Endpoint endpoint = endpoint(listenerName);
         if (endpoint == null) {
-            throw new EndpointNotAvailableException(
-                    String.format(
-                            "Endpoint with listener name: %s not found for %s %d",
-                            listenerName, serverType.name().toLowerCase(), id));
+            throw new EndpointNotAvailableException(String.format(
+                    "Endpoint with listener name: %s not found for %s %d",
+                    listenerName, serverType.name().toLowerCase(), id));
         }
         return endpoint;
     }

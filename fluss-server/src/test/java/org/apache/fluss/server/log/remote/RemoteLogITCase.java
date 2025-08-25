@@ -59,37 +59,29 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** ITCase for remote log. */
 public class RemoteLogITCase {
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(initConfig())
+            .build();
 
     private TableBucket setupTableBucket() throws Exception {
-        long tableId =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
         return tb;
     }
 
-    private void produceRecordsAndWaitRemoteLogCopy(
-            TabletServerGateway leaderGateway, TableBucket tb) throws Exception {
+    private void produceRecordsAndWaitRemoteLogCopy(TabletServerGateway leaderGateway, TableBucket tb)
+            throws Exception {
         for (int i = 0; i < 10; i++) {
             assertProduceLogResponse(
                     leaderGateway
-                            .produceLog(
-                                    newProduceLogRequest(
-                                            tb.getTableId(),
-                                            0,
-                                            1,
-                                            genMemoryLogRecordsByObject(DATA1)))
+                            .produceLog(newProduceLogRequest(tb.getTableId(), 0, 1, genMemoryLogRecordsByObject(DATA1)))
                             .get(),
                     0,
                     i * 10L);
         }
-        FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(
-                new TableBucket(tb.getTableId(), 0));
+        FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(new TableBucket(tb.getTableId(), 0));
     }
 
     @Test
@@ -98,8 +90,7 @@ public class RemoteLogITCase {
         long tableId = tb.getTableId();
 
         int leaderId = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
-        TabletServerGateway leaderGateway =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderId);
+        TabletServerGateway leaderGateway = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leaderId);
 
         // produce test records
         produceRecordsAndWaitRemoteLogCopy(leaderGateway, tb);
@@ -115,18 +106,16 @@ public class RemoteLogITCase {
         assertThat(manifest.getRemoteLogSegmentList().size()).isGreaterThan(0);
 
         // test create: verify remote log created
-        FsPath fsPath =
-                FlussPaths.remoteLogTabletDir(
-                        tabletServer.getReplicaManager().getRemoteLogManager().remoteLogDir(),
-                        PhysicalTablePath.of(DATA1_TABLE_PATH),
-                        tb);
+        FsPath fsPath = FlussPaths.remoteLogTabletDir(
+                tabletServer.getReplicaManager().getRemoteLogManager().remoteLogDir(),
+                PhysicalTablePath.of(DATA1_TABLE_PATH),
+                tb);
         FileSystem fileSystem = fsPath.getFileSystem();
         assertThat(fileSystem.exists(fsPath)).isTrue();
         assertThat(fileSystem.listStatus(fsPath).length).isGreaterThan(0);
 
         // test download remote log
-        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future =
-                new CompletableFuture<>();
+        CompletableFuture<Map<TableBucket, FetchLogResultForBucket>> future = new CompletableFuture<>();
 
         tabletServer
                 .getReplicaManager()
@@ -146,10 +135,7 @@ public class RemoteLogITCase {
         CoordinatorGateway coordinatorGateway = FLUSS_CLUSTER_EXTENSION.newCoordinatorClient();
         coordinatorGateway
                 .dropTable(
-                        newDropTableRequest(
-                                DATA1_TABLE_PATH.getDatabaseName(),
-                                DATA1_TABLE_PATH.getTableName(),
-                                true))
+                        newDropTableRequest(DATA1_TABLE_PATH.getDatabaseName(), DATA1_TABLE_PATH.getTableName(), true))
                 .get();
         retry(Duration.ofMinutes(2), () -> assertThat(fileSystem.exists(fsPath)).isFalse());
     }
@@ -157,8 +143,7 @@ public class RemoteLogITCase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testFollowerFetchAlreadyMoveToRemoteLog(boolean withWriterId) throws Exception {
-        long tableId =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
         TableBucket tb = new TableBucket(tableId, 0);
 
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
@@ -173,21 +158,18 @@ public class RemoteLogITCase {
         // kill follower, and restart after some segments in leader has been copied to remote.
         FLUSS_CLUSTER_EXTENSION.stopTabletServer(follower);
 
-        TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        TabletServerGateway leaderGateWay = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         // produce many records to trigger remote log copy.
         for (int i = 0; i < 10; i++) {
             assertProduceLogResponse(
                     leaderGateWay
-                            .produceLog(
-                                    newProduceLogRequest(
-                                            tableId,
-                                            0,
-                                            1,
-                                            withWriterId
-                                                    ? genMemoryLogRecordsWithWriterId(
-                                                            DATA1, 100, i, 0L)
-                                                    : genMemoryLogRecordsByObject(DATA1)))
+                            .produceLog(newProduceLogRequest(
+                                    tableId,
+                                    0,
+                                    1,
+                                    withWriterId
+                                            ? genMemoryLogRecordsWithWriterId(DATA1, 100, i, 0L)
+                                            : genMemoryLogRecordsByObject(DATA1)))
                             .get(),
                     0,
                     i * 10L);

@@ -86,20 +86,16 @@ public class OBSSecurityTokenReceiver implements SecurityTokenReceiver {
 
         byte[] tokenBytes = token.getToken();
 
-        org.apache.fluss.fs.token.Credentials flussCredentials =
-                CredentialsJsonSerde.fromJson(tokenBytes);
+        org.apache.fluss.fs.token.Credentials flussCredentials = CredentialsJsonSerde.fromJson(tokenBytes);
 
         // Create Credential from fluss credentials
-        credentials =
-                new BasicSecurityKey(
-                        flussCredentials.getAccessKeyId(),
-                        flussCredentials.getSecretAccessKey(),
-                        flussCredentials.getSecurityToken());
+        credentials = new BasicSecurityKey(
+                flussCredentials.getAccessKeyId(),
+                flussCredentials.getSecretAccessKey(),
+                flussCredentials.getSecurityToken());
         additionInfos = token.getAdditionInfos();
 
-        LOG.info(
-                "Session credentials updated successfully with access key: {}.",
-                credentials.getAccessKey());
+        LOG.info("Session credentials updated successfully with access key: {}.", credentials.getAccessKey());
     }
 
     public static ISecurityKey getCredentials() {

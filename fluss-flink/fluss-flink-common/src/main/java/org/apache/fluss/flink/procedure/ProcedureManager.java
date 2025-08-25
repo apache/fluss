@@ -35,8 +35,7 @@ import java.util.Optional;
 public class ProcedureManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(ProcedureManager.class);
-    private static final Map<String, Class<? extends ProcedureBase>> PROCEDURE_MAP =
-            initProcedureMap();
+    private static final Map<String, Class<? extends ProcedureBase>> PROCEDURE_MAP = initProcedureMap();
 
     public static List<String> listProcedures() {
         return new ArrayList<>(PROCEDURE_MAP.keySet());

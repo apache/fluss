@@ -49,14 +49,9 @@ class CompletedSnapshotTest {
         // snapshot 1
         long snapshotId = 1;
         Path snapshotPath = makeDir(snapshotBaseLocation, "snapshot-" + snapshotId);
-        KvSnapshotHandle kvSnapshotHandle =
-                makeSnapshotHandle(localFileDir, snapshotPath, shareDir, 100);
-        CompletedSnapshot snapshot =
-                new CompletedSnapshot(
-                        tableBucket,
-                        snapshotId,
-                        FsPath.fromLocalFile(snapshotPath.toFile()),
-                        kvSnapshotHandle);
+        KvSnapshotHandle kvSnapshotHandle = makeSnapshotHandle(localFileDir, snapshotPath, shareDir, 100);
+        CompletedSnapshot snapshot = new CompletedSnapshot(
+                tableBucket, snapshotId, FsPath.fromLocalFile(snapshotPath.toFile()), kvSnapshotHandle);
 
         SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry();
         // register the snapshot to a registry
@@ -71,12 +66,8 @@ class CompletedSnapshotTest {
         snapshotId = 2;
         snapshotPath = makeDir(snapshotBaseLocation, "snapshot-" + snapshotId);
         kvSnapshotHandle = makeSnapshotHandle(localFileDir, snapshotPath, shareDir, 100);
-        snapshot =
-                new CompletedSnapshot(
-                        tableBucket,
-                        snapshotId,
-                        FsPath.fromLocalFile(snapshotPath.toFile()),
-                        kvSnapshotHandle);
+        snapshot = new CompletedSnapshot(
+                tableBucket, snapshotId, FsPath.fromLocalFile(snapshotPath.toFile()), kvSnapshotHandle);
         snapshot.discardAsync(ioExecutor).get();
         // share files should be deleted since it has not been registered
         checkCompletedSnapshotCleanUp(snapshotPath, kvSnapshotHandle, true);
@@ -94,30 +85,23 @@ class CompletedSnapshotTest {
         // snapshot 1
         long snapshotId = 1;
         Path snapshotPath = makeDir(snapshotBaseLocation, "snapshot-" + snapshotId);
-        KvSnapshotHandle kvSnapshotHandle =
-                makeSnapshotHandle(localFileDir, snapshotPath, shareDir, 100);
-        CompletedSnapshot snapshot =
-                new CompletedSnapshot(
-                        tableBucket,
-                        snapshotId,
-                        FsPath.fromLocalFile(snapshotPath.toFile()),
-                        kvSnapshotHandle);
+        KvSnapshotHandle kvSnapshotHandle = makeSnapshotHandle(localFileDir, snapshotPath, shareDir, 100);
+        CompletedSnapshot snapshot = new CompletedSnapshot(
+                tableBucket, snapshotId, FsPath.fromLocalFile(snapshotPath.toFile()), kvSnapshotHandle);
         assertThat(snapshot.getKvSnapshotHandle().getSnapshotSize()).isEqualTo(400L);
     }
 
     private void checkCompletedSnapshotCleanUp(
             Path snapshotPath, KvSnapshotHandle kvSnapshotHandle, boolean isShareFileShouldDelete) {
         // private should be deleted, but the local file should still remain
-        for (KvFileHandleAndLocalPath kvFileHandleAndLocalPath :
-                kvSnapshotHandle.getPrivateFileHandles()) {
+        for (KvFileHandleAndLocalPath kvFileHandleAndLocalPath : kvSnapshotHandle.getPrivateFileHandles()) {
             assertThat(new File(kvFileHandleAndLocalPath.getKvFileHandle().getFilePath()))
                     .doesNotExist();
             assertThat(new File(kvFileHandleAndLocalPath.getLocalPath())).exists();
         }
 
         // check the share files is as expected, and the local file should still remain
-        for (KvFileHandleAndLocalPath kvFileHandleAndLocalPath :
-                kvSnapshotHandle.getSharedKvFileHandles()) {
+        for (KvFileHandleAndLocalPath kvFileHandleAndLocalPath : kvSnapshotHandle.getSharedKvFileHandles()) {
             // share files should also be deleted, but the local file should still remain
             if (isShareFileShouldDelete) {
                 assertThat(new File(kvFileHandleAndLocalPath.getKvFileHandle().getFilePath()))
@@ -133,8 +117,7 @@ class CompletedSnapshotTest {
         assertThat(snapshotPath.toFile()).doesNotExist();
     }
 
-    KvSnapshotHandle makeSnapshotHandle(
-            Path localPath, Path baseSnapshotDir, Path shareDir, int perFileSize)
+    KvSnapshotHandle makeSnapshotHandle(Path localPath, Path baseSnapshotDir, Path shareDir, int perFileSize)
             throws IOException {
         List<KvFileHandleAndLocalPath> sharedFileHandles = new ArrayList<>();
 
@@ -147,10 +130,8 @@ class CompletedSnapshotTest {
             File shareFile = new File(shareDir.toFile(), "remote_" + i);
             shareFile.createNewFile();
             writeRandomDataToFile(shareFile, perFileSize);
-            sharedFileHandles.add(
-                    KvFileHandleAndLocalPath.of(
-                            new KvFileHandle(shareFile.getPath(), shareFile.length()),
-                            localFile.getPath()));
+            sharedFileHandles.add(KvFileHandleAndLocalPath.of(
+                    new KvFileHandle(shareFile.getPath(), shareFile.length()), localFile.getPath()));
         }
 
         // create private files
@@ -163,10 +144,8 @@ class CompletedSnapshotTest {
             File privateFile = new File(baseSnapshotDir.toFile(), "remote_i");
             privateFile.createNewFile();
             writeRandomDataToFile(privateFile, perFileSize);
-            privateFileHandles.add(
-                    KvFileHandleAndLocalPath.of(
-                            new KvFileHandle(privateFile.getPath(), privateFile.length()),
-                            localFile.getPath()));
+            privateFileHandles.add(KvFileHandleAndLocalPath.of(
+                    new KvFileHandle(privateFile.getPath(), privateFile.length()), localFile.getPath()));
         }
         return new KvSnapshotHandle(sharedFileHandles, privateFileHandles, 10);
     }

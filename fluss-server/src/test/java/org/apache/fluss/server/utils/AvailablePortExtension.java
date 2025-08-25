@@ -32,7 +32,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 public class AvailablePortExtension implements CustomExtension {
 
-    @Nullable private NetUtils.Port port;
+    @Nullable
+    private NetUtils.Port port;
 
     @Override
     public void before(ExtensionContext context) throws Exception {

@@ -32,14 +32,11 @@ import java.util.concurrent.ThreadLocalRandom;
 import static org.apache.fluss.config.ConfigBuilder.key;
 
 /** An {@link org.apache.fluss.security.auth.AuthenticationPlugin} to mock mutual authentication. */
-public class MutualAuthenticationPlugin
-        implements ServerAuthenticationPlugin, ClientAuthenticationPlugin {
+public class MutualAuthenticationPlugin implements ServerAuthenticationPlugin, ClientAuthenticationPlugin {
 
     private static final String MUTUAL_AUTH_PROTOCOL = "mutual";
     private static final ConfigOption<ErrorType> ERROR_TYPE =
-            key("client.security.mutual.error-type")
-                    .enumType(ErrorType.class)
-                    .defaultValue(ErrorType.NONE);
+            key("client.security.mutual.error-type").enumType(ErrorType.class).defaultValue(ErrorType.NONE);
 
     @Override
     public ClientAuthenticator createClientAuthenticator(Configuration configuration) {
@@ -87,14 +84,13 @@ public class MutualAuthenticationPlugin
         public byte[] authenticate(byte[] data) throws AuthenticationException {
             switch (status) {
                 case SEND_CLIENT_FIRST_MESSAGE:
-                    initialSalt =
-                            isError(
-                                            errorType,
-                                            ErrorType.SERVER_NO_CHALLENGE,
-                                            ErrorType.SERVER_ERROR_CHALLENGE,
-                                            ErrorType.RETRIABLE_EXCEPTION)
-                                    ? errorType
-                                    : generateInitialSalt();
+                    initialSalt = isError(
+                                    errorType,
+                                    ErrorType.SERVER_NO_CHALLENGE,
+                                    ErrorType.SERVER_ERROR_CHALLENGE,
+                                    ErrorType.RETRIABLE_EXCEPTION)
+                            ? errorType
+                            : generateInitialSalt();
                     status = Status.RECEIVE_SERVER_FIRST_MESSAGE;
                     return String.valueOf(initialSalt).getBytes();
                 case RECEIVE_SERVER_FIRST_MESSAGE:
@@ -108,10 +104,7 @@ public class MutualAuthenticationPlugin
                                 .getBytes();
                     } else {
                         throw new AuthenticationException(
-                                "Invalid challenge value: expected "
-                                        + (initialSalt + 1)
-                                        + ", but got "
-                                        + challenge);
+                                "Invalid challenge value: expected " + (initialSalt + 1) + ", but got " + challenge);
                     }
                 case RECEIVE_SERVER_FINAL_MESSAGE:
                     if (data.length == 0) {
@@ -119,8 +112,7 @@ public class MutualAuthenticationPlugin
                         return null;
                     } else {
                         throw new AuthenticationException(
-                                "Invalid token value: expected empty token, but got "
-                                        + new String(data));
+                                "Invalid token value: expected empty token, but got " + new String(data));
                     }
                 default:
                     return null;
@@ -179,10 +171,7 @@ public class MutualAuthenticationPlugin
                         return new byte[0];
                     } else {
                         throw new IllegalArgumentException(
-                                "Invalid token value: expected "
-                                        + (initialSalt + 1)
-                                        + ", but got "
-                                        + tokenValue);
+                                "Invalid token value: expected " + (initialSalt + 1) + ", but got " + tokenValue);
                     }
                 default:
                     return null;

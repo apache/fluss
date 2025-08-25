@@ -51,17 +51,15 @@ public class ArrowCompressionRatioEstimatorTest {
         // currentEstimation plus COMPRESSION_RATIO_DETERIORATE_STEP(0.05), otherwise
         // currentEstimation minus COMPRESSION_RATIO_IMPROVING_STEP(0.005). There are four cases,
         // and updatedCompressionRatio shouldn't smaller than observedRatio in all cases.
-        List<EstimationsObservedRatios> estimationsObservedRatios =
-                Arrays.asList(
-                        new EstimationsObservedRatios(0.8f, 0.84f),
-                        new EstimationsObservedRatios(0.6f, 0.7f),
-                        new EstimationsObservedRatios(0.6f, 0.4f),
-                        new EstimationsObservedRatios(0.004f, 0.001f));
+        List<EstimationsObservedRatios> estimationsObservedRatios = Arrays.asList(
+                new EstimationsObservedRatios(0.8f, 0.84f),
+                new EstimationsObservedRatios(0.6f, 0.7f),
+                new EstimationsObservedRatios(0.6f, 0.4f),
+                new EstimationsObservedRatios(0.004f, 0.001f));
         for (EstimationsObservedRatios estimationObservedRatio : estimationsObservedRatios) {
             compressionRatioEstimator.updateEstimation(estimationObservedRatio.currentEstimation);
             float updatedCompressionRatio = compressionRatioEstimator.estimation();
-            assertThat(updatedCompressionRatio)
-                    .isGreaterThanOrEqualTo(estimationObservedRatio.observedRatio);
+            assertThat(updatedCompressionRatio).isGreaterThanOrEqualTo(estimationObservedRatio.observedRatio);
         }
     }
 }

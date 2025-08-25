@@ -74,11 +74,6 @@ public class IcebergCommittable implements Serializable {
 
     @Override
     public String toString() {
-        return "IcebergCommittable{"
-                + "dataFiles="
-                + dataFiles.size()
-                + ", deleteFiles="
-                + deleteFiles.size()
-                + '}';
+        return "IcebergCommittable{" + "dataFiles=" + dataFiles.size() + ", deleteFiles=" + deleteFiles.size() + '}';
     }
 }

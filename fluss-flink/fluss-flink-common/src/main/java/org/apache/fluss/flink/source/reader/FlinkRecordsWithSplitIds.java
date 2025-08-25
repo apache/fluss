@@ -57,8 +57,7 @@ public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPo
     private @Nullable TableBucket currentTableBucket;
     private @Nullable Long currentSplitStoppingOffset;
 
-    public static FlinkRecordsWithSplitIds emptyRecords(
-            FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
+    public static FlinkRecordsWithSplitIds emptyRecords(FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
         return new FlinkRecordsWithSplitIds(Collections.emptySet(), flinkSourceReaderMetrics);
     }
 
@@ -77,8 +76,7 @@ public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPo
     }
 
     // no any splits, just used to mark splits finished
-    public FlinkRecordsWithSplitIds(
-            Set<String> finishedSplits, FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
+    public FlinkRecordsWithSplitIds(Set<String> finishedSplits, FlinkSourceReaderMetrics flinkSourceReaderMetrics) {
         this(
                 Collections.emptyMap(),
                 Collections.emptyIterator(),
@@ -111,8 +109,7 @@ public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPo
             String currentSplit = splitIterator.next();
             currentRecordIterator = splitRecords.get(currentSplit);
             currentTableBucket = tableBucketIterator.next();
-            currentSplitStoppingOffset =
-                    stoppingOffsets.getOrDefault(currentTableBucket, Long.MAX_VALUE);
+            currentSplitStoppingOffset = stoppingOffsets.getOrDefault(currentTableBucket, Long.MAX_VALUE);
             return currentSplit;
         } else {
             currentRecordIterator = null;
@@ -127,8 +124,7 @@ public class FlinkRecordsWithSplitIds implements RecordsWithSplitIds<RecordAndPo
     public RecordAndPos nextRecordFromSplit() {
         checkNotNull(
                 currentRecordIterator,
-                "Make sure nextSplit() did not return null before "
-                        + "iterate over the records split.");
+                "Make sure nextSplit() did not return null before " + "iterate over the records split.");
         if (currentRecordIterator.hasNext()) {
             RecordAndPos recordAndPos = currentRecordIterator.next();
             long offset = recordAndPos.record().logOffset();

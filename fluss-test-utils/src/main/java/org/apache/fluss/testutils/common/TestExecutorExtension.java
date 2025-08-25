@@ -25,8 +25,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.function.Supplier;
 
 /** Extension which starts/stops an {@link ExecutorService} for testing purposes. */
-public class TestExecutorExtension<T extends ExecutorService>
-        implements BeforeAllCallback, AfterAllCallback {
+public class TestExecutorExtension<T extends ExecutorService> implements BeforeAllCallback, AfterAllCallback {
     private final Supplier<T> serviceFactory;
 
     private T executorService;

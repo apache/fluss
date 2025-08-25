@@ -39,7 +39,8 @@ public class ZkDataTest {
         assertThat(TableZNode.parsePath("/metadata/databases/db1/tables/t1/")).isNull();
         assertThat(TableZNode.parsePath("/metadata/databases/db1/t1/")).isNull();
         assertThat(TableZNode.parsePath("/metadata/databases/db1/tables")).isNull();
-        assertThat(TableZNode.parsePath("/metadata/databases/db1/tables/t1/buckets")).isNull();
+        assertThat(TableZNode.parsePath("/metadata/databases/db1/tables/t1/buckets"))
+                .isNull();
         assertThat(TableZNode.parsePath("/tabletservers/db1/tables/t1")).isNull();
         assertThat(TableZNode.parsePath(path + "/partitions/20240911")).isNull();
     }
@@ -56,8 +57,10 @@ public class ZkDataTest {
         assertThat(TableZNode.parsePath(path + "/buckets")).isNull();
         assertThat(TableZNode.parsePath(path + "*")).isNull();
         assertThat(TableZNode.parsePath("/metadata/databases/db1/t1/20240911")).isNull();
-        assertThat(TableZNode.parsePath("/metadata/databases/db1/tables/t1/partitions")).isNull();
-        assertThat(TableZNode.parsePath("/metadata/databases/db1/tables/t1/partitions/")).isNull();
+        assertThat(TableZNode.parsePath("/metadata/databases/db1/tables/t1/partitions"))
+                .isNull();
+        assertThat(TableZNode.parsePath("/metadata/databases/db1/tables/t1/partitions/"))
+                .isNull();
         assertThat(TableZNode.parsePath("/metadata/databases/db1/tables/*t1*/partitions/20240911"))
                 .isNull();
     }

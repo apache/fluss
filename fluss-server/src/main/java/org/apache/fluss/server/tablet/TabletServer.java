@@ -173,13 +173,12 @@ public class TabletServer extends ServerBase {
 
             // for metrics
             this.metricRegistry = MetricRegistry.create(conf, pluginManager);
-            this.tabletServerMetricGroup =
-                    ServerMetricUtils.createTabletServerGroup(
-                            metricRegistry,
-                            ServerMetricUtils.validateAndGetClusterId(conf),
-                            rack,
-                            endpoints.get(0).getHost(),
-                            serverId);
+            this.tabletServerMetricGroup = ServerMetricUtils.createTabletServerGroup(
+                    metricRegistry,
+                    ServerMetricUtils.validateAndGetClusterId(conf),
+                    rack,
+                    endpoints.get(0).getHost(),
+                    serverId);
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
@@ -201,59 +200,38 @@ public class TabletServer extends ServerBase {
             }
             // rpc client to sent request to the tablet server where the leader replica is located
             // to fetch log.
-            this.clientMetricGroup =
-                    new ClientMetricGroup(metricRegistry, SERVER_NAME + "-" + serverId);
+            this.clientMetricGroup = new ClientMetricGroup(metricRegistry, SERVER_NAME + "-" + serverId);
             this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);
 
-            CoordinatorGateway coordinatorGateway =
-                    GatewayClientProxy.createGatewayProxy(
-                            () -> metadataCache.getCoordinatorServer(interListenerName),
-                            rpcClient,
-                            CoordinatorGateway.class);
+            CoordinatorGateway coordinatorGateway = GatewayClientProxy.createGatewayProxy(
+                    () -> metadataCache.getCoordinatorServer(interListenerName), rpcClient, CoordinatorGateway.class);
 
-            this.replicaManager =
-                    new ReplicaManager(
-                            conf,
-                            scheduler,
-                            logManager,
-                            kvManager,
-                            zkClient,
-                            serverId,
-                            metadataCache,
-                            rpcClient,
-                            coordinatorGateway,
-                            DefaultCompletedKvSnapshotCommitter.create(
-                                    rpcClient, metadataCache, interListenerName),
-                            this,
-                            tabletServerMetricGroup,
-                            clock);
+            this.replicaManager = new ReplicaManager(
+                    conf,
+                    scheduler,
+                    logManager,
+                    kvManager,
+                    zkClient,
+                    serverId,
+                    metadataCache,
+                    rpcClient,
+                    coordinatorGateway,
+                    DefaultCompletedKvSnapshotCommitter.create(rpcClient, metadataCache, interListenerName),
+                    this,
+                    tabletServerMetricGroup,
+                    clock);
             replicaManager.startup();
 
-            this.tabletService =
-                    new TabletService(
-                            serverId,
-                            remoteFileSystem,
-                            zkClient,
-                            replicaManager,
-                            metadataCache,
-                            metadataManager,
-                            authorizer);
+            this.tabletService = new TabletService(
+                    serverId, remoteFileSystem, zkClient, replicaManager, metadataCache, metadataManager, authorizer);
 
-            RequestsMetrics requestsMetrics =
-                    RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
-            this.rpcServer =
-                    RpcServer.create(
-                            conf,
-                            endpoints,
-                            tabletService,
-                            tabletServerMetricGroup,
-                            requestsMetrics);
+            RequestsMetrics requestsMetrics = RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
+            this.rpcServer = RpcServer.create(conf, endpoints, tabletService, tabletServerMetricGroup, requestsMetrics);
             rpcServer.start();
 
             registerTabletServer();
             // when init session, register tablet server again
-            ZooKeeperUtils.registerZookeeperClientReInitSessionListener(
-                    zkClient, this::registerTabletServer, this);
+            ZooKeeperUtils.registerZookeeperClientReInitSessionListener(zkClient, this::registerTabletServer, this);
         }
     }
 
@@ -262,14 +240,13 @@ public class TabletServer extends ServerBase {
         if (isShutDown.compareAndSet(false, true)) {
             CompletableFuture<Void> serviceShutdownFuture = stopServices();
 
-            serviceShutdownFuture.whenComplete(
-                    ((Void ignored2, Throwable serviceThrowable) -> {
-                        if (serviceThrowable != null) {
-                            terminationFuture.completeExceptionally(serviceThrowable);
-                        } else {
-                            terminationFuture.complete(result);
-                        }
-                    }));
+            serviceShutdownFuture.whenComplete(((Void ignored2, Throwable serviceThrowable) -> {
+                if (serviceThrowable != null) {
+                    terminationFuture.completeExceptionally(serviceThrowable);
+                } else {
+                    terminationFuture.complete(result);
+                }
+            }));
         }
 
         return terminationFuture;
@@ -284,8 +261,7 @@ public class TabletServer extends ServerBase {
         long startTime = System.currentTimeMillis();
         List<Endpoint> bindEndpoints = rpcServer.getBindEndpoints();
         TabletServerRegistration tabletServerRegistration =
-                new TabletServerRegistration(
-                        rack, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf), startTime);
+                new TabletServerRegistration(rack, Endpoint.loadAdvertisedEndpoints(bindEndpoints, conf), startTime);
 
         while (true) {
             try {
@@ -303,8 +279,7 @@ public class TabletServer extends ServerBase {
                 }
 
                 LOG.warn(
-                        "Tablet server id {} already registered in Zookeeper. "
-                                + "retrying register after {} ms....",
+                        "Tablet server id {} already registered in Zookeeper. " + "retrying register after {} ms....",
                         serverId,
                         ZOOKEEPER_REGISTER_RETRY_INTERVAL_MS);
                 try {
@@ -440,17 +415,15 @@ public class TabletServer extends ServerBase {
         }
 
         if (serverId.get() < 0) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 0.",
-                            ConfigOptions.TABLET_SERVER_ID.key()));
+            throw new IllegalConfigurationException(String.format(
+                    "Invalid configuration for %s, it must be greater than or equal 0.",
+                    ConfigOptions.TABLET_SERVER_ID.key()));
         }
 
         if (conf.get(ConfigOptions.BACKGROUND_THREADS) < 1) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be greater than or equal 1.",
-                            ConfigOptions.BACKGROUND_THREADS.key()));
+            throw new IllegalConfigurationException(String.format(
+                    "Invalid configuration for %s, it must be greater than or equal 1.",
+                    ConfigOptions.BACKGROUND_THREADS.key()));
         }
 
         if (conf.get(ConfigOptions.REMOTE_DATA_DIR) == null) {
@@ -459,10 +432,9 @@ public class TabletServer extends ServerBase {
         }
 
         if (conf.get(ConfigOptions.LOG_SEGMENT_FILE_SIZE).getBytes() > Integer.MAX_VALUE) {
-            throw new IllegalConfigurationException(
-                    String.format(
-                            "Invalid configuration for %s, it must be less than or equal %d bytes.",
-                            ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
+            throw new IllegalConfigurationException(String.format(
+                    "Invalid configuration for %s, it must be less than or equal %d bytes.",
+                    ConfigOptions.LOG_SEGMENT_FILE_SIZE.key(), Integer.MAX_VALUE));
         }
     }
 

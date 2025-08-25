@@ -26,8 +26,7 @@ import java.io.IOException;
 
 /** Json serializer and deserializer for {@link TablePartition}. */
 @Internal
-public class TablePartitionJsonSerde
-        implements JsonSerializer<TablePartition>, JsonDeserializer<TablePartition> {
+public class TablePartitionJsonSerde implements JsonSerializer<TablePartition>, JsonDeserializer<TablePartition> {
 
     public static final TablePartitionJsonSerde INSTANCE = new TablePartitionJsonSerde();
 

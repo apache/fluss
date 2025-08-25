@@ -40,10 +40,7 @@ public class TableUpsert implements Upsert {
     }
 
     private TableUpsert(
-            TablePath tablePath,
-            TableInfo tableInfo,
-            WriterClient writerClient,
-            @Nullable int[] targetColumns) {
+            TablePath tablePath, TableInfo tableInfo, WriterClient writerClient, @Nullable int[] targetColumns) {
         this.tablePath = tablePath;
         this.tableInfo = tableInfo;
         this.writerClient = writerClient;
@@ -57,14 +54,13 @@ public class TableUpsert implements Upsert {
             int numColumns = tableInfo.getRowType().getFieldCount();
             for (int targetColumn : targetColumns) {
                 if (targetColumn < 0 || targetColumn >= numColumns) {
-                    throw new IllegalArgumentException(
-                            "Invalid target column index: "
-                                    + targetColumn
-                                    + " for table "
-                                    + tablePath
-                                    + ". The table only has "
-                                    + numColumns
-                                    + " columns.");
+                    throw new IllegalArgumentException("Invalid target column index: "
+                            + targetColumn
+                            + " for table "
+                            + tablePath
+                            + ". The table only has "
+                            + numColumns
+                            + " columns.");
                 }
             }
         }
@@ -81,11 +77,7 @@ public class TableUpsert implements Upsert {
             targetColumns[i] = rowType.getFieldIndex(targetColumnNames[i]);
             if (targetColumns[i] == -1) {
                 throw new IllegalArgumentException(
-                        "Can not find target column: "
-                                + targetColumnNames[i]
-                                + " for table "
-                                + tablePath
-                                + ".");
+                        "Can not find target column: " + targetColumnNames[i] + " for table " + tablePath + ".");
             }
         }
         return partialUpdate(targetColumns);

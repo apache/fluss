@@ -43,10 +43,8 @@ public class ArrowTimestampLtzColumnVector implements TimestampLtzColumnVector {
 
     public ArrowTimestampLtzColumnVector(ValueVector valueVector) {
         this.valueVector = checkNotNull(valueVector);
-        checkState(
-                valueVector instanceof TimeStampVector
-                        && ((ArrowType.Timestamp) valueVector.getField().getType()).getTimezone()
-                                == null);
+        checkState(valueVector instanceof TimeStampVector
+                && ((ArrowType.Timestamp) valueVector.getField().getType()).getTimezone() == null);
     }
 
     @Override

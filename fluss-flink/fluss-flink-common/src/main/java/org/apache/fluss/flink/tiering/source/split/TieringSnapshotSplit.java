@@ -96,12 +96,7 @@ public class TieringSnapshotSplit extends TieringSplit {
     @Override
     public TieringSnapshotSplit copy(int numberOfSplits) {
         return new TieringSnapshotSplit(
-                tablePath,
-                tableBucket,
-                partitionName,
-                snapshotId,
-                logOffsetOfSnapshot,
-                numberOfSplits);
+                tablePath, tableBucket, partitionName, snapshotId, logOffsetOfSnapshot, numberOfSplits);
     }
 
     @Override

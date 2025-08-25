@@ -200,23 +200,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         } else {
             databaseDescriptor = DatabaseDescriptor.builder().build();
         }
-        metadataManager.createDatabase(
-                request.getDatabaseName(), databaseDescriptor, request.isIgnoreIfExists());
+        metadataManager.createDatabase(request.getDatabaseName(), databaseDescriptor, request.isIgnoreIfExists());
         return CompletableFuture.completedFuture(response);
     }
 
     @Override
     public CompletableFuture<DropDatabaseResponse> dropDatabase(DropDatabaseRequest request) {
         if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(),
-                    OperationType.DROP,
-                    Resource.database(request.getDatabaseName()));
+            authorizer.authorize(currentSession(), OperationType.DROP, Resource.database(request.getDatabaseName()));
         }
 
         DropDatabaseResponse response = new DropDatabaseResponse();
-        metadataManager.dropDatabase(
-                request.getDatabaseName(), request.isIgnoreIfNotExists(), request.isCascade());
+        metadataManager.dropDatabase(request.getDatabaseName(), request.isIgnoreIfNotExists(), request.isCascade());
         return CompletableFuture.completedFuture(response);
     }
 
@@ -226,9 +221,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         tablePath.validate();
         if (authorizer != null) {
             authorizer.authorize(
-                    currentSession(),
-                    OperationType.CREATE,
-                    Resource.database(tablePath.getDatabaseName()));
+                    currentSession(), OperationType.CREATE, Resource.database(tablePath.getDatabaseName()));
         }
 
         TableDescriptor tableDescriptor;
@@ -236,8 +229,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             tableDescriptor = TableDescriptor.fromJsonBytes(request.getTableJson());
         } catch (Exception e) {
             if (e instanceof UncheckedIOException) {
-                throw new InvalidTableException(
-                        "Failed to parse table descriptor: " + e.getMessage());
+                throw new InvalidTableException("Failed to parse table descriptor: " + e.getMessage());
             } else {
                 // wrap the validate message to InvalidTableException
                 throw new InvalidTableException(e.getMessage());
@@ -249,7 +241,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // the distribution and bucket count must be set now
         //noinspection OptionalGetWithoutIsPresent
-        int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
+        int bucketCount =
+                tableDescriptor.getTableDistribution().get().getBucketCount().get();
 
         // first, generate the assignment
         TableAssignment tableAssignment = null;
@@ -268,17 +261,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             try {
                 checkNotNull(lakeCatalog).createTable(tablePath, tableDescriptor);
             } catch (TableAlreadyExistException e) {
-                throw new TableAlreadyExistException(
-                        String.format(
-                                "The table %s already exists in %s catalog, please "
-                                        + "first drop the table in %s catalog or use a new table name.",
-                                tablePath, dataLakeFormat, dataLakeFormat));
+                throw new TableAlreadyExistException(String.format(
+                        "The table %s already exists in %s catalog, please "
+                                + "first drop the table in %s catalog or use a new table name.",
+                        tablePath, dataLakeFormat, dataLakeFormat));
             }
         }
 
         // then create table;
-        metadataManager.createTable(
-                tablePath, tableDescriptor, tableAssignment, request.isIgnoreIfExists());
+        metadataManager.createTable(tablePath, tableDescriptor, tableAssignment, request.isIgnoreIfExists());
 
         return CompletableFuture.completedFuture(new CreateTableResponse());
     }
@@ -301,8 +292,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // override set num-precreate for auto-partition table with multi-level partition keys
         if (newDescriptor.getPartitionKeys().size() > 1
                 && "true".equals(properties.get(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key()))
-                && !properties.containsKey(
-                        ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key())) {
+                && !properties.containsKey(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key())) {
             Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());
             // disable precreate partitions for multi-level partitions.
             newProperties.put(ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.key(), "0");
@@ -310,26 +300,23 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
 
         // override the datalake format if the table hasn't set it and the cluster configured
-        if (dataLakeFormat != null
-                && !properties.containsKey(ConfigOptions.TABLE_DATALAKE_FORMAT.key())) {
+        if (dataLakeFormat != null && !properties.containsKey(ConfigOptions.TABLE_DATALAKE_FORMAT.key())) {
             newDescriptor = newDescriptor.withDataLakeFormat(dataLakeFormat);
         }
 
         // lake table can only be enabled when the cluster configures datalake format
         boolean dataLakeEnabled = isDataLakeEnabled(tableDescriptor);
         if (dataLakeEnabled && dataLakeFormat == null) {
-            throw new InvalidTableException(
-                    String.format(
-                            "'%s' is enabled for the table, but the Fluss cluster doesn't enable datalake tables.",
-                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+            throw new InvalidTableException(String.format(
+                    "'%s' is enabled for the table, but the Fluss cluster doesn't enable datalake tables.",
+                    ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
         }
 
         return newDescriptor;
     }
 
     private boolean isDataLakeEnabled(TableDescriptor tableDescriptor) {
-        String dataLakeEnabledValue =
-                tableDescriptor.getProperties().get(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
+        String dataLakeEnabledValue = tableDescriptor.getProperties().get(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
         return Boolean.parseBoolean(dataLakeEnabledValue);
     }
 
@@ -349,8 +336,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     @Override
-    public CompletableFuture<CreatePartitionResponse> createPartition(
-            CreatePartitionRequest request) {
+    public CompletableFuture<CreatePartitionResponse> createPartition(CreatePartitionRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
         if (authorizer != null) {
             authorizer.authorize(
@@ -362,8 +348,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         CreatePartitionResponse response = new CreatePartitionResponse();
         TableRegistration table = metadataManager.getTableRegistration(tablePath);
         if (!table.isPartitioned()) {
-            throw new TableNotPartitionedException(
-                    "Only partitioned table support create partition.");
+            throw new TableNotPartitionedException("Only partitioned table support create partition.");
         }
 
         // first, validate the partition spec, and get resolved partition spec.
@@ -376,17 +361,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         int replicaFactor = table.getTableConfig().getReplicationFactor();
         TabletServerInfo[] servers = metadataCache.getLiveServers();
         Map<Integer, BucketAssignment> bucketAssignments =
-                generateAssignment(table.bucketCount, replicaFactor, servers)
-                        .getBucketAssignments();
-        PartitionAssignment partitionAssignment =
-                new PartitionAssignment(table.tableId, bucketAssignments);
+                generateAssignment(table.bucketCount, replicaFactor, servers).getBucketAssignments();
+        PartitionAssignment partitionAssignment = new PartitionAssignment(table.tableId, bucketAssignments);
 
         metadataManager.createPartition(
-                tablePath,
-                table.tableId,
-                partitionAssignment,
-                partitionToCreate,
-                request.isIgnoreIfNotExists());
+                tablePath, table.tableId, partitionAssignment, partitionToCreate, request.isIgnoreIfNotExists());
         return CompletableFuture.completedFuture(response);
     }
 
@@ -403,8 +382,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         DropPartitionResponse response = new DropPartitionResponse();
         TableRegistration table = metadataManager.getTableRegistration(tablePath);
         if (!table.isPartitioned()) {
-            throw new TableNotPartitionedException(
-                    "Only partitioned table support drop partition.");
+            throw new TableNotPartitionedException("Only partitioned table support drop partition.");
         }
 
         // first, validate the partition spec.
@@ -423,43 +401,33 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         Session session = currentSession();
 
         AccessContextEvent<MetadataResponse> metadataResponseAccessContextEvent =
-                new AccessContextEvent<>(
-                        ctx ->
-                                makeMetadataResponse(
-                                        request,
-                                        listenerName,
-                                        session,
-                                        authorizer,
-                                        metadataCache,
-                                        (tablePath) -> getTableMetadata(ctx, tablePath),
-                                        ctx::getPhysicalTablePath,
-                                        (physicalTablePath) ->
-                                                getPartitionMetadata(ctx, physicalTablePath)));
+                new AccessContextEvent<>(ctx -> makeMetadataResponse(
+                        request,
+                        listenerName,
+                        session,
+                        authorizer,
+                        metadataCache,
+                        (tablePath) -> getTableMetadata(ctx, tablePath),
+                        ctx::getPhysicalTablePath,
+                        (physicalTablePath) -> getPartitionMetadata(ctx, physicalTablePath)));
         eventManagerSupplier.get().put(metadataResponseAccessContextEvent);
         return metadataResponseAccessContextEvent.getResultFuture();
     }
 
     public CompletableFuture<AdjustIsrResponse> adjustIsr(AdjustIsrRequest request) {
         CompletableFuture<AdjustIsrResponse> response = new CompletableFuture<>();
-        eventManagerSupplier
-                .get()
-                .put(new AdjustIsrReceivedEvent(getAdjustIsrData(request), response));
+        eventManagerSupplier.get().put(new AdjustIsrReceivedEvent(getAdjustIsrData(request), response));
         return response;
     }
 
     @Override
-    public CompletableFuture<CommitKvSnapshotResponse> commitKvSnapshot(
-            CommitKvSnapshotRequest request) {
+    public CompletableFuture<CommitKvSnapshotResponse> commitKvSnapshot(CommitKvSnapshotRequest request) {
         CompletableFuture<CommitKvSnapshotResponse> response = new CompletableFuture<>();
         // parse completed snapshot from request
         byte[] completedSnapshotBytes = request.getCompletedSnapshot();
-        CompletedSnapshot completedSnapshot =
-                CompletedSnapshotJsonSerde.fromJson(completedSnapshotBytes);
-        CommitKvSnapshotData commitKvSnapshotData =
-                new CommitKvSnapshotData(
-                        completedSnapshot,
-                        request.getCoordinatorEpoch(),
-                        request.getBucketLeaderEpoch());
+        CompletedSnapshot completedSnapshot = CompletedSnapshotJsonSerde.fromJson(completedSnapshotBytes);
+        CommitKvSnapshotData commitKvSnapshotData = new CommitKvSnapshotData(
+                completedSnapshot, request.getCoordinatorEpoch(), request.getBucketLeaderEpoch());
         eventManagerSupplier.get().put(new CommitKvSnapshotEvent(commitKvSnapshotData, response));
         return response;
     }
@@ -470,9 +438,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         CompletableFuture<CommitRemoteLogManifestResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
-                .put(
-                        new CommitRemoteLogManifestEvent(
-                                getCommitRemoteLogManifestData(request), response));
+                .put(new CommitRemoteLogManifestEvent(getCommitRemoteLogManifestData(request), response));
         return response;
     }
 
@@ -502,15 +468,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         CompletableFuture<CommitLakeTableSnapshotResponse> response = new CompletableFuture<>();
         eventManagerSupplier
                 .get()
-                .put(
-                        new CommitLakeTableSnapshotEvent(
-                                getCommitLakeTableSnapshotData(request), response));
+                .put(new CommitLakeTableSnapshotEvent(getCommitLakeTableSnapshotData(request), response));
         return response;
     }
 
     @Override
-    public CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(
-            LakeTieringHeartbeatRequest request) {
+    public CompletableFuture<LakeTieringHeartbeatResponse> lakeTieringHeartbeat(LakeTieringHeartbeatRequest request) {
         LakeTieringHeartbeatResponse heartbeatResponse = new LakeTieringHeartbeatResponse();
         int currentCoordinatorEpoch = coordinatorEpochSupplier.get();
         heartbeatResponse.setCoordinatorEpoch(currentCoordinatorEpoch);
@@ -521,8 +484,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     heartbeatResponse.addFailedTableResp().setTableId(failedTable.getTableId());
             try {
                 validateHeartbeatRequest(failedTable, currentCoordinatorEpoch);
-                lakeTableTieringManager.reportTieringFail(
-                        failedTable.getTableId(), failedTable.getTieringEpoch());
+                lakeTableTieringManager.reportTieringFail(failedTable.getTableId(), failedTable.getTieringEpoch());
             } catch (Throwable e) {
                 pbHeartbeatRespForTable.setError(ApiError.fromThrowable(e).toErrorResponse());
             }
@@ -547,8 +509,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     heartbeatResponse.addFinishedTableResp().setTableId(finishTable.getTableId());
             try {
                 validateHeartbeatRequest(finishTable, currentCoordinatorEpoch);
-                lakeTableTieringManager.finishTableTiering(
-                        finishTable.getTableId(), finishTable.getTieringEpoch());
+                lakeTableTieringManager.finishTableTiering(finishTable.getTableId(), finishTable.getTieringEpoch());
             } catch (Throwable e) {
                 pbHeartbeatRespForTable.setError(ApiError.fromThrowable(e).toErrorResponse());
             }
@@ -567,15 +528,11 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return CompletableFuture.completedFuture(heartbeatResponse);
     }
 
-    private void validateHeartbeatRequest(
-            PbHeartbeatReqForTable heartbeatReqForTable, int currentEpoch) {
+    private void validateHeartbeatRequest(PbHeartbeatReqForTable heartbeatReqForTable, int currentEpoch) {
         if (heartbeatReqForTable.getCoordinatorEpoch() != currentEpoch) {
-            throw new InvalidCoordinatorException(
-                    String.format(
-                            "The coordinator epoch %s in request is not match current coordinator epoch %d for table %d.",
-                            heartbeatReqForTable.getCoordinatorEpoch(),
-                            currentEpoch,
-                            heartbeatReqForTable.getTableId()));
+            throw new InvalidCoordinatorException(String.format(
+                    "The coordinator epoch %s in request is not match current coordinator epoch %d for table %d.",
+                    heartbeatReqForTable.getCoordinatorEpoch(), currentEpoch, heartbeatReqForTable.getTableId()));
         }
     }
 
@@ -589,21 +546,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             // https://github.com/apache/fluss/issues/483
             // get table assignment from zk.
             bucketMetadataList =
-                    getTableMetadataFromZk(
-                            zkClient, tablePath, tableInfo.getTableId(), tableInfo.isPartitioned());
+                    getTableMetadataFromZk(zkClient, tablePath, tableInfo.getTableId(), tableInfo.isPartitioned());
         } else {
             // get table assignment from coordinatorContext.
-            bucketMetadataList =
-                    getBucketMetadataFromContext(
-                            ctx, tableId, null, ctx.getTableAssignment(tableId));
+            bucketMetadataList = getBucketMetadataFromContext(ctx, tableId, null, ctx.getTableAssignment(tableId));
         }
         return new TableMetadata(tableInfo, bucketMetadataList);
     }
 
-    private PartitionMetadata getPartitionMetadata(
-            CoordinatorContext ctx, PhysicalTablePath partitionPath) {
-        TablePath tablePath =
-                new TablePath(partitionPath.getDatabaseName(), partitionPath.getTableName());
+    private PartitionMetadata getPartitionMetadata(CoordinatorContext ctx, PhysicalTablePath partitionPath) {
+        TablePath tablePath = new TablePath(partitionPath.getDatabaseName(), partitionPath.getTableName());
         String partitionName = partitionPath.getPartitionName();
         long tableId = ctx.getTableIdByPath(tablePath);
         if (tableId == TableInfo.UNKNOWN_TABLE_ID) {
@@ -614,15 +566,12 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             Optional<Long> partitionIdOpt = ctx.getPartitionId(partitionPath);
             if (partitionIdOpt.isPresent()) {
                 long partitionId = partitionIdOpt.get();
-                List<BucketMetadata> bucketMetadataList =
-                        getBucketMetadataFromContext(
-                                ctx,
-                                tableId,
-                                partitionId,
-                                ctx.getPartitionAssignment(
-                                        new TablePartition(tableId, partitionId)));
-                return new PartitionMetadata(
-                        tableId, partitionName, partitionId, bucketMetadataList);
+                List<BucketMetadata> bucketMetadataList = getBucketMetadataFromContext(
+                        ctx,
+                        tableId,
+                        partitionId,
+                        ctx.getPartitionAssignment(new TablePartition(tableId, partitionId)));
+                return new PartitionMetadata(tableId, partitionName, partitionId, bucketMetadataList);
             } else {
                 return getPartitionMetadataFromZk(partitionPath, zkClient);
             }
@@ -635,19 +584,14 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             @Nullable Long partitionId,
             Map<Integer, List<Integer>> tableAssigment) {
         List<BucketMetadata> bucketMetadataList = new ArrayList<>();
-        tableAssigment.forEach(
-                (bucketId, serverIds) -> {
-                    TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
-                    Optional<LeaderAndIsr> optLeaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket);
-                    Integer leader = optLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
-                    BucketMetadata bucketMetadata =
-                            new BucketMetadata(
-                                    bucketId,
-                                    leader,
-                                    ctx.getBucketLeaderEpoch(tableBucket),
-                                    serverIds);
-                    bucketMetadataList.add(bucketMetadata);
-                });
+        tableAssigment.forEach((bucketId, serverIds) -> {
+            TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
+            Optional<LeaderAndIsr> optLeaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket);
+            Integer leader = optLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
+            BucketMetadata bucketMetadata =
+                    new BucketMetadata(bucketId, leader, ctx.getBucketLeaderEpoch(tableBucket), serverIds);
+            bucketMetadataList.add(bucketMetadata);
+        });
         return bucketMetadataList;
     }
 }

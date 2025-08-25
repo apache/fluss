@@ -79,12 +79,12 @@ public class RemoteLogManifestJsonSerde
         for (RemoteLogSegment remoteLogSegment : manifest.getRemoteLogSegmentList()) {
             generator.writeStartObject();
             generator.writeStringField(
-                    REMOTE_LOG_SEGMENT_ID_FIELD, remoteLogSegment.remoteLogSegmentId().toString());
+                    REMOTE_LOG_SEGMENT_ID_FIELD,
+                    remoteLogSegment.remoteLogSegmentId().toString());
             generator.writeNumberField(START_OFFSET_FIELD, remoteLogSegment.remoteLogStartOffset());
             generator.writeNumberField(END_OFFSET_FIELD, remoteLogSegment.remoteLogEndOffset());
             generator.writeNumberField(MAX_TIMESTAMP_FIELD, remoteLogSegment.maxTimestamp());
-            generator.writeNumberField(
-                    SEGMENT_SIZE_IN_BYTES_FIELD, remoteLogSegment.segmentSizeInBytes());
+            generator.writeNumberField(SEGMENT_SIZE_IN_BYTES_FIELD, remoteLogSegment.segmentSizeInBytes());
             generator.writeEndObject();
         }
         generator.writeEndArray();
@@ -100,8 +100,7 @@ public class RemoteLogManifestJsonSerde
         if (partitionNameNode == null) {
             physicalTablePath = PhysicalTablePath.of(databaseName, tableName, null);
         } else {
-            physicalTablePath =
-                    PhysicalTablePath.of(databaseName, tableName, partitionNameNode.asText());
+            physicalTablePath = PhysicalTablePath.of(databaseName, tableName, partitionNameNode.asText());
         }
 
         long tableId = node.get(TABLE_ID_FIELD).asLong();
@@ -114,21 +113,21 @@ public class RemoteLogManifestJsonSerde
         List<RemoteLogSegment> snapshotEntries = new ArrayList<>();
         while (entriesJson.hasNext()) {
             JsonNode entryJson = entriesJson.next();
-            String remoteLogSegmentId = entryJson.get(REMOTE_LOG_SEGMENT_ID_FIELD).asText();
+            String remoteLogSegmentId =
+                    entryJson.get(REMOTE_LOG_SEGMENT_ID_FIELD).asText();
             long startOffset = entryJson.get(START_OFFSET_FIELD).asLong();
             long endOffset = entryJson.get(END_OFFSET_FIELD).asLong();
             long maxTimestamp = entryJson.get(MAX_TIMESTAMP_FIELD).asLong();
             int segmentSizeInBytes = entryJson.get(SEGMENT_SIZE_IN_BYTES_FIELD).asInt();
-            snapshotEntries.add(
-                    RemoteLogSegment.Builder.builder()
-                            .physicalTablePath(physicalTablePath)
-                            .tableBucket(tableBucket)
-                            .remoteLogSegmentId(UUID.fromString(remoteLogSegmentId))
-                            .remoteLogStartOffset(startOffset)
-                            .remoteLogEndOffset(endOffset)
-                            .maxTimestamp(maxTimestamp)
-                            .segmentSizeInBytes(segmentSizeInBytes)
-                            .build());
+            snapshotEntries.add(RemoteLogSegment.Builder.builder()
+                    .physicalTablePath(physicalTablePath)
+                    .tableBucket(tableBucket)
+                    .remoteLogSegmentId(UUID.fromString(remoteLogSegmentId))
+                    .remoteLogStartOffset(startOffset)
+                    .remoteLogEndOffset(endOffset)
+                    .maxTimestamp(maxTimestamp)
+                    .segmentSizeInBytes(segmentSizeInBytes)
+                    .build());
         }
 
         return new RemoteLogManifest(physicalTablePath, tableBucket, snapshotEntries);

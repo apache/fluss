@@ -131,8 +131,7 @@ public class EndiannessAccessChecksTest {
 
                 segment.putFloat(pos, val);
                 float r = segment.getFloatBigEndian(pos);
-                float reversed =
-                        Float.intBitsToFloat(Integer.reverseBytes(Float.floatToRawIntBits(r)));
+                float reversed = Float.intBitsToFloat(Integer.reverseBytes(Float.floatToRawIntBits(r)));
                 assertThat(reversed).isCloseTo(val, offset(0.0f));
 
                 segment.putFloatBigEndian(pos, val);
@@ -153,14 +152,12 @@ public class EndiannessAccessChecksTest {
 
                 segment.putDouble(pos, val);
                 double r = segment.getDoubleBigEndian(pos);
-                double reversed =
-                        Double.longBitsToDouble(Long.reverseBytes(Double.doubleToRawLongBits(r)));
+                double reversed = Double.longBitsToDouble(Long.reverseBytes(Double.doubleToRawLongBits(r)));
                 assertThat(reversed).isCloseTo(val, Offset.offset(0.0d));
 
                 segment.putDoubleBigEndian(pos, val);
                 r = segment.getDouble(pos);
-                reversed =
-                        Double.longBitsToDouble(Long.reverseBytes(Double.doubleToRawLongBits(r)));
+                reversed = Double.longBitsToDouble(Long.reverseBytes(Double.doubleToRawLongBits(r)));
                 assertThat(reversed).isCloseTo(val, Offset.offset(0.0d));
             }
         }

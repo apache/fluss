@@ -62,13 +62,17 @@ public class PrometheusReporter implements MetricReporter {
     private static final Pattern UNALLOWED_CHAR_PATTERN = Pattern.compile("[^a-zA-Z0-9:_]");
     private static final CharacterFilter CHARACTER_FILTER = PrometheusReporter::replaceInvalidChars;
 
-    @VisibleForTesting static final char SCOPE_SEPARATOR = '_';
-    @VisibleForTesting static final String SCOPE_PREFIX = "fluss" + SCOPE_SEPARATOR;
+    @VisibleForTesting
+    static final char SCOPE_SEPARATOR = '_';
 
-    private final Map<String, AbstractMap.SimpleImmutableEntry<Collector, Integer>>
-            collectorsWithCountByMetricName = new HashMap<>();
+    @VisibleForTesting
+    static final String SCOPE_PREFIX = "fluss" + SCOPE_SEPARATOR;
 
-    @VisibleForTesting final CollectorRegistry registry = new CollectorRegistry(true);
+    private final Map<String, AbstractMap.SimpleImmutableEntry<Collector, Integer>> collectorsWithCountByMetricName =
+            new HashMap<>();
+
+    @VisibleForTesting
+    final CollectorRegistry registry = new CollectorRegistry(true);
 
     private HTTPServer httpServer;
     private int port;
@@ -92,8 +96,7 @@ public class PrometheusReporter implements MetricReporter {
 
         if (httpServer == null) {
             throw new RuntimeException(
-                    "Could not start PrometheusReporter HTTP server on any configured port. Ports: "
-                            + ports);
+                    "Could not start PrometheusReporter HTTP server on any configured port. Ports: " + ports);
         }
     }
 
@@ -139,13 +142,7 @@ public class PrometheusReporter implements MetricReporter {
                 collector = collectorWithCount.getKey();
                 count = collectorWithCount.getValue();
             } else {
-                collector =
-                        createCollector(
-                                metric,
-                                dimensionKeys,
-                                dimensionValues,
-                                scopedMetricName,
-                                helpString);
+                collector = createCollector(metric, dimensionKeys, dimensionValues, scopedMetricName, helpString);
                 try {
                     collector.register(registry);
                 } catch (Exception e) {
@@ -159,10 +156,7 @@ public class PrometheusReporter implements MetricReporter {
     }
 
     private static String getScopedName(String metricName, MetricGroup group) {
-        return SCOPE_PREFIX
-                + getLogicalScope(group)
-                + SCOPE_SEPARATOR
-                + CHARACTER_FILTER.filterCharacters(metricName);
+        return SCOPE_PREFIX + getLogicalScope(group) + SCOPE_SEPARATOR + CHARACTER_FILTER.filterCharacters(metricName);
     }
 
     private Collector createCollector(
@@ -176,21 +170,15 @@ public class PrometheusReporter implements MetricReporter {
             case GAUGE:
             case COUNTER:
             case METER:
-                collector =
-                        io.prometheus.client.Gauge.build()
-                                .name(scopedMetricName)
-                                .help(helpString)
-                                .labelNames(toArray(dimensionKeys))
-                                .create();
+                collector = io.prometheus.client.Gauge.build()
+                        .name(scopedMetricName)
+                        .help(helpString)
+                        .labelNames(toArray(dimensionKeys))
+                        .create();
                 break;
             case HISTOGRAM:
-                collector =
-                        new HistogramSummaryProxy(
-                                (Histogram) metric,
-                                scopedMetricName,
-                                helpString,
-                                dimensionKeys,
-                                dimensionValues);
+                collector = new HistogramSummaryProxy(
+                        (Histogram) metric, scopedMetricName, helpString, dimensionKeys, dimensionValues);
                 break;
             default:
                 LOG.warn(
@@ -212,8 +200,7 @@ public class PrometheusReporter implements MetricReporter {
                         .setChild(gaugeFrom((Counter) metric), toArray(dimensionValues));
                 break;
             case METER:
-                ((io.prometheus.client.Gauge) collector)
-                        .setChild(gaugeFrom((Meter) metric), toArray(dimensionValues));
+                ((io.prometheus.client.Gauge) collector).setChild(gaugeFrom((Meter) metric), toArray(dimensionValues));
                 break;
             case HISTOGRAM:
                 ((HistogramSummaryProxy) collector).addChild((Histogram) metric, dimensionValues);
@@ -268,8 +255,7 @@ public class PrometheusReporter implements MetricReporter {
                 collectorsWithCountByMetricName.remove(scopedMetricName);
             } else {
                 collectorsWithCountByMetricName.put(
-                        scopedMetricName,
-                        new AbstractMap.SimpleImmutableEntry<>(collector, count - 1));
+                        scopedMetricName, new AbstractMap.SimpleImmutableEntry<>(collector, count - 1));
             }
         }
     }
@@ -353,15 +339,10 @@ public class PrometheusReporter implements MetricReporter {
             // whose snapshot's values array only holds a sample of recent values).
 
             List<MetricFamilySamples.Sample> samples = new LinkedList<>();
-            for (Map.Entry<List<String>, Histogram> labelValuesToHistogram :
-                    histogramsByLabelValues.entrySet()) {
-                addSamples(
-                        labelValuesToHistogram.getKey(),
-                        labelValuesToHistogram.getValue(),
-                        samples);
+            for (Map.Entry<List<String>, Histogram> labelValuesToHistogram : histogramsByLabelValues.entrySet()) {
+                addSamples(labelValuesToHistogram.getKey(), labelValuesToHistogram.getValue(), samples);
             }
-            return Collections.singletonList(
-                    new MetricFamilySamples(metricName, Type.SUMMARY, helpString, samples));
+            return Collections.singletonList(new MetricFamilySamples(metricName, Type.SUMMARY, helpString, samples));
         }
 
         void addChild(final Histogram histogram, final List<String> labelValues) {
@@ -376,20 +357,18 @@ public class PrometheusReporter implements MetricReporter {
                 final List<String> labelValues,
                 final Histogram histogram,
                 final List<MetricFamilySamples.Sample> samples) {
-            samples.add(
-                    new MetricFamilySamples.Sample(
-                            metricName + "_count",
-                            labelNamesWithQuantile.subList(0, labelNamesWithQuantile.size() - 1),
-                            labelValues,
-                            histogram.getCount()));
+            samples.add(new MetricFamilySamples.Sample(
+                    metricName + "_count",
+                    labelNamesWithQuantile.subList(0, labelNamesWithQuantile.size() - 1),
+                    labelValues,
+                    histogram.getCount()));
             final HistogramStatistics statistics = histogram.getStatistics();
             for (final Double quantile : QUANTILES) {
-                samples.add(
-                        new MetricFamilySamples.Sample(
-                                metricName,
-                                labelNamesWithQuantile,
-                                addToList(labelValues, quantile.toString()),
-                                statistics.getQuantile(quantile)));
+                samples.add(new MetricFamilySamples.Sample(
+                        metricName,
+                        labelNamesWithQuantile,
+                        addToList(labelValues, quantile.toString()),
+                        statistics.getQuantile(quantile)));
             }
         }
     }

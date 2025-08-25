@@ -68,19 +68,17 @@ public class DefaultSecurityTokenManager implements SecurityTokenManager {
     @Nullable
     private ScheduledFuture<?> tokensUpdateFuture;
 
-    public DefaultSecurityTokenManager(
-            Configuration configuration, SecurityTokenProvider securityTokenProvider) {
+    public DefaultSecurityTokenManager(Configuration configuration, SecurityTokenProvider securityTokenProvider) {
         this.securityTokenProvider = securityTokenProvider;
-        this.tokensRenewalTimeRatio =
-                configuration.get(FILESYSTEM_SECURITY_TOKEN_RENEWAL_TIME_RATIO);
-        this.renewalRetryBackoffPeriod =
-                configuration.get(FILESYSTEM_SECURITY_TOKEN_RENEWAL_RETRY_BACKOFF).toMillis();
+        this.tokensRenewalTimeRatio = configuration.get(FILESYSTEM_SECURITY_TOKEN_RENEWAL_TIME_RATIO);
+        this.renewalRetryBackoffPeriod = configuration
+                .get(FILESYSTEM_SECURITY_TOKEN_RENEWAL_RETRY_BACKOFF)
+                .toMillis();
 
         this.securityTokenReceiverRepository = new SecurityTokenReceiverRepository();
 
         this.scheduledExecutor =
-                Executors.newScheduledThreadPool(
-                        1, new ExecutorThreadFactory("periodic-token-renew-scheduler"));
+                Executors.newScheduledThreadPool(1, new ExecutorThreadFactory("periodic-token-renew-scheduler"));
     }
 
     @Override
@@ -105,12 +103,10 @@ public class DefaultSecurityTokenManager implements SecurityTokenManager {
             }
 
             if (nextRenewal.isPresent()) {
-                long renewalDelay =
-                        calculateRenewalDelay(Clock.systemDefaultZone(), nextRenewal.get());
+                long renewalDelay = calculateRenewalDelay(Clock.systemDefaultZone(), nextRenewal.get());
                 synchronized (tokensUpdateFutureLock) {
                     tokensUpdateFuture =
-                            scheduledExecutor.schedule(
-                                    this::startTokensUpdate, renewalDelay, TimeUnit.MILLISECONDS);
+                            scheduledExecutor.schedule(this::startTokensUpdate, renewalDelay, TimeUnit.MILLISECONDS);
                 }
                 LOG.info("Tokens update task started with {} ms delay", renewalDelay);
             } else {
@@ -119,16 +115,10 @@ public class DefaultSecurityTokenManager implements SecurityTokenManager {
             }
         } catch (Exception e) {
             synchronized (tokensUpdateFutureLock) {
-                tokensUpdateFuture =
-                        scheduledExecutor.schedule(
-                                this::startTokensUpdate,
-                                renewalRetryBackoffPeriod,
-                                TimeUnit.MILLISECONDS);
+                tokensUpdateFuture = scheduledExecutor.schedule(
+                        this::startTokensUpdate, renewalRetryBackoffPeriod, TimeUnit.MILLISECONDS);
             }
-            LOG.warn(
-                    "Failed to update tokens, will try again in {} ms",
-                    renewalRetryBackoffPeriod,
-                    e);
+            LOG.warn("Failed to update tokens, will try again in {} ms", renewalRetryBackoffPeriod, e);
         }
     }
 

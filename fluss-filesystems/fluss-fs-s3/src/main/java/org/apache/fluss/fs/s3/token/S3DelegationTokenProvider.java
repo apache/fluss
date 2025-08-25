@@ -70,13 +70,10 @@ public class S3DelegationTokenProvider {
     public ObtainedSecurityToken obtainSecurityToken() {
         LOG.info("Obtaining session credentials token with access key: {}", accessKey);
 
-        AWSSecurityTokenService stsClient =
-                AWSSecurityTokenServiceClientBuilder.standard()
-                        .withRegion(region)
-                        .withCredentials(
-                                new AWSStaticCredentialsProvider(
-                                        new BasicAWSCredentials(accessKey, secretKey)))
-                        .build();
+        AWSSecurityTokenService stsClient = AWSSecurityTokenServiceClientBuilder.standard()
+                .withRegion(region)
+                .withCredentials(new AWSStaticCredentialsProvider(new BasicAWSCredentials(accessKey, secretKey)))
+                .build();
         GetSessionTokenResult sessionTokenResult = stsClient.getSessionToken();
         Credentials credentials = sessionTokenResult.getCredentials();
 
@@ -90,11 +87,8 @@ public class S3DelegationTokenProvider {
     }
 
     private byte[] toJson(Credentials credentials) {
-        org.apache.fluss.fs.token.Credentials flussCredentials =
-                new org.apache.fluss.fs.token.Credentials(
-                        credentials.getAccessKeyId(),
-                        credentials.getSecretAccessKey(),
-                        credentials.getSessionToken());
+        org.apache.fluss.fs.token.Credentials flussCredentials = new org.apache.fluss.fs.token.Credentials(
+                credentials.getAccessKeyId(), credentials.getSecretAccessKey(), credentials.getSessionToken());
         return CredentialsJsonSerde.toJson(flussCredentials);
     }
 }

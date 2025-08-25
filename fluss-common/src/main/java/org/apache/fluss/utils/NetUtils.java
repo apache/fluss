@@ -177,8 +177,7 @@ public class NetUtils {
      * @return Set of ports from the range definition
      * @throws NumberFormatException If an invalid string is passed.
      */
-    public static Iterator<Integer> getPortRangeFromString(String rangeDefinition)
-            throws NumberFormatException {
+    public static Iterator<Integer> getPortRangeFromString(String rangeDefinition) throws NumberFormatException {
         final String[] ranges = rangeDefinition.trim().split(",");
 
         UnionIterator<Integer> iterators = new UnionIterator<>();
@@ -192,10 +191,7 @@ public class NetUtils {
                 final int port = Integer.parseInt(range);
                 if (!isValidHostPort(port)) {
                     throw new IllegalConfigurationException(
-                            "Invalid port configuration. Port must be between 0"
-                                    + "and 65535, but was "
-                                    + port
-                                    + ".");
+                            "Invalid port configuration. Port must be between 0" + "and 65535, but was " + port + ".");
                 }
                 rangeIterator = Collections.singleton(Integer.valueOf(range)).iterator();
             } else {
@@ -203,38 +199,31 @@ public class NetUtils {
                 final int start = Integer.parseInt(range.substring(0, dashIdx));
                 if (!isValidHostPort(start)) {
                     throw new IllegalConfigurationException(
-                            "Invalid port configuration. Port must be between 0"
-                                    + "and 65535, but was "
-                                    + start
-                                    + ".");
+                            "Invalid port configuration. Port must be between 0" + "and 65535, but was " + start + ".");
                 }
                 final int end = Integer.parseInt(range.substring(dashIdx + 1));
                 if (!isValidHostPort(end)) {
                     throw new IllegalConfigurationException(
-                            "Invalid port configuration. Port must be between 0"
-                                    + "and 65535, but was "
-                                    + end
-                                    + ".");
+                            "Invalid port configuration. Port must be between 0" + "and 65535, but was " + end + ".");
                 }
-                rangeIterator =
-                        new Iterator<Integer>() {
-                            int i = start;
+                rangeIterator = new Iterator<Integer>() {
+                    int i = start;
 
-                            @Override
-                            public boolean hasNext() {
-                                return i <= end;
-                            }
+                    @Override
+                    public boolean hasNext() {
+                        return i <= end;
+                    }
 
-                            @Override
-                            public Integer next() {
-                                return i++;
-                            }
+                    @Override
+                    public Integer next() {
+                        return i++;
+                    }
 
-                            @Override
-                            public void remove() {
-                                throw new UnsupportedOperationException("Remove not supported");
-                            }
-                        };
+                    @Override
+                    public void remove() {
+                        throw new UnsupportedOperationException("Remove not supported");
+                    }
+                };
             }
             iterators.add(rangeIterator);
         }

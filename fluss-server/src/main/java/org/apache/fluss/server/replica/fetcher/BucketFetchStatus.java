@@ -38,11 +38,7 @@ public class BucketFetchStatus {
     private final long fetchOffset;
     private final @Nullable DelayedItem delayedItem;
 
-    public BucketFetchStatus(
-            long tableId,
-            TablePath tablePath,
-            long fetchOffset,
-            @Nullable DelayedItem delayedItem) {
+    public BucketFetchStatus(long tableId, TablePath tablePath, long fetchOffset, @Nullable DelayedItem delayedItem) {
         this.tableId = tableId;
         this.tablePath = tablePath;
         this.fetchOffset = fetchOffset;
@@ -73,9 +69,6 @@ public class BucketFetchStatus {
     public String toString() {
         return String.format(
                 "BucketFetchStatus(tableId=%s, tablePath=%s, fetchOffset=%d, delay=%s ms)",
-                tableId,
-                tablePath,
-                fetchOffset,
-                delayedItem == null ? 0 : delayedItem.getDelayMs());
+                tableId, tablePath, fetchOffset, delayedItem == null ? 0 : delayedItem.getDelayMs());
     }
 }

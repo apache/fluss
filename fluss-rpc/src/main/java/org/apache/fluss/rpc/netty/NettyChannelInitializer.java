@@ -49,9 +49,7 @@ public class NettyChannelInitializer extends ChannelInitializer<SocketChannel> {
     public void addFrameDecoder(SocketChannel ch, int maxFrameLength, int initialBytesToStrip) {
         ch.pipeline()
                 .addLast(
-                        "frameDecoder",
-                        new LengthFieldBasedFrameDecoder(
-                                maxFrameLength, 0, 4, 0, initialBytesToStrip));
+                        "frameDecoder", new LengthFieldBasedFrameDecoder(maxFrameLength, 0, 4, 0, initialBytesToStrip));
     }
 
     public void addIdleStateHandler(SocketChannel ch) {

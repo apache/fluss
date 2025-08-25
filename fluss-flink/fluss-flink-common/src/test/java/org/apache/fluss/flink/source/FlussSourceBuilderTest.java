@@ -40,7 +40,8 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
 
     @BeforeEach
     public void setup() throws Exception {
-        bootstrapServers = conn.getConfiguration().get(ConfigOptions.BOOTSTRAP_SERVERS).get(0);
+        bootstrapServers =
+                conn.getConfiguration().get(ConfigOptions.BOOTSTRAP_SERVERS).get(0);
 
         createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
     }
@@ -48,15 +49,14 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     @Test
     public void testBuildWithValidConfiguration() {
         // Given
-        FlussSource<TestRecord> source =
-                FlussSource.<TestRecord>builder()
-                        .setBootstrapServers(bootstrapServers)
-                        .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
-                        .setStartingOffsets(OffsetsInitializer.earliest())
-                        .setScanPartitionDiscoveryIntervalMs(1000L)
-                        .setDeserializationSchema(new TestDeserializationSchema())
-                        .build();
+        FlussSource<TestRecord> source = FlussSource.<TestRecord>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new TestDeserializationSchema())
+                .build();
 
         // Then
         assertThat(source).isNotNull();
@@ -65,15 +65,13 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     @Test
     public void testMissingBootstrapServers() {
         // Given
-        Executable executable =
-                () ->
-                        FlussSource.<TestRecord>builder()
-                                .setDatabase(DEFAULT_DB)
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
-                                .setStartingOffsets(OffsetsInitializer.earliest())
-                                .setScanPartitionDiscoveryIntervalMs(1000L)
-                                .setDeserializationSchema(new TestDeserializationSchema())
-                                .build();
+        Executable executable = () -> FlussSource.<TestRecord>builder()
+                .setDatabase(DEFAULT_DB)
+                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new TestDeserializationSchema())
+                .build();
 
         // Then
         assertThatThrownBy(executable::execute)
@@ -84,16 +82,14 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     @Test
     public void testEmptyBootstrapServers() {
         // Given
-        Executable executable =
-                () ->
-                        FlussSource.<TestRecord>builder()
-                                .setBootstrapServers("")
-                                .setDatabase(DEFAULT_DB)
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
-                                .setStartingOffsets(OffsetsInitializer.earliest())
-                                .setScanPartitionDiscoveryIntervalMs(1000L)
-                                .setDeserializationSchema(new TestDeserializationSchema())
-                                .build();
+        Executable executable = () -> FlussSource.<TestRecord>builder()
+                .setBootstrapServers("")
+                .setDatabase(DEFAULT_DB)
+                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new TestDeserializationSchema())
+                .build();
 
         assertThatThrownBy(executable::execute)
                 .isInstanceOf(RuntimeException.class)
@@ -104,15 +100,13 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     @Test
     public void testMissingDatabase() {
         // Given
-        Executable executable =
-                () ->
-                        FlussSource.<TestRecord>builder()
-                                .setBootstrapServers(bootstrapServers)
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
-                                .setStartingOffsets(OffsetsInitializer.earliest())
-                                .setScanPartitionDiscoveryIntervalMs(1000L)
-                                .setDeserializationSchema(new TestDeserializationSchema())
-                                .build();
+        Executable executable = () -> FlussSource.<TestRecord>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new TestDeserializationSchema())
+                .build();
 
         // Then
         assertThatThrownBy(executable::execute)
@@ -123,16 +117,14 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     @Test
     public void testEmptyDatabase() {
         // Given
-        Executable executable =
-                () ->
-                        FlussSource.<TestRecord>builder()
-                                .setBootstrapServers(bootstrapServers)
-                                .setDatabase("")
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
-                                .setStartingOffsets(OffsetsInitializer.earliest())
-                                .setScanPartitionDiscoveryIntervalMs(1000L)
-                                .setDeserializationSchema(new TestDeserializationSchema())
-                                .build();
+        Executable executable = () -> FlussSource.<TestRecord>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase("")
+                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new TestDeserializationSchema())
+                .build();
 
         // Then
         assertThatThrownBy(executable::execute)
@@ -143,15 +135,13 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     @Test
     public void testMissingTable() {
         // Given
-        Executable executable =
-                () ->
-                        FlussSource.<TestRecord>builder()
-                                .setBootstrapServers(bootstrapServers)
-                                .setDatabase(DEFAULT_DB)
-                                .setStartingOffsets(OffsetsInitializer.earliest())
-                                .setScanPartitionDiscoveryIntervalMs(1000L)
-                                .setDeserializationSchema(new TestDeserializationSchema())
-                                .build();
+        Executable executable = () -> FlussSource.<TestRecord>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new TestDeserializationSchema())
+                .build();
 
         // Then
         assertThatThrownBy(executable::execute)
@@ -162,16 +152,14 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     @Test
     public void testEmptyTable() {
         // Given
-        Executable executable =
-                () ->
-                        FlussSource.<TestRecord>builder()
-                                .setBootstrapServers(bootstrapServers)
-                                .setDatabase(DEFAULT_DB)
-                                .setTable("")
-                                .setStartingOffsets(OffsetsInitializer.earliest())
-                                .setScanPartitionDiscoveryIntervalMs(1000L)
-                                .setDeserializationSchema(new TestDeserializationSchema())
-                                .build();
+        Executable executable = () -> FlussSource.<TestRecord>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable("")
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new TestDeserializationSchema())
+                .build();
 
         // Then
         assertThatThrownBy(executable::execute)
@@ -182,14 +170,13 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     @Test
     public void testMissingScanPartitionDiscoveryInterval() {
         // Given
-        FlussSource<TestRecord> source =
-                FlussSource.<TestRecord>builder()
-                        .setBootstrapServers(bootstrapServers)
-                        .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
-                        .setStartingOffsets(OffsetsInitializer.earliest())
-                        .setDeserializationSchema(new TestDeserializationSchema())
-                        .build();
+        FlussSource<TestRecord> source = FlussSource.<TestRecord>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setDeserializationSchema(new TestDeserializationSchema())
+                .build();
 
         // Then
         assertThat(source.scanPartitionDiscoveryIntervalMs).isEqualTo(10000L);
@@ -198,14 +185,13 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     @Test
     public void testMissingOffsetsInitializer() {
         // Given
-        FlussSource<TestRecord> source =
-                FlussSource.<TestRecord>builder()
-                        .setBootstrapServers(bootstrapServers)
-                        .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
-                        .setScanPartitionDiscoveryIntervalMs(1000L)
-                        .setDeserializationSchema(new TestDeserializationSchema())
-                        .build();
+        FlussSource<TestRecord> source = FlussSource.<TestRecord>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new TestDeserializationSchema())
+                .build();
 
         assertThat(source.getOffsetsInitializer().getClass())
                 .isEqualTo(OffsetsInitializer.full().getClass());
@@ -214,15 +200,13 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     @Test
     public void testMissingDeserializationSchema() {
         // Given
-        Executable executable =
-                () ->
-                        FlussSource.<TestRecord>builder()
-                                .setBootstrapServers(bootstrapServers)
-                                .setDatabase(DEFAULT_DB)
-                                .setTable(DEFAULT_TABLE_PATH.getTableName())
-                                .setStartingOffsets(OffsetsInitializer.earliest())
-                                .setScanPartitionDiscoveryIntervalMs(10000L)
-                                .build();
+        Executable executable = () -> FlussSource.<TestRecord>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(10000L)
+                .build();
 
         // Then
         assertThatThrownBy(executable::execute)
@@ -233,16 +217,15 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     @Test
     public void testSetProjectedFields() {
         // Given
-        FlussSource<TestRecord> source =
-                FlussSource.<TestRecord>builder()
-                        .setBootstrapServers(bootstrapServers)
-                        .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
-                        .setStartingOffsets(OffsetsInitializer.earliest())
-                        .setScanPartitionDiscoveryIntervalMs(1000L)
-                        .setDeserializationSchema(new TestDeserializationSchema())
-                        .setProjectedFields("id", "name")
-                        .build();
+        FlussSource<TestRecord> source = FlussSource.<TestRecord>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new TestDeserializationSchema())
+                .setProjectedFields("id", "name")
+                .build();
 
         // Then
         assertThat(source).isNotNull();
@@ -251,16 +234,15 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     @Test
     public void testProjectedFields() {
         // When
-        FlussSource<TestRecord> source =
-                FlussSource.<TestRecord>builder()
-                        .setBootstrapServers(bootstrapServers)
-                        .setDatabase(DEFAULT_DB)
-                        .setTable(DEFAULT_TABLE_PATH.getTableName())
-                        .setStartingOffsets(OffsetsInitializer.earliest())
-                        .setScanPartitionDiscoveryIntervalMs(1000L)
-                        .setDeserializationSchema(new TestDeserializationSchema())
-                        .setProjectedFields("id", "name")
-                        .build();
+        FlussSource<TestRecord> source = FlussSource.<TestRecord>builder()
+                .setBootstrapServers(bootstrapServers)
+                .setDatabase(DEFAULT_DB)
+                .setTable(DEFAULT_TABLE_PATH.getTableName())
+                .setStartingOffsets(OffsetsInitializer.earliest())
+                .setScanPartitionDiscoveryIntervalMs(1000L)
+                .setDeserializationSchema(new TestDeserializationSchema())
+                .setProjectedFields("id", "name")
+                .build();
 
         // Then
         assertThat(source).isNotNull();
@@ -286,8 +268,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
     }
 
     // Test deserialization schema for tests
-    private static class TestDeserializationSchema
-            implements FlussDeserializationSchema<TestRecord> {
+    private static class TestDeserializationSchema implements FlussDeserializationSchema<TestRecord> {
 
         @Override
         public void open(InitializationContext context) throws Exception {}

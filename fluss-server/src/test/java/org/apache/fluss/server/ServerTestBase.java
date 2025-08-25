@@ -60,9 +60,7 @@ public abstract class ServerTestBase {
     @BeforeAll
     static void baseBeforeAll() {
         zookeeperClient =
-                ZOO_KEEPER_EXTENSION_WRAPPER
-                        .getCustomExtension()
-                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+                ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getZooKeeperClient(NOPErrorHandler.INSTANCE);
     }
 
     @Test
@@ -93,22 +91,19 @@ public abstract class ServerTestBase {
     void registerServerNodeWhenZkClientReInitSession() throws Exception {
         ServerBase server = getServer();
         // get the EPHEMERAL node of server
-        String path =
-                server instanceof CoordinatorServer
-                        ? CoordinatorZNode.path()
-                        : ServerIdZNode.path(server.conf.getInt(ConfigOptions.TABLET_SERVER_ID));
+        String path = server instanceof CoordinatorServer
+                ? CoordinatorZNode.path()
+                : ServerIdZNode.path(server.conf.getInt(ConfigOptions.TABLET_SERVER_ID));
 
         long oldNodeCtime = zookeeperClient.getStat(path).get().getCtime();
         // let's restart zk to mock zk client re-init session
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().restart();
-        retry(
-                Duration.ofMinutes(2),
-                () -> {
-                    Optional<Stat> optionalStat = zookeeperClient.getStat(path);
-                    assertThat(optionalStat).isPresent();
-                    Stat stat = optionalStat.get();
-                    assertThat(stat.getCtime()).isGreaterThan(oldNodeCtime);
-                });
+        retry(Duration.ofMinutes(2), () -> {
+            Optional<Stat> optionalStat = zookeeperClient.getStat(path);
+            assertThat(optionalStat).isPresent();
+            Stat stat = optionalStat.get();
+            assertThat(stat.getCtime()).isGreaterThan(oldNodeCtime);
+        });
     }
 
     /** Create a configuration with Zookeeper address setting. */
@@ -117,8 +112,7 @@ public abstract class ServerTestBase {
         configuration.setString(
                 ConfigOptions.ZOOKEEPER_ADDRESS,
                 ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().getConnectString());
-        configuration.setString(
-                ConfigOptions.BIND_LISTENERS, "CLIENT://localhost:0,FLUSS://localhost:0");
+        configuration.setString(ConfigOptions.BIND_LISTENERS, "CLIENT://localhost:0,FLUSS://localhost:0");
         configuration.setString(ConfigOptions.ADVERTISED_LISTENERS, "CLIENT://198.168.0.1:100");
         configuration.set(ConfigOptions.REMOTE_DATA_DIR, "/tmp/fluss/remote-data");
 
@@ -129,16 +123,13 @@ public abstract class ServerTestBase {
         return configuration;
     }
 
-    protected void verifyEndpoint(
-            List<Endpoint> registeredEndpoints, List<Endpoint> bindEndpoints) {
-        Endpoint internal =
-                bindEndpoints.stream()
-                        .filter(e -> e.getListenerName().equals("FLUSS"))
-                        .findFirst()
-                        .get();
+    protected void verifyEndpoint(List<Endpoint> registeredEndpoints, List<Endpoint> bindEndpoints) {
+        Endpoint internal = bindEndpoints.stream()
+                .filter(e -> e.getListenerName().equals("FLUSS"))
+                .findFirst()
+                .get();
         List<Endpoint> expectedEndpoints =
-                Endpoint.fromListenersString(
-                        internal.listenerString() + ", CLIENT://198.168.0.1:100");
+                Endpoint.fromListenersString(internal.listenerString() + ", CLIENT://198.168.0.1:100");
         assertThat(registeredEndpoints).containsExactlyInAnyOrderElementsOf(expectedEndpoints);
     }
 

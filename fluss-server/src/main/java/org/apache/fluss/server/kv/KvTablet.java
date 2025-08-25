@@ -160,8 +160,7 @@ public final class KvTablet {
             RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo)
             throws IOException {
-        Tuple2<PhysicalTablePath, TableBucket> tablePathAndBucket =
-                FlussPaths.parseTabletDir(kvTabletDir);
+        Tuple2<PhysicalTablePath, TableBucket> tablePathAndBucket = FlussPaths.parseTabletDir(kvTabletDir);
         return create(
                 tablePathAndBucket.f0,
                 tablePathAndBucket.f1,
@@ -206,15 +205,10 @@ public final class KvTablet {
                 arrowCompressionInfo);
     }
 
-    private static RocksDBKv buildRocksDBKv(Configuration configuration, File kvDir)
-            throws IOException {
-        RocksDBResourceContainer rocksDBResourceContainer =
-                new RocksDBResourceContainer(configuration, kvDir);
+    private static RocksDBKv buildRocksDBKv(Configuration configuration, File kvDir) throws IOException {
+        RocksDBResourceContainer rocksDBResourceContainer = new RocksDBResourceContainer(configuration, kvDir);
         RocksDBKvBuilder rocksDBKvBuilder =
-                new RocksDBKvBuilder(
-                        kvDir,
-                        rocksDBResourceContainer,
-                        rocksDBResourceContainer.getColumnOptions());
+                new RocksDBKvBuilder(kvDir, rocksDBResourceContainer, rocksDBResourceContainer.getColumnOptions());
         return rocksDBKvBuilder.build();
     }
 
@@ -247,12 +241,9 @@ public final class KvTablet {
         MetricGroup metricGroup = bucketMetricGroup.addGroup("kv");
 
         // about pre-write buffer.
-        metricGroup.meter(
-                MetricNames.KV_PRE_WRITE_BUFFER_FLUSH_RATE,
-                new MeterView(kvPreWriteBuffer.getFlushCount()));
+        metricGroup.meter(MetricNames.KV_PRE_WRITE_BUFFER_FLUSH_RATE, new MeterView(kvPreWriteBuffer.getFlushCount()));
         metricGroup.histogram(
-                MetricNames.KV_PRE_WRITE_BUFFER_FLUSH_LATENCY_MS,
-                kvPreWriteBuffer.getFlushLatencyHistogram());
+                MetricNames.KV_PRE_WRITE_BUFFER_FLUSH_LATENCY_MS, kvPreWriteBuffer.getFlushLatencyHistogram());
         metricGroup.meter(
                 MetricNames.KV_PRE_WRITE_BUFFER_TRUNCATE_AS_DUPLICATED_RATE,
                 new MeterView(kvPreWriteBuffer.getTruncateAsDuplicatedCount()));
@@ -267,130 +258,114 @@ public final class KvTablet {
      * @param kvRecords the kv records to put into
      * @param targetColumns the target columns to put, null if put all columns
      */
-    public LogAppendInfo putAsLeader(KvRecordBatch kvRecords, @Nullable int[] targetColumns)
-            throws Exception {
-        return inWriteLock(
-                kvLock,
-                () -> {
-                    rocksDBKv.checkIfRocksDBClosed();
-                    short schemaId = kvRecords.schemaId();
-                    RowMerger currentMerger = rowMerger.configureTargetColumns(targetColumns);
-                    RowType rowType = schema.getRowType();
-                    WalBuilder walBuilder = createWalBuilder(schemaId, rowType);
-                    walBuilder.setWriterState(kvRecords.writerId(), kvRecords.batchSequence());
-                    // get offset to track the offset corresponded to the kv record
-                    long logEndOffsetOfPrevBatch = logTablet.localLogEndOffset();
-                    DataType[] fieldTypes = rowType.getChildren().toArray(new DataType[0]);
-                    try {
-                        long logOffset = logEndOffsetOfPrevBatch;
+    public LogAppendInfo putAsLeader(KvRecordBatch kvRecords, @Nullable int[] targetColumns) throws Exception {
+        return inWriteLock(kvLock, () -> {
+            rocksDBKv.checkIfRocksDBClosed();
+            short schemaId = kvRecords.schemaId();
+            RowMerger currentMerger = rowMerger.configureTargetColumns(targetColumns);
+            RowType rowType = schema.getRowType();
+            WalBuilder walBuilder = createWalBuilder(schemaId, rowType);
+            walBuilder.setWriterState(kvRecords.writerId(), kvRecords.batchSequence());
+            // get offset to track the offset corresponded to the kv record
+            long logEndOffsetOfPrevBatch = logTablet.localLogEndOffset();
+            DataType[] fieldTypes = rowType.getChildren().toArray(new DataType[0]);
+            try {
+                long logOffset = logEndOffsetOfPrevBatch;
 
-                        // TODO: reuse the read context and decoder
-                        KvRecordBatch.ReadContext readContext =
-                                KvRecordReadContext.createReadContext(kvFormat, fieldTypes);
-                        ValueDecoder valueDecoder =
-                                new ValueDecoder(readContext.getRowDecoder(schemaId));
-                        for (KvRecord kvRecord : kvRecords.records(readContext)) {
-                            byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
-                            KvPreWriteBuffer.Key key = KvPreWriteBuffer.Key.of(keyBytes);
-                            if (kvRecord.getRow() == null) {
-                                if (!rowMerger.supportsDelete()) {
-                                    // skip delete rows if the merger doesn't support yet
-                                    continue;
-                                }
-                                // it's for deletion
-                                byte[] oldValue = getFromBufferOrKv(key);
-                                if (oldValue == null) {
-                                    // there might be large amount of such deletion, so we don't log
-                                    LOG.debug(
-                                            "The specific key can't be found in kv tablet although the kv record is for deletion, "
-                                                    + "ignore it directly as it doesn't exist in the kv tablet yet.");
-                                } else {
-                                    BinaryRow oldRow = valueDecoder.decodeValue(oldValue).row;
-                                    BinaryRow newRow = currentMerger.delete(oldRow);
-                                    // if newRow is null, it means the row should be deleted
-                                    if (newRow == null) {
-                                        walBuilder.append(ChangeType.DELETE, oldRow);
-                                        kvPreWriteBuffer.delete(key, logOffset++);
-                                    } else {
-                                        // otherwise, it's a partial update, should produce -U,+U
-                                        walBuilder.append(ChangeType.UPDATE_BEFORE, oldRow);
-                                        walBuilder.append(ChangeType.UPDATE_AFTER, newRow);
-                                        kvPreWriteBuffer.put(
-                                                key,
-                                                ValueEncoder.encodeValue(schemaId, newRow),
-                                                logOffset + 1);
-                                        logOffset += 2;
-                                    }
-                                }
+                // TODO: reuse the read context and decoder
+                KvRecordBatch.ReadContext readContext = KvRecordReadContext.createReadContext(kvFormat, fieldTypes);
+                ValueDecoder valueDecoder = new ValueDecoder(readContext.getRowDecoder(schemaId));
+                for (KvRecord kvRecord : kvRecords.records(readContext)) {
+                    byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
+                    KvPreWriteBuffer.Key key = KvPreWriteBuffer.Key.of(keyBytes);
+                    if (kvRecord.getRow() == null) {
+                        if (!rowMerger.supportsDelete()) {
+                            // skip delete rows if the merger doesn't support yet
+                            continue;
+                        }
+                        // it's for deletion
+                        byte[] oldValue = getFromBufferOrKv(key);
+                        if (oldValue == null) {
+                            // there might be large amount of such deletion, so we don't log
+                            LOG.debug(
+                                    "The specific key can't be found in kv tablet although the kv record is for deletion, "
+                                            + "ignore it directly as it doesn't exist in the kv tablet yet.");
+                        } else {
+                            BinaryRow oldRow = valueDecoder.decodeValue(oldValue).row;
+                            BinaryRow newRow = currentMerger.delete(oldRow);
+                            // if newRow is null, it means the row should be deleted
+                            if (newRow == null) {
+                                walBuilder.append(ChangeType.DELETE, oldRow);
+                                kvPreWriteBuffer.delete(key, logOffset++);
                             } else {
-                                // upsert operation
-                                byte[] oldValue = getFromBufferOrKv(key);
-                                // it's update
-                                if (oldValue != null) {
-                                    BinaryRow oldRow = valueDecoder.decodeValue(oldValue).row;
-                                    BinaryRow newRow =
-                                            currentMerger.merge(oldRow, kvRecord.getRow());
-                                    if (newRow == oldRow) {
-                                        // newRow is the same to oldRow, means nothing
-                                        // happens (no update/delete), and input should be ignored
-                                        continue;
-                                    }
-                                    walBuilder.append(ChangeType.UPDATE_BEFORE, oldRow);
-                                    walBuilder.append(ChangeType.UPDATE_AFTER, newRow);
-                                    // logOffset is for -U, logOffset + 1 is for +U, we need to use
-                                    // the log offset for +U
-                                    kvPreWriteBuffer.put(
-                                            key,
-                                            ValueEncoder.encodeValue(schemaId, newRow),
-                                            logOffset + 1);
-                                    logOffset += 2;
-                                } else {
-                                    // it's insert
-                                    // TODO: we should add guarantees that all non-specified columns
-                                    //  of the input row are set to null.
-                                    BinaryRow newRow = kvRecord.getRow();
-                                    walBuilder.append(ChangeType.INSERT, newRow);
-                                    kvPreWriteBuffer.put(
-                                            key,
-                                            ValueEncoder.encodeValue(schemaId, newRow),
-                                            logOffset++);
-                                }
+                                // otherwise, it's a partial update, should produce -U,+U
+                                walBuilder.append(ChangeType.UPDATE_BEFORE, oldRow);
+                                walBuilder.append(ChangeType.UPDATE_AFTER, newRow);
+                                kvPreWriteBuffer.put(key, ValueEncoder.encodeValue(schemaId, newRow), logOffset + 1);
+                                logOffset += 2;
                             }
                         }
-
-                        // There will be a situation that these batches of kvRecordBatch have not
-                        // generated any CDC logs, for example, when client attempts to delete
-                        // some non-existent keys or MergeEngineType set to FIRST_ROW. In this case,
-                        // we cannot simply return, as doing so would cause a
-                        // OutOfOrderSequenceException problem. Therefore, here we will build an
-                        // empty batch with lastLogOffset to 0L as the baseLogOffset is 0L. As doing
-                        // that, the logOffsetDelta in logRecordBatch will be set to 0L. So, we will
-                        // put a batch into file with recordCount 0 and offset plus 1L, it will
-                        // update the batchSequence corresponding to the writerId and also increment
-                        // the CDC log offset by 1.
-                        LogAppendInfo logAppendInfo = logTablet.appendAsLeader(walBuilder.build());
-
-                        // if the batch is duplicated, we should truncate the kvPreWriteBuffer
-                        // already written.
-                        if (logAppendInfo.duplicated()) {
-                            kvPreWriteBuffer.truncateTo(
-                                    logEndOffsetOfPrevBatch, TruncateReason.DUPLICATED);
+                    } else {
+                        // upsert operation
+                        byte[] oldValue = getFromBufferOrKv(key);
+                        // it's update
+                        if (oldValue != null) {
+                            BinaryRow oldRow = valueDecoder.decodeValue(oldValue).row;
+                            BinaryRow newRow = currentMerger.merge(oldRow, kvRecord.getRow());
+                            if (newRow == oldRow) {
+                                // newRow is the same to oldRow, means nothing
+                                // happens (no update/delete), and input should be ignored
+                                continue;
+                            }
+                            walBuilder.append(ChangeType.UPDATE_BEFORE, oldRow);
+                            walBuilder.append(ChangeType.UPDATE_AFTER, newRow);
+                            // logOffset is for -U, logOffset + 1 is for +U, we need to use
+                            // the log offset for +U
+                            kvPreWriteBuffer.put(key, ValueEncoder.encodeValue(schemaId, newRow), logOffset + 1);
+                            logOffset += 2;
+                        } else {
+                            // it's insert
+                            // TODO: we should add guarantees that all non-specified columns
+                            //  of the input row are set to null.
+                            BinaryRow newRow = kvRecord.getRow();
+                            walBuilder.append(ChangeType.INSERT, newRow);
+                            kvPreWriteBuffer.put(key, ValueEncoder.encodeValue(schemaId, newRow), logOffset++);
                         }
-                        return logAppendInfo;
-                    } catch (Throwable t) {
-                        // While encounter error here, the CDC logs may fail writing to disk,
-                        // and the client probably will resend the batch. If we do not remove the
-                        // values generated by the erroneous batch from the kvPreWriteBuffer, the
-                        // retry-send batch will produce incorrect CDC logs.
-                        // TODO for some errors, the cdc logs may already be written to disk, for
-                        //  those errors, we should not truncate the kvPreWriteBuffer.
-                        kvPreWriteBuffer.truncateTo(logEndOffsetOfPrevBatch, TruncateReason.ERROR);
-                        throw t;
-                    } finally {
-                        // deallocate the memory and arrow writer used by the wal builder
-                        walBuilder.deallocate();
                     }
-                });
+                }
+
+                // There will be a situation that these batches of kvRecordBatch have not
+                // generated any CDC logs, for example, when client attempts to delete
+                // some non-existent keys or MergeEngineType set to FIRST_ROW. In this case,
+                // we cannot simply return, as doing so would cause a
+                // OutOfOrderSequenceException problem. Therefore, here we will build an
+                // empty batch with lastLogOffset to 0L as the baseLogOffset is 0L. As doing
+                // that, the logOffsetDelta in logRecordBatch will be set to 0L. So, we will
+                // put a batch into file with recordCount 0 and offset plus 1L, it will
+                // update the batchSequence corresponding to the writerId and also increment
+                // the CDC log offset by 1.
+                LogAppendInfo logAppendInfo = logTablet.appendAsLeader(walBuilder.build());
+
+                // if the batch is duplicated, we should truncate the kvPreWriteBuffer
+                // already written.
+                if (logAppendInfo.duplicated()) {
+                    kvPreWriteBuffer.truncateTo(logEndOffsetOfPrevBatch, TruncateReason.DUPLICATED);
+                }
+                return logAppendInfo;
+            } catch (Throwable t) {
+                // While encounter error here, the CDC logs may fail writing to disk,
+                // and the client probably will resend the batch. If we do not remove the
+                // values generated by the erroneous batch from the kvPreWriteBuffer, the
+                // retry-send batch will produce incorrect CDC logs.
+                // TODO for some errors, the cdc logs may already be written to disk, for
+                //  those errors, we should not truncate the kvPreWriteBuffer.
+                kvPreWriteBuffer.truncateTo(logEndOffsetOfPrevBatch, TruncateReason.ERROR);
+                throw t;
+            } finally {
+                // deallocate the memory and arrow writer used by the wal builder
+                walBuilder.deallocate();
+            }
+        });
     }
 
     private WalBuilder createWalBuilder(int schemaId, RowType rowType) throws Exception {
@@ -425,30 +400,25 @@ public final class KvTablet {
     public void flush(long exclusiveUpToLogOffset, FatalErrorHandler fatalErrorHandler) {
         // todo: need to introduce a backpressure mechanism
         // to avoid too much records in kvPreWriteBuffer
-        inWriteLock(
-                kvLock,
-                () -> {
-                    // when kv manager is closed which means kv tablet is already closed,
-                    // but the tablet server may still handle fetch log request from follower
-                    // as the tablet rpc service is closed asynchronously, then update the watermark
-                    // and then flush the pre-write buffer.
+        inWriteLock(kvLock, () -> {
+            // when kv manager is closed which means kv tablet is already closed,
+            // but the tablet server may still handle fetch log request from follower
+            // as the tablet rpc service is closed asynchronously, then update the watermark
+            // and then flush the pre-write buffer.
 
-                    // In such case, if the tablet is already closed, we won't flush pre-write
-                    // buffer, just warning it.
-                    if (isClosed) {
-                        LOG.warn(
-                                "The kv tablet for {} is already closed, ignore flushing kv pre-write buffer.",
-                                tableBucket);
-                    } else {
-                        try {
-                            kvPreWriteBuffer.flush(exclusiveUpToLogOffset);
-                            flushedLogOffset = exclusiveUpToLogOffset;
-                        } catch (Throwable t) {
-                            fatalErrorHandler.onFatalError(
-                                    new KvStorageException("Failed to flush kv pre-write buffer."));
-                        }
-                    }
-                });
+            // In such case, if the tablet is already closed, we won't flush pre-write
+            // buffer, just warning it.
+            if (isClosed) {
+                LOG.warn("The kv tablet for {} is already closed, ignore flushing kv pre-write buffer.", tableBucket);
+            } else {
+                try {
+                    kvPreWriteBuffer.flush(exclusiveUpToLogOffset);
+                    flushedLogOffset = exclusiveUpToLogOffset;
+                } catch (Throwable t) {
+                    fatalErrorHandler.onFatalError(new KvStorageException("Failed to flush kv pre-write buffer."));
+                }
+            }
+        });
     }
 
     /** put key,value,logOffset into pre-write buffer directly. */
@@ -482,30 +452,24 @@ public final class KvTablet {
     }
 
     public List<byte[]> multiGet(List<byte[]> keys) throws IOException {
-        return inReadLock(
-                kvLock,
-                () -> {
-                    rocksDBKv.checkIfRocksDBClosed();
-                    return rocksDBKv.multiGet(keys);
-                });
+        return inReadLock(kvLock, () -> {
+            rocksDBKv.checkIfRocksDBClosed();
+            return rocksDBKv.multiGet(keys);
+        });
     }
 
     public List<byte[]> prefixLookup(byte[] prefixKey) throws IOException {
-        return inReadLock(
-                kvLock,
-                () -> {
-                    rocksDBKv.checkIfRocksDBClosed();
-                    return rocksDBKv.prefixLookup(prefixKey);
-                });
+        return inReadLock(kvLock, () -> {
+            rocksDBKv.checkIfRocksDBClosed();
+            return rocksDBKv.prefixLookup(prefixKey);
+        });
     }
 
     public List<byte[]> limitScan(int limit) throws IOException {
-        return inReadLock(
-                kvLock,
-                () -> {
-                    rocksDBKv.checkIfRocksDBClosed();
-                    return rocksDBKv.limitScan(limit);
-                });
+        return inReadLock(kvLock, () -> {
+            rocksDBKv.checkIfRocksDBClosed();
+            return rocksDBKv.limitScan(limit);
+        });
     }
 
     public KvBatchWriter createKvBatchWriter() {
@@ -514,29 +478,25 @@ public final class KvTablet {
 
     public void close() throws Exception {
         LOG.info("close kv tablet {} for table {}.", tableBucket, physicalPath);
-        inWriteLock(
-                kvLock,
-                () -> {
-                    if (isClosed) {
-                        return;
-                    }
-                    if (rocksDBKv != null) {
-                        rocksDBKv.close();
-                    }
-                    isClosed = true;
-                });
+        inWriteLock(kvLock, () -> {
+            if (isClosed) {
+                return;
+            }
+            if (rocksDBKv != null) {
+                rocksDBKv.close();
+            }
+            isClosed = true;
+        });
     }
 
     /** Completely delete the kv directory and all contents form the file system with no delay. */
     public void drop() throws Exception {
-        inWriteLock(
-                kvLock,
-                () -> {
-                    // first close the kv.
-                    close();
-                    // then delete the directory.
-                    FileUtils.deleteDirectory(kvTabletDir);
-                });
+        inWriteLock(kvLock, () -> {
+            // first close the kv.
+            close();
+            // then delete the directory.
+            FileUtils.deleteDirectory(kvTabletDir);
+        });
     }
 
     public RocksIncrementalSnapshot createIncrementalSnapshot(

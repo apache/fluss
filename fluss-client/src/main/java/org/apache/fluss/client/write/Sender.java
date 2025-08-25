@@ -153,8 +153,7 @@ public class Sender implements Runnable {
             }
         }
 
-        LOG.debug(
-                "Beginning shutdown of Fluss log record write I/O thread, sending remaining records.");
+        LOG.debug("Beginning shutdown of Fluss log record write I/O thread, sending remaining records.");
 
         // okay we stopped accepting requests but there may still be requests in the accumulator or
         // waiting for acknowledgment, wait until these are completed.
@@ -239,8 +238,7 @@ public class Sender implements Runnable {
         }
 
         // get the list of batches prepare to send.
-        Map<Integer, List<ReadyWriteBatch>> batches =
-                accumulator.drain(clusterSnapshot, readyNodes, maxRequestSize);
+        Map<Integer, List<ReadyWriteBatch>> batches = accumulator.drain(clusterSnapshot, readyNodes, maxRequestSize);
 
         if (!batches.isEmpty()) {
             addToInflightBatches(batches);
@@ -263,8 +261,7 @@ public class Sender implements Runnable {
         }
     }
 
-    private void failBatch(
-            ReadyWriteBatch batch, Exception exception, boolean adjustBatchSequences) {
+    private void failBatch(ReadyWriteBatch batch, Exception exception, boolean adjustBatchSequences) {
         if (batch.writeBatch().completeExceptionally(exception)) {
             if (idempotenceManager.idempotenceEnabled()) {
                 try {
@@ -274,9 +271,7 @@ public class Sender implements Runnable {
                     // logic.
                     idempotenceManager.handleFailedBatch(batch, exception, adjustBatchSequences);
                 } catch (Exception e) {
-                    LOG.debug(
-                            "Encountered error when idempotence manager was handling a failed batch",
-                            e);
+                    LOG.debug("Encountered error when idempotence manager was handling a failed batch", e);
                 }
             }
             maybeRemoveAndDeallocateBatch(batch);
@@ -310,8 +305,7 @@ public class Sender implements Runnable {
                 && !batch.isDone()
                 && ((error.exception() instanceof RetriableException)
                         || (idempotenceManager.idempotenceEnabled()
-                                && idempotenceManager.canRetry(
-                                        batch, readyWriteBatch.tableBucket(), error)));
+                                && idempotenceManager.canRetry(batch, readyWriteBatch.tableBucket(), error)));
     }
 
     private void maybeRemoveAndDeallocateBatch(ReadyWriteBatch readyWriteBatch) {
@@ -333,11 +327,9 @@ public class Sender implements Runnable {
 
     private void addToInflightBatches(List<ReadyWriteBatch> batches) {
         synchronized (inFlightBatchesLock) {
-            batches.forEach(
-                    batch ->
-                            inFlightBatches
-                                    .computeIfAbsent(batch.tableBucket(), k -> new ArrayList<>())
-                                    .add(batch));
+            batches.forEach(batch -> inFlightBatches
+                    .computeIfAbsent(batch.tableBucket(), k -> new ArrayList<>())
+                    .add(batch));
         }
     }
 
@@ -358,42 +350,36 @@ public class Sender implements Runnable {
         // group record batch by table id.
         final Map<TableBucket, ReadyWriteBatch> recordsByBucket = new HashMap<>();
         Map<Long, List<ReadyWriteBatch>> writeBatchByTable = new HashMap<>();
-        batches.forEach(
-                batch -> {
-                    // keep the batch before ack.
-                    recordsByBucket.put(batch.tableBucket(), batch);
-                    writeBatchByTable
-                            .computeIfAbsent(
-                                    batch.tableBucket().getTableId(), k -> new ArrayList<>())
-                            .add(batch);
-                });
+        batches.forEach(batch -> {
+            // keep the batch before ack.
+            recordsByBucket.put(batch.tableBucket(), batch);
+            writeBatchByTable
+                    .computeIfAbsent(batch.tableBucket().getTableId(), k -> new ArrayList<>())
+                    .add(batch);
+        });
 
         TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(destination);
         if (gateway == null) {
             handleWriteRequestException(
-                    new LeaderNotAvailableException(
-                            "Server " + destination + " is not found in metadata cache."),
+                    new LeaderNotAvailableException("Server " + destination + " is not found in metadata cache."),
                     recordsByBucket);
         } else {
-            writeBatchByTable.forEach(
-                    (tableId, writeBatches) -> {
-                        TableInfo tableInfo = metadataUpdater.getTableInfoOrElseThrow(tableId);
-                        if (tableInfo.hasPrimaryKey()) {
-                            sendPutKvRequestAndHandleResponse(
-                                    gateway,
-                                    makePutKvRequest(
-                                            tableId, acks, maxRequestTimeoutMs, writeBatches),
-                                    tableId,
-                                    recordsByBucket);
-                        } else {
-                            sendProduceLogRequestAndHandleResponse(
-                                    gateway,
-                                    makeProduceLogRequest(
-                                            tableId, acks, maxRequestTimeoutMs, writeBatches),
-                                    tableId,
-                                    recordsByBucket);
-                        }
-                    });
+            writeBatchByTable.forEach((tableId, writeBatches) -> {
+                TableInfo tableInfo = metadataUpdater.getTableInfoOrElseThrow(tableId);
+                if (tableInfo.hasPrimaryKey()) {
+                    sendPutKvRequestAndHandleResponse(
+                            gateway,
+                            makePutKvRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),
+                            tableId,
+                            recordsByBucket);
+                } else {
+                    sendProduceLogRequestAndHandleResponse(
+                            gateway,
+                            makeProduceLogRequest(tableId, acks, maxRequestTimeoutMs, writeBatches),
+                            tableId,
+                            recordsByBucket);
+                }
+            });
         }
     }
 
@@ -403,18 +389,14 @@ public class Sender implements Runnable {
             long tableId,
             Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
         long startTime = System.currentTimeMillis();
-        gateway.produceLog(request)
-                .whenComplete(
-                        (produceLogResponse, e) -> {
-                            writerMetricGroup.setSendLatencyInMs(
-                                    System.currentTimeMillis() - startTime);
-                            if (e != null) {
-                                handleWriteRequestException(e, recordsByBucket);
-                            } else {
-                                handleProduceLogResponse(
-                                        produceLogResponse, tableId, recordsByBucket);
-                            }
-                        });
+        gateway.produceLog(request).whenComplete((produceLogResponse, e) -> {
+            writerMetricGroup.setSendLatencyInMs(System.currentTimeMillis() - startTime);
+            if (e != null) {
+                handleWriteRequestException(e, recordsByBucket);
+            } else {
+                handleProduceLogResponse(produceLogResponse, tableId, recordsByBucket);
+            }
+        });
     }
 
     private void sendPutKvRequestAndHandleResponse(
@@ -423,37 +405,28 @@ public class Sender implements Runnable {
             long tableId,
             Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
         long startTime = System.currentTimeMillis();
-        gateway.putKv(request)
-                .whenComplete(
-                        (putKvResponse, e) -> {
-                            writerMetricGroup.setSendLatencyInMs(
-                                    System.currentTimeMillis() - startTime);
-                            if (e != null) {
-                                handleWriteRequestException(e, recordsByBucket);
-                            } else {
-                                handlePutKvResponse(putKvResponse, tableId, recordsByBucket);
-                            }
-                        });
+        gateway.putKv(request).whenComplete((putKvResponse, e) -> {
+            writerMetricGroup.setSendLatencyInMs(System.currentTimeMillis() - startTime);
+            if (e != null) {
+                handleWriteRequestException(e, recordsByBucket);
+            } else {
+                handlePutKvResponse(putKvResponse, tableId, recordsByBucket);
+            }
+        });
     }
 
     private void handleProduceLogResponse(
-            ProduceLogResponse response,
-            long tableId,
-            Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
+            ProduceLogResponse response, long tableId, Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
         Set<PhysicalTablePath> invalidMetadataTablesSet = new HashSet<>();
         for (PbProduceLogRespForBucket logRespForBucket : response.getBucketsRespsList()) {
-            TableBucket tb =
-                    new TableBucket(
-                            tableId,
-                            logRespForBucket.hasPartitionId()
-                                    ? logRespForBucket.getPartitionId()
-                                    : null,
-                            logRespForBucket.getBucketId());
+            TableBucket tb = new TableBucket(
+                    tableId,
+                    logRespForBucket.hasPartitionId() ? logRespForBucket.getPartitionId() : null,
+                    logRespForBucket.getBucketId());
             ReadyWriteBatch writeBatch = recordsByBucket.get(tb);
             if (logRespForBucket.hasErrorCode()) {
                 Set<PhysicalTablePath> invalidMetadataTables =
-                        handleWriteBatchException(
-                                writeBatch, ApiError.fromErrorMessage(logRespForBucket));
+                        handleWriteBatchException(writeBatch, ApiError.fromErrorMessage(logRespForBucket));
                 invalidMetadataTablesSet.addAll(invalidMetadataTables);
             } else {
                 completeBatch(writeBatch);
@@ -463,21 +436,17 @@ public class Sender implements Runnable {
     }
 
     private void handlePutKvResponse(
-            PutKvResponse putKvResponse,
-            long tableId,
-            Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
+            PutKvResponse putKvResponse, long tableId, Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
         Set<PhysicalTablePath> invalidMetadataTablesSet = new HashSet<>();
         for (PbPutKvRespForBucket respForBucket : putKvResponse.getBucketsRespsList()) {
-            TableBucket tb =
-                    new TableBucket(
-                            tableId,
-                            respForBucket.hasPartitionId() ? respForBucket.getPartitionId() : null,
-                            respForBucket.getBucketId());
+            TableBucket tb = new TableBucket(
+                    tableId,
+                    respForBucket.hasPartitionId() ? respForBucket.getPartitionId() : null,
+                    respForBucket.getBucketId());
             ReadyWriteBatch writeBatch = recordsByBucket.get(tb);
             if (respForBucket.hasErrorCode()) {
                 Set<PhysicalTablePath> invalidMetadataTables =
-                        handleWriteBatchException(
-                                writeBatch, ApiError.fromErrorMessage(respForBucket));
+                        handleWriteBatchException(writeBatch, ApiError.fromErrorMessage(respForBucket));
                 invalidMetadataTablesSet.addAll(invalidMetadataTables);
             } else {
                 completeBatch(writeBatch);
@@ -486,8 +455,7 @@ public class Sender implements Runnable {
         metadataUpdater.invalidPhysicalTableBucketMeta(invalidMetadataTablesSet);
     }
 
-    private void handleWriteRequestException(
-            Throwable t, Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
+    private void handleWriteRequestException(Throwable t, Map<TableBucket, ReadyWriteBatch> recordsByBucket) {
         ApiError error = ApiError.fromThrowable(t);
 
         // if batch failed because of retrievable exception, we need to retry send all those
@@ -502,8 +470,7 @@ public class Sender implements Runnable {
     }
 
     /** Handle the exception and return a set of tables for which the metadata is invalid. */
-    private Set<PhysicalTablePath> handleWriteBatchException(
-            ReadyWriteBatch readyWriteBatch, ApiError error) {
+    private Set<PhysicalTablePath> handleWriteBatchException(ReadyWriteBatch readyWriteBatch, ApiError error) {
         Set<PhysicalTablePath> invalidMetadataTables = new HashSet<>();
         WriteBatch writeBatch = readyWriteBatch.writeBatch();
         if (canRetry(readyWriteBatch, error.error())) {
@@ -526,12 +493,10 @@ public class Sender implements Runnable {
                         writeBatch.batchSequence());
                 reEnqueueBatch(readyWriteBatch);
             } else {
-                Exception exception =
-                        Errors.UNKNOWN_WRITER_ID_EXCEPTION.exception(
-                                String.format(
-                                        "Attempted to retry sending a batch but the writer id has changed from %s "
-                                                + "to %s in the mean time. This batch will be dropped.",
-                                        writeBatch.writerId(), idempotenceManager.writerId()));
+                Exception exception = Errors.UNKNOWN_WRITER_ID_EXCEPTION.exception(String.format(
+                        "Attempted to retry sending a batch but the writer id has changed from %s "
+                                + "to %s in the mean time. This batch will be dropped.",
+                        writeBatch.writerId(), idempotenceManager.writerId()));
                 failBatch(readyWriteBatch, exception, false);
             }
 
@@ -568,25 +533,19 @@ public class Sender implements Runnable {
     }
 
     private void updateWriterMetrics(Map<Integer, List<ReadyWriteBatch>> batches) {
-        batches.values()
-                .forEach(
-                        batchList -> {
-                            for (ReadyWriteBatch readyWriteBatch : batchList) {
-                                WriteBatch batch = readyWriteBatch.writeBatch();
-                                // update table metrics.
-                                int recordCount = batch.getRecordCount();
-                                writerMetricGroup.recordsSendTotal().inc(recordCount);
-                                writerMetricGroup.setBatchQueueTimeMs(batch.getQueueTimeMs());
-                                writerMetricGroup
-                                        .bytesSendTotal()
-                                        .inc(batch.estimatedSizeInBytes());
+        batches.values().forEach(batchList -> {
+            for (ReadyWriteBatch readyWriteBatch : batchList) {
+                WriteBatch batch = readyWriteBatch.writeBatch();
+                // update table metrics.
+                int recordCount = batch.getRecordCount();
+                writerMetricGroup.recordsSendTotal().inc(recordCount);
+                writerMetricGroup.setBatchQueueTimeMs(batch.getQueueTimeMs());
+                writerMetricGroup.bytesSendTotal().inc(batch.estimatedSizeInBytes());
 
-                                writerMetricGroup.recordPerBatch().update(recordCount);
-                                writerMetricGroup
-                                        .bytesPerBatch()
-                                        .update(batch.estimatedSizeInBytes());
-                            }
-                        });
+                writerMetricGroup.recordPerBatch().update(recordCount);
+                writerMetricGroup.bytesPerBatch().update(batch.estimatedSizeInBytes());
+            }
+        });
     }
 
     /** Closes the sender without sending out any pending messages. */

@@ -69,68 +69,56 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     @Test
     void testSanityCheck() throws Exception {
         TablePath tablePath1 = TablePath.of(DEFAULT_DB, "test1");
-        Schema schema1 =
-                Schema.newBuilder()
-                        .primaryKey("id")
-                        .column("id", DataTypes.BIGINT())
-                        .column("name", DataTypes.STRING())
-                        .column("age", DataTypes.INT())
-                        .build();
+        Schema schema1 = Schema.newBuilder()
+                .primaryKey("id")
+                .column("id", DataTypes.BIGINT())
+                .column("name", DataTypes.STRING())
+                .column("age", DataTypes.INT())
+                .build();
         TableDescriptor descriptor1 = TableDescriptor.builder().schema(schema1).build();
         createTable(tablePath1, descriptor1);
 
-        assertThatThrownBy(
-                        () ->
-                                new FlinkSourceSplitReader(
-                                        clientConf,
-                                        tablePath1,
-                                        DataTypes.ROW(
-                                                DataTypes.FIELD("id", DataTypes.BIGINT()),
-                                                DataTypes.FIELD("name", DataTypes.STRING()),
-                                                DataTypes.FIELD("age", DataTypes.INT())),
-                                        null,
-                                        createMockSourceReaderMetrics(),
-                                        null))
+        assertThatThrownBy(() -> new FlinkSourceSplitReader(
+                        clientConf,
+                        tablePath1,
+                        DataTypes.ROW(
+                                DataTypes.FIELD("id", DataTypes.BIGINT()),
+                                DataTypes.FIELD("name", DataTypes.STRING()),
+                                DataTypes.FIELD("age", DataTypes.INT())),
+                        null,
+                        createMockSourceReaderMetrics(),
+                        null))
                 .isInstanceOf(ValidationException.class)
-                .hasMessage(
-                        "The Flink query schema is not matched to Fluss table schema. \n"
-                                + "Flink query schema: ROW<`id` BIGINT, `name` STRING, `age` INT>\n"
-                                + "Fluss table schema: ROW<`id` BIGINT NOT NULL, `name` STRING, `age` INT>");
+                .hasMessage("The Flink query schema is not matched to Fluss table schema. \n"
+                        + "Flink query schema: ROW<`id` BIGINT, `name` STRING, `age` INT>\n"
+                        + "Fluss table schema: ROW<`id` BIGINT NOT NULL, `name` STRING, `age` INT>");
 
-        assertThatThrownBy(
-                        () ->
-                                new FlinkSourceSplitReader(
-                                        clientConf,
-                                        tablePath1,
-                                        DataTypes.ROW(
-                                                DataTypes.FIELD(
-                                                        "id", DataTypes.BIGINT().copy(false)),
-                                                DataTypes.FIELD("name", DataTypes.STRING())),
-                                        new int[] {1, 0},
-                                        createMockSourceReaderMetrics(),
-                                        null))
+        assertThatThrownBy(() -> new FlinkSourceSplitReader(
+                        clientConf,
+                        tablePath1,
+                        DataTypes.ROW(
+                                DataTypes.FIELD("id", DataTypes.BIGINT().copy(false)),
+                                DataTypes.FIELD("name", DataTypes.STRING())),
+                        new int[] {1, 0},
+                        createMockSourceReaderMetrics(),
+                        null))
                 .isInstanceOf(ValidationException.class)
-                .hasMessage(
-                        "The Flink query schema is not matched to Fluss table schema. \n"
-                                + "Flink query schema: ROW<`id` BIGINT NOT NULL, `name` STRING>\n"
-                                + "Fluss table schema: ROW<`name` STRING, `id` BIGINT NOT NULL> (projection [1, 0])");
+                .hasMessage("The Flink query schema is not matched to Fluss table schema. \n"
+                        + "Flink query schema: ROW<`id` BIGINT NOT NULL, `name` STRING>\n"
+                        + "Fluss table schema: ROW<`name` STRING, `id` BIGINT NOT NULL> (projection [1, 0])");
     }
 
     @Test
     void testHandleHybridSnapshotLogSplitChangesAndFetch() throws Exception {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "test-only-snapshot-table");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
-        try (FlinkSourceSplitReader splitReader =
-                createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.getRowType())) {
+        try (FlinkSourceSplitReader splitReader = createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.getRowType())) {
 
             // no any records
             List<SourceSplitBase> hybridSnapshotLogSplits = new ArrayList<>();
             Map<String, List<RecordAndPos>> expectedRecords = new HashMap<>();
             assignSplitsAndFetchUntilRetrieveRecords(
-                    splitReader,
-                    hybridSnapshotLogSplits,
-                    expectedRecords,
-                    DEFAULT_PK_TABLE_SCHEMA.getRowType());
+                    splitReader, hybridSnapshotLogSplits, expectedRecords, DEFAULT_PK_TABLE_SCHEMA.getRowType());
 
             // now, write some records into the table
             Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 10);
@@ -143,20 +131,17 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
             expectedRecords = constructRecords(rows);
 
             assignSplitsAndFetchUntilRetrieveRecords(
-                    splitReader,
-                    hybridSnapshotLogSplits,
-                    expectedRecords,
-                    DEFAULT_PK_TABLE_SCHEMA.getRowType());
+                    splitReader, hybridSnapshotLogSplits, expectedRecords, DEFAULT_PK_TABLE_SCHEMA.getRowType());
         }
     }
 
-    private Map<String, List<RecordAndPos>> constructRecords(
-            Map<TableBucket, List<InternalRow>> rows) {
+    private Map<String, List<RecordAndPos>> constructRecords(Map<TableBucket, List<InternalRow>> rows) {
         Map<String, List<RecordAndPos>> expectedRecords = new HashMap<>();
         for (Map.Entry<TableBucket, List<InternalRow>> bucketRowsEntry : rows.entrySet()) {
             TableBucket tb = bucketRowsEntry.getKey();
             String splitId = toHybridSnapshotLogSplitId(tb);
-            List<RecordAndPos> records = new ArrayList<>(bucketRowsEntry.getValue().size());
+            List<RecordAndPos> records =
+                    new ArrayList<>(bucketRowsEntry.getValue().size());
             List<InternalRow> kvRows = bucketRowsEntry.getValue();
             int currentReadRecords = 1;
             for (InternalRow row : kvRows) {
@@ -169,33 +154,28 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
     @Test
     void testHandleLogSplitChangesAndFetch() throws Exception {
-        final Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("name", DataTypes.STRING())
-                        .build();
+        final Schema schema = Schema.newBuilder()
+                .column("id", DataTypes.INT())
+                .column("name", DataTypes.STRING())
+                .build();
 
         final TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(1).build();
         TablePath tablePath1 = TablePath.of(DEFAULT_DB, "test-only-log-table");
         long tableId = createTable(tablePath1, tableDescriptor);
 
-        try (FlinkSourceSplitReader splitReader =
-                createSplitReader(tablePath1, schema.getRowType())) {
+        try (FlinkSourceSplitReader splitReader = createSplitReader(tablePath1, schema.getRowType())) {
 
             // no any records
             List<SourceSplitBase> logSplits = new ArrayList<>();
             Map<String, List<RecordAndPos>> expectedRecords = new HashMap<>();
-            assignSplitsAndFetchUntilRetrieveRecords(
-                    splitReader, logSplits, expectedRecords, schema.getRowType());
+            assignSplitsAndFetchUntilRetrieveRecords(splitReader, logSplits, expectedRecords, schema.getRowType());
 
             // now, write some records into the table
             List<InternalRow> internalRows = appendRows(tablePath1, 5);
             List<RecordAndPos> expected = new ArrayList<>(internalRows.size());
             for (int i = 0; i < internalRows.size(); i++) {
-                expected.add(
-                        new RecordAndPos(
-                                new ScanRecord(i, i, ChangeType.APPEND_ONLY, internalRows.get(i))));
+                expected.add(new RecordAndPos(new ScanRecord(i, i, ChangeType.APPEND_ONLY, internalRows.get(i))));
             }
 
             TableBucket tableBucket = new TableBucket(tableId, 0);
@@ -204,8 +184,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
             logSplits.add(new LogSplit(tableBucket, null, 0L));
 
-            assignSplitsAndFetchUntilRetrieveRecords(
-                    splitReader, logSplits, expectedRecords, schema.getRowType());
+            assignSplitsAndFetchUntilRetrieveRecords(splitReader, logSplits, expectedRecords, schema.getRowType());
         }
     }
 
@@ -214,8 +193,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "test-mix-snapshot-log-table");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
 
-        try (FlinkSourceSplitReader splitReader =
-                createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.getRowType())) {
+        try (FlinkSourceSplitReader splitReader = createSplitReader(tablePath, DEFAULT_PK_TABLE_SCHEMA.getRowType())) {
 
             // now, write some records into the table
             Map<TableBucket, List<InternalRow>> rows = putRows(tableId, tablePath, 10);
@@ -223,19 +201,17 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
             // check the expected records
             waitUntilSnapshot(tableId, 0);
 
-            List<SourceSplitBase> totalSplits =
-                    new ArrayList<>(getHybridSnapshotLogSplits(tablePath));
+            List<SourceSplitBase> totalSplits = new ArrayList<>(getHybridSnapshotLogSplits(tablePath));
             // construct expected records for snapshot;
             Map<String, List<RecordAndPos>> expectedRecords = constructRecords(rows);
 
             // now, put data again;
             Map<TableBucket, Integer> bucketOffsets = new HashMap<>();
             for (int bucket = 0; bucket < DEFAULT_BUCKET_NUM; bucket++) {
-                LogSplit logSplit =
-                        new LogSplit(
-                                new TableBucket(tableId, bucket),
-                                null,
-                                rows.get(new TableBucket(tableId, bucket)).size());
+                LogSplit logSplit = new LogSplit(
+                        new TableBucket(tableId, bucket),
+                        null,
+                        rows.get(new TableBucket(tableId, bucket)).size());
                 // add log splits
                 totalSplits.add(logSplit);
                 bucketOffsets.put(
@@ -250,43 +226,35 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
             for (Map.Entry<TableBucket, List<InternalRow>> bucketRowsEntry : rows.entrySet()) {
                 TableBucket tb = bucketRowsEntry.getKey();
                 String splitId = toLogSplitId(tb);
-                List<RecordAndPos> records = new ArrayList<>(2 * bucketRowsEntry.getValue().size());
+                List<RecordAndPos> records =
+                        new ArrayList<>(2 * bucketRowsEntry.getValue().size());
                 List<InternalRow> kvRows = bucketRowsEntry.getValue();
                 int offset = bucketOffsets.get(tb);
                 for (InternalRow row : kvRows) {
-                    records.add(
-                            new RecordAndPos(
-                                    new ScanRecord(offset++, -1, ChangeType.UPDATE_BEFORE, row)));
+                    records.add(new RecordAndPos(new ScanRecord(offset++, -1, ChangeType.UPDATE_BEFORE, row)));
 
-                    records.add(
-                            new RecordAndPos(
-                                    new ScanRecord(offset++, -1, ChangeType.UPDATE_AFTER, row)));
+                    records.add(new RecordAndPos(new ScanRecord(offset++, -1, ChangeType.UPDATE_AFTER, row)));
                 }
                 expectedRecords.put(splitId, records);
             }
 
             assignSplitsAndFetchUntilRetrieveRecords(
-                    splitReader,
-                    totalSplits,
-                    expectedRecords,
-                    DEFAULT_PK_TABLE_SCHEMA.getRowType());
+                    splitReader, totalSplits, expectedRecords, DEFAULT_PK_TABLE_SCHEMA.getRowType());
         }
     }
 
     @Test
     void testNoSubscribedBucket() throws Exception {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "test-no-subscribe-bucket-table");
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("name", DataTypes.STRING())
-                        .build();
+        Schema schema = Schema.newBuilder()
+                .column("id", DataTypes.INT())
+                .column("name", DataTypes.STRING())
+                .build();
         final TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(1).build();
         createTable(tablePath, tableDescriptor);
 
-        try (FlinkSourceSplitReader splitReader =
-                createSplitReader(tablePath, schema.getRowType())) {
+        try (FlinkSourceSplitReader splitReader = createSplitReader(tablePath, schema.getRowType())) {
             // fetch shouldn't throw exception
             RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
             assertThat(records.nextSplit()).isNull();
@@ -296,15 +264,13 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     @Test
     void testSubscribeEmptySplits() throws Exception {
         TablePath tablePath = TablePath.of(DEFAULT_DB, "test-subscribe-empty-splits");
-        Schema schema =
-                Schema.newBuilder()
-                        .column("id", DataTypes.INT())
-                        .column("name", DataTypes.STRING())
-                        .build();
-        long tableId =
-                createTable(
-                        tablePath,
-                        TableDescriptor.builder().schema(schema).distributedBy(3).build());
+        Schema schema = Schema.newBuilder()
+                .column("id", DataTypes.INT())
+                .column("name", DataTypes.STRING())
+                .build();
+        long tableId = createTable(
+                tablePath,
+                TableDescriptor.builder().schema(schema).distributedBy(3).build());
 
         // create two empty splits with log start offset equal to end offset
         LogSplit split1 = new LogSplit(new TableBucket(tableId, 0), null, 0, 0);
@@ -312,15 +278,13 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         LogSplit split3 = new LogSplit(new TableBucket(tableId, 2), null, EARLIEST_OFFSET);
         List<SourceSplitBase> subscribeSplits = Arrays.asList(split1, split2, split3);
 
-        try (FlinkSourceSplitReader splitReader =
-                createSplitReader(tablePath, schema.getRowType())) {
+        try (FlinkSourceSplitReader splitReader = createSplitReader(tablePath, schema.getRowType())) {
             splitReader.handleSplitsChanges(new SplitsAddition<>(subscribeSplits));
 
             // fetch records
             RecordsWithSplitIds<RecordAndPos> records = splitReader.fetch();
             // finished splits should be split1,split2
-            assertThat(records.finishedSplits())
-                    .containsExactlyInAnyOrder(split1.splitId(), split2.splitId());
+            assertThat(records.finishedSplits()).containsExactlyInAnyOrder(split1.splitId(), split2.splitId());
         }
     }
 
@@ -356,7 +320,9 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
 
                 // if records retrieved from this split is greater or equal to expected records,
                 // it means we should stop read
-                if (splitConsumedRecords.getOrDefault(splitId, Collections.emptyList()).size()
+                if (splitConsumedRecords
+                                .getOrDefault(splitId, Collections.emptyList())
+                                .size()
                         >= expectedRecords.get(splitId).size()) {
                     finishedSplits.add(splitId);
                 }
@@ -376,8 +342,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
         assertThat(actualRecords.size()).isEqualTo(expectedRecords.size());
         for (Map.Entry<String, List<RecordAndPos>> splitRecordsEntry : actualRecords.entrySet()) {
             List<RecordAndPos> actualSplitRecords = splitRecordsEntry.getValue();
-            List<RecordAndPos> expectedRecordsForSplit =
-                    expectedRecords.get(splitRecordsEntry.getKey());
+            List<RecordAndPos> expectedRecordsForSplit = expectedRecords.get(splitRecordsEntry.getKey());
 
             assertThat(actualSplitRecords.size()).isEqualTo(expectedRecordsForSplit.size());
 
@@ -395,18 +360,15 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     }
 
     private FlinkSourceSplitReader createSplitReader(TablePath tablePath, RowType rowType) {
-        return new FlinkSourceSplitReader(
-                clientConf, tablePath, rowType, null, createMockSourceReaderMetrics(), null);
+        return new FlinkSourceSplitReader(clientConf, tablePath, rowType, null, createMockSourceReaderMetrics(), null);
     }
 
     private FlinkSourceReaderMetrics createMockSourceReaderMetrics() {
         MetricListener metricListener = new MetricListener();
-        return new FlinkSourceReaderMetrics(
-                InternalSourceReaderMetricGroup.mock(metricListener.getMetricGroup()));
+        return new FlinkSourceReaderMetrics(InternalSourceReaderMetricGroup.mock(metricListener.getMetricGroup()));
     }
 
-    private Map<TableBucket, List<InternalRow>> putRows(long tableId, TablePath tablePath, int rows)
-            throws Exception {
+    private Map<TableBucket, List<InternalRow>> putRows(long tableId, TablePath tablePath, int rows) throws Exception {
         Map<TableBucket, List<InternalRow>> rowsByBuckets = new HashMap<>();
         try (Table table = conn.getTable(tablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
@@ -414,7 +376,9 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
                 InternalRow row = row(i, "v" + i);
                 upsertWriter.upsert(row);
                 TableBucket tableBucket = new TableBucket(tableId, getBucketId(row));
-                rowsByBuckets.computeIfAbsent(tableBucket, k -> new ArrayList<>()).add(row);
+                rowsByBuckets
+                        .computeIfAbsent(tableBucket, k -> new ArrayList<>())
+                        .add(row);
             }
             upsertWriter.flush();
         }
@@ -446,10 +410,8 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
     }
 
     private static int getBucketId(InternalRow row) {
-        CompactedKeyEncoder keyEncoder =
-                new CompactedKeyEncoder(
-                        DEFAULT_PK_TABLE_SCHEMA.getRowType(),
-                        DEFAULT_PK_TABLE_SCHEMA.getPrimaryKeyIndexes());
+        CompactedKeyEncoder keyEncoder = new CompactedKeyEncoder(
+                DEFAULT_PK_TABLE_SCHEMA.getRowType(), DEFAULT_PK_TABLE_SCHEMA.getPrimaryKeyIndexes());
         byte[] key = keyEncoder.encodeKey(row);
         HashBucketAssigner hashBucketAssigner = new HashBucketAssigner(DEFAULT_BUCKET_NUM);
         return hashBucketAssigner.assignBucket(key);
@@ -464,8 +426,7 @@ class FlinkSourceSplitReaderTest extends FlinkTestBase {
             OptionalLong logOffset = snapshots.getLogOffset(bucketId);
             if (snapshotId.isPresent() && logOffset.isPresent()) {
                 hybridSnapshotLogSplits.add(
-                        new HybridSnapshotLogSplit(
-                                tableBucket, null, snapshotId.getAsLong(), logOffset.getAsLong()));
+                        new HybridSnapshotLogSplit(tableBucket, null, snapshotId.getAsLong(), logOffset.getAsLong()));
             }
         }
         return hybridSnapshotLogSplits;

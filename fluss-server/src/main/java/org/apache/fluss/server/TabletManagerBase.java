@@ -81,8 +81,7 @@ public abstract class TabletManagerBase {
     private final TabletType tabletType;
     private final String tabletDirPrefix;
 
-    public TabletManagerBase(
-            TabletType tabletType, File dataDir, Configuration conf, int recoveryThreads) {
+    public TabletManagerBase(TabletType tabletType, File dataDir, Configuration conf, int recoveryThreads) {
         this.tabletType = tabletType;
         this.tabletDirPrefix = getTabletDirPrefix(tabletType);
         this.dataDir = dataDir;
@@ -115,20 +114,16 @@ public abstract class TabletManagerBase {
                         tabletDirs.add(tabletOrPartitionDir);
                     } else {
                         // consider all dirs in partition as tablet dirs
-                        tabletDirs.addAll(
-                                Arrays.asList(FileUtils.listDirectories(tabletOrPartitionDir)));
+                        tabletDirs.addAll(Arrays.asList(FileUtils.listDirectories(tabletOrPartitionDir)));
                     }
                 }
 
                 // it may contain the directory for kv tablet and log tablet
                 // filter out the directory for specific type tablet
                 // actually it identified by the prefix of the directory
-                tabletsToLoad.addAll(
-                        tabletDirs.stream()
-                                .filter(
-                                        tabletDir ->
-                                                tabletDir.getName().startsWith(tabletDirPrefix))
-                                .collect(Collectors.toList()));
+                tabletsToLoad.addAll(tabletDirs.stream()
+                        .filter(tabletDir -> tabletDir.getName().startsWith(tabletDirPrefix))
+                        .collect(Collectors.toList()));
             }
         }
 
@@ -197,28 +192,20 @@ public abstract class TabletManagerBase {
     }
 
     // TODO: we should support get table info from local properties file instead of from zk
-    public static TableInfo getTableInfo(ZooKeeperClient zkClient, TablePath tablePath)
-            throws Exception {
+    public static TableInfo getTableInfo(ZooKeeperClient zkClient, TablePath tablePath) throws Exception {
         int schemaId = zkClient.getCurrentSchemaId(tablePath);
         Optional<SchemaInfo> schemaInfoOpt = zkClient.getSchemaById(tablePath, schemaId);
         SchemaInfo schemaInfo;
         if (!schemaInfoOpt.isPresent()) {
-            throw new LogStorageException(
-                    String.format(
-                            "Failed to load table '%s': Table schema not found in zookeeper metadata.",
-                            tablePath));
+            throw new LogStorageException(String.format(
+                    "Failed to load table '%s': Table schema not found in zookeeper metadata.", tablePath));
         } else {
             schemaInfo = schemaInfoOpt.get();
         }
 
-        TableRegistration tableRegistration =
-                zkClient.getTable(tablePath)
-                        .orElseThrow(
-                                () ->
-                                        new LogStorageException(
-                                                String.format(
-                                                        "Failed to load table '%s': table info not found in zookeeper metadata.",
-                                                        tablePath)));
+        TableRegistration tableRegistration = zkClient.getTable(tablePath)
+                .orElseThrow(() -> new LogStorageException(String.format(
+                        "Failed to load table '%s': table info not found in zookeeper metadata.", tablePath)));
 
         return tableRegistration.toTableInfo(tablePath, schemaInfo);
     }
@@ -229,9 +216,7 @@ public abstract class TabletManagerBase {
             Files.createDirectories(tabletDir.toPath());
         } catch (IOException e) {
             String errorMsg =
-                    String.format(
-                            "Failed to create directory %s for %s tablet.",
-                            tabletDir.toPath(), tabletType);
+                    String.format("Failed to create directory %s for %s tablet.", tabletDir.toPath(), tabletType);
             LOG.error(errorMsg, e);
             if (tabletType == TabletType.KV) {
                 throw new KvStorageException(errorMsg, e);

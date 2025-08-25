@@ -48,33 +48,27 @@ import static org.assertj.core.api.Assertions.assertThat;
 class CommitRemoteLogManifestITCase {
 
     @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setNumOfTabletServers(3)
-                    .setClusterConf(initConfig())
-                    .build();
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION = FlussClusterExtension.builder()
+            .setNumOfTabletServers(3)
+            .setClusterConf(initConfig())
+            .build();
 
     @Test
     void testDeleteOutOfSyncReplicaLogAfterCommit() throws Exception {
         // then create a table with 3 buckets
-        long tableId =
-                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
 
         // find the tb whose leader is the server with large log tiering interval.
         TableBucket tb = new TableBucket(tableId, 0);
         FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
-        int leader =
-                Objects.requireNonNull(
-                        FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb).getLeaderId());
-        TabletServerGateway leaderGateWay =
-                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+        int leader = Objects.requireNonNull(
+                FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb).getLeaderId());
+        TabletServerGateway leaderGateWay = FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
         // produce many records to trigger remote log copy.
         for (int i = 0; i < 3; i++) {
             assertProduceLogResponse(
                     leaderGateWay
-                            .produceLog(
-                                    newProduceLogRequest(
-                                            tableId, 0, -1, genMemoryLogRecordsByObject(DATA1)))
+                            .produceLog(newProduceLogRequest(tableId, 0, -1, genMemoryLogRecordsByObject(DATA1)))
                             .get(),
                     0,
                     i * 10L);
@@ -87,36 +81,28 @@ class CommitRemoteLogManifestITCase {
             FLUSS_CLUSTER_EXTENSION.stopReplica(stopFollower, tb, 1);
         }
         leaderGateWay
-                .produceLog(
-                        newProduceLogRequest(tableId, 0, -1, genMemoryLogRecordsByObject(DATA1)))
+                .produceLog(newProduceLogRequest(tableId, 0, -1, genMemoryLogRecordsByObject(DATA1)))
                 .get();
         for (int stopFollower : stopFollowers) {
             FLUSS_CLUSTER_EXTENSION.waitUntilReplicaShrinkFromIsr(tb, stopFollower);
-            LogTablet stopfollowerLogTablet =
-                    FLUSS_CLUSTER_EXTENSION
-                            .waitAndGetFollowerReplica(tb, stopFollower)
-                            .getLogTablet();
+            LogTablet stopfollowerLogTablet = FLUSS_CLUSTER_EXTENSION
+                    .waitAndGetFollowerReplica(tb, stopFollower)
+                    .getLogTablet();
             assertThat(stopfollowerLogTablet.logSegments()).hasSize(3);
         }
 
         // restart the leader server with a small log tiering interval
         FLUSS_CLUSTER_EXTENSION.restartTabletServer(
-                leader,
-                new Configuration()
-                        .set(
-                                ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION,
-                                Duration.ofMillis(1)));
+                leader, new Configuration().set(ConfigOptions.REMOTE_LOG_TASK_INTERVAL_DURATION, Duration.ofMillis(1)));
         FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(tb);
 
         // check only has two remote log segments for the stopped replicas
         for (int stopFollower : stopFollowers) {
-            LogTablet stopfollowerLogTablet =
-                    FLUSS_CLUSTER_EXTENSION
-                            .waitAndGetFollowerReplica(tb, stopFollower)
-                            .getLogTablet();
-            retry(
-                    Duration.ofMinutes(1),
-                    () -> assertThat(stopfollowerLogTablet.logSegments()).hasSize(2));
+            LogTablet stopfollowerLogTablet = FLUSS_CLUSTER_EXTENSION
+                    .waitAndGetFollowerReplica(tb, stopFollower)
+                    .getLogTablet();
+            retry(Duration.ofMinutes(1), () -> assertThat(stopfollowerLogTablet.logSegments())
+                    .hasSize(2));
         }
     }
 

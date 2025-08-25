@@ -60,14 +60,8 @@ final class LocalLogTest extends LogTestBase {
         TableBucket tableBucket = new TableBucket(1001, 1);
         LogOffsetMetadata logOffsetMetadata = new LogOffsetMetadata(0L, 0L, 0);
         LogSegments logSegments = new LogSegments(tableBucket);
-        localLog =
-                createLocalLogWithActiveSegment(
-                        logTabletDir,
-                        logSegments,
-                        new Configuration(),
-                        0L,
-                        logOffsetMetadata,
-                        tableBucket);
+        localLog = createLocalLogWithActiveSegment(
+                logTabletDir, logSegments, new Configuration(), 0L, logOffsetMetadata, tableBucket);
     }
 
     @AfterEach
@@ -82,8 +76,7 @@ final class LocalLogTest extends LogTestBase {
     @Test
     void testLogDeleteSegmentsSuccess() throws Exception {
         MemoryLogRecords ms1 =
-                genMemoryLogRecordsWithBaseOffset(
-                        0L, Collections.singletonList(new Object[] {1, "hello"}));
+                genMemoryLogRecordsWithBaseOffset(0L, Collections.singletonList(new Object[] {1, "hello"}));
         localLog.append(0, -1L, 0L, ms1);
         localLog.roll(Optional.empty());
         assertThat(localLog.getSegments().numberOfSegments()).isEqualTo(2);
@@ -110,15 +103,13 @@ final class LocalLogTest extends LogTestBase {
     @Test
     void testLogDeleteDirSuccessWhenEmptyAndFailureWhenNonEmpty() throws Exception {
         MemoryLogRecords ms1 =
-                genMemoryLogRecordsWithBaseOffset(
-                        0L, Collections.singletonList(new Object[] {1, "hello"}));
+                genMemoryLogRecordsWithBaseOffset(0L, Collections.singletonList(new Object[] {1, "hello"}));
         localLog.append(0, -1L, 0L, ms1);
         localLog.roll(Optional.empty());
         assertThat(localLog.getSegments().numberOfSegments()).isEqualTo(2);
         assertThat(logTabletDir.listFiles().length == 0).isFalse();
 
-        assertThatThrownBy(() -> localLog.deleteEmptyDir())
-                .isInstanceOf(IllegalStateException.class);
+        assertThatThrownBy(() -> localLog.deleteEmptyDir()).isInstanceOf(IllegalStateException.class);
         assertThat(logTabletDir.exists()).isTrue();
 
         localLog.deleteAllSegments();
@@ -129,30 +120,19 @@ final class LocalLogTest extends LogTestBase {
     @Test
     void testLogTabletDirRenameToNewDir() throws Exception {
         MemoryLogRecords ms1 =
-                genMemoryLogRecordsWithBaseOffset(
-                        0L, Collections.singletonList(new Object[] {1, "hello"}));
+                genMemoryLogRecordsWithBaseOffset(0L, Collections.singletonList(new Object[] {1, "hello"}));
         localLog.append(0, -1L, 0L, ms1);
         localLog.roll(Optional.empty());
         assertThat(localLog.getSegments().numberOfSegments()).isEqualTo(2);
 
-        File newLogTabletDir =
-                LogTestUtils.makeRandomLogTabletDir(tempDir, "testDb", tableId, "testTable");
+        File newLogTabletDir = LogTestUtils.makeRandomLogTabletDir(tempDir, "testDb", tableId, "testTable");
         assertThat(localLog.renameDir(newLogTabletDir.getName())).isTrue();
         assertThat(logTabletDir.exists()).isFalse();
         assertThat(newLogTabletDir.exists()).isTrue();
         assertThat(localLog.getLogTabletDir()).isEqualTo(newLogTabletDir);
         assertThat(localLog.getLogTabletDir().getParent()).isEqualTo(newLogTabletDir.getParent());
-        localLog.getSegments()
-                .values()
-                .forEach(
-                        logSegment ->
-                                assertThat(newLogTabletDir.getPath())
-                                        .isEqualTo(
-                                                logSegment
-                                                        .getFileLogRecords()
-                                                        .file()
-                                                        .getParentFile()
-                                                        .getPath()));
+        localLog.getSegments().values().forEach(logSegment -> assertThat(newLogTabletDir.getPath())
+                .isEqualTo(logSegment.getFileLogRecords().file().getParentFile().getPath()));
         assertThat(localLog.getSegments().numberOfSegments()).isEqualTo(2);
     }
 
@@ -165,8 +145,7 @@ final class LocalLogTest extends LogTestBase {
     void testFlush() throws Exception {
         assertThat(localLog.getRecoveryPoint()).isEqualTo(0L);
         MemoryLogRecords ms1 =
-                genMemoryLogRecordsWithBaseOffset(
-                        0L, Collections.singletonList(new Object[] {1, "hello"}));
+                genMemoryLogRecordsWithBaseOffset(0L, Collections.singletonList(new Object[] {1, "hello"}));
         localLog.append(0, -1L, 0L, ms1);
         LogSegment newSegment = localLog.roll(Optional.empty());
         localLog.flush(newSegment.getBaseOffset());
@@ -179,9 +158,8 @@ final class LocalLogTest extends LogTestBase {
         FetchDataInfo read = readLog(localLog, 0L, 1);
         assertThat(read.getRecords().sizeInBytes()).isEqualTo(0);
 
-        MemoryLogRecords ms1 =
-                genMemoryLogRecordsWithBaseOffset(
-                        0L, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "bye"}));
+        MemoryLogRecords ms1 = genMemoryLogRecordsWithBaseOffset(
+                0L, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "bye"}));
         localLog.append(1, -1L, 0L, ms1);
         assertThat(localLog.getLocalLogEndOffset()).isEqualTo(2L);
         assertThat(localLog.getRecoveryPoint()).isEqualTo(0L);
@@ -192,16 +170,13 @@ final class LocalLogTest extends LogTestBase {
 
     @Test
     void testLogCloseSuccess() throws Exception {
-        MemoryLogRecords ms1 =
-                genMemoryLogRecordsWithBaseOffset(
-                        0L, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "bye"}));
+        MemoryLogRecords ms1 = genMemoryLogRecordsWithBaseOffset(
+                0L, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "bye"}));
         localLog.append(1, -1L, 0L, ms1);
         localLog.close();
-        MemoryLogRecords ms2 =
-                genMemoryLogRecordsWithBaseOffset(
-                        3L, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "bye"}));
-        assertThatThrownBy(() -> localLog.append(4, -1L, 0L, ms2))
-                .isInstanceOf(ClosedChannelException.class);
+        MemoryLogRecords ms2 = genMemoryLogRecordsWithBaseOffset(
+                3L, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "bye"}));
+        assertThatThrownBy(() -> localLog.append(4, -1L, 0L, ms2)).isInstanceOf(ClosedChannelException.class);
     }
 
     @Test
@@ -213,9 +188,8 @@ final class LocalLogTest extends LogTestBase {
 
     @Test
     void testLogCloseFailureWhenInMemoryBufferClosed() throws Exception {
-        MemoryLogRecords ms1 =
-                genMemoryLogRecordsWithBaseOffset(
-                        0L, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "bye"}));
+        MemoryLogRecords ms1 = genMemoryLogRecordsWithBaseOffset(
+                0L, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "bye"}));
         localLog.append(1, -1L, 0L, ms1);
         localLog.closeHandlers();
         assertThatThrownBy(() -> localLog.close())
@@ -225,16 +199,13 @@ final class LocalLogTest extends LogTestBase {
 
     @Test
     void testLogCloseHandlers() throws Exception {
-        MemoryLogRecords ms1 =
-                genMemoryLogRecordsWithBaseOffset(
-                        0L, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "bye"}));
+        MemoryLogRecords ms1 = genMemoryLogRecordsWithBaseOffset(
+                0L, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "bye"}));
         localLog.append(1, -1L, 0L, ms1);
         localLog.closeHandlers();
-        MemoryLogRecords ms2 =
-                genMemoryLogRecordsWithBaseOffset(
-                        3L, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "bye"}));
-        assertThatThrownBy(() -> localLog.append(4, -1L, 0L, ms2))
-                .isInstanceOf(ClosedChannelException.class);
+        MemoryLogRecords ms2 = genMemoryLogRecordsWithBaseOffset(
+                3L, Arrays.asList(new Object[] {1, "hello"}, new Object[] {2, "bye"}));
+        assertThatThrownBy(() -> localLog.append(4, -1L, 0L, ms2)).isInstanceOf(ClosedChannelException.class);
     }
 
     @Test
@@ -247,12 +218,9 @@ final class LocalLogTest extends LogTestBase {
     @Test
     void testRemoveAndDeleteSegments() throws Exception {
         for (int i = 0; i <= 8; i++) {
-            localLog.append(
-                    i,
-                    -1L,
-                    0L,
-                    genMemoryLogRecordsWithBaseOffset(
-                            i, Collections.singletonList(new Object[] {i + 1, String.valueOf(i)})));
+            localLog.append(i, -1L, 0L, genMemoryLogRecordsWithBaseOffset(i, Collections.singletonList(new Object[] {
+                i + 1, String.valueOf(i)
+            })));
             localLog.roll(Optional.empty());
         }
 
@@ -265,52 +233,39 @@ final class LocalLogTest extends LogTestBase {
     @Test
     void testCreateAndDeleteSegment() throws Exception {
         MemoryLogRecords ms1 =
-                genMemoryLogRecordsWithBaseOffset(
-                        0L, Collections.singletonList(new Object[] {1, "hello"}));
+                genMemoryLogRecordsWithBaseOffset(0L, Collections.singletonList(new Object[] {1, "hello"}));
         localLog.append(0, -1L, 0L, ms1);
 
         long newOffset = localLog.getSegments().activeSegment().getBaseOffset() + 1;
         LogSegment oldActiveSegment = localLog.getSegments().activeSegment();
-        LogSegment newActiveSegment =
-                localLog.createAndDeleteSegment(
-                        newOffset,
-                        localLog.getSegments().activeSegment(),
-                        SegmentDeletionReason.LOG_TRUNCATION);
+        LogSegment newActiveSegment = localLog.createAndDeleteSegment(
+                newOffset, localLog.getSegments().activeSegment(), SegmentDeletionReason.LOG_TRUNCATION);
         assertThat(localLog.getSegments().numberOfSegments()).isEqualTo(1);
         assertThat(localLog.getSegments().activeSegment()).isEqualTo(newActiveSegment);
         assertThat(localLog.getSegments().activeSegment()).isNotEqualTo(oldActiveSegment);
         assertThat(localLog.getSegments().activeSegment().getBaseOffset()).isEqualTo(newOffset);
         assertThat(localLog.getRecoveryPoint()).isEqualTo(0L);
         assertThat(localLog.getLocalLogEndOffset()).isEqualTo(newOffset);
-        FetchDataInfo read =
-                readLog(
-                        localLog,
-                        newOffset,
-                        localLog.getSegments().activeSegment().getSizeInBytes());
+        FetchDataInfo read = readLog(
+                localLog, newOffset, localLog.getSegments().activeSegment().getSizeInBytes());
         assertThat(read.getRecords().sizeInBytes()).isEqualTo(0);
     }
 
     @Test
     void testTruncateFullyAndStartAt() throws Exception {
         for (int i = 0; i <= 7; i++) {
-            localLog.append(
-                    i,
-                    -1L,
-                    0L,
-                    genMemoryLogRecordsWithBaseOffset(
-                            i, Collections.singletonList(new Object[] {i + 1, String.valueOf(i)})));
+            localLog.append(i, -1L, 0L, genMemoryLogRecordsWithBaseOffset(i, Collections.singletonList(new Object[] {
+                i + 1, String.valueOf(i)
+            })));
             if (i % 2 != 0) {
                 localLog.roll(Optional.empty());
             }
         }
 
         for (int i = 8; i <= 12; i++) {
-            localLog.append(
-                    i,
-                    -1L,
-                    0L,
-                    genMemoryLogRecordsWithBaseOffset(
-                            i, Collections.singletonList(new Object[] {i + 1, String.valueOf(i)})));
+            localLog.append(i, -1L, 0L, genMemoryLogRecordsWithBaseOffset(i, Collections.singletonList(new Object[] {
+                i + 1, String.valueOf(i)
+            })));
         }
 
         assertThat(localLog.getSegments().numberOfSegments()).isEqualTo(5);
@@ -329,12 +284,9 @@ final class LocalLogTest extends LogTestBase {
     @Test
     void testTruncateTo() throws Exception {
         for (int i = 0; i <= 11; i++) {
-            localLog.append(
-                    i,
-                    -1L,
-                    0L,
-                    genMemoryLogRecordsWithBaseOffset(
-                            i, Collections.singletonList(new Object[] {i + 1, String.valueOf(i)})));
+            localLog.append(i, -1L, 0L, genMemoryLogRecordsWithBaseOffset(i, Collections.singletonList(new Object[] {
+                i + 1, String.valueOf(i)
+            })));
             if (i % 3 == 2) {
                 localLog.roll(Optional.empty());
             }
@@ -342,8 +294,7 @@ final class LocalLogTest extends LogTestBase {
         assertThat(localLog.getSegments().numberOfSegments()).isEqualTo(5);
         assertThat(localLog.getLocalLogEndOffset()).isEqualTo(12L);
 
-        List<LogSegment> expected =
-                localLog.getSegments().values(9L, localLog.getLocalLogEndOffset() + 1);
+        List<LogSegment> expected = localLog.getSegments().values(9L, localLog.getLocalLogEndOffset() + 1);
         // Truncate to an offset before the base offset of the active segment
         List<LogSegment> deleted = localLog.truncateTo(7L);
         assertThat(deleted).isEqualTo(expected);
@@ -353,15 +304,13 @@ final class LocalLogTest extends LogTestBase {
         assertThat(localLog.getLocalLogEndOffset()).isEqualTo(7L);
         FetchDataInfo read =
                 readLog(localLog, 6L, localLog.getSegments().activeSegment().getSizeInBytes());
-        MemoryLogRecords ms1 =
-                genMemoryLogRecordsWithBaseOffset(
-                        6, Collections.singletonList(new Object[] {6 + 1, String.valueOf(6)}));
+        MemoryLogRecords ms1 = genMemoryLogRecordsWithBaseOffset(
+                6, Collections.singletonList(new Object[] {6 + 1, String.valueOf(6)}));
         assertLogRecordsEquals(read.getRecords(), ms1);
 
         // Verify that we can still append to the active segment
-        MemoryLogRecords ms2 =
-                genMemoryLogRecordsWithBaseOffset(
-                        7, Collections.singletonList(new Object[] {7 + 1, String.valueOf(7)}));
+        MemoryLogRecords ms2 = genMemoryLogRecordsWithBaseOffset(
+                7, Collections.singletonList(new Object[] {7 + 1, String.valueOf(7)}));
         localLog.append(7, -1L, 0L, ms2);
         assertThat(localLog.getLocalLogEndOffset()).isEqualTo(8L);
     }
@@ -369,12 +318,9 @@ final class LocalLogTest extends LogTestBase {
     @Test
     void testNonActiveSegmentFrom() throws Exception {
         for (int i = 0; i < 5; i++) {
-            localLog.append(
-                    i,
-                    -1L,
-                    0L,
-                    genMemoryLogRecordsWithBaseOffset(
-                            i, Collections.singletonList(new Object[] {i + 1, String.valueOf(i)})));
+            localLog.append(i, -1L, 0L, genMemoryLogRecordsWithBaseOffset(i, Collections.singletonList(new Object[] {
+                i + 1, String.valueOf(i)
+            })));
             localLog.roll(Optional.empty());
         }
 
@@ -392,8 +338,7 @@ final class LocalLogTest extends LogTestBase {
     }
 
     private FetchDataInfo readLog(LocalLog log, long startOffset, int maxLength) throws Exception {
-        return log.read(
-                startOffset, maxLength, false, localLog.getLocalLogEndOffsetMetadata(), null);
+        return log.read(startOffset, maxLength, false, localLog.getLocalLogEndOffsetMetadata(), null);
     }
 
     private LocalLog createLocalLogWithActiveSegment(
@@ -405,13 +350,6 @@ final class LocalLogTest extends LogTestBase {
             TableBucket tableBucket)
             throws IOException {
         segments.add(LogSegment.open(dir, 0L, logConf, LogFormat.ARROW));
-        return new LocalLog(
-                dir,
-                logConf,
-                segments,
-                recoverPoint,
-                nextOffsetMetadata,
-                tableBucket,
-                LogFormat.ARROW);
+        return new LocalLog(dir, logConf, segments, recoverPoint, nextOffsetMetadata, tableBucket, LogFormat.ARROW);
     }
 }

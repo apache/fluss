@@ -50,10 +50,7 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
     private final long snapshotId;
 
     public PaimonSplitPlanner(
-            Configuration paimonConfig,
-            TablePath tablePath,
-            @Nullable Predicate predicate,
-            long snapshotId) {
+            Configuration paimonConfig, TablePath tablePath, @Nullable Predicate predicate, long snapshotId) {
         this.paimonConfig = paimonConfig;
         this.tablePath = tablePath;
         this.predicate = predicate;
@@ -82,17 +79,11 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
     }
 
     private Catalog getCatalog() {
-        return CatalogFactory.createCatalog(
-                CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
+        return CatalogFactory.createCatalog(CatalogContext.create(Options.fromMap(paimonConfig.toMap())));
     }
 
-    private FileStoreTable getTable(Catalog catalog, TablePath tablePath, long snapshotId)
-            throws Exception {
-        return (FileStoreTable)
-                catalog.getTable(toPaimon(tablePath))
-                        .copy(
-                                Collections.singletonMap(
-                                        CoreOptions.SCAN_SNAPSHOT_ID.key(),
-                                        String.valueOf(snapshotId)));
+    private FileStoreTable getTable(Catalog catalog, TablePath tablePath, long snapshotId) throws Exception {
+        return (FileStoreTable) catalog.getTable(toPaimon(tablePath))
+                .copy(Collections.singletonMap(CoreOptions.SCAN_SNAPSHOT_ID.key(), String.valueOf(snapshotId)));
     }
 }

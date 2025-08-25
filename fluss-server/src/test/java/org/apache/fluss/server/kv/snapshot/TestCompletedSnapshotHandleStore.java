@@ -28,8 +28,7 @@ import java.util.Optional;
 /** An implementation of {@link CompletedSnapshotStore} for test purpose. */
 public class TestCompletedSnapshotHandleStore implements CompletedSnapshotHandleStore {
 
-    private final SupplierWithException<Optional<CompletedSnapshotHandle>, Exception>
-            getLatestSupplier;
+    private final SupplierWithException<Optional<CompletedSnapshotHandle>, Exception> getLatestSupplier;
 
     private final FunctionWithException<CompletedSnapshotHandle, Void, Exception> addFunction;
 
@@ -41,9 +40,7 @@ public class TestCompletedSnapshotHandleStore implements CompletedSnapshotHandle
     }
 
     @Override
-    public void add(
-            TableBucket tableBucket, long snapshotId, CompletedSnapshotHandle snapshotHandle)
-            throws Exception {
+    public void add(TableBucket tableBucket, long snapshotId, CompletedSnapshotHandle snapshotHandle) throws Exception {
         addFunction.apply(snapshotHandle);
     }
 
@@ -51,20 +48,18 @@ public class TestCompletedSnapshotHandleStore implements CompletedSnapshotHandle
     public void remove(TableBucket tableBucket, long snapshotId) throws Exception {}
 
     @Override
-    public Optional<CompletedSnapshotHandle> get(TableBucket tableBucket, long snapshotId)
-            throws Exception {
+    public Optional<CompletedSnapshotHandle> get(TableBucket tableBucket, long snapshotId) throws Exception {
         return Optional.empty();
     }
 
     @Override
-    public List<CompletedSnapshotHandle> getAllCompletedSnapshotHandles(TableBucket tableBucket)
-            throws Exception {
+    public List<CompletedSnapshotHandle> getAllCompletedSnapshotHandles(TableBucket tableBucket) throws Exception {
         return Collections.emptyList();
     }
 
     @Override
-    public Optional<CompletedSnapshotHandle> getLatestCompletedSnapshotHandle(
-            TableBucket tableBucket) throws Exception {
+    public Optional<CompletedSnapshotHandle> getLatestCompletedSnapshotHandle(TableBucket tableBucket)
+            throws Exception {
         return getLatestSupplier.get();
     }
 
@@ -77,21 +72,17 @@ public class TestCompletedSnapshotHandleStore implements CompletedSnapshotHandle
 
         private Builder() {}
 
-        private FunctionWithException<CompletedSnapshotHandle, Void, Exception> addFunction =
-                (ignore) -> null;
+        private FunctionWithException<CompletedSnapshotHandle, Void, Exception> addFunction = (ignore) -> null;
 
-        private SupplierWithException<Optional<CompletedSnapshotHandle>, Exception>
-                getLatestSupplier = Optional::empty;
+        private SupplierWithException<Optional<CompletedSnapshotHandle>, Exception> getLatestSupplier = Optional::empty;
 
-        public Builder setAddFunction(
-                FunctionWithException<CompletedSnapshotHandle, Void, Exception> addFunction) {
+        public Builder setAddFunction(FunctionWithException<CompletedSnapshotHandle, Void, Exception> addFunction) {
             this.addFunction = addFunction;
             return this;
         }
 
         public Builder setGetLatestSupplier(
-                SupplierWithException<Optional<CompletedSnapshotHandle>, Exception>
-                        getLatestSupplier) {
+                SupplierWithException<Optional<CompletedSnapshotHandle>, Exception> getLatestSupplier) {
             this.getLatestSupplier = getLatestSupplier;
             return this;
         }

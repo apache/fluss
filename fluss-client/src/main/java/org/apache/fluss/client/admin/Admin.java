@@ -148,8 +148,7 @@ public interface Admin extends AutoCloseable {
      *     nothing.
      * @param cascade Flag to specify whether to delete all tables in the database.
      */
-    CompletableFuture<Void> dropDatabase(
-            String databaseName, boolean ignoreIfNotExists, boolean cascade);
+    CompletableFuture<Void> dropDatabase(String databaseName, boolean ignoreIfNotExists, boolean cascade);
 
     /**
      * Get whether database exists asynchronously.
@@ -181,8 +180,7 @@ public interface Admin extends AutoCloseable {
      * @throws InvalidDatabaseException if the database name is invalid, e.g., contains illegal
      *     characters, or exceeds the maximum length.
      */
-    CompletableFuture<Void> createTable(
-            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists)
+    CompletableFuture<Void> createTable(TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists)
             throws InvalidTableException, InvalidDatabaseException;
 
     /**
@@ -263,8 +261,7 @@ public interface Admin extends AutoCloseable {
      * @param tablePath The path of the table.
      * @param partialPartitionSpec Part of table partition spec
      */
-    CompletableFuture<List<PartitionInfo>> listPartitionInfos(
-            TablePath tablePath, PartitionSpec partialPartitionSpec);
+    CompletableFuture<List<PartitionInfo>> listPartitionInfos(TablePath tablePath, PartitionSpec partialPartitionSpec);
 
     /**
      * Create a new partition for a partitioned table.
@@ -289,8 +286,7 @@ public interface Admin extends AutoCloseable {
      *     exists: if set to false, throw a PartitionAlreadyExistsException, if set to true, do
      *     nothing.
      */
-    CompletableFuture<Void> createPartition(
-            TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfExists);
+    CompletableFuture<Void> createPartition(TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfExists);
 
     /**
      * Drop a partition from a partitioned table.
@@ -311,8 +307,7 @@ public interface Admin extends AutoCloseable {
      *     not exist: if set to false, throw a PartitionNotExistException, if set to true, do
      *     nothing.
      */
-    CompletableFuture<Void> dropPartition(
-            TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfNotExists);
+    CompletableFuture<Void> dropPartition(TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfNotExists);
 
     /**
      * Get the latest kv snapshots of the given table asynchronously. A kv snapshot is a snapshot of
@@ -371,8 +366,7 @@ public interface Admin extends AutoCloseable {
      * @param bucket the table bucket of the kv snapshot.
      * @param snapshotId the snapshot id.
      */
-    CompletableFuture<KvSnapshotMetadata> getKvSnapshotMetadata(
-            TableBucket bucket, long snapshotId);
+    CompletableFuture<KvSnapshotMetadata> getKvSnapshotMetadata(TableBucket bucket, long snapshotId);
 
     /**
      * Get table lake snapshot info of the given table asynchronously.
@@ -397,8 +391,7 @@ public interface Admin extends AutoCloseable {
      * @param buckets the buckets to fetch offset.
      * @param offsetSpec the offset spec to fetch.
      */
-    ListOffsetsResult listOffsets(
-            TablePath tablePath, Collection<Integer> buckets, OffsetSpec offsetSpec);
+    ListOffsetsResult listOffsets(TablePath tablePath, Collection<Integer> buckets, OffsetSpec offsetSpec);
 
     /**
      * List offset for the specified buckets. This operation enables to find the beginning offset,
@@ -411,10 +404,7 @@ public interface Admin extends AutoCloseable {
      * @param offsetSpec the offset spec to fetch.
      */
     ListOffsetsResult listOffsets(
-            TablePath tablePath,
-            String partitionName,
-            Collection<Integer> buckets,
-            OffsetSpec offsetSpec);
+            TablePath tablePath, String partitionName, Collection<Integer> buckets, OffsetSpec offsetSpec);
 
     /**
      * Retrieves ACL entries filtered by principal for the specified resource.

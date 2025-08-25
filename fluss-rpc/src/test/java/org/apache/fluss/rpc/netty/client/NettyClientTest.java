@@ -88,11 +88,9 @@ final class NettyClientTest {
         GetTableInfoRequest request = new GetTableInfoRequest();
 
         // get table request without table path.
-        assertThatThrownBy(
-                        () ->
-                                nettyClient
-                                        .sendRequest(serverNode, ApiKeys.GET_TABLE_INFO, request)
-                                        .get())
+        assertThatThrownBy(() -> nettyClient
+                        .sendRequest(serverNode, ApiKeys.GET_TABLE_INFO, request)
+                        .get())
                 .isInstanceOf(ExecutionException.class)
                 .hasMessageContaining("Failed to encode request for 'GET_TABLE_INFO(1007)'")
                 .hasRootCauseMessage("Some required fields are missing");
@@ -108,11 +106,9 @@ final class NettyClientTest {
 
         // LookupRequest isn't support by Coordinator server, See ApiManager for details. In this
         // case, we will get an exception.
-        assertThatThrownBy(
-                        () ->
-                                nettyClient
-                                        .sendRequest(serverNode, ApiKeys.LOOKUP, lookupRequest)
-                                        .get())
+        assertThatThrownBy(() -> nettyClient
+                        .sendRequest(serverNode, ApiKeys.LOOKUP, lookupRequest)
+                        .get())
                 .isInstanceOf(ExecutionException.class)
                 .hasMessageContaining("The server does not support LOOKUP(1017)")
                 .hasRootCauseMessage("The server does not support LOOKUP(1017)");
@@ -123,10 +119,9 @@ final class NettyClientTest {
         int numRequests = 100;
         List<CompletableFuture<ApiMessage>> futures = new ArrayList<>();
         for (int i = 0; i < numRequests; i++) {
-            ApiVersionsRequest request =
-                    new ApiVersionsRequest()
-                            .setClientSoftwareName("testing_client" + i)
-                            .setClientSoftwareVersion("1.0");
+            ApiVersionsRequest request = new ApiVersionsRequest()
+                    .setClientSoftwareName("testing_client" + i)
+                    .setClientSoftwareVersion("1.0");
             futures.add(nettyClient.sendRequest(serverNode, ApiKeys.API_VERSIONS, request));
         }
         FutureUtils.waitForAll(futures).get();
@@ -140,10 +135,9 @@ final class NettyClientTest {
 
     @Test
     void testServerDisconnection() throws Exception {
-        ApiVersionsRequest request =
-                new ApiVersionsRequest()
-                        .setClientSoftwareName("testing_client_100")
-                        .setClientSoftwareVersion("1.0");
+        ApiVersionsRequest request = new ApiVersionsRequest()
+                .setClientSoftwareName("testing_client_100")
+                .setClientSoftwareVersion("1.0");
         nettyClient.sendRequest(serverNode, ApiKeys.API_VERSIONS, request).get();
         assertThat(nettyClient.connections().size()).isEqualTo(1);
         assertThat(nettyClient.connections().get(serverNode.uid()).getServerNode())
@@ -151,11 +145,9 @@ final class NettyClientTest {
 
         // close the netty server.
         nettyServer.close();
-        assertThatThrownBy(
-                        () ->
-                                nettyClient
-                                        .sendRequest(serverNode, ApiKeys.API_VERSIONS, request)
-                                        .get())
+        assertThatThrownBy(() -> nettyClient
+                        .sendRequest(serverNode, ApiKeys.API_VERSIONS, request)
+                        .get())
                 .isInstanceOf(ExecutionException.class)
                 .hasMessageContaining("Disconnected from node")
                 .hasRootCauseMessage("finishConnect(..) failed: Connection refused");
@@ -189,42 +181,28 @@ final class NettyClientTest {
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
         try (NetUtils.Port availablePort1 = getAvailablePort();
                 NetUtils.Port availablePort2 = getAvailablePort();
-                NettyServer multipleEndpointsServer =
-                        new NettyServer(
-                                conf,
-                                Arrays.asList(
-                                        new Endpoint(
-                                                "localhost", availablePort1.getPort(), "INTERNAL"),
-                                        new Endpoint(
-                                                "localhost", availablePort2.getPort(), "CLIENT")),
-                                service,
-                                metricGroup,
-                                RequestsMetrics.createCoordinatorServerRequestMetrics(
-                                        metricGroup)); ) {
+                NettyServer multipleEndpointsServer = new NettyServer(
+                        conf,
+                        Arrays.asList(
+                                new Endpoint("localhost", availablePort1.getPort(), "INTERNAL"),
+                                new Endpoint("localhost", availablePort2.getPort(), "CLIENT")),
+                        service,
+                        metricGroup,
+                        RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup)); ) {
             multipleEndpointsServer.start();
-            ApiVersionsRequest request =
-                    new ApiVersionsRequest()
-                            .setClientSoftwareName("testing_client_100")
-                            .setClientSoftwareVersion("1.0");
+            ApiVersionsRequest request = new ApiVersionsRequest()
+                    .setClientSoftwareName("testing_client_100")
+                    .setClientSoftwareVersion("1.0");
             nettyClient
                     .sendRequest(
-                            new ServerNode(
-                                    2,
-                                    "localhost",
-                                    availablePort1.getPort(),
-                                    ServerType.COORDINATOR),
+                            new ServerNode(2, "localhost", availablePort1.getPort(), ServerType.COORDINATOR),
                             ApiKeys.API_VERSIONS,
                             request)
                     .get();
             assertThat(nettyClient.connections().size()).isEqualTo(1);
-            try (NettyClient client =
-                    new NettyClient(conf, TestingClientMetricGroup.newInstance(), false); ) {
+            try (NettyClient client = new NettyClient(conf, TestingClientMetricGroup.newInstance(), false); ) {
                 client.sendRequest(
-                                new ServerNode(
-                                        2,
-                                        "localhost",
-                                        availablePort2.getPort(),
-                                        ServerType.COORDINATOR),
+                                new ServerNode(2, "localhost", availablePort2.getPort(), ServerType.COORDINATOR),
                                 ApiKeys.API_VERSIONS,
                                 request)
                         .get();
@@ -235,19 +213,15 @@ final class NettyClientTest {
 
     private void buildNettyServer(int serverId) throws Exception {
         try (NetUtils.Port availablePort = getAvailablePort()) {
-            serverNode =
-                    new ServerNode(
-                            serverId, "localhost", availablePort.getPort(), ServerType.COORDINATOR);
+            serverNode = new ServerNode(serverId, "localhost", availablePort.getPort(), ServerType.COORDINATOR);
             service = new TestingGatewayService();
             MetricGroup metricGroup = NOPMetricsGroup.newInstance();
-            nettyServer =
-                    new NettyServer(
-                            conf,
-                            Collections.singleton(
-                                    new Endpoint(serverNode.host(), serverNode.port(), "INTERNAL")),
-                            service,
-                            metricGroup,
-                            RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
+            nettyServer = new NettyServer(
+                    conf,
+                    Collections.singleton(new Endpoint(serverNode.host(), serverNode.port(), "INTERNAL")),
+                    service,
+                    metricGroup,
+                    RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
             nettyServer.start();
         }
     }

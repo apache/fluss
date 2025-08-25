@@ -117,8 +117,7 @@ abstract class BinarySection implements MemoryAwareGetters, Serializable {
         }
         final BinarySection that = (BinarySection) o;
         return sizeInBytes == that.sizeInBytes
-                && BinarySegmentUtils.equals(
-                        segments, offset, that.segments, that.offset, sizeInBytes);
+                && BinarySegmentUtils.equals(segments, offset, that.segments, that.offset, sizeInBytes);
     }
 
     @Override

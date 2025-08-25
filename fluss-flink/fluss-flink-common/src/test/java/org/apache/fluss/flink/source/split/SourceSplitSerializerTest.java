@@ -43,17 +43,13 @@ class SourceSplitSerializerTest {
         TableBucket bucket = isPartitioned ? partitionedTableBucket : tableBucket;
         String partitionName = isPartitioned ? "2024" : null;
 
-        HybridSnapshotLogSplit split =
-                new HybridSnapshotLogSplit(bucket, partitionName, snapshotId, recordsToSkip);
+        HybridSnapshotLogSplit split = new HybridSnapshotLogSplit(bucket, partitionName, snapshotId, recordsToSkip);
         byte[] serialized = serializer.serialize(split);
 
-        SourceSplitBase deserializedSplit =
-                serializer.deserialize(serializer.getVersion(), serialized);
+        SourceSplitBase deserializedSplit = serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserializedSplit).isEqualTo(split);
 
-        split =
-                new HybridSnapshotLogSplit(
-                        bucket, partitionName, snapshotId, recordsToSkip, true, 5);
+        split = new HybridSnapshotLogSplit(bucket, partitionName, snapshotId, recordsToSkip, true, 5);
         serialized = serializer.serialize(split);
         deserializedSplit = serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserializedSplit).isEqualTo(split);
@@ -67,8 +63,7 @@ class SourceSplitSerializerTest {
         LogSplit logSplit = new LogSplit(bucket, partitionName, 100);
 
         byte[] serialized = serializer.serialize(logSplit);
-        SourceSplitBase deserializedSplit =
-                serializer.deserialize(serializer.getVersion(), serialized);
+        SourceSplitBase deserializedSplit = serializer.deserialize(serializer.getVersion(), serialized);
         assertThat(deserializedSplit).isEqualTo(logSplit);
     }
 }

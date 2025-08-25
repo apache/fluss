@@ -29,8 +29,7 @@ public class NotifyLakeTableOffsetData {
 
     private final Map<TableBucket, LakeBucketOffset> lakeBucketOffsets;
 
-    public NotifyLakeTableOffsetData(
-            int coordinatorEpoch, Map<TableBucket, LakeBucketOffset> lakeBucketOffsets) {
+    public NotifyLakeTableOffsetData(int coordinatorEpoch, Map<TableBucket, LakeBucketOffset> lakeBucketOffsets) {
         this.coordinatorEpoch = coordinatorEpoch;
         this.lakeBucketOffsets = lakeBucketOffsets;
     }

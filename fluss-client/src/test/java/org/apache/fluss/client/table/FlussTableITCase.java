@@ -98,9 +98,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
         // the created table info will be applied with additional replica factor property
         TableDescriptor expected =
-                DATA1_TABLE_DESCRIPTOR_PK
-                        .withReplicationFactor(3)
-                        .withDataLakeFormat(DataLakeFormat.PAIMON);
+                DATA1_TABLE_DESCRIPTOR_PK.withReplicationFactor(3).withDataLakeFormat(DataLakeFormat.PAIMON);
         assertThat(tableInfo.toTableDescriptor()).isEqualTo(expected);
     }
 
@@ -117,14 +115,13 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     @ValueSource(booleans = {true, false})
     @Disabled("TODO, fix me in #116")
     void testAppendWithSmallBuffer(boolean indexedFormat) throws Exception {
-        TableDescriptor desc =
-                indexedFormat
-                        ? TableDescriptor.builder()
-                                .schema(DATA1_SCHEMA)
-                                .distributedBy(3)
-                                .logFormat(LogFormat.INDEXED)
-                                .build()
-                        : DATA1_TABLE_DESCRIPTOR;
+        TableDescriptor desc = indexedFormat
+                ? TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(3)
+                        .logFormat(LogFormat.INDEXED)
+                        .build()
+                : DATA1_TABLE_DESCRIPTOR;
         createTable(DATA1_TABLE_PATH, desc, false);
         Configuration config = new Configuration(clientConf);
         // only 1kb memory size, and 64 bytes page size.
@@ -197,8 +194,10 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testUpsertWithSmallBuffer() throws Exception {
-        TableDescriptor desc =
-                TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1, "a").build();
+        TableDescriptor desc = TableDescriptor.builder()
+                .schema(DATA1_SCHEMA_PK)
+                .distributedBy(1, "a")
+                .build();
         createTable(DATA1_TABLE_PATH, desc, false);
         Configuration config = new Configuration(clientConf);
         // only 1kb memory size, and 64 bytes page size.
@@ -243,19 +242,17 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         verifyPutAndLookup(table, new Object[] {1, "a"});
 
         // test put/lookup data for primary table with pk index is not 0
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.STRING())
-                        .withComment("a is first column")
-                        .column("b", DataTypes.INT())
-                        .withComment("b is second column")
-                        .primaryKey("b")
-                        .build();
+        Schema schema = Schema.newBuilder()
+                .column("a", DataTypes.STRING())
+                .withComment("a is first column")
+                .column("b", DataTypes.INT())
+                .withComment("b is second column")
+                .primaryKey("b")
+                .build();
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(3, "b").build();
         // create the table
-        TablePath data1PkTablePath2 =
-                TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_pk_table_2");
+        TablePath data1PkTablePath2 = TablePath.of(DATA1_TABLE_PATH_PK.getDatabaseName(), "test_pk_table_2");
         createTable(data1PkTablePath2, tableDescriptor, true);
 
         // now, check put/lookup data
@@ -266,16 +263,17 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     @Test
     void testPutAndPrefixLookup() throws Exception {
         TablePath tablePath = TablePath.of("test_db_1", "test_put_and_prefix_lookup_table");
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .column("c", DataTypes.BIGINT())
-                        .column("d", DataTypes.STRING())
-                        .primaryKey("a", "b", "c")
-                        .build();
-        TableDescriptor descriptor =
-                TableDescriptor.builder().schema(schema).distributedBy(3, "a", "b").build();
+        Schema schema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.STRING())
+                .column("c", DataTypes.BIGINT())
+                .column("d", DataTypes.STRING())
+                .primaryKey("a", "b", "c")
+                .build();
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(schema)
+                .distributedBy(3, "a", "b")
+                .build();
         createTable(tablePath, descriptor, false);
         Table table = conn.getTable(tablePath);
         verifyPutAndLookup(table, new Object[] {1, "a", 1L, "value1"});
@@ -285,11 +283,10 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         RowType rowType = schema.getRowType();
 
         // test prefix lookup.
-        Schema prefixKeySchema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .build();
+        Schema prefixKeySchema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.STRING())
+                .build();
         RowType prefixKeyRowType = prefixKeySchema.getRowType();
         Lookuper prefixLookuper =
                 table.newLookup().lookupBy(prefixKeyRowType.getFieldNames()).createLookuper();
@@ -299,8 +296,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         List<InternalRow> rowList = prefixLookupResult.getRowList();
         assertThat(rowList.size()).isEqualTo(3);
         for (int i = 0; i < rowList.size(); i++) {
-            assertRowValueEquals(
-                    rowType, rowList.get(i), new Object[] {1, "a", i + 1L, "value" + (i + 1)});
+            assertRowValueEquals(rowType, rowList.get(i), new Object[] {1, "a", i + 1L, "value" + (i + 1)});
         }
 
         result = prefixLookuper.lookup(row(2, "a"));
@@ -321,16 +317,17 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     void testInvalidPrefixLookup() throws Exception {
         // First, test the bucket keys not a prefix subset of primary keys.
         TablePath tablePath = TablePath.of("test_db_1", "test_invalid_prefix_lookup_1");
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.BIGINT())
-                        .column("c", DataTypes.STRING())
-                        .column("d", DataTypes.STRING())
-                        .primaryKey("a", "b", "c")
-                        .build();
-        TableDescriptor descriptor =
-                TableDescriptor.builder().schema(schema).distributedBy(3, "a", "c").build();
+        Schema schema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.BIGINT())
+                .column("c", DataTypes.STRING())
+                .column("d", DataTypes.STRING())
+                .primaryKey("a", "b", "c")
+                .build();
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(schema)
+                .distributedBy(3, "a", "c")
+                .build();
         createTable(tablePath, descriptor, false);
         Table table = conn.getTable(tablePath);
 
@@ -343,16 +340,18 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
         // Second, test the lookup column names in PrefixLookup not a subset of primary keys.
         tablePath = TablePath.of("test_db_1", "test_invalid_prefix_lookup_2");
-        schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .column("c", DataTypes.BIGINT())
-                        .column("d", DataTypes.STRING())
-                        .primaryKey("a", "b", "c")
-                        .build();
+        schema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.STRING())
+                .column("c", DataTypes.BIGINT())
+                .column("d", DataTypes.STRING())
+                .primaryKey("a", "b", "c")
+                .build();
 
-        descriptor = TableDescriptor.builder().schema(schema).distributedBy(3, "a", "b").build();
+        descriptor = TableDescriptor.builder()
+                .schema(schema)
+                .distributedBy(3, "a", "b")
+                .build();
         createTable(tablePath, descriptor, true);
         Table table2 = conn.getTable(tablePath);
 
@@ -374,8 +373,10 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     @Test
     void testLookupForNotReadyTable() throws Exception {
         TablePath tablePath = TablePath.of("test_db_1", "test_lookup_unready_table_t1");
-        TableDescriptor descriptor =
-                TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(10).build();
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(DATA1_SCHEMA_PK)
+                .distributedBy(10)
+                .build();
         long tableId = createTable(tablePath, descriptor, true);
         IndexedRow rowKey = keyRow(DATA1_SCHEMA_PK, new Object[] {1, "a"});
         // retry until all replica ready. Otherwise, the lookup maybe fail. To avoid test unstable,
@@ -388,8 +389,10 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testLimitScanPrimaryTable() throws Exception {
-        TableDescriptor descriptor =
-                TableDescriptor.builder().schema(DATA1_SCHEMA_PK).distributedBy(1).build();
+        TableDescriptor descriptor = TableDescriptor.builder()
+                .schema(DATA1_SCHEMA_PK)
+                .distributedBy(1)
+                .build();
         long tableId = createTable(DATA1_TABLE_PATH_PK, descriptor, true);
         int insertSize = 10;
         int limitSize = 5;
@@ -412,8 +415,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     collectRows(table.newScan().limit(limitSize).createBatchScanner(tb));
             assertThat(actualRows.size()).isEqualTo(limitSize);
             for (int i = 0; i < limitSize; i++) {
-                assertRowValueEquals(
-                        DATA1_SCHEMA.getRowType(), actualRows.get(i), expectedRows.get(i));
+                assertRowValueEquals(DATA1_SCHEMA.getRowType(), actualRows.get(i), expectedRows.get(i));
             }
 
             // test projection scan
@@ -421,18 +423,12 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             for (int i = 0; i < limitSize; i++) {
                 expectedRows.set(i, new Object[] {expectedRows.get(i)[1]});
             }
-            actualRows =
-                    collectRows(
-                            table.newScan()
-                                    .limit(limitSize)
-                                    .project(projectedFields)
-                                    .createBatchScanner(tb));
+            actualRows = collectRows(
+                    table.newScan().limit(limitSize).project(projectedFields).createBatchScanner(tb));
             assertThat(actualRows.size()).isEqualTo(limitSize);
             for (int i = 0; i < limitSize; i++) {
                 assertRowValueEquals(
-                        DATA1_SCHEMA.getRowType().project(projectedFields),
-                        actualRows.get(i),
-                        expectedRows.get(i));
+                        DATA1_SCHEMA.getRowType().project(projectedFields), actualRows.get(i), expectedRows.get(i));
             }
         }
     }
@@ -465,8 +461,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     collectRows(table.newScan().limit(limitSize).createBatchScanner(tb));
             assertThat(actualRows.size()).isEqualTo(limitSize);
             for (int i = 0; i < limitSize; i++) {
-                assertRowValueEquals(
-                        DATA1_SCHEMA.getRowType(), actualRows.get(i), expectedRows.get(i));
+                assertRowValueEquals(DATA1_SCHEMA.getRowType(), actualRows.get(i), expectedRows.get(i));
             }
 
             // test projection scan
@@ -474,32 +469,25 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             for (int i = 0; i < limitSize; i++) {
                 expectedRows.set(i, new Object[] {expectedRows.get(i)[1]});
             }
-            actualRows =
-                    collectRows(
-                            table.newScan()
-                                    .limit(limitSize)
-                                    .project(projectedFields)
-                                    .createBatchScanner(tb));
+            actualRows = collectRows(
+                    table.newScan().limit(limitSize).project(projectedFields).createBatchScanner(tb));
             assertThat(actualRows.size()).isEqualTo(limitSize);
             for (int i = 0; i < limitSize; i++) {
                 assertRowValueEquals(
-                        DATA1_SCHEMA.getRowType().project(projectedFields),
-                        actualRows.get(i),
-                        expectedRows.get(i));
+                        DATA1_SCHEMA.getRowType().project(projectedFields), actualRows.get(i), expectedRows.get(i));
             }
         }
     }
 
     @Test
     void testPartialPutAndDelete() throws Exception {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.STRING())
-                        .column("c", DataTypes.INT())
-                        .column("d", DataTypes.BOOLEAN())
-                        .primaryKey("a")
-                        .build();
+        Schema schema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.STRING())
+                .column("c", DataTypes.INT())
+                .column("d", DataTypes.BOOLEAN())
+                .primaryKey("a")
+                .build();
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
         createTable(DATA1_TABLE_PATH_PK, tableDescriptor, true);
@@ -544,13 +532,12 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testInvalidPartialUpdate() throws Exception {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", new StringType(true))
-                        .column("c", new BigIntType(false))
-                        .primaryKey("a")
-                        .build();
+        Schema schema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", new StringType(true))
+                .column("c", new BigIntType(false))
+                .primaryKey("a")
+                .build();
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder().schema(schema).distributedBy(3, "a").build();
         createTable(DATA1_TABLE_PATH_PK, tableDescriptor, true);
@@ -559,8 +546,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             // the target columns doesn't contain the primary column, should
             // throw exception
             assertThatThrownBy(() -> table.newUpsert().partialUpdate("b").createWriter())
-                    .hasMessage(
-                            "The target write columns [b] must contain the primary key columns [a].");
+                    .hasMessage("The target write columns [b] must contain the primary key columns [a].");
 
             // the column not in the primary key is nullable, should throw exception
             assertThatThrownBy(() -> table.newUpsert().partialUpdate("a", "b").createWriter())
@@ -570,10 +556,9 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     .hasMessage(
                             "Partial Update requires all columns except primary key to be nullable, but column c is NOT NULL.");
             assertThatThrownBy(() -> table.newUpsert().partialUpdate("a", "d").createWriter())
-                    .hasMessage(
-                            "Can not find target column: d for table test_db_1.test_pk_table_1.");
-            assertThatThrownBy(
-                            () -> table.newUpsert().partialUpdate(new int[] {0, 3}).createWriter())
+                    .hasMessage("Can not find target column: d for table test_db_1.test_pk_table_1.");
+            assertThatThrownBy(() ->
+                            table.newUpsert().partialUpdate(new int[] {0, 3}).createWriter())
                     .hasMessage(
                             "Invalid target column index: 3 for table test_db_1.test_pk_table_1. The table only has 3 columns.");
         }
@@ -608,8 +593,10 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         // like the unknown leader. In this case, the append request need retry until the table is
         // ready.
         int bucketNumber = 10;
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder().schema(DATA1_SCHEMA).distributedBy(bucketNumber).build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(DATA1_SCHEMA)
+                .distributedBy(bucketNumber)
+                .build();
         createTable(DATA1_TABLE_PATH, tableDescriptor, false);
 
         // append data.
@@ -645,23 +632,21 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         verifyAppendOrPut(false, "ARROW", kvFormat);
     }
 
-    void verifyAppendOrPut(boolean append, String logFormat, @Nullable String kvFormat)
-            throws Exception {
-        Schema schema =
-                append
-                        ? Schema.newBuilder()
-                                .column("a", DataTypes.INT())
-                                .column("b", DataTypes.INT())
-                                .column("c", DataTypes.STRING())
-                                .column("d", DataTypes.BIGINT())
-                                .build()
-                        : Schema.newBuilder()
-                                .column("a", DataTypes.INT())
-                                .column("b", DataTypes.INT())
-                                .column("c", DataTypes.STRING())
-                                .column("d", DataTypes.BIGINT())
-                                .primaryKey("a")
-                                .build();
+    void verifyAppendOrPut(boolean append, String logFormat, @Nullable String kvFormat) throws Exception {
+        Schema schema = append
+                ? Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .column("c", DataTypes.STRING())
+                        .column("d", DataTypes.BIGINT())
+                        .build()
+                : Schema.newBuilder()
+                        .column("a", DataTypes.INT())
+                        .column("b", DataTypes.INT())
+                        .column("c", DataTypes.STRING())
+                        .column("d", DataTypes.BIGINT())
+                        .primaryKey("a")
+                        .build();
         TableDescriptor.Builder builder =
                 TableDescriptor.builder().schema(schema).logFormat(LogFormat.fromString(logFormat));
         if (kvFormat != null) {
@@ -710,8 +695,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
                     assertThat(scanRecord.getRow().getInt(1)).isEqualTo(100);
                     if (count % 2 == 0) {
-                        assertThat(scanRecord.getRow().getString(2).toString())
-                                .isEqualTo("hello, friend" + count);
+                        assertThat(scanRecord.getRow().getString(2).toString()).isEqualTo("hello, friend" + count);
                     } else {
                         // check null values
                         assertThat(scanRecord.getRow().isNullAt(2)).isTrue();
@@ -727,18 +711,16 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     @ParameterizedTest
     @ValueSource(strings = {"INDEXED", "ARROW"})
     void testAppendAndProject(String format) throws Exception {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.INT())
-                        .column("c", DataTypes.STRING())
-                        .column("d", DataTypes.BIGINT())
-                        .build();
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .logFormat(LogFormat.fromString(format))
-                        .build();
+        Schema schema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.INT())
+                .column("c", DataTypes.STRING())
+                .column("d", DataTypes.BIGINT())
+                .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(schema)
+                .logFormat(LogFormat.fromString(format))
+                .build();
         TablePath tablePath = TablePath.of("test_db_1", "test_append_and_project");
         createTable(tablePath, tableDescriptor, false);
 
@@ -766,8 +748,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
                     assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
                     if (count % 2 == 0) {
-                        assertThat(scanRecord.getRow().getString(1).toString())
-                                .isEqualTo("hello, friend" + count);
+                        assertThat(scanRecord.getRow().getString(1).toString()).isEqualTo("hello, friend" + count);
                     } else {
                         // check null values
                         assertThat(scanRecord.getRow().isNullAt(1)).isTrue();
@@ -789,8 +770,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
                     assertThat(scanRecord.getRow().getInt(1)).isEqualTo(count);
                     if (count % 2 == 0) {
-                        assertThat(scanRecord.getRow().getString(0).toString())
-                                .isEqualTo("hello, friend" + count);
+                        assertThat(scanRecord.getRow().getString(0).toString()).isEqualTo("hello, friend" + count);
                     } else {
                         // check null values
                         assertThat(scanRecord.getRow().isNullAt(0)).isTrue();
@@ -805,15 +785,15 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPutAndProject() throws Exception {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.INT())
-                        .column("c", DataTypes.STRING())
-                        .column("d", DataTypes.BIGINT())
-                        .primaryKey("a")
-                        .build();
-        TableDescriptor tableDescriptor = TableDescriptor.builder().schema(schema).build();
+        Schema schema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.INT())
+                .column("c", DataTypes.STRING())
+                .column("d", DataTypes.BIGINT())
+                .primaryKey("a")
+                .build();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder().schema(schema).build();
         TablePath tablePath = TablePath.of("test_db_1", "test_pk_table_1");
         createTable(tablePath, tableDescriptor, false);
 
@@ -862,8 +842,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.INSERT);
                         assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(3);
                         assertThat(scanRecord.getRow().getInt(0)).isEqualTo(id);
-                        assertThat(scanRecord.getRow().getString(1).toString())
-                                .isEqualTo("hello, friend" + id);
+                        assertThat(scanRecord.getRow().getString(1).toString()).isEqualTo("hello, friend" + id);
                         assertThat(scanRecord.getRow().getInt(2)).isEqualTo(100);
                         count++;
                         id++;
@@ -872,8 +851,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     // 10 updates
                     for (int i = 0; i < 5; i++) {
                         ScanRecord beforeRecord = iterator.next();
-                        assertThat(beforeRecord.getChangeType())
-                                .isEqualTo(ChangeType.UPDATE_BEFORE);
+                        assertThat(beforeRecord.getChangeType()).isEqualTo(ChangeType.UPDATE_BEFORE);
                         assertThat(beforeRecord.getRow().getFieldCount()).isEqualTo(3);
                         assertThat(beforeRecord.getRow().getInt(0)).isEqualTo(id);
                         assertThat(beforeRecord.getRow().getString(1).toString())
@@ -884,8 +862,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                         assertThat(afterRecord.getChangeType()).isEqualTo(ChangeType.UPDATE_AFTER);
                         assertThat(afterRecord.getRow().getFieldCount()).isEqualTo(3);
                         assertThat(afterRecord.getRow().getInt(0)).isEqualTo(id);
-                        assertThat(afterRecord.getRow().getString(1).toString())
-                                .isEqualTo("HELLO, FRIEND" + id);
+                        assertThat(afterRecord.getRow().getString(1).toString()).isEqualTo("HELLO, FRIEND" + id);
                         assertThat(afterRecord.getRow().getInt(2)).isEqualTo(200);
 
                         id++;
@@ -897,8 +874,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     assertThat(beforeRecord.getChangeType()).isEqualTo(ChangeType.DELETE);
                     assertThat(beforeRecord.getRow().getFieldCount()).isEqualTo(3);
                     assertThat(beforeRecord.getRow().getInt(0)).isEqualTo(id);
-                    assertThat(beforeRecord.getRow().getString(1).toString())
-                            .isEqualTo("hello, friend" + id);
+                    assertThat(beforeRecord.getRow().getString(1).toString()).isEqualTo("hello, friend" + id);
                     assertThat(beforeRecord.getRow().getInt(2)).isEqualTo(100);
                     count++;
                     id += 5;
@@ -910,31 +886,29 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testInvalidColumnProjection() throws Exception {
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder().schema(DATA1_SCHEMA).logFormat(LogFormat.INDEXED).build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(DATA1_SCHEMA)
+                .logFormat(LogFormat.INDEXED)
+                .build();
         createTable(DATA1_TABLE_PATH, tableDescriptor, false);
         Table table = conn.getTable(DATA1_TABLE_PATH);
 
         // validation on projection
         assertThatThrownBy(() -> createLogScanner(table, new int[] {1, 2, 3, 4, 5}))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessage(
-                        "Projected field index 2 is out of bound for schema ROW<`a` INT, `b` STRING>");
+                .hasMessage("Projected field index 2 is out of bound for schema ROW<`a` INT, `b` STRING>");
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testFirstRowMergeEngine(boolean doProjection) throws Exception {
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(DATA1_SCHEMA_PK)
-                        .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.FIRST_ROW)
-                        .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(DATA1_SCHEMA_PK)
+                .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.FIRST_ROW)
+                .build();
         RowType rowType = DATA1_SCHEMA_PK.getRowType();
         String tableName =
-                String.format(
-                        "test_first_row_merge_engine_with_%s",
-                        doProjection ? "projection" : "no_projection");
+                String.format("test_first_row_merge_engine_with_%s", doProjection ? "projection" : "no_projection");
         TablePath tablePath = TablePath.of("test_db_1", tableName);
         createTable(tablePath, tableDescriptor, false);
 
@@ -996,19 +970,17 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     @ParameterizedTest
     @CsvSource({"none,3", "lz4_frame,3", "zstd,3", "zstd,9"})
     void testArrowCompressionAndProject(String compression, String level) throws Exception {
-        Schema schema =
-                Schema.newBuilder()
-                        .column("a", DataTypes.INT())
-                        .column("b", DataTypes.INT())
-                        .column("c", DataTypes.STRING())
-                        .column("d", DataTypes.BIGINT())
-                        .build();
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(schema)
-                        .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE.key(), compression)
-                        .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key(), level)
-                        .build();
+        Schema schema = Schema.newBuilder()
+                .column("a", DataTypes.INT())
+                .column("b", DataTypes.INT())
+                .column("c", DataTypes.STRING())
+                .column("d", DataTypes.BIGINT())
+                .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(schema)
+                .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_TYPE.key(), compression)
+                .property(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key(), level)
+                .build();
         TablePath tablePath = TablePath.of("test_db_1", "test_arrow_" + compression + level);
         createTable(tablePath, tableDescriptor, false);
 
@@ -1038,8 +1010,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
                     assertThat(scanRecord.getRow().getInt(1)).isEqualTo(100);
                     if (count % 2 == 0) {
-                        assertThat(scanRecord.getRow().getString(2).toString())
-                                .isEqualTo("hello, friend " + count);
+                        assertThat(scanRecord.getRow().getString(2).toString()).isEqualTo("hello, friend " + count);
                     } else {
                         // check null values
                         assertThat(scanRecord.getRow().isNullAt(2)).isTrue();
@@ -1061,8 +1032,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
                     assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
                     assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
                     if (count % 2 == 0) {
-                        assertThat(scanRecord.getRow().getString(1).toString())
-                                .isEqualTo("hello, friend " + count);
+                        assertThat(scanRecord.getRow().getString(1).toString()).isEqualTo("hello, friend " + count);
                     } else {
                         // check null values
                         assertThat(scanRecord.getRow().isNullAt(1)).isTrue();
@@ -1079,17 +1049,14 @@ class FlussTableITCase extends ClientToServerITCaseBase {
     @ValueSource(booleans = {true, false})
     void testMergeEngineWithVersion(boolean doProjection) throws Exception {
         // Create table.
-        TableDescriptor tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(DATA3_SCHEMA_PK)
-                        .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.VERSIONED)
-                        .property(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN, "b")
-                        .build();
+        TableDescriptor tableDescriptor = TableDescriptor.builder()
+                .schema(DATA3_SCHEMA_PK)
+                .property(ConfigOptions.TABLE_MERGE_ENGINE, MergeEngineType.VERSIONED)
+                .property(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN, "b")
+                .build();
         RowType rowType = DATA3_SCHEMA_PK.getRowType();
         String tableName =
-                String.format(
-                        "test_merge_engine_with_version_with_%s",
-                        doProjection ? "projection" : "no_projection");
+                String.format("test_merge_engine_with_version_with_%s", doProjection ? "projection" : "no_projection");
         TablePath tablePath = TablePath.of("test_db_1", tableName);
         createTable(tablePath, tableDescriptor, false);
 
@@ -1102,8 +1069,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             for (int id = 0; id < rows; id++) {
                 upsertWriter.upsert(row(id, 1000L));
 
-                expectedScanRecords.add(
-                        doProjection ? new ScanRecord(row(id)) : new ScanRecord(row(id, 1000L)));
+                expectedScanRecords.add(doProjection ? new ScanRecord(row(id)) : new ScanRecord(row(id, 1000L)));
             }
             upsertWriter.flush();
 
@@ -1123,18 +1089,10 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             upsertWriter.upsert(row(1, 1001L));
             // update_before record, don't care about offset/timestamp
             expectedScanRecords.add(
-                    new ScanRecord(
-                            -1,
-                            -1,
-                            ChangeType.UPDATE_BEFORE,
-                            doProjection ? row(1) : row(1, 1000L)));
+                    new ScanRecord(-1, -1, ChangeType.UPDATE_BEFORE, doProjection ? row(1) : row(1, 1000L)));
             // update_after record
             expectedScanRecords.add(
-                    new ScanRecord(
-                            -1,
-                            -1,
-                            ChangeType.UPDATE_AFTER,
-                            doProjection ? row(1) : row(1, 1001L)));
+                    new ScanRecord(-1, -1, ChangeType.UPDATE_AFTER, doProjection ? row(1) : row(1, 1001L)));
             rows = rows + 2;
 
             upsertWriter.flush();
@@ -1156,8 +1114,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             for (int i = 0; i < rows; i++) {
                 ScanRecord actualScanRecord = actualLogRecords.get(i);
                 ScanRecord expectedRecord = expectedScanRecords.get(i);
-                assertThat(actualScanRecord.getChangeType())
-                        .isEqualTo(expectedRecord.getChangeType());
+                assertThat(actualScanRecord.getChangeType()).isEqualTo(expectedRecord.getChangeType());
                 assertThatRow(actualScanRecord.getRow())
                         .withSchema(doProjection ? rowType.project(new int[] {0}) : rowType)
                         .isEqualTo(expectedRecord.getRow());
@@ -1175,8 +1132,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             TestFileSystem testFileSystem = (TestFileSystem) fsPath.getFileSystem();
             Configuration filesystemConf = testFileSystem.getConfiguration();
             assertThat(filesystemConf.toMap())
-                    .containsExactlyEntriesOf(
-                            Collections.singletonMap("client.fs.test.key", "fs_test_value"));
+                    .containsExactlyEntriesOf(Collections.singletonMap("client.fs.test.key", "fs_test_value"));
         }
     }
 }

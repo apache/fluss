@@ -36,19 +36,14 @@ import static org.apache.fluss.utils.FlussPaths.WRITER_SNAPSHOT_FILE_SUFFIX;
 
 /** Test utils for log. */
 public class LogTestUtils {
-    public static LogSegment createSegment(long offset, File dataDir, int indexIntervalBytes)
-            throws IOException {
+    public static LogSegment createSegment(long offset, File dataDir, int indexIntervalBytes) throws IOException {
         FileLogRecords fileLogRecords = FileLogRecords.open(FlussPaths.logFile(dataDir, offset));
-        LazyIndex<OffsetIndex> idx =
-                LazyIndex.forOffset(FlussPaths.offsetIndexFile(dataDir, offset), offset, 1000);
-        LazyIndex<TimeIndex> timeIdx =
-                LazyIndex.forTime(FlussPaths.timeIndexFile(dataDir, offset), offset, 1500);
-        return new LogSegment(
-                LogFormat.ARROW, fileLogRecords, idx, timeIdx, offset, indexIntervalBytes);
+        LazyIndex<OffsetIndex> idx = LazyIndex.forOffset(FlussPaths.offsetIndexFile(dataDir, offset), offset, 1000);
+        LazyIndex<TimeIndex> timeIdx = LazyIndex.forTime(FlussPaths.timeIndexFile(dataDir, offset), offset, 1500);
+        return new LogSegment(LogFormat.ARROW, fileLogRecords, idx, timeIdx, offset, indexIntervalBytes);
     }
 
-    public static void writeNonsenseToFile(File fileName, long position, int size)
-            throws IOException {
+    public static void writeNonsenseToFile(File fileName, long position, int size) throws IOException {
         Random random = new Random();
         RandomAccessFile outputStream = new RandomAccessFile(fileName, "rw");
         outputStream.seek(position);
@@ -66,8 +61,8 @@ public class LogTestUtils {
      * /{database}/{table_name}-{table_id}/log-{bucket_id} used for Fluss bucket logs. It is the
      * responsibility of the caller to set up a shutdown hook for deletion of the directory.
      */
-    public static File makeRandomLogTabletDir(
-            File dataDir, String dbName, long tableId, String tableName) throws IOException {
+    public static File makeRandomLogTabletDir(File dataDir, String dbName, long tableId, String tableName)
+            throws IOException {
         Path dbDir = Paths.get(dataDir.getAbsolutePath(), dbName);
         if (!Files.exists(dbDir)) {
             FileUtils.createDirectory(dataDir, dbName);
@@ -81,21 +76,11 @@ public class LogTestUtils {
 
         Random random = new Random(10L);
         int attempts = 1000;
-        File f =
-                Stream.generate(
-                                () ->
-                                        new File(
-                                                tableDir.toFile(),
-                                                LOG_TABLET_DIR_PREFIX + random.nextInt(1000000)))
-                        .limit(attempts)
-                        .filter(File::mkdir)
-                        .findFirst()
-                        .orElseThrow(
-                                () ->
-                                        new RuntimeException(
-                                                "Failed to create directory after "
-                                                        + attempts
-                                                        + " attempts"));
+        File f = Stream.generate(() -> new File(tableDir.toFile(), LOG_TABLET_DIR_PREFIX + random.nextInt(1000000)))
+                .limit(attempts)
+                .filter(File::mkdir)
+                .findFirst()
+                .orElseThrow(() -> new RuntimeException("Failed to create directory after " + attempts + " attempts"));
         f.deleteOnExit();
         return f;
     }

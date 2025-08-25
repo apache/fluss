@@ -40,9 +40,7 @@ public class RemoteLogManifest {
     private final List<RemoteLogSegment> remoteLogSegmentList;
 
     public RemoteLogManifest(
-            PhysicalTablePath physicalTablePath,
-            TableBucket tableBucket,
-            List<RemoteLogSegment> remoteLogSegmentList) {
+            PhysicalTablePath physicalTablePath, TableBucket tableBucket, List<RemoteLogSegment> remoteLogSegmentList) {
         this.physicalTablePath = physicalTablePath;
         this.tableBucket = tableBucket;
         this.remoteLogSegmentList = Collections.unmodifiableList(remoteLogSegmentList);
@@ -62,10 +60,9 @@ public class RemoteLogManifest {
 
     public RemoteLogManifest trimAndMerge(
             List<RemoteLogSegment> deletedSegments, List<RemoteLogSegment> addedSegments) {
-        Set<UUID> deletedIds =
-                deletedSegments.stream()
-                        .map(RemoteLogSegment::remoteLogSegmentId)
-                        .collect(Collectors.toSet());
+        Set<UUID> deletedIds = deletedSegments.stream()
+                .map(RemoteLogSegment::remoteLogSegmentId)
+                .collect(Collectors.toSet());
         ArrayList<RemoteLogSegment> newSegments = new ArrayList<>(remoteLogSegmentList.size());
         for (RemoteLogSegment segment : remoteLogSegmentList) {
             if (!deletedIds.contains(segment.remoteLogSegmentId())) {

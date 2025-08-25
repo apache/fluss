@@ -36,8 +36,7 @@ public interface AutoCloseableAsync extends AutoCloseable {
         try {
             closeAsync().get();
         } catch (ExecutionException e) {
-            throw new FlussException(
-                    "Could not close resource.", ExceptionUtils.stripExecutionException(e));
+            throw new FlussException("Could not close resource.", ExceptionUtils.stripExecutionException(e));
         }
     }
 }

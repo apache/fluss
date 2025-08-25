@@ -148,9 +148,7 @@ public class IndexedRowTest {
 
     @Test
     void testProjectRow() {
-        DataType[] dataTypes = {
-            DataTypes.INT(), DataTypes.INT(), DataTypes.STRING(), DataTypes.BIGINT()
-        };
+        DataType[] dataTypes = {DataTypes.INT(), DataTypes.INT(), DataTypes.STRING(), DataTypes.BIGINT()};
         IndexedRow row = new IndexedRow(dataTypes);
         IndexedRowWriter writer = new IndexedRowWriter(dataTypes);
         writer.writeInt(1000);
@@ -209,8 +207,7 @@ public class IndexedRowTest {
         assertThat(row.getChar(11, 2)).isEqualTo(BinaryString.fromString("1"));
         assertThat(row.getString(12)).isEqualTo(BinaryString.fromString("hello"));
         assertThat(row.getDecimal(13, 5, 2)).isEqualTo(Decimal.fromUnscaledLong(9, 5, 2));
-        assertThat(row.getDecimal(14, 20, 0))
-                .isEqualTo(Decimal.fromBigDecimal(new BigDecimal(10), 20, 0));
+        assertThat(row.getDecimal(14, 20, 0)).isEqualTo(Decimal.fromBigDecimal(new BigDecimal(10), 20, 0));
         assertThat(row.getTimestampNtz(15, 1).toString()).isEqualTo("2023-10-25T12:01:13.182");
         assertThat(row.getTimestampNtz(16, 5).toString()).isEqualTo("2023-10-25T12:01:13.182");
         assertThat(row.getTimestampLtz(17, 5).toString()).isEqualTo("2023-10-25T12:01:13.182Z");

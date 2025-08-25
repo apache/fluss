@@ -100,10 +100,9 @@ public class BoundedSplitReader implements AutoCloseable {
             nextBatch = pollBatch();
             // no more records, but still need to skip records
             if (nextBatch == null) {
-                throw new RuntimeException(
-                        String.format(
-                                "Skip more than the number of total records, has skipped %d record(s), but remain %s record(s) to skip.",
-                                currentReadRecordsCount, toSkip));
+                throw new RuntimeException(String.format(
+                        "Skip more than the number of total records, has skipped %d record(s), but remain %s record(s) to skip.",
+                        currentReadRecordsCount, toSkip));
             }
             // skip
             while (toSkip > 0 && nextBatch.hasNext()) {

@@ -68,27 +68,21 @@ public class ReplicaStateMachine {
 
     public void startup() {
         LOG.info("Initializing replica state machine.");
-        Tuple2<Set<TableBucketReplica>, Set<TableBucketReplica>> onlineAndOfflineReplicas =
-                initializeReplicaState();
+        Tuple2<Set<TableBucketReplica>, Set<TableBucketReplica>> onlineAndOfflineReplicas = initializeReplicaState();
 
         // we only try to trigger the replicas that are not in deleted table to online
         // since it will then trigger the replicas to be offline/deleted during deletion resuming
         // see more in TableManager#onDeleteTableBucket
         LOG.info("Triggering online replica state changes");
         handleStateChanges(
-                replicaNotInDeletedTableOrPartition(onlineAndOfflineReplicas.f0),
-                ReplicaState.OnlineReplica);
+                replicaNotInDeletedTableOrPartition(onlineAndOfflineReplicas.f0), ReplicaState.OnlineReplica);
         LOG.info("Triggering offline replica state changes");
         handleStateChanges(
-                replicaNotInDeletedTableOrPartition(onlineAndOfflineReplicas.f1),
-                ReplicaState.OfflineReplica);
-        LOG.debug(
-                "Started replica state machine with initial state {}.",
-                coordinatorContext.getReplicaStates());
+                replicaNotInDeletedTableOrPartition(onlineAndOfflineReplicas.f1), ReplicaState.OfflineReplica);
+        LOG.debug("Started replica state machine with initial state {}.", coordinatorContext.getReplicaStates());
     }
 
-    private Set<TableBucketReplica> replicaNotInDeletedTableOrPartition(
-            Set<TableBucketReplica> replicas) {
+    private Set<TableBucketReplica> replicaNotInDeletedTableOrPartition(Set<TableBucketReplica> replicas) {
         return replicas.stream()
                 .filter(replica -> !coordinatorContext.isToBeDeleted(replica.getTableBucket()))
                 .collect(Collectors.toSet());
@@ -105,15 +99,12 @@ public class ReplicaStateMachine {
         for (TableBucket tableBucket : allBuckets) {
             List<Integer> replicas = coordinatorContext.getAssignment(tableBucket);
             for (Integer replica : replicas) {
-                TableBucketReplica tableBucketReplica =
-                        new TableBucketReplica(tableBucket, replica);
+                TableBucketReplica tableBucketReplica = new TableBucketReplica(tableBucket, replica);
                 if (coordinatorContext.isReplicaAndServerOnline(replica, tableBucket)) {
-                    coordinatorContext.putReplicaState(
-                            tableBucketReplica, ReplicaState.OnlineReplica);
+                    coordinatorContext.putReplicaState(tableBucketReplica, ReplicaState.OnlineReplica);
                     onlineReplicas.add(tableBucketReplica);
                 } else {
-                    coordinatorContext.putReplicaState(
-                            tableBucketReplica, ReplicaState.OfflineReplica);
+                    coordinatorContext.putReplicaState(tableBucketReplica, ReplicaState.OfflineReplica);
                     offlineReplicas.add(tableBucketReplica);
                 }
             }
@@ -121,19 +112,13 @@ public class ReplicaStateMachine {
         return Tuple2.of(onlineReplicas, offlineReplicas);
     }
 
-    public void handleStateChanges(
-            Collection<TableBucketReplica> replicas, ReplicaState targetState) {
+    public void handleStateChanges(Collection<TableBucketReplica> replicas, ReplicaState targetState) {
         try {
             coordinatorRequestBatch.newBatch();
             doHandleStateChanges(replicas, targetState);
-            coordinatorRequestBatch.sendRequestToTabletServers(
-                    coordinatorContext.getCoordinatorEpoch());
+            coordinatorRequestBatch.sendRequestToTabletServers(coordinatorContext.getCoordinatorEpoch());
         } catch (Throwable e) {
-            LOG.error(
-                    "Failed to move table bucket replicas {} to state {}.",
-                    replicas,
-                    targetState,
-                    e);
+            LOG.error("Failed to move table bucket replicas {} to state {}.", replicas, targetState, e);
         }
     }
 
@@ -199,85 +184,62 @@ public class ReplicaStateMachine {
      * @param replicas The table bucket replicas that are to do state change
      * @param targetState the target state that is to change to
      */
-    private void doHandleStateChanges(
-            Collection<TableBucketReplica> replicas, ReplicaState targetState) {
+    private void doHandleStateChanges(Collection<TableBucketReplica> replicas, ReplicaState targetState) {
         replicas.forEach(
-                replica ->
-                        coordinatorContext.putReplicaStateIfNotExists(
-                                replica, ReplicaState.NonExistentReplica));
-        Collection<TableBucketReplica> validReplicas =
-                checkValidReplicaStateChange(replicas, targetState);
+                replica -> coordinatorContext.putReplicaStateIfNotExists(replica, ReplicaState.NonExistentReplica));
+        Collection<TableBucketReplica> validReplicas = checkValidReplicaStateChange(replicas, targetState);
         switch (targetState) {
             case NewReplica:
                 validReplicas.forEach(replica -> doStateChange(replica, targetState));
                 break;
             case OnlineReplica:
-                validReplicas.forEach(
-                        replica -> {
-                            ReplicaState currentState = coordinatorContext.getReplicaState(replica);
-                            if (currentState != ReplicaState.NewReplica) {
-                                TableBucket tableBucket = replica.getTableBucket();
-                                String partitionName;
-                                try {
-                                    partitionName = getPartitionName(tableBucket);
-                                } catch (PartitionNotExistException e) {
-                                    LOG.error(e.getMessage());
-                                    logFailedSateChange(replica, currentState, targetState);
-                                    return;
-                                }
+                validReplicas.forEach(replica -> {
+                    ReplicaState currentState = coordinatorContext.getReplicaState(replica);
+                    if (currentState != ReplicaState.NewReplica) {
+                        TableBucket tableBucket = replica.getTableBucket();
+                        String partitionName;
+                        try {
+                            partitionName = getPartitionName(tableBucket);
+                        } catch (PartitionNotExistException e) {
+                            LOG.error(e.getMessage());
+                            logFailedSateChange(replica, currentState, targetState);
+                            return;
+                        }
 
-                                coordinatorContext
-                                        .getBucketLeaderAndIsr(tableBucket)
-                                        .ifPresent(
-                                                leaderAndIsr -> {
-                                                    // send leader request to the replica server
-                                                    coordinatorRequestBatch
-                                                            .addNotifyLeaderRequestForTabletServers(
-                                                                    Collections.singleton(
-                                                                            replica.getReplica()),
-                                                                    PhysicalTablePath.of(
-                                                                            coordinatorContext
-                                                                                    .getTablePathById(
-                                                                                            tableBucket
-                                                                                                    .getTableId()),
-                                                                            partitionName),
-                                                                    replica.getTableBucket(),
-                                                                    coordinatorContext
-                                                                            .getAssignment(
-                                                                                    tableBucket),
-                                                                    leaderAndIsr);
-                                                });
-                            }
-                            doStateChange(replica, targetState);
+                        coordinatorContext.getBucketLeaderAndIsr(tableBucket).ifPresent(leaderAndIsr -> {
+                            // send leader request to the replica server
+                            coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
+                                    Collections.singleton(replica.getReplica()),
+                                    PhysicalTablePath.of(
+                                            coordinatorContext.getTablePathById(tableBucket.getTableId()),
+                                            partitionName),
+                                    replica.getTableBucket(),
+                                    coordinatorContext.getAssignment(tableBucket),
+                                    leaderAndIsr);
                         });
+                    }
+                    doStateChange(replica, targetState);
+                });
                 break;
             case OfflineReplica:
                 // first, send stop replica request to servers
-                validReplicas.forEach(
-                        replica ->
-                                coordinatorRequestBatch.addStopReplicaRequestForTabletServers(
-                                        Collections.singleton(replica.getReplica()),
-                                        replica.getTableBucket(),
-                                        false,
-                                        coordinatorContext.getBucketLeaderEpoch(
-                                                replica.getTableBucket())));
+                validReplicas.forEach(replica -> coordinatorRequestBatch.addStopReplicaRequestForTabletServers(
+                        Collections.singleton(replica.getReplica()),
+                        replica.getTableBucket(),
+                        false,
+                        coordinatorContext.getBucketLeaderEpoch(replica.getTableBucket())));
 
                 // then, may remove the offline replica from isr
-                Map<TableBucketReplica, LeaderAndIsr> adjustedLeaderAndIsr =
-                        doRemoveReplicaFromIsr(validReplicas);
+                Map<TableBucketReplica, LeaderAndIsr> adjustedLeaderAndIsr = doRemoveReplicaFromIsr(validReplicas);
                 // notify leader and isr changes
-                for (Map.Entry<TableBucketReplica, LeaderAndIsr> leaderAndIsrEntry :
-                        adjustedLeaderAndIsr.entrySet()) {
+                for (Map.Entry<TableBucketReplica, LeaderAndIsr> leaderAndIsrEntry : adjustedLeaderAndIsr.entrySet()) {
                     TableBucketReplica tableBucketReplica = leaderAndIsrEntry.getKey();
                     TableBucket tableBucket = tableBucketReplica.getTableBucket();
                     LeaderAndIsr leaderAndIsr = leaderAndIsrEntry.getValue();
                     if (!coordinatorContext.isToBeDeleted(tableBucket)) {
-                        Set<Integer> recipients =
-                                coordinatorContext.getAssignment(tableBucket).stream()
-                                        .filter(
-                                                replica ->
-                                                        replica != tableBucketReplica.getReplica())
-                                        .collect(Collectors.toSet());
+                        Set<Integer> recipients = coordinatorContext.getAssignment(tableBucket).stream()
+                                .filter(replica -> replica != tableBucketReplica.getReplica())
+                                .collect(Collectors.toSet());
                         String partitionName;
                         try {
                             partitionName = getPartitionName(tableBucket);
@@ -293,9 +255,7 @@ public class ReplicaStateMachine {
                         coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
                                 recipients,
                                 PhysicalTablePath.of(
-                                        coordinatorContext.getTablePathById(
-                                                tableBucket.getTableId()),
-                                        partitionName),
+                                        coordinatorContext.getTablePathById(tableBucket.getTableId()), partitionName),
                                 tableBucket,
                                 coordinatorContext.getAssignment(tableBucket),
                                 leaderAndIsr);
@@ -303,28 +263,23 @@ public class ReplicaStateMachine {
                 }
 
                 // finally, set to offline
-                validReplicas.forEach(
-                        replica -> doStateChange(replica, ReplicaState.OfflineReplica));
+                validReplicas.forEach(replica -> doStateChange(replica, ReplicaState.OfflineReplica));
 
                 break;
             case ReplicaDeletionStarted:
-                validReplicas.forEach(
-                        replica -> doStateChange(replica, ReplicaState.ReplicaDeletionStarted));
+                validReplicas.forEach(replica -> doStateChange(replica, ReplicaState.ReplicaDeletionStarted));
                 // send stop replica request with delete = true
-                validReplicas.forEach(
-                        tableBucketReplica -> {
-                            int replicaServer = tableBucketReplica.getReplica();
-                            coordinatorRequestBatch.addStopReplicaRequestForTabletServers(
-                                    Collections.singleton(replicaServer),
-                                    tableBucketReplica.getTableBucket(),
-                                    true,
-                                    coordinatorContext.getBucketLeaderEpoch(
-                                            tableBucketReplica.getTableBucket()));
-                        });
+                validReplicas.forEach(tableBucketReplica -> {
+                    int replicaServer = tableBucketReplica.getReplica();
+                    coordinatorRequestBatch.addStopReplicaRequestForTabletServers(
+                            Collections.singleton(replicaServer),
+                            tableBucketReplica.getTableBucket(),
+                            true,
+                            coordinatorContext.getBucketLeaderEpoch(tableBucketReplica.getTableBucket()));
+                });
                 break;
             case ReplicaDeletionSuccessful:
-                validReplicas.forEach(
-                        replica -> doStateChange(replica, ReplicaState.ReplicaDeletionSuccessful));
+                validReplicas.forEach(replica -> doStateChange(replica, ReplicaState.ReplicaDeletionSuccessful));
                 break;
             case NonExistentReplica:
                 validReplicas.forEach(replica -> doStateChange(replica, null));
@@ -336,22 +291,20 @@ public class ReplicaStateMachine {
     protected Collection<TableBucketReplica> checkValidReplicaStateChange(
             Collection<TableBucketReplica> replicas, ReplicaState targetState) {
         return replicas.stream()
-                .filter(
-                        replica -> {
-                            ReplicaState curState = coordinatorContext.getReplicaState(replica);
-                            if (isValidReplicaStateTransition(curState, targetState)) {
-                                return true;
-                            } else {
-                                logInvalidTransition(replica, curState, targetState);
-                                logFailedSateChange(replica, curState, targetState);
-                                return false;
-                            }
-                        })
+                .filter(replica -> {
+                    ReplicaState curState = coordinatorContext.getReplicaState(replica);
+                    if (isValidReplicaStateTransition(curState, targetState)) {
+                        return true;
+                    } else {
+                        logInvalidTransition(replica, curState, targetState);
+                        logFailedSateChange(replica, curState, targetState);
+                        return false;
+                    }
+                })
                 .collect(Collectors.toList());
     }
 
-    private boolean isValidReplicaStateTransition(
-            ReplicaState currentState, ReplicaState targetState) {
+    private boolean isValidReplicaStateTransition(ReplicaState currentState, ReplicaState targetState) {
         return targetState.getValidPreviousStates().contains(currentState);
     }
 
@@ -365,8 +318,7 @@ public class ReplicaStateMachine {
         logSuccessfulStateChange(replica, previousState, targetState);
     }
 
-    private void logInvalidTransition(
-            TableBucketReplica replica, ReplicaState curState, ReplicaState targetState) {
+    private void logInvalidTransition(TableBucketReplica replica, ReplicaState curState, ReplicaState targetState) {
         LOG.error(
                 "Replica state for {} should be in the {} before moving to state {}, but the current state is {}.",
                 stringifyReplica(replica),
@@ -375,8 +327,7 @@ public class ReplicaStateMachine {
                 curState);
     }
 
-    private void logFailedSateChange(
-            TableBucketReplica replica, ReplicaState currState, ReplicaState targetState) {
+    private void logFailedSateChange(TableBucketReplica replica, ReplicaState currState, ReplicaState targetState) {
         LOG.error(
                 "Fail to change state for table bucket replica {} from {} to {}.",
                 stringifyReplica(replica),
@@ -398,9 +349,7 @@ public class ReplicaStateMachine {
         if (tableBucket.getPartitionId() == null) {
             return String.format(
                     "TableBucketReplica{tableBucket=%s, replica=%d, tablePath=%s}",
-                    tableBucket,
-                    replica.getReplica(),
-                    coordinatorContext.getTablePathById(tableBucket.getTableId()));
+                    tableBucket, replica.getReplica(), coordinatorContext.getTablePathById(tableBucket.getTableId()));
         } else {
             return String.format(
                     "TableBucketReplica{tableBucket=%s, replica=%d, tablePath=%s, partition=%s}",
@@ -417,8 +366,7 @@ public class ReplicaStateMachine {
         for (TableBucketReplica tableBucketReplica : tableBucketReplicas) {
             TableBucket tableBucket = tableBucketReplica.getTableBucket();
             int replicaId = tableBucketReplica.getReplica();
-            Optional<LeaderAndIsr> optLeaderAndIsr =
-                    coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+            Optional<LeaderAndIsr> optLeaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket);
             if (!optLeaderAndIsr.isPresent()) {
                 // no leader and isr for this table bucket, skip
                 continue;
@@ -428,21 +376,17 @@ public class ReplicaStateMachine {
                 // isr doesn't contain the replica, skip
                 continue;
             }
-            int newLeader =
-                    replicaId == leaderAndIsr.leader()
-                            ?
-                            // the leader become offline, set it to no leader
-                            LeaderAndIsr.NO_LEADER
-                            // otherwise, keep the origin as leader
-                            : leaderAndIsr.leader();
-            List<Integer> newIsr =
-                    leaderAndIsr.isr().size() == 1
-                            // don't remove the replica id from isr when isr size is 1,
-                            // if isr is empty, we can't elect leader any more
-                            ? leaderAndIsr.isr()
-                            : leaderAndIsr.isr().stream()
-                                    .filter(id -> id != replicaId)
-                                    .collect(Collectors.toList());
+            int newLeader = replicaId == leaderAndIsr.leader()
+                    ?
+                    // the leader become offline, set it to no leader
+                    LeaderAndIsr.NO_LEADER
+                    // otherwise, keep the origin as leader
+                    : leaderAndIsr.leader();
+            List<Integer> newIsr = leaderAndIsr.isr().size() == 1
+                    // don't remove the replica id from isr when isr size is 1,
+                    // if isr is empty, we can't elect leader any more
+                    ? leaderAndIsr.isr()
+                    : leaderAndIsr.isr().stream().filter(id -> id != replicaId).collect(Collectors.toList());
             LeaderAndIsr adjustLeaderAndIsr = leaderAndIsr.newLeaderAndIsr(newLeader, newIsr);
             try {
                 zooKeeperClient.updateLeaderAndIsr(tableBucket, adjustLeaderAndIsr);
@@ -468,9 +412,7 @@ public class ReplicaStateMachine {
             partitionName = coordinatorContext.getPartitionName(tableBucket.getPartitionId());
             if (partitionName == null) {
                 throw new PartitionNotExistException(
-                        String.format(
-                                "Can't find partition name for partition id: %s.",
-                                tableBucket.getPartitionId()));
+                        String.format("Can't find partition name for partition id: %s.", tableBucket.getPartitionId()));
             }
         } else {
             partitionName = null;

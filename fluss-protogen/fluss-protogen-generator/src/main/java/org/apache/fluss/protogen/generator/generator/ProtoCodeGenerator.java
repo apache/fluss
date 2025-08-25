@@ -31,16 +31,15 @@ import java.util.List;
 /** Utilities for generating Java classes from protobufs. */
 public class ProtoCodeGenerator {
 
-    public static void generate(
-            List<File> inputs, File outputDirectory, String classPrefix, boolean useOuterClass)
+    public static void generate(List<File> inputs, File outputDirectory, String classPrefix, boolean useOuterClass)
             throws Exception {
         for (File input : inputs) {
             Proto proto = new Proto();
             ProtoUtil.loadFrom(input, proto);
 
-            String fileWithoutExtension = Splitter.on(".").splitToList(input.getName()).get(0);
-            String outerClassName =
-                    ProtoGenUtil.camelCaseFirstUpper(classPrefix, fileWithoutExtension);
+            String fileWithoutExtension =
+                    Splitter.on(".").splitToList(input.getName()).get(0);
+            String outerClassName = ProtoGenUtil.camelCaseFirstUpper(classPrefix, fileWithoutExtension);
 
             String javaPackageName = proto.getJavaPackageName();
             String javaDir = Joiner.on('/').join(javaPackageName.split("\\."));

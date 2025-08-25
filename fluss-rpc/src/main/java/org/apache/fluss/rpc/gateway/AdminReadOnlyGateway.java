@@ -136,8 +136,7 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      * @return a future returns latest kv snapshots
      */
     @RPC(api = ApiKeys.GET_LATEST_KV_SNAPSHOTS)
-    CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(
-            GetLatestKvSnapshotsRequest request);
+    CompletableFuture<GetLatestKvSnapshotsResponse> getLatestKvSnapshots(GetLatestKvSnapshotsRequest request);
 
     /**
      * Get the kv snapshot metadata of a given kv snapshot.
@@ -146,8 +145,7 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      * @return a future returns kv snapshot metadata (including the snapshot files and log offset)
      */
     @RPC(api = ApiKeys.GET_KV_SNAPSHOT_METADATA)
-    CompletableFuture<GetKvSnapshotMetadataResponse> getKvSnapshotMetadata(
-            GetKvSnapshotMetadataRequest request);
+    CompletableFuture<GetKvSnapshotMetadataResponse> getKvSnapshotMetadata(GetKvSnapshotMetadataRequest request);
 
     /**
      * Get the security token to access the files.
@@ -166,8 +164,7 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      * @return a future returns partition infos
      */
     @RPC(api = ApiKeys.LIST_PARTITION_INFOS)
-    CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(
-            ListPartitionInfosRequest request);
+    CompletableFuture<ListPartitionInfosResponse> listPartitionInfos(ListPartitionInfosRequest request);
 
     /**
      * Get the latest lake snapshot for the given table.
@@ -176,8 +173,7 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      * @return a future returns the lake snapshot of the table.
      */
     @RPC(api = ApiKeys.GET_LATEST_LAKE_SNAPSHOT)
-    CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(
-            GetLatestLakeSnapshotRequest request);
+    CompletableFuture<GetLatestLakeSnapshotResponse> getLatestLakeSnapshot(GetLatestLakeSnapshotRequest request);
 
     /**
      * List acls for a table.

@@ -92,8 +92,7 @@ public class Configuration implements Serializable, ReadableConfig {
      *     key exists.
      */
     @SuppressWarnings("unchecked")
-    public <T> Class<T> getClass(
-            String key, Class<? extends T> defaultValue, ClassLoader classLoader)
+    public <T> Class<T> getClass(String key, Class<? extends T> defaultValue, ClassLoader classLoader)
             throws ClassNotFoundException {
         Optional<Object> o = getRawValue(key);
         if (!o.isPresent()) {
@@ -105,9 +104,7 @@ public class Configuration implements Serializable, ReadableConfig {
         }
 
         throw new IllegalArgumentException(
-                "Configuration cannot evaluate object of class "
-                        + o.get().getClass()
-                        + " as a class name");
+                "Configuration cannot evaluate object of class " + o.get().getClass() + " as a class name");
     }
 
     /**
@@ -396,17 +393,14 @@ public class Configuration implements Serializable, ReadableConfig {
      */
     public byte[] getBytes(String key, byte[] defaultValue) {
         return getRawValue(key)
-                .map(
-                        o -> {
-                            if (o.getClass().equals(byte[].class)) {
-                                return (byte[]) o;
-                            } else {
-                                throw new IllegalArgumentException(
-                                        String.format(
-                                                "Configuration cannot evaluate value %s as a byte[] value",
-                                                o));
-                            }
-                        })
+                .map(o -> {
+                    if (o.getClass().equals(byte[].class)) {
+                        return (byte[]) o;
+                    } else {
+                        throw new IllegalArgumentException(
+                                String.format("Configuration cannot evaluate value %s as a byte[] value", o));
+                    }
+                })
                 .orElse(defaultValue);
     }
 
@@ -428,8 +422,7 @@ public class Configuration implements Serializable, ReadableConfig {
      * @return the (default) value associated with the given config option
      */
     public String getValue(ConfigOption<?> configOption) {
-        return Optional.ofNullable(
-                        getRawValueFromOption(configOption).orElseGet(configOption::defaultValue))
+        return Optional.ofNullable(getRawValueFromOption(configOption).orElseGet(configOption::defaultValue))
                 .map(String::valueOf)
                 .orElse(null);
     }
@@ -442,8 +435,7 @@ public class Configuration implements Serializable, ReadableConfig {
      * @throws IllegalArgumentException If the string associated with the given config option cannot
      *     be parsed as a value of the provided enum class.
      */
-    public <T extends Enum<T>> T getEnum(
-            final Class<T> enumClass, final ConfigOption<String> configOption) {
+    public <T extends Enum<T>> T getEnum(final Class<T> enumClass, final ConfigOption<String> configOption) {
         checkNotNull(enumClass, "enumClass must not be null");
         checkNotNull(configOption, "configOption must not be null");
 
@@ -451,12 +443,9 @@ public class Configuration implements Serializable, ReadableConfig {
         try {
             return ConfigurationUtils.convertToEnum(rawValue, enumClass);
         } catch (IllegalArgumentException ex) {
-            final String errorMessage =
-                    String.format(
-                            "Value for config option %s must be one of %s (was %s)",
-                            configOption.key(),
-                            Arrays.toString(enumClass.getEnumConstants()),
-                            rawValue);
+            final String errorMessage = String.format(
+                    "Value for config option %s must be one of %s (was %s)",
+                    configOption.key(), Arrays.toString(enumClass.getEnumConstants()), rawValue);
             throw new IllegalArgumentException(errorMessage);
         }
     }
@@ -583,8 +572,7 @@ public class Configuration implements Serializable, ReadableConfig {
 
     public Map<String, String> toMap() {
         synchronized (this.confData) {
-            Map<String, String> ret =
-                    CollectionUtils.newHashMapWithExpectedSize(this.confData.size());
+            Map<String, String> ret = CollectionUtils.newHashMapWithExpectedSize(this.confData.size());
             for (Map.Entry<String, Object> entry : confData.entrySet()) {
                 ret.put(entry.getKey(), ConfigurationUtils.convertToString(entry.getValue()));
             }

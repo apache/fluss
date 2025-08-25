@@ -31,13 +31,9 @@ class CredentialsJsonSerdeTest extends JsonSerdeTestBase<Credentials> {
     @Override
     protected Credentials[] createObjects() {
         Credentials credentials1 =
-                new Credentials(
-                        "myrandomaccessid111", "myrandomaccesssecret111", "myrandomsecuritytoken");
+                new Credentials("myrandomaccessid111", "myrandomaccesssecret111", "myrandomsecuritytoken");
         Credentials credentials2 =
-                new Credentials(
-                        "myrandomaccessid222",
-                        "myrandomaccesssecret222",
-                        "myrandomsecuritytoken222");
+                new Credentials("myrandomaccessid222", "myrandomaccesssecret222", "myrandomsecuritytoken222");
         return new Credentials[] {credentials1, credentials2};
     }
 

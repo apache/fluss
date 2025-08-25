@@ -105,37 +105,28 @@ public class FlussAdmin implements Admin {
     private final MetadataUpdater metadataUpdater;
 
     public FlussAdmin(RpcClient client, MetadataUpdater metadataUpdater) {
-        this.gateway =
-                GatewayClientProxy.createGatewayProxy(
-                        metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
-        this.readOnlyGateway =
-                GatewayClientProxy.createGatewayProxy(
-                        metadataUpdater::getRandomTabletServer, client, AdminGateway.class);
+        this.gateway = GatewayClientProxy.createGatewayProxy(
+                metadataUpdater::getCoordinatorServer, client, AdminGateway.class);
+        this.readOnlyGateway = GatewayClientProxy.createGatewayProxy(
+                metadataUpdater::getRandomTabletServer, client, AdminGateway.class);
         this.metadataUpdater = metadataUpdater;
     }
 
     @Override
     public CompletableFuture<List<ServerNode>> getServerNodes() {
         CompletableFuture<List<ServerNode>> future = new CompletableFuture<>();
-        CompletableFuture.runAsync(
-                () -> {
-                    try {
-                        List<ServerNode> serverNodeList = new ArrayList<>();
-                        Cluster cluster =
-                                sendMetadataRequestAndRebuildCluster(
-                                        readOnlyGateway,
-                                        false,
-                                        metadataUpdater.getCluster(),
-                                        null,
-                                        null,
-                                        null);
-                        serverNodeList.add(cluster.getCoordinatorServer());
-                        serverNodeList.addAll(cluster.getAliveTabletServerList());
-                        future.complete(serverNodeList);
-                    } catch (Throwable t) {
-                        future.completeExceptionally(t);
-                    }
-                });
+        CompletableFuture.runAsync(() -> {
+            try {
+                List<ServerNode> serverNodeList = new ArrayList<>();
+                Cluster cluster = sendMetadataRequestAndRebuildCluster(
+                        readOnlyGateway, false, metadataUpdater.getCluster(), null, null, null);
+                serverNodeList.add(cluster.getCoordinatorServer());
+                serverNodeList.addAll(cluster.getAliveTabletServerList());
+                future.complete(serverNodeList);
+            } catch (Throwable t) {
+                future.completeExceptionally(t);
+            }
+        });
         return future;
     }
 
@@ -143,15 +134,10 @@ public class FlussAdmin implements Admin {
     public CompletableFuture<SchemaInfo> getTableSchema(TablePath tablePath) {
         GetTableSchemaRequest request = new GetTableSchemaRequest();
         // requesting the latest schema of the given table by not setting schema id
-        request.setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
+        request.setTablePath().setDatabaseName(tablePath.getDatabaseName()).setTableName(tablePath.getTableName());
         return readOnlyGateway
                 .getTableSchema(request)
-                .thenApply(
-                        r ->
-                                new SchemaInfo(
-                                        Schema.fromJsonBytes(r.getSchemaJson()), r.getSchemaId()));
+                .thenApply(r -> new SchemaInfo(Schema.fromJsonBytes(r.getSchemaJson()), r.getSchemaId()));
     }
 
     @Override
@@ -164,10 +150,7 @@ public class FlussAdmin implements Admin {
                 .setTableName(tablePath.getTableName());
         return readOnlyGateway
                 .getTableSchema(request)
-                .thenApply(
-                        r ->
-                                new SchemaInfo(
-                                        Schema.fromJsonBytes(r.getSchemaJson()), r.getSchemaId()));
+                .thenApply(r -> new SchemaInfo(Schema.fromJsonBytes(r.getSchemaJson()), r.getSchemaId()));
     }
 
     @Override
@@ -187,23 +170,18 @@ public class FlussAdmin implements Admin {
         request.setDatabaseName(databaseName);
         return readOnlyGateway
                 .getDatabaseInfo(request)
-                .thenApply(
-                        r ->
-                                new DatabaseInfo(
-                                        databaseName,
-                                        DatabaseDescriptor.fromJsonBytes(r.getDatabaseJson()),
-                                        r.getCreatedTime(),
-                                        r.getModifiedTime()));
+                .thenApply(r -> new DatabaseInfo(
+                        databaseName,
+                        DatabaseDescriptor.fromJsonBytes(r.getDatabaseJson()),
+                        r.getCreatedTime(),
+                        r.getModifiedTime()));
     }
 
     @Override
-    public CompletableFuture<Void> dropDatabase(
-            String databaseName, boolean ignoreIfNotExists, boolean cascade) {
+    public CompletableFuture<Void> dropDatabase(String databaseName, boolean ignoreIfNotExists, boolean cascade) {
         DropDatabaseRequest request = new DropDatabaseRequest();
 
-        request.setIgnoreIfNotExists(ignoreIfNotExists)
-                .setCascade(cascade)
-                .setDatabaseName(databaseName);
+        request.setIgnoreIfNotExists(ignoreIfNotExists).setCascade(cascade).setDatabaseName(databaseName);
         return gateway.dropDatabase(request).thenApply(r -> null);
     }
 
@@ -217,9 +195,7 @@ public class FlussAdmin implements Admin {
     @Override
     public CompletableFuture<List<String>> listDatabases() {
         ListDatabasesRequest request = new ListDatabasesRequest();
-        return readOnlyGateway
-                .listDatabases(request)
-                .thenApply(ListDatabasesResponse::getDatabaseNamesList);
+        return readOnlyGateway.listDatabases(request).thenApply(ListDatabasesResponse::getDatabaseNamesList);
     }
 
     @Override
@@ -238,20 +214,16 @@ public class FlussAdmin implements Admin {
     @Override
     public CompletableFuture<TableInfo> getTableInfo(TablePath tablePath) {
         GetTableInfoRequest request = new GetTableInfoRequest();
-        request.setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
+        request.setTablePath().setDatabaseName(tablePath.getDatabaseName()).setTableName(tablePath.getTableName());
         return readOnlyGateway
                 .getTableInfo(request)
-                .thenApply(
-                        r ->
-                                TableInfo.of(
-                                        tablePath,
-                                        r.getTableId(),
-                                        r.getSchemaId(),
-                                        TableDescriptor.fromJsonBytes(r.getTableJson()),
-                                        r.getCreatedTime(),
-                                        r.getModifiedTime()));
+                .thenApply(r -> TableInfo.of(
+                        tablePath,
+                        r.getTableId(),
+                        r.getSchemaId(),
+                        TableDescriptor.fromJsonBytes(r.getTableJson()),
+                        r.getCreatedTime(),
+                        r.getModifiedTime()));
     }
 
     @Override
@@ -267,9 +239,7 @@ public class FlussAdmin implements Admin {
     @Override
     public CompletableFuture<Boolean> tableExists(TablePath tablePath) {
         TableExistsRequest request = new TableExistsRequest();
-        request.setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
+        request.setTablePath().setDatabaseName(tablePath.getDatabaseName()).setTableName(tablePath.getTableName());
         return readOnlyGateway.tableExists(request).thenApply(TableExistsResponse::isExists);
     }
 
@@ -286,110 +256,79 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<List<PartitionInfo>> listPartitionInfos(
-            TablePath tablePath, PartitionSpec partitionSpec) {
+    public CompletableFuture<List<PartitionInfo>> listPartitionInfos(TablePath tablePath, PartitionSpec partitionSpec) {
         ListPartitionInfosRequest request = new ListPartitionInfosRequest();
         request.setTablePath(
-                new PbTablePath()
-                        .setDatabaseName(tablePath.getDatabaseName())
-                        .setTableName(tablePath.getTableName()));
+                new PbTablePath().setDatabaseName(tablePath.getDatabaseName()).setTableName(tablePath.getTableName()));
 
         if (partitionSpec != null) {
             PbPartitionSpec pbPartitionSpec = makePbPartitionSpec(partitionSpec);
             request.setPartialPartitionSpec(pbPartitionSpec);
         }
-        return readOnlyGateway
-                .listPartitionInfos(request)
-                .thenApply(ClientRpcMessageUtils::toPartitionInfos);
+        return readOnlyGateway.listPartitionInfos(request).thenApply(ClientRpcMessageUtils::toPartitionInfos);
     }
 
     @Override
     public CompletableFuture<Void> createPartition(
             TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfExists) {
-        return gateway.createPartition(
-                        makeCreatePartitionRequest(tablePath, partitionSpec, ignoreIfExists))
+        return gateway.createPartition(makeCreatePartitionRequest(tablePath, partitionSpec, ignoreIfExists))
                 .thenApply(r -> null);
     }
 
     @Override
     public CompletableFuture<Void> dropPartition(
             TablePath tablePath, PartitionSpec partitionSpec, boolean ignoreIfNotExists) {
-        return gateway.dropPartition(
-                        makeDropPartitionRequest(tablePath, partitionSpec, ignoreIfNotExists))
+        return gateway.dropPartition(makeDropPartitionRequest(tablePath, partitionSpec, ignoreIfNotExists))
                 .thenApply(r -> null);
     }
 
     @Override
     public CompletableFuture<KvSnapshots> getLatestKvSnapshots(TablePath tablePath) {
         GetLatestKvSnapshotsRequest request = new GetLatestKvSnapshotsRequest();
-        request.setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
-        return readOnlyGateway
-                .getLatestKvSnapshots(request)
-                .thenApply(ClientRpcMessageUtils::toKvSnapshots);
+        request.setTablePath().setDatabaseName(tablePath.getDatabaseName()).setTableName(tablePath.getTableName());
+        return readOnlyGateway.getLatestKvSnapshots(request).thenApply(ClientRpcMessageUtils::toKvSnapshots);
     }
 
     @Override
-    public CompletableFuture<KvSnapshots> getLatestKvSnapshots(
-            TablePath tablePath, String partitionName) {
+    public CompletableFuture<KvSnapshots> getLatestKvSnapshots(TablePath tablePath, String partitionName) {
         checkNotNull(partitionName, "partitionName");
         GetLatestKvSnapshotsRequest request = new GetLatestKvSnapshotsRequest();
-        request.setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
+        request.setTablePath().setDatabaseName(tablePath.getDatabaseName()).setTableName(tablePath.getTableName());
         request.setPartitionName(partitionName);
-        return readOnlyGateway
-                .getLatestKvSnapshots(request)
-                .thenApply(ClientRpcMessageUtils::toKvSnapshots);
+        return readOnlyGateway.getLatestKvSnapshots(request).thenApply(ClientRpcMessageUtils::toKvSnapshots);
     }
 
     @Override
-    public CompletableFuture<KvSnapshotMetadata> getKvSnapshotMetadata(
-            TableBucket bucket, long snapshotId) {
+    public CompletableFuture<KvSnapshotMetadata> getKvSnapshotMetadata(TableBucket bucket, long snapshotId) {
         GetKvSnapshotMetadataRequest request = new GetKvSnapshotMetadataRequest();
         if (bucket.getPartitionId() != null) {
             request.setPartitionId(bucket.getPartitionId());
         }
-        request.setTableId(bucket.getTableId())
-                .setBucketId(bucket.getBucket())
-                .setSnapshotId(snapshotId);
-        return readOnlyGateway
-                .getKvSnapshotMetadata(request)
-                .thenApply(ClientRpcMessageUtils::toKvSnapshotMetadata);
+        request.setTableId(bucket.getTableId()).setBucketId(bucket.getBucket()).setSnapshotId(snapshotId);
+        return readOnlyGateway.getKvSnapshotMetadata(request).thenApply(ClientRpcMessageUtils::toKvSnapshotMetadata);
     }
 
     @Override
     public CompletableFuture<LakeSnapshot> getLatestLakeSnapshot(TablePath tablePath) {
         GetLatestLakeSnapshotRequest request = new GetLatestLakeSnapshotRequest();
-        request.setTablePath()
-                .setDatabaseName(tablePath.getDatabaseName())
-                .setTableName(tablePath.getTableName());
+        request.setTablePath().setDatabaseName(tablePath.getDatabaseName()).setTableName(tablePath.getTableName());
 
-        return readOnlyGateway
-                .getLatestLakeSnapshot(request)
-                .thenApply(ClientRpcMessageUtils::toLakeTableSnapshotInfo);
+        return readOnlyGateway.getLatestLakeSnapshot(request).thenApply(ClientRpcMessageUtils::toLakeTableSnapshotInfo);
     }
 
     @Override
-    public ListOffsetsResult listOffsets(
-            TablePath tablePath, Collection<Integer> buckets, OffsetSpec offsetSpec) {
+    public ListOffsetsResult listOffsets(TablePath tablePath, Collection<Integer> buckets, OffsetSpec offsetSpec) {
         return listOffsets(PhysicalTablePath.of(tablePath), buckets, offsetSpec);
     }
 
     @Override
     public ListOffsetsResult listOffsets(
-            TablePath tablePath,
-            String partitionName,
-            Collection<Integer> buckets,
-            OffsetSpec offsetSpec) {
+            TablePath tablePath, String partitionName, Collection<Integer> buckets, OffsetSpec offsetSpec) {
         return listOffsets(PhysicalTablePath.of(tablePath, partitionName), buckets, offsetSpec);
     }
 
     private ListOffsetsResult listOffsets(
-            PhysicalTablePath physicalTablePath,
-            Collection<Integer> buckets,
-            OffsetSpec offsetSpec) {
+            PhysicalTablePath physicalTablePath, Collection<Integer> buckets, OffsetSpec offsetSpec) {
         Long partitionId = null;
         metadataUpdater.updateTableOrPartitionMetadata(physicalTablePath.getTablePath(), null);
         long tableId = metadataUpdater.getTableId(physicalTablePath.getTablePath());
@@ -399,8 +338,7 @@ public class FlussAdmin implements Admin {
             partitionId = metadataUpdater.getPartitionIdOrElseThrow(physicalTablePath);
         }
         Map<Integer, ListOffsetsRequest> requestMap =
-                prepareListOffsetsRequests(
-                        metadataUpdater, tableId, partitionId, buckets, offsetSpec);
+                prepareListOffsetsRequests(metadataUpdater, tableId, partitionId, buckets, offsetSpec);
         Map<Integer, CompletableFuture<Long>> bucketToOffsetMap = MapUtils.newConcurrentHashMap();
         for (int bucket : buckets) {
             bucketToOffsetMap.put(bucket, new CompletableFuture<>());
@@ -413,54 +351,45 @@ public class FlussAdmin implements Admin {
     @Override
     public CompletableFuture<Collection<AclBinding>> listAcls(AclBindingFilter aclBindingFilter) {
         CompletableFuture<Collection<AclBinding>> future = new CompletableFuture<>();
-        ListAclsRequest listAclsRequest =
-                new ListAclsRequest().setAclFilter(toPbAclFilter(aclBindingFilter));
+        ListAclsRequest listAclsRequest = new ListAclsRequest().setAclFilter(toPbAclFilter(aclBindingFilter));
 
-        gateway.listAcls(listAclsRequest)
-                .whenComplete(
-                        (r, t) -> {
-                            if (t != null) {
-                                future.completeExceptionally(t);
-                            } else {
-                                future.complete(toAclBindings(r.getAclsList()));
-                            }
-                        });
+        gateway.listAcls(listAclsRequest).whenComplete((r, t) -> {
+            if (t != null) {
+                future.completeExceptionally(t);
+            } else {
+                future.complete(toAclBindings(r.getAclsList()));
+            }
+        });
         return future;
     }
 
     @Override
     public CreateAclsResult createAcls(Collection<AclBinding> aclBindings) {
         CreateAclsResult result = new CreateAclsResult(aclBindings);
-        CreateAclsRequest createAclsRequest =
-                new CreateAclsRequest().addAllAcls(toPbAclInfos(aclBindings));
+        CreateAclsRequest createAclsRequest = new CreateAclsRequest().addAllAcls(toPbAclInfos(aclBindings));
 
-        gateway.createAcls(createAclsRequest)
-                .whenComplete(
-                        (r, t) -> {
-                            if (t != null) {
-                                result.completeExceptionally(t);
-                            } else {
-                                result.complete(r.getAclResList());
-                            }
-                        });
+        gateway.createAcls(createAclsRequest).whenComplete((r, t) -> {
+            if (t != null) {
+                result.completeExceptionally(t);
+            } else {
+                result.complete(r.getAclResList());
+            }
+        });
         return result;
     }
 
     @Override
     public DropAclsResult dropAcls(Collection<AclBindingFilter> filters) {
         DropAclsResult result = new DropAclsResult(filters);
-        DropAclsRequest dropAclsRequest =
-                new DropAclsRequest()
-                        .addAllAclFilters(toPbAclBindingFilters(result.values().keySet()));
-        gateway.dropAcls(dropAclsRequest)
-                .whenComplete(
-                        (r, t) -> {
-                            if (t != null) {
-                                result.completeExceptionally(t);
-                            } else {
-                                result.complete(r.getFilterResultsList());
-                            }
-                        });
+        DropAclsRequest dropAclsRequest = new DropAclsRequest()
+                .addAllAclFilters(toPbAclBindingFilters(result.values().keySet()));
+        gateway.dropAcls(dropAclsRequest).whenComplete((r, t) -> {
+            if (t != null) {
+                result.completeExceptionally(t);
+            } else {
+                result.complete(r.getFilterResultsList());
+            }
+        });
         return result;
     }
 
@@ -482,11 +411,8 @@ public class FlussAdmin implements Admin {
         }
 
         Map<Integer, ListOffsetsRequest> listOffsetsRequests = new HashMap<>();
-        nodeForBucketList.forEach(
-                (leader, ids) ->
-                        listOffsetsRequests.put(
-                                leader,
-                                makeListOffsetsRequest(tableId, partitionId, ids, offsetSpec)));
+        nodeForBucketList.forEach((leader, ids) ->
+                listOffsetsRequests.put(leader, makeListOffsetsRequest(tableId, partitionId, ids, offsetSpec)));
         return listOffsetsRequests;
     }
 
@@ -494,33 +420,24 @@ public class FlussAdmin implements Admin {
             MetadataUpdater metadataUpdater,
             Map<Integer, ListOffsetsRequest> leaderToRequestMap,
             Map<Integer, CompletableFuture<Long>> bucketToOffsetMap) {
-        leaderToRequestMap.forEach(
-                (leader, request) -> {
-                    TabletServerGateway gateway =
-                            metadataUpdater.newTabletServerClientForNode(leader);
-                    if (gateway == null) {
-                        throw new LeaderNotAvailableException(
-                                "Server " + leader + " is not found in metadata cache.");
-                    } else {
-                        gateway.listOffsets(request)
-                                .thenAccept(
-                                        r -> {
-                                            for (PbListOffsetsRespForBucket resp :
-                                                    r.getBucketsRespsList()) {
-                                                if (resp.hasErrorCode()) {
-                                                    bucketToOffsetMap
-                                                            .get(resp.getBucketId())
-                                                            .completeExceptionally(
-                                                                    ApiError.fromErrorMessage(resp)
-                                                                            .exception());
-                                                } else {
-                                                    bucketToOffsetMap
-                                                            .get(resp.getBucketId())
-                                                            .complete(resp.getOffset());
-                                                }
-                                            }
-                                        });
+        leaderToRequestMap.forEach((leader, request) -> {
+            TabletServerGateway gateway = metadataUpdater.newTabletServerClientForNode(leader);
+            if (gateway == null) {
+                throw new LeaderNotAvailableException("Server " + leader + " is not found in metadata cache.");
+            } else {
+                gateway.listOffsets(request).thenAccept(r -> {
+                    for (PbListOffsetsRespForBucket resp : r.getBucketsRespsList()) {
+                        if (resp.hasErrorCode()) {
+                            bucketToOffsetMap
+                                    .get(resp.getBucketId())
+                                    .completeExceptionally(
+                                            ApiError.fromErrorMessage(resp).exception());
+                        } else {
+                            bucketToOffsetMap.get(resp.getBucketId()).complete(resp.getOffset());
+                        }
                     }
                 });
+            }
+        });
     }
 }

@@ -51,21 +51,17 @@ class StickyStaticBucketAssignerTest {
     ServerNode node3 = new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER, "rack3");
     private final int[] serverNodes = new int[] {node1.id(), node2.id(), node3.id()};
     private final BucketLocation bucket1 =
-            new BucketLocation(
-                    DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 0, node1.id(), serverNodes);
+            new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 0, node1.id(), serverNodes);
     private final BucketLocation bucket2 =
-            new BucketLocation(
-                    DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 1, node1.id(), serverNodes);
+            new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 1, node1.id(), serverNodes);
     private final BucketLocation bucket3 =
-            new BucketLocation(
-                    DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 2, node2.id(), serverNodes);
+            new BucketLocation(DATA1_PHYSICAL_TABLE_PATH, DATA1_TABLE_ID, 2, node2.id(), serverNodes);
 
     @Test
     void testSticky() {
         // init cluster.
         Cluster cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
-        StickyBucketAssigner stickyBucketAssigner =
-                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
+        StickyBucketAssigner stickyBucketAssigner = new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
         int bucketId = stickyBucketAssigner.assignBucket(cluster);
         assertThat(bucketId >= 0 && bucketId < 3).isTrue();
 
@@ -93,8 +89,7 @@ class StickyStaticBucketAssignerTest {
     void testBucketIdShouldNotChange() {
         // init cluster.
         Cluster cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
-        StickyBucketAssigner stickyBucketAssigner =
-                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
+        StickyBucketAssigner stickyBucketAssigner = new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
         int bucketId = stickyBucketAssigner.assignBucket(cluster);
         for (int i = 0; i < 3; i++) {
             if (i != bucketId) {
@@ -110,8 +105,7 @@ class StickyStaticBucketAssignerTest {
     void testOnlyOneAvailableBuckets() {
         // init cluster.
         Cluster cluster = updateCluster(Collections.singletonList(bucket1));
-        StickyBucketAssigner stickyBucketAssigner =
-                new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
+        StickyBucketAssigner stickyBucketAssigner = new StickyBucketAssigner(DATA1_PHYSICAL_TABLE_PATH);
         int bucketId = stickyBucketAssigner.assignBucket(cluster);
 
         for (int i = 0; i < 100; i++) {
@@ -126,13 +120,12 @@ class StickyStaticBucketAssignerTest {
         PhysicalTablePath tp1 = PhysicalTablePath.of(TablePath.of("db1", "table1"));
         PhysicalTablePath tp2 = PhysicalTablePath.of(TablePath.of("db1", "table2"));
         PhysicalTablePath tp3 = PhysicalTablePath.of(TablePath.of("db1", "table3"));
-        List<BucketLocation> allBuckets =
-                Arrays.asList(
-                        new BucketLocation(tp1, 150001L, 1, null, serverNodes),
-                        new BucketLocation(tp1, 150001L, 2, node3.id(), serverNodes),
-                        new BucketLocation(tp2, 150002L, 0, null, serverNodes),
-                        new BucketLocation(tp2, 150002L, 1, node1.id(), serverNodes),
-                        new BucketLocation(tp3, 150003L, 0, null, serverNodes));
+        List<BucketLocation> allBuckets = Arrays.asList(
+                new BucketLocation(tp1, 150001L, 1, null, serverNodes),
+                new BucketLocation(tp1, 150001L, 2, node3.id(), serverNodes),
+                new BucketLocation(tp2, 150002L, 0, null, serverNodes),
+                new BucketLocation(tp2, 150002L, 1, node1.id(), serverNodes),
+                new BucketLocation(tp3, 150003L, 0, null, serverNodes));
         Cluster cluster = updateCluster(allBuckets);
 
         // Assure we never choose bucket 1 for tp1 because it is unavailable.
@@ -164,19 +157,16 @@ class StickyStaticBucketAssignerTest {
     @Test
     void testMultiThreadToCallOnNewBatch() {
         Cluster cluster = updateCluster(Arrays.asList(bucket1, bucket2, bucket3));
-        StickyBucketAssigner stickyBucketAssigner =
-                new StickyBucketAssigner(PhysicalTablePath.of(DATA1_TABLE_PATH));
+        StickyBucketAssigner stickyBucketAssigner = new StickyBucketAssigner(PhysicalTablePath.of(DATA1_TABLE_PATH));
         int bucketId = stickyBucketAssigner.assignBucket(cluster);
         Queue<Integer> bucketIds = new ConcurrentLinkedQueue<>();
         Thread[] threads = new Thread[100];
         for (int i = 0; i < 100; i++) {
-            threads[i] =
-                    new Thread(
-                            () -> {
-                                stickyBucketAssigner.onNewBatch(cluster, bucketId);
-                                int newBucketId = stickyBucketAssigner.assignBucket(cluster);
-                                bucketIds.add(newBucketId);
-                            });
+            threads[i] = new Thread(() -> {
+                stickyBucketAssigner.onNewBatch(cluster, bucketId);
+                int newBucketId = stickyBucketAssigner.assignBucket(cluster);
+                bucketIds.add(newBucketId);
+            });
             threads[i].start();
         }
 
@@ -203,28 +193,27 @@ class StickyStaticBucketAssignerTest {
         Map<PhysicalTablePath, List<BucketLocation>> bucketsByPath = new HashMap<>();
         Map<TablePath, Long> tableIdByPath = new HashMap<>();
         Map<TablePath, TableInfo> tableInfoByPath = new HashMap<>();
-        bucketLocations.forEach(
-                bucketLocation -> {
-                    PhysicalTablePath physicalTablePath = bucketLocation.getPhysicalTablePath();
-                    bucketsByPath
-                            .computeIfAbsent(physicalTablePath, k -> new ArrayList<>())
-                            .add(bucketLocation);
-                    tableIdByPath.put(
-                            bucketLocation.getPhysicalTablePath().getTablePath(),
-                            bucketLocation.getTableBucket().getTableId());
-                    tableInfoByPath.put(
+        bucketLocations.forEach(bucketLocation -> {
+            PhysicalTablePath physicalTablePath = bucketLocation.getPhysicalTablePath();
+            bucketsByPath
+                    .computeIfAbsent(physicalTablePath, k -> new ArrayList<>())
+                    .add(bucketLocation);
+            tableIdByPath.put(
+                    bucketLocation.getPhysicalTablePath().getTablePath(),
+                    bucketLocation.getTableBucket().getTableId());
+            tableInfoByPath.put(
+                    physicalTablePath.getTablePath(),
+                    TableInfo.of(
                             physicalTablePath.getTablePath(),
-                            TableInfo.of(
-                                    physicalTablePath.getTablePath(),
-                                    bucketLocation.getTableBucket().getTableId(),
-                                    1,
-                                    TableDescriptor.builder()
-                                            .schema(DATA1_SCHEMA)
-                                            .distributedBy(3)
-                                            .build(),
-                                    System.currentTimeMillis(),
-                                    System.currentTimeMillis()));
-                });
+                            bucketLocation.getTableBucket().getTableId(),
+                            1,
+                            TableDescriptor.builder()
+                                    .schema(DATA1_SCHEMA)
+                                    .distributedBy(3)
+                                    .build(),
+                            System.currentTimeMillis(),
+                            System.currentTimeMillis()));
+        });
 
         return new Cluster(
                 aliveTabletServersById,

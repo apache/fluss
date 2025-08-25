@@ -102,24 +102,20 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         tEnv = StreamTableEnvironment.create(env);
         // crate catalog using sql
-        tEnv.executeSql(
-                String.format(
-                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
+        tEnv.executeSql(String.format(
+                "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
+                CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tEnv.executeSql("use catalog " + CATALOG_NAME);
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
 
         // create batch table environment
-        tBatchEnv =
-                TableEnvironment.create(EnvironmentSettings.newInstance().inBatchMode().build());
-        tBatchEnv.executeSql(
-                String.format(
-                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
-                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
+        tBatchEnv = TableEnvironment.create(
+                EnvironmentSettings.newInstance().inBatchMode().build());
+        tBatchEnv.executeSql(String.format(
+                "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
+                CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         tBatchEnv.executeSql("use catalog " + CATALOG_NAME);
-        tBatchEnv
-                .getConfig()
-                .set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
+        tBatchEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
         // create database
         tEnv.executeSql("create database " + DEFAULT_DB);
         tEnv.useDatabase(DEFAULT_DB);
@@ -136,54 +132,48 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @ValueSource(booleans = {true, false})
     void testAppendLog(boolean compressed) throws Exception {
         String compressedProperties =
-                compressed
-                        ? ",'table.log.format' = 'arrow', 'table.log.arrow.compression.type' = 'zstd'"
-                        : "";
-        tEnv.executeSql(
-                "create table sink_test (a int not null, b bigint, c string) with "
-                        + "('bucket.num' = '3'"
-                        + compressedProperties
-                        + ")");
-        tEnv.executeSql(
-                        "INSERT INTO sink_test(a, b, c) "
-                                + "VALUES (1, 3501, 'Tim'), "
-                                + "(2, 3502, 'Fabian'), "
-                                + "(3, 3503, 'coco'), "
-                                + "(4, 3504, 'jerry'), "
-                                + "(5, 3505, 'piggy'), "
-                                + "(6, 3506, 'stave')")
+                compressed ? ",'table.log.format' = 'arrow', 'table.log.arrow.compression.type' = 'zstd'" : "";
+        tEnv.executeSql("create table sink_test (a int not null, b bigint, c string) with "
+                + "('bucket.num' = '3'"
+                + compressedProperties
+                + ")");
+        tEnv.executeSql("INSERT INTO sink_test(a, b, c) "
+                        + "VALUES (1, 3501, 'Tim'), "
+                        + "(2, 3502, 'Fabian'), "
+                        + "(3, 3503, 'coco'), "
+                        + "(4, 3504, 'jerry'), "
+                        + "(5, 3505, 'piggy'), "
+                        + "(6, 3506, 'stave')")
                 .await();
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
-        List<String> expectedRows =
-                Arrays.asList(
-                        "+I[1, 3501, Tim]", "+I[2, 3502, Fabian]",
-                        "+I[3, 3503, coco]", "+I[4, 3504, jerry]",
-                        "+I[5, 3505, piggy]", "+I[6, 3506, stave]");
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from sink_test").collect();
+        List<String> expectedRows = Arrays.asList(
+                "+I[1, 3501, Tim]", "+I[2, 3502, Fabian]",
+                "+I[3, 3503, coco]", "+I[4, 3504, jerry]",
+                "+I[5, 3505, piggy]", "+I[6, 3506, stave]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testAppendLogWithBucketKey(boolean sinkBucketShuffle) throws Exception {
-        tEnv.executeSql(
-                String.format(
-                        "create table sink_test (a int not null, b bigint, c string) "
-                                + "with ('bucket.num' = '3', 'bucket.key' = 'c', 'sink.bucket-shuffle'= '%s')",
-                        sinkBucketShuffle));
-        String insertSql =
-                "INSERT INTO sink_test(a, b, c) "
-                        + "VALUES (1, 3501, 'Tim'), "
-                        + "(2, 3502, 'Fabian'), "
-                        + "(3, 3503, 'Tim'), "
-                        + "(4, 3504, 'jerry'), "
-                        + "(5, 3505, 'piggy'), "
-                        + "(7, 3507, 'Fabian'), "
-                        + "(8, 3508, 'stave'), "
-                        + "(9, 3509, 'Tim'), "
-                        + "(10, 3510, 'coco'), "
-                        + "(11, 3511, 'stave'), "
-                        + "(12, 3512, 'Tim')";
+        tEnv.executeSql(String.format(
+                "create table sink_test (a int not null, b bigint, c string) "
+                        + "with ('bucket.num' = '3', 'bucket.key' = 'c', 'sink.bucket-shuffle'= '%s')",
+                sinkBucketShuffle));
+        String insertSql = "INSERT INTO sink_test(a, b, c) "
+                + "VALUES (1, 3501, 'Tim'), "
+                + "(2, 3502, 'Fabian'), "
+                + "(3, 3503, 'Tim'), "
+                + "(4, 3504, 'jerry'), "
+                + "(5, 3505, 'piggy'), "
+                + "(7, 3507, 'Fabian'), "
+                + "(8, 3508, 'stave'), "
+                + "(9, 3509, 'Tim'), "
+                + "(10, 3510, 'coco'), "
+                + "(11, 3511, 'stave'), "
+                + "(12, 3512, 'Tim')";
         String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
         if (sinkBucketShuffle) {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET_SHUFFLE\"");
@@ -192,20 +182,16 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         }
         tEnv.executeSql(insertSql).await();
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from sink_test").collect();
         //noinspection ArraysAsListWithZeroOrOneArgument
-        List<List<String>> expectedGroups =
-                Arrays.asList(
-                        Arrays.asList(
-                                "+I[1, 3501, Tim]",
-                                "+I[3, 3503, Tim]",
-                                "+I[9, 3509, Tim]",
-                                "+I[12, 3512, Tim]"),
-                        Arrays.asList("+I[2, 3502, Fabian]", "+I[7, 3507, Fabian]"),
-                        Arrays.asList("+I[4, 3504, jerry]"),
-                        Arrays.asList("+I[5, 3505, piggy]"),
-                        Arrays.asList("+I[8, 3508, stave]", "+I[11, 3511, stave]"),
-                        Arrays.asList("+I[10, 3510, coco]"));
+        List<List<String>> expectedGroups = Arrays.asList(
+                Arrays.asList("+I[1, 3501, Tim]", "+I[3, 3503, Tim]", "+I[9, 3509, Tim]", "+I[12, 3512, Tim]"),
+                Arrays.asList("+I[2, 3502, Fabian]", "+I[7, 3507, Fabian]"),
+                Arrays.asList("+I[4, 3504, jerry]"),
+                Arrays.asList("+I[5, 3505, piggy]"),
+                Arrays.asList("+I[8, 3508, stave]", "+I[11, 3511, stave]"),
+                Arrays.asList("+I[10, 3510, coco]"));
 
         List<String> expectedRows =
                 expectedGroups.stream().flatMap(List::stream).collect(Collectors.toList());
@@ -233,17 +219,15 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
     @Test
     void testAppendLogWithRoundRobin() throws Exception {
-        tEnv.executeSql(
-                "create table sink_test (a int not null, b bigint, c string) with "
-                        + "('bucket.num' = '3', 'client.writer.bucket.no-key-assigner' = 'round_robin')");
-        tEnv.executeSql(
-                        "INSERT INTO sink_test(a, b, c) "
-                                + "VALUES (1, 3501, 'Tim'), "
-                                + "(2, 3502, 'Fabian'), "
-                                + "(3, 3503, 'coco'), "
-                                + "(4, 3504, 'jerry'), "
-                                + "(5, 3505, 'piggy'), "
-                                + "(6, 3506, 'stave')")
+        tEnv.executeSql("create table sink_test (a int not null, b bigint, c string) with "
+                + "('bucket.num' = '3', 'client.writer.bucket.no-key-assigner' = 'round_robin')");
+        tEnv.executeSql("INSERT INTO sink_test(a, b, c) "
+                        + "VALUES (1, 3501, 'Tim'), "
+                        + "(2, 3502, 'Fabian'), "
+                        + "(3, 3503, 'coco'), "
+                        + "(4, 3504, 'jerry'), "
+                        + "(5, 3505, 'piggy'), "
+                        + "(6, 3506, 'stave')")
                 .await();
 
         Map<Integer, List<String>> rows = new HashMap<>();
@@ -258,13 +242,14 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
             while (scanned < 6) {
                 ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (TableBucket bucket : scanRecords.buckets()) {
-                    List<String> rowsBucket =
-                            rows.computeIfAbsent(bucket.getBucket(), k -> new ArrayList<>());
+                    List<String> rowsBucket = rows.computeIfAbsent(bucket.getBucket(), k -> new ArrayList<>());
                     for (ScanRecord record : scanRecords.records(bucket)) {
                         InternalRow row = record.getRow();
-                        rowsBucket.add(
-                                Row.of(row.getInt(0), row.getLong(1), row.getString(2).toString())
-                                        .toString());
+                        rowsBucket.add(Row.of(
+                                        row.getInt(0),
+                                        row.getLong(1),
+                                        row.getString(2).toString())
+                                .toString());
                     }
                 }
                 scanned += scanRecords.count();
@@ -273,36 +258,32 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         List<String> expectedRows0 = Arrays.asList("+I[1, 3501, Tim]", "+I[4, 3504, jerry]");
         List<String> expectedRows1 = Arrays.asList("+I[2, 3502, Fabian]", "+I[5, 3505, piggy]");
         List<String> expectedRows2 = Arrays.asList("+I[3, 3503, coco]", "+I[6, 3506, stave]");
-        assertThat(rows.values())
-                .containsExactlyInAnyOrder(expectedRows0, expectedRows1, expectedRows2);
+        assertThat(rows.values()).containsExactlyInAnyOrder(expectedRows0, expectedRows1, expectedRows2);
     }
 
     @Test
     void testAppendLogWithMultiBatch() throws Exception {
-        tEnv.executeSql(
-                "create table sink_test (a int not null, b bigint, c string) with "
-                        + "('bucket.num' = '3')");
+        tEnv.executeSql("create table sink_test (a int not null, b bigint, c string) with " + "('bucket.num' = '3')");
         int batchSize = 3;
         for (int i = 0; i < batchSize; i++) {
-            tEnv.executeSql(
-                            "INSERT INTO sink_test(a, b, c) "
-                                    + "VALUES (1, 3501, 'Tim'), "
-                                    + "(2, 3502, 'Fabian'), "
-                                    + "(3, 3503, 'coco'), "
-                                    + "(4, 3504, 'jerry'), "
-                                    + "(5, 3505, 'piggy'), "
-                                    + "(6, 3506, 'stave')")
+            tEnv.executeSql("INSERT INTO sink_test(a, b, c) "
+                            + "VALUES (1, 3501, 'Tim'), "
+                            + "(2, 3502, 'Fabian'), "
+                            + "(3, 3503, 'coco'), "
+                            + "(4, 3504, 'jerry'), "
+                            + "(5, 3505, 'piggy'), "
+                            + "(6, 3506, 'stave')")
                     .await();
         }
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from sink_test").collect();
         List<String> expectedRows = new ArrayList<>();
         for (int i = 0; i < batchSize; i++) {
-            expectedRows.addAll(
-                    Arrays.asList(
-                            "+I[1, 3501, Tim]", "+I[2, 3502, Fabian]",
-                            "+I[3, 3503, coco]", "+I[4, 3504, jerry]",
-                            "+I[5, 3505, piggy]", "+I[6, 3506, stave]"));
+            expectedRows.addAll(Arrays.asList(
+                    "+I[1, 3501, Tim]", "+I[2, 3502, Fabian]",
+                    "+I[3, 3503, coco]", "+I[4, 3504, jerry]",
+                    "+I[5, 3505, piggy]", "+I[6, 3506, stave]"));
         }
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
@@ -310,20 +291,18 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testPut(boolean sinkBucketShuffle) throws Exception {
-        tEnv.executeSql(
-                String.format(
-                        "create table sink_test (a int not null primary key not enforced, b bigint, c string)"
-                                + " with('bucket.num' = '3', 'sink.bucket-shuffle'= '%s')",
-                        sinkBucketShuffle));
+        tEnv.executeSql(String.format(
+                "create table sink_test (a int not null primary key not enforced, b bigint, c string)"
+                        + " with('bucket.num' = '3', 'sink.bucket-shuffle'= '%s')",
+                sinkBucketShuffle));
 
-        String insertSql =
-                "INSERT INTO sink_test(a, b, c) "
-                        + "VALUES (1, 3501, 'Tim'), "
-                        + "(2, 3502, 'Fabian'), "
-                        + "(3, 3503, 'coco'), "
-                        + "(4, 3504, 'jerry'), "
-                        + "(5, 3505, 'piggy'), "
-                        + "(6, 3506, 'stave')";
+        String insertSql = "INSERT INTO sink_test(a, b, c) "
+                + "VALUES (1, 3501, 'Tim'), "
+                + "(2, 3502, 'Fabian'), "
+                + "(3, 3503, 'coco'), "
+                + "(4, 3504, 'jerry'), "
+                + "(5, 3505, 'piggy'), "
+                + "(6, 3506, 'stave')";
         String insertPlan = tEnv.explainSql(insertSql, ExplainDetail.JSON_EXECUTION_PLAN);
         if (sinkBucketShuffle) {
             assertThat(insertPlan).contains("\"ship_strategy\" : \"BUCKET_SHUFFLE\"");
@@ -332,29 +311,27 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         }
         tEnv.executeSql(insertSql).await();
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
-        List<String> expectedRows =
-                Arrays.asList(
-                        "+I[1, 3501, Tim]", "+I[2, 3502, Fabian]",
-                        "+I[3, 3503, coco]", "+I[4, 3504, jerry]",
-                        "+I[5, 3505, piggy]", "+I[6, 3506, stave]");
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from sink_test").collect();
+        List<String> expectedRows = Arrays.asList(
+                "+I[1, 3501, Tim]", "+I[2, 3502, Fabian]",
+                "+I[3, 3503, coco]", "+I[4, 3504, jerry]",
+                "+I[5, 3505, piggy]", "+I[6, 3506, stave]");
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
-        tEnv.executeSql(
-                        "INSERT INTO sink_test(c, b, a) "
-                                + "VALUES "
-                                + "('Timmy', 501, 11), "
-                                + "('Fab', 502, 12), "
-                                + "('cony', 503, 13), "
-                                + "('jemmy', 504, 14), "
-                                + "('pig', 505, 15), "
-                                + "('stephen', 506, 16)")
+        tEnv.executeSql("INSERT INTO sink_test(c, b, a) "
+                        + "VALUES "
+                        + "('Timmy', 501, 11), "
+                        + "('Fab', 502, 12), "
+                        + "('cony', 503, 13), "
+                        + "('jemmy', 504, 14), "
+                        + "('pig', 505, 15), "
+                        + "('stephen', 506, 16)")
                 .await();
-        expectedRows =
-                Arrays.asList(
-                        "+I[11, 501, Timmy]", "+I[12, 502, Fab]",
-                        "+I[13, 503, cony]", "+I[14, 504, jemmy]",
-                        "+I[15, 505, pig]", "+I[16, 506, stephen]");
+        expectedRows = Arrays.asList(
+                "+I[11, 501, Timmy]", "+I[12, 502, Fab]",
+                "+I[13, 503, cony]", "+I[14, 504, jemmy]",
+                "+I[15, 505, pig]", "+I[16, 506, stephen]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
@@ -365,77 +342,67 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         // partial insert
         tEnv.executeSql("INSERT INTO sink_test(a, b) VALUES (1, 111), (2, 222)").await();
-        tEnv.executeSql("INSERT INTO sink_test(c, a) VALUES ('c1', 1), ('c2', 2)").await();
+        tEnv.executeSql("INSERT INTO sink_test(c, a) VALUES ('c1', 1), ('c2', 2)")
+                .await();
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from sink_test").collect();
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from sink_test").collect();
 
-        List<String> expectedRows =
-                Arrays.asList(
-                        "+I[1, 111, null]",
-                        "+I[2, 222, null]",
-                        "-U[1, 111, null]",
-                        "+U[1, 111, c1]",
-                        "-U[2, 222, null]",
-                        "+U[2, 222, c2]");
+        List<String> expectedRows = Arrays.asList(
+                "+I[1, 111, null]",
+                "+I[2, 222, null]",
+                "-U[1, 111, null]",
+                "+U[1, 111, c1]",
+                "-U[2, 222, null]",
+                "+U[2, 222, c2]");
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
         // partial delete
-        org.apache.flink.table.api.Table changeLogTable =
-                tEnv.fromChangelogStream(
-                        env.fromElements(
-                                        Row.ofKind(
-                                                org.apache.flink.types.RowKind.INSERT,
-                                                1,
-                                                333L,
-                                                "c11"),
-                                        Row.ofKind(
-                                                org.apache.flink.types.RowKind.DELETE,
-                                                1,
-                                                333L,
-                                                "c11"))
-                                .returns(Types.ROW(Types.INT, Types.LONG, Types.STRING)));
+        org.apache.flink.table.api.Table changeLogTable = tEnv.fromChangelogStream(env.fromElements(
+                        Row.ofKind(org.apache.flink.types.RowKind.INSERT, 1, 333L, "c11"),
+                        Row.ofKind(org.apache.flink.types.RowKind.DELETE, 1, 333L, "c11"))
+                .returns(Types.ROW(Types.INT, Types.LONG, Types.STRING)));
         tEnv.createTemporaryView("changeLog", changeLogTable);
 
         // check the target fields in row 1 is set to null
-        tEnv.executeSql("INSERT INTO sink_test(a, b) SELECT f0, f1 FROM changeLog").await();
-        expectedRows =
-                Arrays.asList(
-                        "-U[1, 111, c1]", "+U[1, 333, c1]", "-U[1, 333, c1]", "+U[1, null, c1]");
+        tEnv.executeSql("INSERT INTO sink_test(a, b) SELECT f0, f1 FROM changeLog")
+                .await();
+        expectedRows = Arrays.asList("-U[1, 111, c1]", "+U[1, 333, c1]", "-U[1, 333, c1]", "+U[1, null, c1]");
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
         // check the row 1 will be deleted finally since all the fields in the row are set to null
-        tEnv.executeSql("INSERT INTO sink_test(a, c) SELECT f0, f2 FROM changeLog").await();
+        tEnv.executeSql("INSERT INTO sink_test(a, c) SELECT f0, f2 FROM changeLog")
+                .await();
         expectedRows = Arrays.asList("-U[1, null, c1]", "+U[1, null, c11]", "-D[1, null, c11]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
     @Test
     void testFirstRowMergeEngine() throws Exception {
-        tEnv.executeSql(
-                "create table first_row_source (a int not null primary key not enforced,"
-                        + " b string) with('table.merge-engine' = 'first_row')");
+        tEnv.executeSql("create table first_row_source (a int not null primary key not enforced,"
+                + " b string) with('table.merge-engine' = 'first_row')");
         tEnv.executeSql("create table log_sink (a int, b string)");
 
         // insert the primary table with first_row merge engine into the a log table to verify that
         // the first_row merge engine only generates append-only stream
-        JobClient insertJobClient =
-                tEnv.executeSql("insert into log_sink select * from first_row_source")
-                        .getJobClient()
-                        .get();
+        JobClient insertJobClient = tEnv.executeSql("insert into log_sink select * from first_row_source")
+                .getJobClient()
+                .get();
 
         // insert once
-        tEnv.executeSql(
-                        "insert into first_row_source(a, b) VALUES (1, 'v1'), (2, 'v2'), (1, 'v11'), (3, 'v3')")
+        tEnv.executeSql("insert into first_row_source(a, b) VALUES (1, 'v1'), (2, 'v2'), (1, 'v11'), (3, 'v3')")
                 .await();
 
-        CloseableIterator<Row> rowIter = tEnv.executeSql("select * from log_sink").collect();
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from log_sink").collect();
 
         List<String> expectedRows = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
 
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
         // insert again
-        tEnv.executeSql("insert into first_row_source(a, b) VALUES (3, 'v33'), (4, 'v44')").await();
+        tEnv.executeSql("insert into first_row_source(a, b) VALUES (3, 'v33'), (4, 'v44')")
+                .await();
         expectedRows = Collections.singletonList("+I[4, v44]");
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
@@ -455,19 +422,18 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         tEnv.executeSql("create table sink_insert_all (a int, b bigint, c string)");
         tEnv.executeSql("create table source_insert_all (a int, b bigint, c string)");
         // we just use explain to reduce test time
-        String expectPlan =
-                "== Abstract Syntax Tree ==\n"
-                        + "LogicalSink(table=[testcatalog.defaultdb.sink_insert_all], fields=[a, b, c])\n"
-                        + "+- LogicalProject(a=[$0], b=[$1], c=[$2])\n"
-                        + "   +- LogicalTableScan(table=[[testcatalog, defaultdb, source_insert_all]])\n"
-                        + "\n"
-                        + "== Optimized Physical Plan ==\n"
-                        + "Sink(table=[testcatalog.defaultdb.sink_insert_all], fields=[a, b, c])\n"
-                        + "+- TableSourceScan(table=[[testcatalog, defaultdb, source_insert_all]], fields=[a, b, c])\n"
-                        + "\n"
-                        + "== Optimized Execution Plan ==\n"
-                        + "Sink(table=[testcatalog.defaultdb.sink_insert_all], fields=[a, b, c])\n"
-                        + "+- TableSourceScan(table=[[testcatalog, defaultdb, source_insert_all]], fields=[a, b, c])\n";
+        String expectPlan = "== Abstract Syntax Tree ==\n"
+                + "LogicalSink(table=[testcatalog.defaultdb.sink_insert_all], fields=[a, b, c])\n"
+                + "+- LogicalProject(a=[$0], b=[$1], c=[$2])\n"
+                + "   +- LogicalTableScan(table=[[testcatalog, defaultdb, source_insert_all]])\n"
+                + "\n"
+                + "== Optimized Physical Plan ==\n"
+                + "Sink(table=[testcatalog.defaultdb.sink_insert_all], fields=[a, b, c])\n"
+                + "+- TableSourceScan(table=[[testcatalog, defaultdb, source_insert_all]], fields=[a, b, c])\n"
+                + "\n"
+                + "== Optimized Execution Plan ==\n"
+                + "Sink(table=[testcatalog.defaultdb.sink_insert_all], fields=[a, b, c])\n"
+                + "+- TableSourceScan(table=[[testcatalog, defaultdb, source_insert_all]], fields=[a, b, c])\n";
         assertThat(tEnv.explainSql("insert into sink_insert_all select * from source_insert_all"))
                 .isEqualTo(expectPlan);
     }
@@ -475,87 +441,71 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testIgnoreDelete(boolean isPrimaryKeyTable) throws Exception {
-        String sinkName =
-                isPrimaryKeyTable
-                        ? "ignore_delete_primary_key_table_sink"
-                        : "ignore_delete_log_table_sink";
+        String sinkName = isPrimaryKeyTable ? "ignore_delete_primary_key_table_sink" : "ignore_delete_log_table_sink";
         String sourceName = isPrimaryKeyTable ? "source_primary_key_table" : "source_log_table";
-        org.apache.flink.table.api.Table cdcSourceData =
-                tEnv.fromChangelogStream(
-                        env.fromCollection(
-                                Arrays.asList(
-                                        Row.ofKind(RowKind.INSERT, 1, 3501L, "Tim"),
-                                        Row.ofKind(RowKind.DELETE, 1, 3501L, "Tim"),
-                                        Row.ofKind(RowKind.INSERT, 2, 3502L, "Fabian"),
-                                        Row.ofKind(RowKind.UPDATE_BEFORE, 2, 3502L, "Fabian"),
-                                        Row.ofKind(RowKind.UPDATE_AFTER, 3, 3503L, "coco"))));
+        org.apache.flink.table.api.Table cdcSourceData = tEnv.fromChangelogStream(env.fromCollection(Arrays.asList(
+                Row.ofKind(RowKind.INSERT, 1, 3501L, "Tim"),
+                Row.ofKind(RowKind.DELETE, 1, 3501L, "Tim"),
+                Row.ofKind(RowKind.INSERT, 2, 3502L, "Fabian"),
+                Row.ofKind(RowKind.UPDATE_BEFORE, 2, 3502L, "Fabian"),
+                Row.ofKind(RowKind.UPDATE_AFTER, 3, 3503L, "coco"))));
         tEnv.createTemporaryView(String.format("%s", sourceName), cdcSourceData);
 
-        tEnv.executeSql(
-                String.format(
-                        "create table %s ("
-                                + "a int not null, "
-                                + "b bigint, "
-                                + "c string "
-                                + (isPrimaryKeyTable ? ", primary key (a) NOT ENFORCED" : "")
-                                + ") with('bucket.num' = '3',"
-                                + " 'sink.ignore-delete'='true')",
-                        sinkName));
+        tEnv.executeSql(String.format(
+                "create table %s ("
+                        + "a int not null, "
+                        + "b bigint, "
+                        + "c string "
+                        + (isPrimaryKeyTable ? ", primary key (a) NOT ENFORCED" : "")
+                        + ") with('bucket.num' = '3',"
+                        + " 'sink.ignore-delete'='true')",
+                sinkName));
         tEnv.executeSql(String.format("INSERT INTO %s SELECT * FROM %s", sinkName, sourceName))
                 .await();
 
         CloseableIterator<Row> rowIter =
                 tEnv.executeSql(String.format("select * from %s", sinkName)).collect();
-        List<String> expectedRows =
-                Arrays.asList("+I[1, 3501, Tim]", "+I[2, 3502, Fabian]", "+I[3, 3503, coco]");
+        List<String> expectedRows = Arrays.asList("+I[1, 3501, Tim]", "+I[2, 3502, Fabian]", "+I[3, 3503, coco]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
     @ParameterizedTest
     @MethodSource("writePartitionedTableParams")
-    void testWritePartitionedTable(boolean isPrimaryKeyTable, boolean isAutoPartition)
-            throws Exception {
-        String tableName =
-                String.format(
-                        "%s_partitioned_%s_table_sink",
-                        isPrimaryKeyTable ? "primary_key" : "log", isAutoPartition ? "auto" : "");
+    void testWritePartitionedTable(boolean isPrimaryKeyTable, boolean isAutoPartition) throws Exception {
+        String tableName = String.format(
+                "%s_partitioned_%s_table_sink",
+                isPrimaryKeyTable ? "primary_key" : "log", isAutoPartition ? "auto" : "");
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
 
         Collection<String> partitions;
         if (isAutoPartition) {
-            tEnv.executeSql(
-                    String.format(
-                            "create table %s ("
-                                    + "a int not null,"
-                                    + " b bigint, "
-                                    + "c string"
-                                    + (isPrimaryKeyTable ? ", primary key (a,c) NOT ENFORCED" : "")
-                                    + ")"
-                                    + " partitioned by (c) "
-                                    + "with ('table.auto-partition.enabled' = 'true',"
-                                    + " 'table.auto-partition.time-unit' = 'year')",
-                            tableName));
-            partitions =
-                    waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath)
-                            .values();
+            tEnv.executeSql(String.format(
+                    "create table %s ("
+                            + "a int not null,"
+                            + " b bigint, "
+                            + "c string"
+                            + (isPrimaryKeyTable ? ", primary key (a,c) NOT ENFORCED" : "")
+                            + ")"
+                            + " partitioned by (c) "
+                            + "with ('table.auto-partition.enabled' = 'true',"
+                            + " 'table.auto-partition.time-unit' = 'year')",
+                    tableName));
+            partitions = waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath)
+                    .values();
         } else {
-            tEnv.executeSql(
-                    String.format(
-                            "create table %s ("
-                                    + "a int not null,"
-                                    + " b bigint, "
-                                    + "c string"
-                                    + (isPrimaryKeyTable ? ", primary key (a,c) NOT ENFORCED" : "")
-                                    + ")"
-                                    + " partitioned by (c) ",
-                            tableName));
+            tEnv.executeSql(String.format(
+                    "create table %s ("
+                            + "a int not null,"
+                            + " b bigint, "
+                            + "c string"
+                            + (isPrimaryKeyTable ? ", primary key (a,c) NOT ENFORCED" : "")
+                            + ")"
+                            + " partitioned by (c) ",
+                    tableName));
             int currentYear = LocalDate.now().getYear();
-            tEnv.executeSql(
-                    String.format(
-                            "alter table %s add partition (c = '%s')", tableName, currentYear));
-            partitions =
-                    waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath, 1)
-                            .values();
+            tEnv.executeSql(String.format("alter table %s add partition (c = '%s')", tableName, currentYear));
+            partitions = waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath, 1)
+                    .values();
         }
 
         InsertAndExpectValues insertAndExpectValues = rowsToInsertInto(partitions);
@@ -563,10 +513,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         List<String> insertValues = insertAndExpectValues.insertValues;
         List<String> expectedRows = insertAndExpectValues.expectedRows;
 
-        tEnv.executeSql(
-                        String.format(
-                                "INSERT INTO %s(a, b, c) " + "VALUES %s",
-                                tableName, String.join(", ", insertValues)))
+        tEnv.executeSql(String.format(
+                        "INSERT INTO %s(a, b, c) " + "VALUES %s", tableName, String.join(", ", insertValues)))
                 .await();
 
         CloseableIterator<Row> rowIter =
@@ -575,224 +523,176 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
         // create two partitions, write data to the new partitions
         List<String> newPartitions = Arrays.asList("2030", "2031");
-        tEnv.executeSql(
-                String.format("alter table %s add partition (c = '%s')", tableName, "2030"));
-        tEnv.executeSql(
-                String.format("alter table %s add partition (c = '%s')", tableName, "2031"));
+        tEnv.executeSql(String.format("alter table %s add partition (c = '%s')", tableName, "2030"));
+        tEnv.executeSql(String.format("alter table %s add partition (c = '%s')", tableName, "2031"));
 
         // insert into the new partition again, check we can read the data
         // in new partitions
         insertAndExpectValues = rowsToInsertInto(newPartitions);
         insertValues = insertAndExpectValues.insertValues;
         expectedRows = insertAndExpectValues.expectedRows;
-        tEnv.executeSql(
-                        String.format(
-                                "INSERT INTO %s(a, b, c) " + "VALUES %s",
-                                tableName, String.join(", ", insertValues)))
+        tEnv.executeSql(String.format(
+                        "INSERT INTO %s(a, b, c) " + "VALUES %s", tableName, String.join(", ", insertValues)))
                 .await();
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
         // test insert new added partitions
-        tEnv.executeSql(
-                        String.format(
-                                "INSERT INTO %s PARTITION (c = 2030) values (22, 2222), (33, 3333)",
-                                tableName))
+        tEnv.executeSql(String.format("INSERT INTO %s PARTITION (c = 2030) values (22, 2222), (33, 3333)", tableName))
                 .await();
-        assertResultsIgnoreOrder(
-                rowIter, Arrays.asList("+I[22, 2222, 2030]", "+I[33, 3333, 2030]"), true);
+        assertResultsIgnoreOrder(rowIter, Arrays.asList("+I[22, 2222, 2030]", "+I[33, 3333, 2030]"), true);
     }
 
     @Test
     void testDeleteAndUpdateStmtOnPkTable() throws Exception {
         String tableName = "pk_table_delete_test";
-        tBatchEnv.executeSql(
-                String.format(
-                        "create table %s ("
-                                + " a int not null,"
-                                + " b bigint, "
-                                + " c string,"
-                                + " primary key (a) not enforced"
-                                + ")",
-                        tableName));
+        tBatchEnv.executeSql(String.format(
+                "create table %s ("
+                        + " a int not null,"
+                        + " b bigint, "
+                        + " c string,"
+                        + " primary key (a) not enforced"
+                        + ")",
+                tableName));
         // test delete data with non-exists key.
         tBatchEnv.executeSql("DELETE FROM " + tableName + " WHERE a = 5").await();
 
-        List<String> insertValues =
-                Arrays.asList(
-                        "(1, 3501, 'Beijing')",
-                        "(2, 3502, 'Shanghai')",
-                        "(3, 3503, 'Berlin')",
-                        "(4, 3504, 'Seattle')",
-                        "(5, 3505, 'Boston')",
-                        "(6, 3506, 'London')");
+        List<String> insertValues = Arrays.asList(
+                "(1, 3501, 'Beijing')",
+                "(2, 3502, 'Shanghai')",
+                "(3, 3503, 'Berlin')",
+                "(4, 3504, 'Seattle')",
+                "(5, 3505, 'Boston')",
+                "(6, 3506, 'London')");
         tBatchEnv
                 .executeSql(
-                        String.format(
-                                "INSERT INTO %s(a,b,c) VALUES %s",
-                                tableName, String.join(", ", insertValues)))
+                        String.format("INSERT INTO %s(a,b,c) VALUES %s", tableName, String.join(", ", insertValues)))
                 .await();
 
         // test delete row5
         tBatchEnv.executeSql("DELETE FROM " + tableName + " WHERE a = 5").await();
-        CloseableIterator<Row> rowIter =
-                tBatchEnv
-                        .executeSql(String.format("select * from %s WHERE a = 5", tableName))
-                        .collect();
+        CloseableIterator<Row> rowIter = tBatchEnv
+                .executeSql(String.format("select * from %s WHERE a = 5", tableName))
+                .collect();
         assertThat(rowIter.hasNext()).isFalse();
 
         // test delete data with non-exists key.
         tBatchEnv.executeSql("DELETE FROM " + tableName + " WHERE a = 15").await();
 
         // test update row4
-        tBatchEnv.executeSql("UPDATE " + tableName + " SET c = 'New York' WHERE a = 4").await();
-        CloseableIterator<Row> row4 =
-                tBatchEnv
-                        .executeSql(String.format("select * from %s WHERE a = 4", tableName))
-                        .collect();
+        tBatchEnv
+                .executeSql("UPDATE " + tableName + " SET c = 'New York' WHERE a = 4")
+                .await();
+        CloseableIterator<Row> row4 = tBatchEnv
+                .executeSql(String.format("select * from %s WHERE a = 4", tableName))
+                .collect();
         List<String> expected = Collections.singletonList("+I[4, 3504, New York]");
         assertResultsIgnoreOrder(row4, expected, true);
 
         // use stream env to assert changelogs
-        CloseableIterator<Row> changelogIter =
-                tEnv.executeSql(
-                                String.format(
-                                        "select * from %s /*+ OPTIONS('scan.startup.mode' = 'earliest') */",
-                                        tableName))
-                        .collect();
-        List<String> expectedRows =
-                Arrays.asList(
-                        "+I[1, 3501, Beijing]",
-                        "+I[2, 3502, Shanghai]",
-                        "+I[3, 3503, Berlin]",
-                        "+I[4, 3504, Seattle]",
-                        "+I[5, 3505, Boston]",
-                        "+I[6, 3506, London]",
-                        "-D[5, 3505, Boston]",
-                        "-U[4, 3504, Seattle]",
-                        "+U[4, 3504, New York]");
+        CloseableIterator<Row> changelogIter = tEnv.executeSql(
+                        String.format("select * from %s /*+ OPTIONS('scan.startup.mode' = 'earliest') */", tableName))
+                .collect();
+        List<String> expectedRows = Arrays.asList(
+                "+I[1, 3501, Beijing]",
+                "+I[2, 3502, Shanghai]",
+                "+I[3, 3503, Berlin]",
+                "+I[4, 3504, Seattle]",
+                "+I[5, 3505, Boston]",
+                "+I[6, 3506, London]",
+                "-D[5, 3505, Boston]",
+                "-U[4, 3504, Seattle]",
+                "+U[4, 3504, New York]");
         assertResultsIgnoreOrder(changelogIter, expectedRows, true);
     }
 
     @Test
     void testDeleteAndUpdateStmtOnPartitionedPkTable() throws Exception {
         String tableName = "partitioned_pk_table_delete_test";
-        tBatchEnv.executeSql(
-                String.format(
-                        "create table %s ("
-                                + " a int not null,"
-                                + " b bigint, "
-                                + " c string,"
-                                + " primary key (a, c) not enforced"
-                                + ") partitioned by (c)"
-                                + " with ('table.auto-partition.enabled' = 'true',"
-                                + " 'table.auto-partition.time-unit' = 'year')",
-                        tableName));
-        Collection<String> partitions =
-                waitUntilPartitions(
-                                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
-                                TablePath.of(DEFAULT_DB, tableName))
-                        .values();
+        tBatchEnv.executeSql(String.format(
+                "create table %s ("
+                        + " a int not null,"
+                        + " b bigint, "
+                        + " c string,"
+                        + " primary key (a, c) not enforced"
+                        + ") partitioned by (c)"
+                        + " with ('table.auto-partition.enabled' = 'true',"
+                        + " 'table.auto-partition.time-unit' = 'year')",
+                tableName));
+        Collection<String> partitions = waitUntilPartitions(
+                        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), TablePath.of(DEFAULT_DB, tableName))
+                .values();
         String partition = partitions.iterator().next();
-        List<String> insertValues =
-                Arrays.asList(
-                        "(1, 3501, '" + partition + "')",
-                        "(2, 3502, '" + partition + "')",
-                        "(3, 3503, '" + partition + "')",
-                        "(4, 3504, '" + partition + "')",
-                        "(5, 3505, '" + partition + "')",
-                        "(6, 3506, '" + partition + "')");
+        List<String> insertValues = Arrays.asList(
+                "(1, 3501, '" + partition + "')",
+                "(2, 3502, '" + partition + "')",
+                "(3, 3503, '" + partition + "')",
+                "(4, 3504, '" + partition + "')",
+                "(5, 3505, '" + partition + "')",
+                "(6, 3506, '" + partition + "')");
         tBatchEnv
                 .executeSql(
-                        String.format(
-                                "INSERT INTO %s(a,b,c) VALUES %s",
-                                tableName, String.join(", ", insertValues)))
+                        String.format("INSERT INTO %s(a,b,c) VALUES %s", tableName, String.join(", ", insertValues)))
                 .await();
 
         // test delete row5
         tBatchEnv
                 .executeSql("DELETE FROM " + tableName + " WHERE a = 5 AND c = '" + partition + "'")
                 .await();
-        CloseableIterator<Row> rowIter =
-                tBatchEnv
-                        .executeSql(
-                                String.format(
-                                        "select * from %s WHERE a = 5 AND c = '%s'",
-                                        tableName, partition))
-                        .collect();
+        CloseableIterator<Row> rowIter = tBatchEnv
+                .executeSql(String.format("select * from %s WHERE a = 5 AND c = '%s'", tableName, partition))
+                .collect();
         assertThat(rowIter.hasNext()).isFalse();
 
         // test update row4
         tBatchEnv
-                .executeSql(
-                        "UPDATE "
-                                + tableName
-                                + " SET b = 4004 WHERE a = 4 AND c = '"
-                                + partition
-                                + "'")
+                .executeSql("UPDATE " + tableName + " SET b = 4004 WHERE a = 4 AND c = '" + partition + "'")
                 .await();
-        CloseableIterator<Row> row4 =
-                tBatchEnv
-                        .executeSql(
-                                String.format(
-                                        "select * from %s WHERE a = 4 AND c = '%s'",
-                                        tableName, partition))
-                        .collect();
+        CloseableIterator<Row> row4 = tBatchEnv
+                .executeSql(String.format("select * from %s WHERE a = 4 AND c = '%s'", tableName, partition))
+                .collect();
         List<String> expected = Collections.singletonList("+I[4, 4004, " + partition + "]");
         assertResultsIgnoreOrder(row4, expected, true);
 
         // use stream env to assert changelogs
-        CloseableIterator<Row> changelogIter =
-                tEnv.executeSql(
-                                String.format(
-                                        "select * from %s /*+ OPTIONS('scan.startup.mode' = 'earliest') */",
-                                        tableName))
-                        .collect();
-        List<String> expectedRows =
-                Arrays.asList(
-                        "+I[1, 3501, " + partition + "]",
-                        "+I[2, 3502, " + partition + "]",
-                        "+I[3, 3503, " + partition + "]",
-                        "+I[4, 3504, " + partition + "]",
-                        "+I[5, 3505, " + partition + "]",
-                        "+I[6, 3506, " + partition + "]",
-                        "-D[5, 3505, " + partition + "]",
-                        "-U[4, 3504, " + partition + "]",
-                        "+U[4, 4004, " + partition + "]");
+        CloseableIterator<Row> changelogIter = tEnv.executeSql(
+                        String.format("select * from %s /*+ OPTIONS('scan.startup.mode' = 'earliest') */", tableName))
+                .collect();
+        List<String> expectedRows = Arrays.asList(
+                "+I[1, 3501, " + partition + "]",
+                "+I[2, 3502, " + partition + "]",
+                "+I[3, 3503, " + partition + "]",
+                "+I[4, 3504, " + partition + "]",
+                "+I[5, 3505, " + partition + "]",
+                "+I[6, 3506, " + partition + "]",
+                "-D[5, 3505, " + partition + "]",
+                "-U[4, 3504, " + partition + "]",
+                "+U[4, 4004, " + partition + "]");
         assertResultsIgnoreOrder(changelogIter, expectedRows, true);
     }
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testUnsupportedDeleteAndUpdateStmtOnLogTable(boolean isPartitionedTable) {
-        String tableName =
-                isPartitionedTable ? "partitioned_log_table_delete_test" : "log_table_delete_test";
+        String tableName = isPartitionedTable ? "partitioned_log_table_delete_test" : "log_table_delete_test";
         String partitionedTableStmt =
                 " partitioned by (c) with ('table.auto-partition.enabled' = 'true','table.auto-partition.time-unit' = 'year')";
-        tBatchEnv.executeSql(
-                String.format(
-                        "create table %s ("
-                                + " a int not null,"
-                                + " b bigint, "
-                                + " c string"
-                                + ")"
-                                + (isPartitionedTable ? partitionedTableStmt : ""),
-                        tableName));
-        assertThatThrownBy(
-                        () ->
-                                tBatchEnv
-                                        .executeSql("DELETE FROM " + tableName + " WHERE a = 1")
-                                        .await())
+        tBatchEnv.executeSql(String.format(
+                "create table %s ("
+                        + " a int not null,"
+                        + " b bigint, "
+                        + " c string"
+                        + ")"
+                        + (isPartitionedTable ? partitionedTableStmt : ""),
+                tableName));
+        assertThatThrownBy(() -> tBatchEnv
+                        .executeSql("DELETE FROM " + tableName + " WHERE a = 1")
+                        .await())
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("Log Table doesn't support DELETE and UPDATE statements.");
 
-        assertThatThrownBy(
-                        () ->
-                                tBatchEnv
-                                        .executeSql(
-                                                "UPDATE "
-                                                        + tableName
-                                                        + " SET c = 'New York' WHERE a = 4")
-                                        .await())
+        assertThatThrownBy(() -> tBatchEnv
+                        .executeSql("UPDATE " + tableName + " SET c = 'New York' WHERE a = 4")
+                        .await())
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("Log Table doesn't support DELETE and UPDATE statements.");
     }
@@ -801,71 +701,64 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     void testUnsupportedDeleteAndUpdateStmtOnPartialPK() {
         // test primary-key table
         String t1 = "t1";
-        tBatchEnv.executeSql(
-                String.format(
-                        "create table %s ("
-                                + " a int not null,"
-                                + " b bigint not null, "
-                                + " c string,"
-                                + " primary key (a, b) not enforced"
-                                + ")",
-                        t1));
-        assertThatThrownBy(() -> tBatchEnv.executeSql("DELETE FROM " + t1 + " WHERE a = 1").await())
+        tBatchEnv.executeSql(String.format(
+                "create table %s ("
+                        + " a int not null,"
+                        + " b bigint not null, "
+                        + " c string,"
+                        + " primary key (a, b) not enforced"
+                        + ")",
+                t1));
+        assertThatThrownBy(() -> tBatchEnv
+                        .executeSql("DELETE FROM " + t1 + " WHERE a = 1")
+                        .await())
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining(
                         "Currently, Fluss table only supports DELETE statement with conditions on primary key.");
 
-        assertThatThrownBy(
-                        () ->
-                                tBatchEnv
-                                        .executeSql("UPDATE " + t1 + " SET b = 4004 WHERE a = 1")
-                                        .await())
+        assertThatThrownBy(() -> tBatchEnv
+                        .executeSql("UPDATE " + t1 + " SET b = 4004 WHERE a = 1")
+                        .await())
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining(
                         "Updates to primary keys are not supported, primaryKeys ([a, b]), updatedColumns ([b])");
 
-        assertThatThrownBy(
-                        () ->
-                                tBatchEnv
-                                        .executeSql(
-                                                "UPDATE " + t1 + " SET c = 'New York' WHERE a = 1")
-                                        .await())
+        assertThatThrownBy(() -> tBatchEnv
+                        .executeSql("UPDATE " + t1 + " SET c = 'New York' WHERE a = 1")
+                        .await())
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining(
                         "Currently, Fluss table only supports UPDATE statement with conditions on primary key.");
 
         // test partitioned primary-key table
         String t2 = "t2";
-        tBatchEnv.executeSql(
-                String.format(
-                        "create table %s ("
-                                + " a int not null,"
-                                + " b bigint not null, "
-                                + " c string,"
-                                + " primary key (a, c) not enforced"
-                                + ") partitioned by (c)"
-                                + " with ('table.auto-partition.enabled' = 'true',"
-                                + " 'table.auto-partition.time-unit' = 'year')",
-                        t2));
-        assertThatThrownBy(() -> tBatchEnv.executeSql("DELETE FROM " + t2 + " WHERE a = 1").await())
+        tBatchEnv.executeSql(String.format(
+                "create table %s ("
+                        + " a int not null,"
+                        + " b bigint not null, "
+                        + " c string,"
+                        + " primary key (a, c) not enforced"
+                        + ") partitioned by (c)"
+                        + " with ('table.auto-partition.enabled' = 'true',"
+                        + " 'table.auto-partition.time-unit' = 'year')",
+                t2));
+        assertThatThrownBy(() -> tBatchEnv
+                        .executeSql("DELETE FROM " + t2 + " WHERE a = 1")
+                        .await())
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining(
                         "Currently, Fluss table only supports DELETE statement with conditions on primary key.");
 
-        assertThatThrownBy(
-                        () ->
-                                tBatchEnv
-                                        .executeSql("UPDATE " + t2 + " SET c = '2028' WHERE a = 1")
-                                        .await())
+        assertThatThrownBy(() -> tBatchEnv
+                        .executeSql("UPDATE " + t2 + " SET c = '2028' WHERE a = 1")
+                        .await())
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining(
                         "Updates to primary keys are not supported, primaryKeys ([a, c]), updatedColumns ([c])");
 
-        assertThatThrownBy(
-                        () ->
-                                tBatchEnv
-                                        .executeSql("UPDATE " + t2 + " SET b = 4004 WHERE a = 1")
-                                        .await())
+        assertThatThrownBy(() -> tBatchEnv
+                        .executeSql("UPDATE " + t2 + " SET b = 4004 WHERE a = 1")
+                        .await())
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining(
                         "Currently, Fluss table only supports UPDATE statement with conditions on primary key.");
@@ -875,36 +768,33 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     void testUnsupportedStmtOnFirstRowMergeEngine() {
         String t1 = "firstRowMergeEngineTable";
         TablePath tablePath = TablePath.of(DEFAULT_DB, t1);
-        tBatchEnv.executeSql(
-                String.format(
-                        "create table %s ("
-                                + " a int not null,"
-                                + " b bigint null, "
-                                + " c string null, "
-                                + " primary key (a) not enforced"
-                                + ") with ('table.merge-engine' = 'first_row')",
-                        t1));
-        assertThatThrownBy(() -> tBatchEnv.executeSql("DELETE FROM " + t1 + " WHERE a = 1").await())
+        tBatchEnv.executeSql(String.format(
+                "create table %s ("
+                        + " a int not null,"
+                        + " b bigint null, "
+                        + " c string null, "
+                        + " primary key (a) not enforced"
+                        + ") with ('table.merge-engine' = 'first_row')",
+                t1));
+        assertThatThrownBy(() -> tBatchEnv
+                        .executeSql("DELETE FROM " + t1 + " WHERE a = 1")
+                        .await())
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage(
                         "Table %s uses the 'FIRST_ROW' merge engine which does not support DELETE or UPDATE statements.",
                         tablePath);
 
-        assertThatThrownBy(
-                        () ->
-                                tBatchEnv
-                                        .executeSql("UPDATE " + t1 + " SET b = 4004 WHERE a = 1")
-                                        .await())
+        assertThatThrownBy(() -> tBatchEnv
+                        .executeSql("UPDATE " + t1 + " SET b = 4004 WHERE a = 1")
+                        .await())
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage(
                         "Table %s uses the 'FIRST_ROW' merge engine which does not support DELETE or UPDATE statements.",
                         tablePath);
 
-        assertThatThrownBy(
-                        () ->
-                                tBatchEnv
-                                        .executeSql("INSERT INTO " + t1 + "(a, c) VALUES(1, 'c1')")
-                                        .await())
+        assertThatThrownBy(() -> tBatchEnv
+                        .executeSql("INSERT INTO " + t1 + "(a, c) VALUES(1, 'c1')")
+                        .await())
                 .isInstanceOf(ValidationException.class)
                 .hasMessage(
                         "Table %s uses the 'FIRST_ROW' merge engine which does not support partial updates."
@@ -916,37 +806,34 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     void testUnsupportedStmtOnVersionMergeEngine() {
         String t1 = "versionMergeEngineTable";
         TablePath tablePath = TablePath.of(DEFAULT_DB, t1);
-        tBatchEnv.executeSql(
-                String.format(
-                        "create table %s ("
-                                + " a int not null,"
-                                + " b bigint null, "
-                                + " c string null, "
-                                + " primary key (a) not enforced"
-                                + ") with ('table.merge-engine' = 'versioned', "
-                                + "'table.merge-engine.versioned.ver-column' = 'b')",
-                        t1));
-        assertThatThrownBy(() -> tBatchEnv.executeSql("DELETE FROM " + t1 + " WHERE a = 1").await())
+        tBatchEnv.executeSql(String.format(
+                "create table %s ("
+                        + " a int not null,"
+                        + " b bigint null, "
+                        + " c string null, "
+                        + " primary key (a) not enforced"
+                        + ") with ('table.merge-engine' = 'versioned', "
+                        + "'table.merge-engine.versioned.ver-column' = 'b')",
+                t1));
+        assertThatThrownBy(() -> tBatchEnv
+                        .executeSql("DELETE FROM " + t1 + " WHERE a = 1")
+                        .await())
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage(
                         "Table %s uses the 'VERSIONED' merge engine which does not support DELETE or UPDATE statements.",
                         tablePath);
 
-        assertThatThrownBy(
-                        () ->
-                                tBatchEnv
-                                        .executeSql("UPDATE " + t1 + " SET b = 4004 WHERE a = 1")
-                                        .await())
+        assertThatThrownBy(() -> tBatchEnv
+                        .executeSql("UPDATE " + t1 + " SET b = 4004 WHERE a = 1")
+                        .await())
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessage(
                         "Table %s uses the 'VERSIONED' merge engine which does not support DELETE or UPDATE statements.",
                         tablePath);
 
-        assertThatThrownBy(
-                        () ->
-                                tBatchEnv
-                                        .executeSql("INSERT INTO " + t1 + "(a, c) VALUES(1, 'c1')")
-                                        .await())
+        assertThatThrownBy(() -> tBatchEnv
+                        .executeSql("INSERT INTO " + t1 + "(a, c) VALUES(1, 'c1')")
+                        .await())
                 .isInstanceOf(ValidationException.class)
                 .hasMessage(
                         "Table %s uses the 'VERSIONED' merge engine which does not support partial updates."
@@ -956,69 +843,57 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
 
     @Test
     void testVersionMergeEngineWithTypeBigint() throws Exception {
-        tEnv.executeSql(
-                "create table merge_engine_with_version (a int not null primary key not enforced,"
-                        + " b string, ts bigint) with('table.merge-engine' = 'versioned',"
-                        + "'table.merge-engine.versioned.ver-column' = 'ts')");
+        tEnv.executeSql("create table merge_engine_with_version (a int not null primary key not enforced,"
+                + " b string, ts bigint) with('table.merge-engine' = 'versioned',"
+                + "'table.merge-engine.versioned.ver-column' = 'ts')");
 
         // insert once
-        tEnv.executeSql(
-                        "insert into merge_engine_with_version (a, b, ts) VALUES "
-                                + "(1, 'v1', 1000), (2, 'v2', 1000), (1, 'v11', 999), (3, 'v3', 1000)")
+        tEnv.executeSql("insert into merge_engine_with_version (a, b, ts) VALUES "
+                        + "(1, 'v1', 1000), (2, 'v2', 1000), (1, 'v11', 999), (3, 'v3', 1000)")
                 .await();
 
         CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from merge_engine_with_version").collect();
 
         // id=1 not update
-        List<String> expectedRows =
-                Arrays.asList("+I[1, v1, 1000]", "+I[2, v2, 1000]", "+I[3, v3, 1000]");
+        List<String> expectedRows = Arrays.asList("+I[1, v1, 1000]", "+I[2, v2, 1000]", "+I[3, v3, 1000]");
 
         assertResultsIgnoreOrder(rowIter, expectedRows, false);
 
         // insert again, update id=3 and id=2 (>= old version), insert id=4, ignore id=1
-        tEnv.executeSql(
-                        "insert into merge_engine_with_version (a, b, ts) VALUES "
-                                + "(3, 'v33', 1001), (4, 'v44', 1000), (1, 'v11', 999), (2, 'v22', 1000)")
+        tEnv.executeSql("insert into merge_engine_with_version (a, b, ts) VALUES "
+                        + "(3, 'v33', 1001), (4, 'v44', 1000), (1, 'v11', 999), (2, 'v22', 1000)")
                 .await();
-        expectedRows =
-                Arrays.asList(
-                        "-U[3, v3, 1000]",
-                        "+U[3, v33, 1001]",
-                        "+I[4, v44, 1000]",
-                        "-U[2, v2, 1000]",
-                        "+U[2, v22, 1000]");
+        expectedRows = Arrays.asList(
+                "-U[3, v3, 1000]", "+U[3, v33, 1001]", "+I[4, v44, 1000]", "-U[2, v2, 1000]", "+U[2, v22, 1000]");
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
 
     @Test
     void testVersionMergeEngineWithTypeTimestamp() throws Exception {
-        tEnv.executeSql(
-                "create table merge_engine_with_version (a int not null primary key not enforced,"
-                        + " b string, ts TIMESTAMP(3)) with('table.merge-engine' = 'versioned',"
-                        + "'table.merge-engine.versioned.ver-column' = 'ts')");
+        tEnv.executeSql("create table merge_engine_with_version (a int not null primary key not enforced,"
+                + " b string, ts TIMESTAMP(3)) with('table.merge-engine' = 'versioned',"
+                + "'table.merge-engine.versioned.ver-column' = 'ts')");
 
         // insert once
-        tEnv.executeSql(
-                        "INSERT INTO merge_engine_with_version (a, b, ts) VALUES "
-                                + "(1, 'v1', TIMESTAMP '2024-12-27 12:00:00.123'), "
-                                + "(2, 'v2', TIMESTAMP '2024-12-27 12:00:00.123'), "
-                                + "(1, 'v11', TIMESTAMP '2024-12-27 11:59:59.123'), "
-                                + "(3, 'v3', TIMESTAMP '2024-12-27 12:00:00.123'),"
-                                + "(3, 'v33', TIMESTAMP '2024-12-27 12:00:00.123');")
+        tEnv.executeSql("INSERT INTO merge_engine_with_version (a, b, ts) VALUES "
+                        + "(1, 'v1', TIMESTAMP '2024-12-27 12:00:00.123'), "
+                        + "(2, 'v2', TIMESTAMP '2024-12-27 12:00:00.123'), "
+                        + "(1, 'v11', TIMESTAMP '2024-12-27 11:59:59.123'), "
+                        + "(3, 'v3', TIMESTAMP '2024-12-27 12:00:00.123'),"
+                        + "(3, 'v33', TIMESTAMP '2024-12-27 12:00:00.123');")
                 .await();
 
         CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from merge_engine_with_version").collect();
 
         // id=1 not update, but id=3 updated
-        List<String> expectedRows =
-                Arrays.asList(
-                        "+I[1, v1, 2024-12-27T12:00:00.123]",
-                        "+I[2, v2, 2024-12-27T12:00:00.123]",
-                        "+I[3, v3, 2024-12-27T12:00:00.123]",
-                        "-U[3, v3, 2024-12-27T12:00:00.123]",
-                        "+U[3, v33, 2024-12-27T12:00:00.123]");
+        List<String> expectedRows = Arrays.asList(
+                "+I[1, v1, 2024-12-27T12:00:00.123]",
+                "+I[2, v2, 2024-12-27T12:00:00.123]",
+                "+I[3, v3, 2024-12-27T12:00:00.123]",
+                "-U[3, v3, 2024-12-27T12:00:00.123]",
+                "+U[3, v33, 2024-12-27T12:00:00.123]");
 
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
@@ -1027,11 +902,10 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
     void testVersionMergeEngineWithTypeTimestampLTZ9() throws Exception {
 
         tEnv.getConfig().set("table.local-time-zone", "UTC");
-        tEnv.executeSql(
-                "create table merge_engine_with_version (a int not null primary key not enforced,"
-                        + " b string, ts TIMESTAMP(9) WITH LOCAL TIME ZONE ) with("
-                        + "'table.merge-engine' = 'versioned',"
-                        + "'table.merge-engine.versioned.ver-column' = 'ts')");
+        tEnv.executeSql("create table merge_engine_with_version (a int not null primary key not enforced,"
+                + " b string, ts TIMESTAMP(9) WITH LOCAL TIME ZONE ) with("
+                + "'table.merge-engine' = 'versioned',"
+                + "'table.merge-engine.versioned.ver-column' = 'ts')");
 
         // insert once
         tEnv.executeSql(
@@ -1047,13 +921,12 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
                 tEnv.executeSql("select * from merge_engine_with_version").collect();
 
         // id=1 not update, but id=3 updated
-        List<String> expectedRows =
-                Arrays.asList(
-                        "+I[1, v1, 2024-12-27T12:00:00.123456789Z]",
-                        "+I[2, v2, 2024-12-27T12:00:00.123456789Z]",
-                        "+I[3, v3, 2024-12-27T12:00:00.123456789Z]",
-                        "-U[3, v3, 2024-12-27T12:00:00.123456789Z]",
-                        "+U[3, v33, 2024-12-27T12:00:00.123456789Z]");
+        List<String> expectedRows = Arrays.asList(
+                "+I[1, v1, 2024-12-27T12:00:00.123456789Z]",
+                "+I[2, v2, 2024-12-27T12:00:00.123456789Z]",
+                "+I[3, v3, 2024-12-27T12:00:00.123456789Z]",
+                "-U[3, v3, 2024-12-27T12:00:00.123456789Z]",
+                "+U[3, v33, 2024-12-27T12:00:00.123456789Z]");
 
         assertResultsIgnoreOrder(rowIter, expectedRows, true);
     }
@@ -1062,22 +935,20 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         List<String> insertValues = new ArrayList<>();
         List<String> expectedValues = new ArrayList<>();
         for (String partition : partitions) {
-            insertValues.addAll(
-                    Arrays.asList(
-                            "(1, 3501, '" + partition + "')",
-                            "(2, 3502, '" + partition + "')",
-                            "(3, 3503, '" + partition + "')",
-                            "(4, 3504, '" + partition + "')",
-                            "(5, 3505, '" + partition + "')",
-                            "(6, 3506, '" + partition + "')"));
-            expectedValues.addAll(
-                    Arrays.asList(
-                            "+I[1, 3501, " + partition + "]",
-                            "+I[2, 3502, " + partition + "]",
-                            "+I[3, 3503, " + partition + "]",
-                            "+I[4, 3504, " + partition + "]",
-                            "+I[5, 3505, " + partition + "]",
-                            "+I[6, 3506, " + partition + "]"));
+            insertValues.addAll(Arrays.asList(
+                    "(1, 3501, '" + partition + "')",
+                    "(2, 3502, '" + partition + "')",
+                    "(3, 3503, '" + partition + "')",
+                    "(4, 3504, '" + partition + "')",
+                    "(5, 3505, '" + partition + "')",
+                    "(6, 3506, '" + partition + "')"));
+            expectedValues.addAll(Arrays.asList(
+                    "+I[1, 3501, " + partition + "]",
+                    "+I[2, 3502, " + partition + "]",
+                    "+I[3, 3503, " + partition + "]",
+                    "+I[4, 3504, " + partition + "]",
+                    "+I[5, 3505, " + partition + "]",
+                    "+I[6, 3506, " + partition + "]"));
         }
         return new InsertAndExpectValues(insertValues, expectedValues);
     }

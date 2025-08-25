@@ -138,21 +138,13 @@ public class TableRegistrationJsonSerde
         TableDistribution distribution = new TableDistribution(bucketCount, bucketKeys);
 
         Map<String, String> properties = deserializeProperties(node.get(PROPERTIES_NAME));
-        Map<String, String> customProperties =
-                deserializeProperties(node.get(CUSTOM_PROPERTIES_NAME));
+        Map<String, String> customProperties = deserializeProperties(node.get(CUSTOM_PROPERTIES_NAME));
 
         long createdTime = node.get(CREATED_TIME).asLong();
         long modifiedTime = node.get(MODIFIED_TIME).asLong();
 
         return new TableRegistration(
-                tableId,
-                comment,
-                partitionKeys,
-                distribution,
-                properties,
-                customProperties,
-                createdTime,
-                modifiedTime);
+                tableId, comment, partitionKeys, distribution, properties, customProperties, createdTime, modifiedTime);
     }
 
     private Map<String, String> deserializeProperties(JsonNode node) {

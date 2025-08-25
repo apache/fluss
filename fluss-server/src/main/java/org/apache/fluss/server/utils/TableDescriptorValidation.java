@@ -52,13 +52,8 @@ import static org.apache.fluss.utils.PartitionUtils.PARTITION_KEY_SUPPORTED_TYPE
 /** Validator of {@link TableDescriptor}. */
 public class TableDescriptorValidation {
 
-    private static final Set<String> SYSTEM_COLUMNS =
-            Collections.unmodifiableSet(
-                    new LinkedHashSet<>(
-                            Arrays.asList(
-                                    OFFSET_COLUMN_NAME,
-                                    TIMESTAMP_COLUMN_NAME,
-                                    BUCKET_COLUMN_NAME)));
+    private static final Set<String> SYSTEM_COLUMNS = Collections.unmodifiableSet(
+            new LinkedHashSet<>(Arrays.asList(OFFSET_COLUMN_NAME, TIMESTAMP_COLUMN_NAME, BUCKET_COLUMN_NAME)));
 
     /** Validate table descriptor to create is valid and contain all necessary information. */
     public static void validateTableDescriptor(TableDescriptor tableDescriptor, int maxBucketNum) {
@@ -71,10 +66,9 @@ public class TableDescriptorValidation {
         // and value is valid
         for (String key : tableConf.keySet()) {
             if (!TABLE_OPTIONS.containsKey(key)) {
-                throw new InvalidConfigException(
-                        String.format(
-                                "'%s' is not a Fluss table property. Please use '.customProperty(..)' to set custom properties.",
-                                key));
+                throw new InvalidConfigException(String.format(
+                        "'%s' is not a Fluss table property. Please use '.customProperty(..)' to set custom properties.",
+                        key));
             }
             ConfigOption<?> option = TABLE_OPTIONS.get(key);
             validateOptionValue(tableConf, option);
@@ -98,14 +92,12 @@ public class TableDescriptorValidation {
         List<String> unsupportedColumns =
                 fieldNames.stream().filter(SYSTEM_COLUMNS::contains).collect(Collectors.toList());
         if (!unsupportedColumns.isEmpty()) {
-            throw new InvalidTableException(
-                    String.format(
-                            "%s cannot be used as column names, "
-                                    + "because they are reserved system columns in Fluss. "
-                                    + "Please use other names for these columns. "
-                                    + "The reserved system columns are: %s",
-                            String.join(", ", unsupportedColumns),
-                            String.join(", ", SYSTEM_COLUMNS)));
+            throw new InvalidTableException(String.format(
+                    "%s cannot be used as column names, "
+                            + "because they are reserved system columns in Fluss. "
+                            + "Please use other names for these columns. "
+                            + "The reserved system columns are: %s",
+                    String.join(", ", unsupportedColumns), String.join(", ", SYSTEM_COLUMNS)));
         }
     }
 
@@ -116,27 +108,22 @@ public class TableDescriptorValidation {
         if (!tableDescriptor.getTableDistribution().get().getBucketCount().isPresent()) {
             throw new InvalidTableException("Bucket number must be set.");
         }
-        int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();
+        int bucketCount =
+                tableDescriptor.getTableDistribution().get().getBucketCount().get();
         if (bucketCount > maxBucketNum) {
             throw new TooManyBucketsException(
-                    String.format(
-                            "Bucket count %s exceeds the maximum limit %s.",
-                            bucketCount, maxBucketNum));
+                    String.format("Bucket count %s exceeds the maximum limit %s.", bucketCount, maxBucketNum));
         }
     }
 
     private static void checkReplicationFactor(Configuration tableConf) {
         if (!tableConf.containsKey(ConfigOptions.TABLE_REPLICATION_FACTOR.key())) {
-            throw new InvalidConfigException(
-                    String.format(
-                            "Missing required table property '%s'.",
-                            ConfigOptions.TABLE_REPLICATION_FACTOR.key()));
+            throw new InvalidConfigException(String.format(
+                    "Missing required table property '%s'.", ConfigOptions.TABLE_REPLICATION_FACTOR.key()));
         }
         if (tableConf.get(ConfigOptions.TABLE_REPLICATION_FACTOR) <= 0) {
             throw new InvalidConfigException(
-                    String.format(
-                            "'%s' must be greater than 0.",
-                            ConfigOptions.TABLE_REPLICATION_FACTOR.key()));
+                    String.format("'%s' must be greater than 0.", ConfigOptions.TABLE_REPLICATION_FACTOR.key()));
         }
     }
 
@@ -151,55 +138,45 @@ public class TableDescriptorValidation {
 
     private static void checkArrowCompression(Configuration tableConf) {
         if (tableConf.containsKey(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL.key())) {
-            int compressionLevel =
-                    tableConf.get(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL);
+            int compressionLevel = tableConf.get(ConfigOptions.TABLE_LOG_ARROW_COMPRESSION_ZSTD_LEVEL);
             if (compressionLevel < 1 || compressionLevel > 22) {
                 throw new InvalidConfigException(
-                        "Invalid ZSTD compression level: "
-                                + compressionLevel
-                                + ". Expected a value between 1 and 22.");
+                        "Invalid ZSTD compression level: " + compressionLevel + ". Expected a value between 1 and 22.");
             }
         }
     }
 
-    private static void checkMergeEngine(
-            Configuration tableConf, boolean hasPrimaryKey, RowType schema) {
+    private static void checkMergeEngine(Configuration tableConf, boolean hasPrimaryKey, RowType schema) {
         MergeEngineType mergeEngine = tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE);
         if (mergeEngine != null) {
             if (!hasPrimaryKey) {
-                throw new InvalidConfigException(
-                        "Merge engine is only supported in primary key table.");
+                throw new InvalidConfigException("Merge engine is only supported in primary key table.");
             }
             if (mergeEngine == MergeEngineType.VERSIONED) {
-                Optional<String> versionColumn =
-                        tableConf.getOptional(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN);
+                Optional<String> versionColumn = tableConf.getOptional(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN);
                 if (!versionColumn.isPresent()) {
-                    throw new InvalidConfigException(
-                            String.format(
-                                    "'%s' must be set for versioned merge engine.",
-                                    ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key()));
+                    throw new InvalidConfigException(String.format(
+                            "'%s' must be set for versioned merge engine.",
+                            ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key()));
                 }
                 int columnIndex = schema.getFieldIndex(versionColumn.get());
                 if (columnIndex < 0) {
-                    throw new InvalidConfigException(
-                            String.format(
-                                    "The version column '%s' for versioned merge engine doesn't exist in schema.",
-                                    versionColumn.get()));
+                    throw new InvalidConfigException(String.format(
+                            "The version column '%s' for versioned merge engine doesn't exist in schema.",
+                            versionColumn.get()));
                 }
-                EnumSet<DataTypeRoot> supportedTypes =
-                        EnumSet.of(
-                                DataTypeRoot.INTEGER,
-                                DataTypeRoot.BIGINT,
-                                DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE,
-                                DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
+                EnumSet<DataTypeRoot> supportedTypes = EnumSet.of(
+                        DataTypeRoot.INTEGER,
+                        DataTypeRoot.BIGINT,
+                        DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE,
+                        DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
                 DataType columnType = schema.getTypeAt(columnIndex);
                 if (!supportedTypes.contains(columnType.getTypeRoot())) {
-                    throw new InvalidConfigException(
-                            String.format(
-                                    "The version column '%s' for versioned merge engine must be one type of "
-                                            + "[INT, BIGINT, TIMESTAMP, TIMESTAMP_LTZ]"
-                                            + ", but got %s.",
-                                    versionColumn.get(), columnType));
+                    throw new InvalidConfigException(String.format(
+                            "The version column '%s' for versioned merge engine must be one type of "
+                                    + "[INT, BIGINT, TIMESTAMP, TIMESTAMP_LTZ]"
+                                    + ", but got %s.",
+                            versionColumn.get(), columnType));
                 }
             }
         }
@@ -208,22 +185,18 @@ public class TableDescriptorValidation {
     private static void checkTieredLog(Configuration tableConf) {
         if (tableConf.get(ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS) <= 0) {
             throw new InvalidConfigException(
-                    String.format(
-                            "'%s' must be greater than 0.",
-                            ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key()));
+                    String.format("'%s' must be greater than 0.", ConfigOptions.TABLE_TIERED_LOG_LOCAL_SEGMENTS.key()));
         }
     }
 
-    private static void checkPartition(
-            Configuration tableConf, List<String> partitionKeys, RowType rowType) {
+    private static void checkPartition(Configuration tableConf, List<String> partitionKeys, RowType rowType) {
         boolean isPartitioned = !partitionKeys.isEmpty();
         AutoPartitionStrategy autoPartition = AutoPartitionStrategy.from(tableConf);
 
         if (!isPartitioned && autoPartition.isAutoPartitionEnabled()) {
-            throw new InvalidConfigException(
-                    String.format(
-                            "Currently, auto partition is only supported for partitioned table, please set table property '%s' to false.",
-                            ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key()));
+            throw new InvalidConfigException(String.format(
+                    "Currently, auto partition is only supported for partitioned table, please set table property '%s' to false.",
+                    ConfigOptions.TABLE_AUTO_PARTITION_ENABLED.key()));
         }
 
         if (isPartitioned) {
@@ -231,13 +204,10 @@ public class TableDescriptorValidation {
                 int partitionIndex = rowType.getFieldIndex(partitionKey);
                 DataType partitionDataType = rowType.getTypeAt(partitionIndex);
                 if (!PARTITION_KEY_SUPPORTED_TYPES.contains(partitionDataType.getTypeRoot())) {
-                    throw new InvalidTableException(
-                            String.format(
-                                    "Currently, partitioned table supported partition key type are %s, "
-                                            + "but got partition key '%s' with data type %s.",
-                                    PARTITION_KEY_SUPPORTED_TYPES,
-                                    partitionKey,
-                                    partitionDataType));
+                    throw new InvalidTableException(String.format(
+                            "Currently, partitioned table supported partition key type are %s, "
+                                    + "but got partition key '%s' with data type %s.",
+                            PARTITION_KEY_SUPPORTED_TYPES, partitionKey, partitionDataType));
                 }
             }
 
@@ -246,19 +216,17 @@ public class TableDescriptorValidation {
                     // must specify auto partition key for auto partition table when optional keys
                     // size > 1
                     if (StringUtils.isNullOrWhitespaceOnly(autoPartition.key())) {
-                        throw new InvalidTableException(
-                                String.format(
-                                        "Currently, auto partitioned table must set one auto partition key when it "
-                                                + "has multiple partition keys. Please set table property '%s'.",
-                                        ConfigOptions.TABLE_AUTO_PARTITION_KEY.key()));
+                        throw new InvalidTableException(String.format(
+                                "Currently, auto partitioned table must set one auto partition key when it "
+                                        + "has multiple partition keys. Please set table property '%s'.",
+                                ConfigOptions.TABLE_AUTO_PARTITION_KEY.key()));
                     }
 
                     if (!partitionKeys.contains(autoPartition.key())) {
-                        throw new InvalidTableException(
-                                String.format(
-                                        "The specified key for auto partitioned table is not a partition key. "
-                                                + "Your key '%s' is not in key list %s",
-                                        autoPartition.key(), partitionKeys));
+                        throw new InvalidTableException(String.format(
+                                "The specified key for auto partitioned table is not a partition key. "
+                                        + "Your key '%s' is not in key list %s",
+                                autoPartition.key(), partitionKeys));
                     }
 
                     if (autoPartition.numPreCreate() > 0) {
@@ -269,11 +237,10 @@ public class TableDescriptorValidation {
                 }
 
                 if (autoPartition.timeUnit() == null) {
-                    throw new InvalidTableException(
-                            String.format(
-                                    "Currently, auto partitioned table must set auto partition time unit when auto "
-                                            + "partition is enabled, please set table property '%s'.",
-                                    ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key()));
+                    throw new InvalidTableException(String.format(
+                            "Currently, auto partitioned table must set auto partition time unit when auto "
+                                    + "partition is enabled, please set table property '%s'.",
+                            ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key()));
                 }
             }
         }
@@ -284,9 +251,7 @@ public class TableDescriptorValidation {
             options.get(option);
         } catch (Throwable t) {
             throw new InvalidConfigException(
-                    String.format(
-                            "Invalid value for config '%s'. Reason: %s",
-                            option.key(), t.getMessage()));
+                    String.format("Invalid value for config '%s'. Reason: %s", option.key(), t.getMessage()));
         }
     }
 }

@@ -27,8 +27,7 @@ import java.util.List;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Extend assertj assertions to easily assert {@link PartitionMetadata}. */
-public class PartitionMetadataAssert
-        extends AbstractAssert<PartitionMetadataAssert, PartitionMetadata> {
+public class PartitionMetadataAssert extends AbstractAssert<PartitionMetadataAssert, PartitionMetadata> {
 
     /** Creates assertions for {@link PartitionMetadata}. */
     public static PartitionMetadataAssert assertPartitionMetadata(PartitionMetadata actual) {

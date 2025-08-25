@@ -36,10 +36,7 @@ public interface CompletedSnapshotHandleStore {
      * @param completedSnapshotHandle CompletedSnapshotHandle to be added
      * @throws Exception if persisting snapshot or writing snapshot handle failed
      */
-    void add(
-            TableBucket tableBucket,
-            long snapshotId,
-            CompletedSnapshotHandle completedSnapshotHandle)
+    void add(TableBucket tableBucket, long snapshotId, CompletedSnapshotHandle completedSnapshotHandle)
             throws Exception;
 
     /**
@@ -59,8 +56,7 @@ public interface CompletedSnapshotHandleStore {
      * @return the snapshot handle
      * @throws Exception if getting the handle failed
      */
-    Optional<CompletedSnapshotHandle> get(TableBucket tableBucket, long snapshotId)
-            throws Exception;
+    Optional<CompletedSnapshotHandle> get(TableBucket tableBucket, long snapshotId) throws Exception;
 
     /**
      * Get all the completed snapshot handles order by snapshot id from the smallest to largest for
@@ -70,8 +66,7 @@ public interface CompletedSnapshotHandleStore {
      * @return the all completed snapshot order by snapshot id
      * @throws Exception if getting failed
      */
-    List<CompletedSnapshotHandle> getAllCompletedSnapshotHandles(TableBucket tableBucket)
-            throws Exception;
+    List<CompletedSnapshotHandle> getAllCompletedSnapshotHandles(TableBucket tableBucket) throws Exception;
 
     /**
      * Get the latest completed snapshot handle for the given table bucket.
@@ -80,6 +75,5 @@ public interface CompletedSnapshotHandleStore {
      * @return the latest completed snapshot handle, empty if no any snapshot
      * @throws Exception if getting failed
      */
-    Optional<CompletedSnapshotHandle> getLatestCompletedSnapshotHandle(TableBucket tableBucket)
-            throws Exception;
+    Optional<CompletedSnapshotHandle> getLatestCompletedSnapshotHandle(TableBucket tableBucket) throws Exception;
 }

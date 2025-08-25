@@ -57,8 +57,7 @@ public final class IndexedLogWriteBatch extends WriteBatch {
             long createdMs) {
         super(bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
-        this.recordsBuilder =
-                MemoryLogRecordsIndexedBuilder.builder(schemaId, writeLimit, outputView, true);
+        this.recordsBuilder = MemoryLogRecordsIndexedBuilder.builder(schemaId, writeLimit, outputView, true);
     }
 
     @Override
@@ -66,12 +65,8 @@ public final class IndexedLogWriteBatch extends WriteBatch {
         checkNotNull(callback, "write callback must be not null");
         checkNotNull(writeRecord.getRow(), "row must not be null for log record");
         checkArgument(writeRecord.getKey() == null, "key must be null for log record");
-        checkArgument(
-                writeRecord.getTargetColumns() == null,
-                "target columns must be null for log record");
-        checkArgument(
-                writeRecord.getRow() instanceof IndexedRow,
-                "row must not be IndexRow for indexed log table");
+        checkArgument(writeRecord.getTargetColumns() == null, "target columns must be null for log record");
+        checkArgument(writeRecord.getRow() instanceof IndexedRow, "row must not be IndexRow for indexed log table");
         IndexedRow row = (IndexedRow) writeRecord.getRow();
         if (!recordsBuilder.hasRoomFor(row) || isClosed()) {
             return false;

@@ -63,21 +63,14 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         Path offsetIndexPath = entry.offsetIndex().file().toPath();
         Path timeIndexPath = entry.timeIndex().file().toPath();
         String expectedOffsetIndexFileName =
-                remoteLogSegment.remoteLogStartOffset()
-                        + "_"
-                        + remoteLogSegment.remoteLogSegmentId()
-                        + ".index";
+                remoteLogSegment.remoteLogStartOffset() + "_" + remoteLogSegment.remoteLogSegmentId() + ".index";
         String expectedTimestampFileName =
-                remoteLogSegment.remoteLogStartOffset()
-                        + "_"
-                        + remoteLogSegment.remoteLogSegmentId()
-                        + ".timeindex";
+                remoteLogSegment.remoteLogStartOffset() + "_" + remoteLogSegment.remoteLogSegmentId() + ".timeindex";
         assertThat(offsetIndexPath.getFileName().toString()).isEqualTo(expectedOffsetIndexFileName);
         assertThat(timeIndexPath.getFileName().toString()).isEqualTo(expectedTimestampFileName);
         assertThat(offsetIndexPath.getParent().getFileName().toString())
                 .isEqualTo(FlussPaths.REMOTE_LOG_INDEX_LOCAL_CACHE);
-        assertThat(timeIndexPath.getParent().getFileName().toString())
-                .isEqualTo(RemoteLogIndexCache.DIR_NAME);
+        assertThat(timeIndexPath.getParent().getFileName().toString()).isEqualTo(RemoteLogIndexCache.DIR_NAME);
     }
 
     @ParameterizedTest
@@ -89,8 +82,7 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
 
         OffsetIndex offsetIndex = rlIndexCache.getIndexEntry(remoteLogSegment).offsetIndex();
         OffsetPosition offsetPosition1 = offsetIndex.entry(1);
-        int resultPosition =
-                rlIndexCache.lookupPosition(remoteLogSegment, offsetPosition1.getOffset());
+        int resultPosition = rlIndexCache.lookupPosition(remoteLogSegment, offsetPosition1.getOffset());
         assertThat(offsetPosition1.getPosition()).isEqualTo(resultPosition);
     }
 
@@ -105,8 +97,7 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
 
         OffsetIndex offsetIndex = rlIndexCache.getIndexEntry(remoteLogSegment).offsetIndex();
         OffsetPosition offsetPosition = offsetIndex.lookup(timestampOffset.offset);
-        long resultOffset =
-                rlIndexCache.lookupOffsetForTimestamp(remoteLogSegment, timestampOffset.timestamp);
+        long resultOffset = rlIndexCache.lookupOffsetForTimestamp(remoteLogSegment, timestampOffset.timestamp);
         assertThat(offsetPosition.getOffset()).isEqualTo(resultOffset);
     }
 
@@ -133,8 +124,7 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
 
         OffsetIndex offsetIndex = rlIndexCache.getIndexEntry(remoteLogSegment).offsetIndex();
         OffsetPosition offsetPosition = offsetIndex.lookup(timestampOffset.offset);
-        long resultOffset =
-                rlIndexCache.lookupOffsetForTimestamp(remoteLogSegment, timestampOffset.timestamp);
+        long resultOffset = rlIndexCache.lookupOffsetForTimestamp(remoteLogSegment, timestampOffset.timestamp);
         assertThat(offsetPosition.getOffset()).isEqualTo(resultOffset);
     }
 
@@ -146,8 +136,7 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         RemoteLogSegment remoteLogSegment = copyLogSegmentToRemote(logTablet, remoteLogStorage, 0);
 
         OffsetIndex offsetIndex = rlIndexCache.getIndexEntry(remoteLogSegment).offsetIndex();
-        int lastOffsetIndex =
-                rlIndexCache.lookupPosition(remoteLogSegment, offsetIndex.lastOffset());
+        int lastOffsetIndex = rlIndexCache.lookupPosition(remoteLogSegment, offsetIndex.lastOffset());
         long greaterOffsetThatLastOffset = offsetIndex.lastOffset() + 1;
         assertThat(rlIndexCache.lookupPosition(remoteLogSegment, greaterOffsetThatLastOffset))
                 .isEqualTo(lastOffsetIndex);
@@ -176,10 +165,9 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         rlIndexCache.close();
         assertThatThrownBy(() -> rlIndexCache.getIndexEntry(remoteLogSegment))
                 .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining(
-                        "Unable to fetch index for remote-segment-id = "
-                                + remoteLogSegment.remoteLogSegmentId()
-                                + ". Instance is already closed.");
+                .hasMessageContaining("Unable to fetch index for remote-segment-id = "
+                        + remoteLogSegment.remoteLogSegmentId()
+                        + ". Instance is already closed.");
     }
 
     @ParameterizedTest
@@ -214,11 +202,7 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         assertThat(rlIndexCache.getInternalCache().asMap().size()).isEqualTo(1);
         rlIndexCache.remove(UUID.randomUUID());
         assertThat(rlIndexCache.getInternalCache().asMap().size()).isEqualTo(1);
-        assertThat(
-                        rlIndexCache
-                                .getInternalCache()
-                                .asMap()
-                                .containsKey(remoteLogSegment.remoteLogSegmentId()))
+        assertThat(rlIndexCache.getInternalCache().asMap().containsKey(remoteLogSegment.remoteLogSegmentId()))
                 .isTrue();
     }
 
@@ -233,11 +217,8 @@ class RemoteLogIndexCacheTest extends RemoteLogTestBase {
         rlIndexCache.getIndexEntry(remoteLogSegment2);
 
         assertThat(rlIndexCache.getInternalCache().asMap().size()).isEqualTo(2);
-        rlIndexCache.removeAll(
-                Arrays.asList(
-                        remoteLogSegment1.remoteLogSegmentId(),
-                        remoteLogSegment2.remoteLogSegmentId(),
-                        UUID.randomUUID()));
+        rlIndexCache.removeAll(Arrays.asList(
+                remoteLogSegment1.remoteLogSegmentId(), remoteLogSegment2.remoteLogSegmentId(), UUID.randomUUID()));
         assertThat(rlIndexCache.getInternalCache().asMap().size()).isEqualTo(0);
     }
 

@@ -55,16 +55,10 @@ public class PlainSaslServerTest {
         options.put("user_" + USER_A, PASSWORD_A);
         options.put("user_" + USER_B, PASSWORD_B);
         jaasConfig.addEntry("jaasContext", PlainLoginModule.class.getName(), options);
-        JaasContext jaasContext =
-                new JaasContext("jaasContext", JaasContext.Type.SERVER, jaasConfig, null);
+        JaasContext jaasContext = new JaasContext("jaasContext", JaasContext.Type.SERVER, jaasConfig, null);
         loginManager = LoginManager.acquireLoginManager(jaasContext);
-        saslServer =
-                SaslServerFactory.createSaslServer(
-                        "PLAIN",
-                        "127.0.0.1",
-                        options,
-                        loginManager,
-                        jaasContext.configurationEntries());
+        saslServer = SaslServerFactory.createSaslServer(
+                "PLAIN", "127.0.0.1", options, loginManager, jaasContext.configurationEntries());
     }
 
     @AfterEach
@@ -74,20 +68,23 @@ public class PlainSaslServerTest {
 
     @Test
     public void testNoAuthorizationIdSpecified() throws SaslException {
-        assertThat(saslServer.evaluateResponse(saslMessage("", USER_A, PASSWORD_A))).isEmpty();
-        assertThat(saslServer.evaluateResponse(saslMessage("", USER_B, PASSWORD_B))).isEmpty();
+        assertThat(saslServer.evaluateResponse(saslMessage("", USER_A, PASSWORD_A)))
+                .isEmpty();
+        assertThat(saslServer.evaluateResponse(saslMessage("", USER_B, PASSWORD_B)))
+                .isEmpty();
     }
 
     @Test
     public void testAuthorizationIdEqualsAuthenticationId() throws SaslException {
-        assertThat(saslServer.evaluateResponse(saslMessage(USER_A, USER_A, PASSWORD_A))).isEmpty();
-        assertThat(saslServer.evaluateResponse(saslMessage(USER_B, USER_B, PASSWORD_B))).isEmpty();
+        assertThat(saslServer.evaluateResponse(saslMessage(USER_A, USER_A, PASSWORD_A)))
+                .isEmpty();
+        assertThat(saslServer.evaluateResponse(saslMessage(USER_B, USER_B, PASSWORD_B)))
+                .isEmpty();
     }
 
     @Test
     public void testAuthorizationIdNotEqualsAuthenticationId() {
-        assertThatThrownBy(
-                        () -> saslServer.evaluateResponse(saslMessage(USER_A, USER_B, PASSWORD_B)))
+        assertThatThrownBy(() -> saslServer.evaluateResponse(saslMessage(USER_A, USER_B, PASSWORD_B)))
                 .isExactlyInstanceOf(AuthenticationException.class)
                 .hasMessage(
                         "Authentication failed: Client requested an authorization id that is different from username");
@@ -95,8 +92,7 @@ public class PlainSaslServerTest {
 
     @Test
     public void testInvalidPassword() {
-        assertThatThrownBy(
-                        () -> saslServer.evaluateResponse(saslMessage(USER_A, USER_A, PASSWORD_B)))
+        assertThatThrownBy(() -> saslServer.evaluateResponse(saslMessage(USER_A, USER_A, PASSWORD_B)))
                 .isExactlyInstanceOf(AuthenticationException.class)
                 .hasMessage("Authentication failed: Invalid username or password");
     }
@@ -116,17 +112,11 @@ public class PlainSaslServerTest {
         assertThatThrownBy(() -> saslServer.evaluateResponse(saslMessage("a", "u", "")))
                 .hasMessage("Authentication failed: password not specified");
         String nul = "\u0000";
-        assertThatThrownBy(
-                        () ->
-                                saslServer.evaluateResponse(
-                                        String.format("%s%s%s%s%s%s", "a", nul, "u", nul, "p", nul)
-                                                .getBytes(StandardCharsets.UTF_8)))
+        assertThatThrownBy(() -> saslServer.evaluateResponse(String.format("%s%s%s%s%s%s", "a", nul, "u", nul, "p", nul)
+                        .getBytes(StandardCharsets.UTF_8)))
                 .hasMessage("Invalid SASL/PLAIN response: expected 3 tokens, got 4");
-        assertThatThrownBy(
-                        () ->
-                                saslServer.evaluateResponse(
-                                        String.format("%s%s%s", "", nul, "u")
-                                                .getBytes(StandardCharsets.UTF_8)))
+        assertThatThrownBy(() -> saslServer.evaluateResponse(
+                        String.format("%s%s%s", "", nul, "u").getBytes(StandardCharsets.UTF_8)))
                 .hasMessage("Invalid SASL/PLAIN response: expected 3 tokens, got 2");
     }
 

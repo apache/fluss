@@ -67,9 +67,7 @@ public class MeterView implements Meter, MetricView {
         // the time-span must be larger than the update-interval as otherwise the array has a size
         // of 1, for which no rate can be computed as no distinct before/after measurement exists.
         this.timeSpanInSeconds =
-                Math.max(
-                        timeSpanInSeconds - (timeSpanInSeconds % UPDATE_INTERVAL_SECONDS),
-                        UPDATE_INTERVAL_SECONDS);
+                Math.max(timeSpanInSeconds - (timeSpanInSeconds % UPDATE_INTERVAL_SECONDS), UPDATE_INTERVAL_SECONDS);
         this.values = new long[this.timeSpanInSeconds / UPDATE_INTERVAL_SECONDS + 1];
     }
 
@@ -101,8 +99,7 @@ public class MeterView implements Meter, MetricView {
     public void update() {
         time = (time + 1) % values.length;
         values[time] = counter.getCount();
-        currentRate =
-                ((double) (values[time] - values[(time + 1) % values.length]) / timeSpanInSeconds);
+        currentRate = ((double) (values[time] - values[(time + 1) % values.length]) / timeSpanInSeconds);
     }
 
     /** Simple wrapper to expose number gauges as timers. */

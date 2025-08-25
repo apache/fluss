@@ -69,26 +69,22 @@ public class DelayedWrite<T extends WriteResultForBucket> extends DelayedOperati
     }
 
     private void updateStatus() {
-        delayedWriteMetadata
-                .getBucketStatusMap()
-                .forEach(
-                        ((tableBucket, delayedBucketStatus) -> {
-                            WriteResultForBucket writeResult =
-                                    delayedBucketStatus.getWriteResultForBucket();
-                            if (writeResult.succeeded()) {
-                                // Timeout error state will be cleared when required acks are
-                                // received.
-                                delayedBucketStatus.setAcksPending(true);
-                                delayedBucketStatus.setDelayedError(Errors.REQUEST_TIME_OUT);
-                            } else {
-                                delayedBucketStatus.setAcksPending(false);
-                            }
+        delayedWriteMetadata.getBucketStatusMap().forEach(((tableBucket, delayedBucketStatus) -> {
+            WriteResultForBucket writeResult = delayedBucketStatus.getWriteResultForBucket();
+            if (writeResult.succeeded()) {
+                // Timeout error state will be cleared when required acks are
+                // received.
+                delayedBucketStatus.setAcksPending(true);
+                delayedBucketStatus.setDelayedError(Errors.REQUEST_TIME_OUT);
+            } else {
+                delayedBucketStatus.setAcksPending(false);
+            }
 
-                            LOG.trace(
-                                    "Initial bucket status for {} is {} before register as delay write operation.",
-                                    tableBucket,
-                                    delayedBucketStatus);
-                        }));
+            LOG.trace(
+                    "Initial bucket status for {} is {} before register as delay write operation.",
+                    tableBucket,
+                    delayedBucketStatus);
+        }));
     }
 
     /**
@@ -122,9 +118,7 @@ public class DelayedWrite<T extends WriteResultForBucket> extends DelayedOperati
                 Tuple2<Boolean, Errors> result;
                 try {
                     Replica replica = replicaManager.getReplicaOrException(tableBucket);
-                    result =
-                            replica.checkEnoughReplicasReachOffset(
-                                    delayedBucketStatus.getRequiredOffset());
+                    result = replica.checkEnoughReplicasReachOffset(delayedBucketStatus.getRequiredOffset());
                 } catch (Exception e) {
                     result = Tuple2.of(false, Errors.forException(e));
                 }
@@ -154,30 +148,26 @@ public class DelayedWrite<T extends WriteResultForBucket> extends DelayedOperati
         serverMetricGroup.delayedWriteExpireCount().inc();
         delayedWriteMetadata
                 .getBucketStatusMap()
-                .forEach(
-                        (tableBucket, delayedBucketStatus) ->
-                                LOG.debug(
-                                        "Expiring delay write operation for bucket {} with status {}",
-                                        tableBucket,
-                                        delayedBucketStatus));
+                .forEach((tableBucket, delayedBucketStatus) -> LOG.debug(
+                        "Expiring delay write operation for bucket {} with status {}",
+                        tableBucket,
+                        delayedBucketStatus));
     }
 
     /** Upon completion, return the current response status along with the error code per bucket. */
     @Override
     public void onComplete() {
-        List<T> result =
-                delayedWriteMetadata.getBucketStatusMap().values().stream()
-                        // overwrite the write result with the delayed error if there is one.
-                        .map(
-                                s -> {
-                                    Errors error = s.getDelayedError();
-                                    if (error != null && error != Errors.NONE) {
-                                        return s.getWriteResultForBucket().copy(error);
-                                    } else {
-                                        return s.getWriteResultForBucket();
-                                    }
-                                })
-                        .collect(Collectors.toList());
+        List<T> result = delayedWriteMetadata.getBucketStatusMap().values().stream()
+                // overwrite the write result with the delayed error if there is one.
+                .map(s -> {
+                    Errors error = s.getDelayedError();
+                    if (error != null && error != Errors.NONE) {
+                        return s.getWriteResultForBucket().copy(error);
+                    } else {
+                        return s.getWriteResultForBucket();
+                    }
+                })
+                .collect(Collectors.toList());
         callback.accept(result);
     }
 
@@ -186,8 +176,7 @@ public class DelayedWrite<T extends WriteResultForBucket> extends DelayedOperati
         private final int requiredAcks;
         private final Map<TableBucket, DelayedBucketStatus<T>> bucketStatusMap;
 
-        public DelayedWriteMetadata(
-                int requiredAcks, Map<TableBucket, DelayedBucketStatus<T>> bucketStatusMap) {
+        public DelayedWriteMetadata(int requiredAcks, Map<TableBucket, DelayedBucketStatus<T>> bucketStatusMap) {
             this.requiredAcks = requiredAcks;
             this.bucketStatusMap = bucketStatusMap;
         }

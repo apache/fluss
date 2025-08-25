@@ -67,28 +67,25 @@ class SortMergeReaderTest {
         List<LogRecord> logRecords1 = createRecords(0, 10, false);
         List<LogRecord> logRecords2 = createRecords(10, 10, false);
         List<LogRecord> logRecords3 = createRecords(20, 10, false);
-        List<KeyValueRow> logRecords4 =
-                createRecords(5, 20, true).stream()
-                        .map(logRecord -> new KeyValueRow(pkIndexes, logRecord.getRow(), false))
-                        .collect(Collectors.toList());
+        List<KeyValueRow> logRecords4 = createRecords(5, 20, true).stream()
+                .map(logRecord -> new KeyValueRow(pkIndexes, logRecord.getRow(), false))
+                .collect(Collectors.toList());
 
-        SortMergeReader sortMergeReader =
-                new SortMergeReader(
-                        projectedFields,
-                        new int[] {keyIndex},
-                        Arrays.asList(
-                                CloseableIterator.wrap(logRecords2.iterator()),
-                                CloseableIterator.wrap(logRecords3.iterator()),
-                                CloseableIterator.wrap(logRecords1.iterator())),
-                        new FlussRowComparator(keyIndex),
-                        CloseableIterator.wrap(logRecords4.iterator()));
+        SortMergeReader sortMergeReader = new SortMergeReader(
+                projectedFields,
+                new int[] {keyIndex},
+                Arrays.asList(
+                        CloseableIterator.wrap(logRecords2.iterator()),
+                        CloseableIterator.wrap(logRecords3.iterator()),
+                        CloseableIterator.wrap(logRecords1.iterator())),
+                new FlussRowComparator(keyIndex),
+                CloseableIterator.wrap(logRecords4.iterator()));
 
         List<InternalRow> actualRows = new ArrayList<>();
-        InternalRow.FieldGetter[] fieldGetters =
-                InternalRow.createFieldGetters(
-                        isProjected
-                                ? RowType.of(new IntType(), new StringType())
-                                : RowType.of(new IntType(), new StringType(), new StringType()));
+        InternalRow.FieldGetter[] fieldGetters = InternalRow.createFieldGetters(
+                isProjected
+                        ? RowType.of(new IntType(), new StringType())
+                        : RowType.of(new IntType(), new StringType(), new StringType()));
         try (CloseableIterator<InternalRow> iterator = sortMergeReader.readBatch()) {
             actualRows.addAll(materializeRows(iterator, fieldGetters));
         }
@@ -98,12 +95,10 @@ class SortMergeReaderTest {
         expectedLogRecords.addAll(createRecords(5, 20, true));
         expectedLogRecords.addAll(createRecords(25, 5, false));
         ProjectedRow projectedRow = isProjected ? ProjectedRow.from(projectedFields) : null;
-        CloseableIterator<InternalRow> expected =
-                isProjected
-                        ? projected(
-                                CloseableIterator.wrap(expectedLogRecords.iterator()), projectedRow)
-                        : CloseableIterator.wrap(
-                                expectedLogRecords.stream().map(LogRecord::getRow).iterator());
+        CloseableIterator<InternalRow> expected = isProjected
+                ? projected(CloseableIterator.wrap(expectedLogRecords.iterator()), projectedRow)
+                : CloseableIterator.wrap(
+                        expectedLogRecords.stream().map(LogRecord::getRow).iterator());
         assertThat(actualRows).isEqualTo(materializeRows(expected, fieldGetters));
     }
 
@@ -148,11 +143,10 @@ class SortMergeReaderTest {
         List<LogRecord> logRecords = new ArrayList<>();
 
         for (int i = 0; i < count; i++) {
-            GenericRow row =
-                    row(
-                            startId + i,
-                            BinaryString.fromString(isLog ? "a" + "_updated" : "a"),
-                            BinaryString.fromString(isLog ? "A" + "_updated" : "A"));
+            GenericRow row = row(
+                    startId + i,
+                    BinaryString.fromString(isLog ? "a" + "_updated" : "a"),
+                    BinaryString.fromString(isLog ? "A" + "_updated" : "A"));
             logRecords.add(new ScanRecord(i, System.currentTimeMillis(), ChangeType.INSERT, row));
         }
         return logRecords;

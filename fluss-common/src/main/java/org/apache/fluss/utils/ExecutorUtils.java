@@ -42,8 +42,7 @@ public class ExecutorUtils {
      * @param unit of the timeout
      * @param executorServices to shut down
      */
-    public static void gracefulShutdown(
-            long timeout, TimeUnit unit, ExecutorService... executorServices) {
+    public static void gracefulShutdown(long timeout, TimeUnit unit, ExecutorService... executorServices) {
         for (ExecutorService executorService : executorServices) {
             executorService.shutdown();
         }
@@ -59,8 +58,7 @@ public class ExecutorUtils {
             } else {
                 try {
                     if (!executorService.awaitTermination(timeLeft, TimeUnit.MILLISECONDS)) {
-                        LOG.warn(
-                                "ExecutorService did not terminate in time. Shutting it down now.");
+                        LOG.warn("ExecutorService did not terminate in time. Shutting it down now.");
                         executorService.shutdownNow();
                     }
                 } catch (InterruptedException e) {
@@ -95,10 +93,9 @@ public class ExecutorUtils {
      */
     public static CompletableFuture<Void> nonBlockingShutdown(
             long timeout, TimeUnit unit, ExecutorService... executorServices) {
-        return CompletableFuture.supplyAsync(
-                () -> {
-                    gracefulShutdown(timeout, unit, executorServices);
-                    return null;
-                });
+        return CompletableFuture.supplyAsync(() -> {
+            gracefulShutdown(timeout, unit, executorServices);
+            return null;
+        });
     }
 }

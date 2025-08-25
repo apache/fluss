@@ -38,11 +38,10 @@ public class ArrowTimeWriter extends ArrowFieldWriter<InternalRow> {
 
     private ArrowTimeWriter(ValueVector valueVector) {
         super(valueVector);
-        checkState(
-                valueVector instanceof TimeSecVector
-                        || valueVector instanceof TimeMilliVector
-                        || valueVector instanceof TimeMicroVector
-                        || valueVector instanceof TimeNanoVector);
+        checkState(valueVector instanceof TimeSecVector
+                || valueVector instanceof TimeMilliVector
+                || valueVector instanceof TimeMicroVector
+                || valueVector instanceof TimeNanoVector);
     }
 
     @Override

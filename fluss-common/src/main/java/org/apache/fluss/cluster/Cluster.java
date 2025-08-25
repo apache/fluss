@@ -44,7 +44,9 @@ import java.util.Set;
  */
 @Internal
 public final class Cluster {
-    @Nullable private final ServerNode coordinatorServer;
+    @Nullable
+    private final ServerNode coordinatorServer;
+
     private final Map<PhysicalTablePath, List<BucketLocation>> availableLocationsByPath;
     private final Map<TableBucket, BucketLocation> availableLocationByBucket;
     private final Map<Integer, ServerNode> aliveTabletServersById;
@@ -66,8 +68,7 @@ public final class Cluster {
             Map<TablePath, TableInfo> tableInfoByPath) {
         this.coordinatorServer = coordinatorServer;
         this.aliveTabletServersById = Collections.unmodifiableMap(aliveTabletServersById);
-        this.aliveTabletServers =
-                Collections.unmodifiableList(new ArrayList<>(aliveTabletServersById.values()));
+        this.aliveTabletServers = Collections.unmodifiableList(new ArrayList<>(aliveTabletServersById.values()));
         this.tableIdByPath = Collections.unmodifiableMap(tableIdByPath);
         this.tableInfoByPath = Collections.unmodifiableMap(tableInfoByPath);
         this.partitionsIdByPath = Collections.unmodifiableMap(partitionsIdByPath);
@@ -78,8 +79,7 @@ public final class Cluster {
         Map<TableBucket, BucketLocation> tmpAvailableLocationByBucket = new HashMap<>();
         Map<PhysicalTablePath, List<BucketLocation>> tmpAvailableLocationsByPath =
                 new HashMap<>(bucketLocationsByPath.size());
-        for (Map.Entry<PhysicalTablePath, List<BucketLocation>> entry :
-                bucketLocationsByPath.entrySet()) {
+        for (Map.Entry<PhysicalTablePath, List<BucketLocation>> entry : bucketLocationsByPath.entrySet()) {
             PhysicalTablePath physicalTablePath = entry.getKey();
             // avoid StackOverflowError on N levels UnmodifiableCollection,
             // see https://stackoverflow.com/a/29027474
@@ -89,8 +89,7 @@ public final class Cluster {
             List<BucketLocation> availableBucketsForTable = new ArrayList<>(bucketsForTable.size());
             for (BucketLocation bucketLocation : bucketsForTable) {
                 if (bucketLocation.getLeader() != null) {
-                    tmpAvailableLocationByBucket.put(
-                            bucketLocation.getTableBucket(), bucketLocation);
+                    tmpAvailableLocationByBucket.put(bucketLocation.getTableBucket(), bucketLocation);
                     availableBucketsForTable.add(bucketLocation);
                 } else {
                     foundUnavailableBucket = true;
@@ -100,8 +99,7 @@ public final class Cluster {
                 tmpAvailableLocationsByPath.put(
                         physicalTablePath, Collections.unmodifiableList(availableBucketsForTable));
             } else {
-                tmpAvailableLocationsByPath.put(
-                        physicalTablePath, Collections.unmodifiableList(bucketsForTable));
+                tmpAvailableLocationsByPath.put(physicalTablePath, Collections.unmodifiableList(bucketsForTable));
             }
         }
 
@@ -129,8 +127,7 @@ public final class Cluster {
                 availableLocationsByPath.entrySet()) {
             if (!physicalTablesToInvalid.contains(tablePathAndBucketLocations.getKey())) {
                 newBucketLocationsByPath.put(
-                        tablePathAndBucketLocations.getKey(),
-                        new ArrayList<>(tablePathAndBucketLocations.getValue()));
+                        tablePathAndBucketLocations.getKey(), new ArrayList<>(tablePathAndBucketLocations.getValue()));
             }
         }
         return new Cluster(
@@ -176,12 +173,8 @@ public final class Cluster {
 
     public TablePath getTablePathOrElseThrow(long tableId) {
         return getTablePath(tableId)
-                .orElseThrow(
-                        () ->
-                                new IllegalArgumentException(
-                                        "table path not found for tableId "
-                                                + tableId
-                                                + " in cluster"));
+                .orElseThrow(() ->
+                        new IllegalArgumentException("table path not found for tableId " + tableId + " in cluster"));
     }
 
     public int getBucketCount(TablePath tablePath) {
@@ -213,8 +206,7 @@ public final class Cluster {
     }
 
     /** Get the list of available buckets for this table/partition. */
-    public List<BucketLocation> getAvailableBucketsForPhysicalTablePath(
-            PhysicalTablePath physicalTablePath) {
+    public List<BucketLocation> getAvailableBucketsForPhysicalTablePath(PhysicalTablePath physicalTablePath) {
         return availableLocationsByPath.getOrDefault(physicalTablePath, Collections.emptyList());
     }
 
@@ -240,10 +232,7 @@ public final class Cluster {
     public TableInfo getTableOrElseThrow(TablePath tablePath) {
         return getTable(tablePath)
                 .orElseThrow(
-                        () ->
-                                new IllegalArgumentException(
-                                        String.format(
-                                                "table: %s not found in cluster", tablePath)));
+                        () -> new IllegalArgumentException(String.format("table: %s not found in cluster", tablePath)));
     }
 
     public TableBucket getTableBucket(PhysicalTablePath physicalTablePath, int bucketId) {
@@ -259,8 +248,7 @@ public final class Cluster {
     public Long getPartitionIdOrElseThrow(PhysicalTablePath physicalTablePath) {
         Long partitionId = partitionsIdByPath.get(physicalTablePath);
         if (partitionId == null) {
-            throw new PartitionNotExistException(
-                    String.format("%s not found in cluster.", physicalTablePath));
+            throw new PartitionNotExistException(String.format("%s not found in cluster.", physicalTablePath));
         }
         return partitionId;
     }
@@ -269,9 +257,7 @@ public final class Cluster {
         String partition = partitionNameById.get(partitionId);
         if (partition == null) {
             throw new PartitionNotExistException(
-                    String.format(
-                            "The partition's name for partition id: %d is not found in cluster.",
-                            partitionId));
+                    String.format("The partition's name for partition id: %d is not found in cluster.", partitionId));
         }
         return partition;
     }
@@ -282,8 +268,7 @@ public final class Cluster {
 
     /** Get the latest schema for the given table. */
     public Optional<SchemaInfo> getSchema(TablePath tablePath) {
-        return getTable(tablePath)
-                .map(tableInfo -> new SchemaInfo(tableInfo.getSchema(), tableInfo.getSchemaId()));
+        return getTable(tablePath).map(tableInfo -> new SchemaInfo(tableInfo.getSchema(), tableInfo.getSchemaId()));
     }
 
     /** Get the table path to table id map. */

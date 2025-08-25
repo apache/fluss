@@ -133,10 +133,8 @@ public class SaslAuthenticationITCase {
         clientConfig.setString("client.security.sasl.jaas.config", CLIENT_JAAS_INFO);
         Configuration serverConfig = getDefaultServerConfig();
         String jaasServerInfo =
-                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required "
-                        + "    user_bob=\"bob-secret\";";
-        serverConfig.setString(
-                "security.sasl.listener.name.client.plain.jaas.config", jaasServerInfo);
+                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required " + "    user_bob=\"bob-secret\";";
+        serverConfig.setString("security.sasl.listener.name.client.plain.jaas.config", jaasServerInfo);
         assertThatThrownBy(() -> testAuthentication(clientConfig, serverConfig))
                 .cause()
                 .isExactlyInstanceOf(AuthenticationException.class)
@@ -184,39 +182,28 @@ public class SaslAuthenticationITCase {
         testAuthentication(clientConfig, getDefaultServerConfig());
     }
 
-    private void testAuthentication(Configuration clientConfig, Configuration serverConfig)
-            throws Exception {
+    private void testAuthentication(Configuration clientConfig, Configuration serverConfig) throws Exception {
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
         TestingAuthenticateGatewayService service = new TestingAuthenticateGatewayService();
         try (NetUtils.Port availablePort1 = getAvailablePort();
-                NettyServer nettyServer =
-                        new NettyServer(
-                                serverConfig,
-                                Collections.singletonList(
-                                        new Endpoint(
-                                                "localhost", availablePort1.getPort(), "CLIENT")),
-                                service,
-                                metricGroup,
-                                RequestsMetrics.createCoordinatorServerRequestMetrics(
-                                        metricGroup))) {
+                NettyServer nettyServer = new NettyServer(
+                        serverConfig,
+                        Collections.singletonList(new Endpoint("localhost", availablePort1.getPort(), "CLIENT")),
+                        service,
+                        metricGroup,
+                        RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup))) {
             nettyServer.start();
 
             // use client listener to connect to server
-            ServerNode serverNode =
-                    new ServerNode(
-                            1, "localhost", availablePort1.getPort(), ServerType.COORDINATOR);
+            ServerNode serverNode = new ServerNode(1, "localhost", availablePort1.getPort(), ServerType.COORDINATOR);
             try (NettyClient nettyClient =
                     new NettyClient(clientConfig, TestingClientMetricGroup.newInstance(), false)) {
-                ListTablesRequest request =
-                        new ListTablesRequest().setDatabaseName("test-database");
-                ListTablesResponse listTablesResponse =
-                        (ListTablesResponse)
-                                nettyClient
-                                        .sendRequest(serverNode, ApiKeys.LIST_TABLES, request)
-                                        .get();
+                ListTablesRequest request = new ListTablesRequest().setDatabaseName("test-database");
+                ListTablesResponse listTablesResponse = (ListTablesResponse) nettyClient
+                        .sendRequest(serverNode, ApiKeys.LIST_TABLES, request)
+                        .get();
 
-                assertThat(listTablesResponse.getTableNamesList())
-                        .isEqualTo(Collections.singletonList("test-table"));
+                assertThat(listTablesResponse.getTableNamesList()).isEqualTo(Collections.singletonList("test-table"));
             }
         }
     }

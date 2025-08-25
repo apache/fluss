@@ -51,8 +51,7 @@ public class ArrowWriter {
         for (int i = 0; i < fieldWriters.length; i++) {
             FieldVector fieldVector = root.getVector(i);
 
-            fieldWriters[i] =
-                    LanceArrowUtils.createArrowFieldWriter(fieldVector, rowType.getTypeAt(i));
+            fieldWriters[i] = LanceArrowUtils.createArrowFieldWriter(fieldVector, rowType.getTypeAt(i));
         }
         return new ArrowWriter(fieldWriters, root);
     }

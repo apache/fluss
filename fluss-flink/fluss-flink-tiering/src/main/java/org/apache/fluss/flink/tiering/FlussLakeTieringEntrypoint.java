@@ -47,47 +47,37 @@ public class FlussLakeTieringEntrypoint {
         // we need to get bootstrap.servers
         String bootstrapServers = flussConfigMap.get(ConfigOptions.BOOTSTRAP_SERVERS.key());
         if (bootstrapServers == null) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "The bootstrap server to fluss is not configured, please configure %s",
-                            FLUSS_CONF_PREFIX + ConfigOptions.BOOTSTRAP_SERVERS.key()));
+            throw new IllegalArgumentException(String.format(
+                    "The bootstrap server to fluss is not configured, please configure %s",
+                    FLUSS_CONF_PREFIX + ConfigOptions.BOOTSTRAP_SERVERS.key()));
         }
         flussConfigMap.put(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
 
         String dataLake = paramsMap.get(ConfigOptions.DATALAKE_FORMAT.key());
         if (dataLake == null) {
-            throw new IllegalArgumentException(
-                    ConfigOptions.DATALAKE_FORMAT.key() + " is not configured");
+            throw new IllegalArgumentException(ConfigOptions.DATALAKE_FORMAT.key() + " is not configured");
         }
 
         // extract lake config
         Map<String, String> lakeConfigMap =
-                extractAndRemovePrefix(
-                        paramsMap, String.format("%s%s.", DATA_LAKE_CONFIG_PREFIX, dataLake));
+                extractAndRemovePrefix(paramsMap, String.format("%s%s.", DATA_LAKE_CONFIG_PREFIX, dataLake));
 
         // now, we must use full restart strategy if any task is failed,
         // since committer is stateless, if tiering committer is failover, committer
         // will lost the collected committable, and will never collect all committable to do commit
         // todo: support region failover
-        org.apache.flink.configuration.Configuration flinkConfig =
-                new org.apache.flink.configuration.Configuration();
+        org.apache.flink.configuration.Configuration flinkConfig = new org.apache.flink.configuration.Configuration();
         flinkConfig.set(JobManagerOptions.EXECUTION_FAILOVER_STRATEGY, FULL_RESTART_STRATEGY_NAME);
 
         // build tiering source
-        final StreamExecutionEnvironment execEnv =
-                StreamExecutionEnvironment.getExecutionEnvironment(flinkConfig);
+        final StreamExecutionEnvironment execEnv = StreamExecutionEnvironment.getExecutionEnvironment(flinkConfig);
 
         // build lake tiering job
-        JobClient jobClient =
-                LakeTieringJobBuilder.newBuilder(
-                                execEnv,
-                                Configuration.fromMap(flussConfigMap),
-                                Configuration.fromMap(lakeConfigMap),
-                                dataLake)
-                        .build();
+        JobClient jobClient = LakeTieringJobBuilder.newBuilder(
+                        execEnv, Configuration.fromMap(flussConfigMap), Configuration.fromMap(lakeConfigMap), dataLake)
+                .build();
 
         System.out.printf(
-                "Starting data tiering service from Fluss to %s, jobId is %s.....%n",
-                dataLake, jobClient.getJobID());
+                "Starting data tiering service from Fluss to %s, jobId is %s.....%n", dataLake, jobClient.getJobID());
     }
 }

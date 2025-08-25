@@ -66,10 +66,8 @@ public interface MetricRegistry extends AutoCloseableAsync {
      * @param pluginManager the plugin manager to find the reporters, be null if not in a server
      *     environment.
      */
-    static MetricRegistry create(
-            Configuration configuration, @Nullable PluginManager pluginManager) {
-        List<MetricReporter> metricReporters =
-                ReporterSetup.fromConfiguration(configuration, pluginManager);
+    static MetricRegistry create(Configuration configuration, @Nullable PluginManager pluginManager) {
+        List<MetricReporter> metricReporters = ReporterSetup.fromConfiguration(configuration, pluginManager);
         if (metricReporters.isEmpty()) {
             LOG.info("No metrics reporter configured, no metrics will be exposed/reported.");
             return NOPMetricRegistry.INSTANCE;

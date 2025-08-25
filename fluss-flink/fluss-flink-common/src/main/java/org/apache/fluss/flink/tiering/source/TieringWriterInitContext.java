@@ -32,7 +32,10 @@ public class TieringWriterInitContext implements WriterInitContext {
     private final TablePath tablePath;
     private final TableBucket tableBucket;
     private final Schema schema;
-    @Nullable private final String partition;
+
+    @Nullable
+    private final String partition;
+
     private final Map<String, String> customProperties;
 
     public TieringWriterInitContext(

@@ -92,28 +92,23 @@ public class KvRecoverHelper {
         long nextLogOffset = recoverPointOffset;
         // read to high watermark
         try (KvBatchWriter kvBatchWriter = kvTablet.createKvBatchWriter()) {
-            ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordApplier =
-                    (resumeRecord) -> {
-                        if (resumeRecord.value == null) {
-                            kvBatchWriter.delete(resumeRecord.key);
-                        } else {
-                            kvBatchWriter.put(resumeRecord.key, resumeRecord.value);
-                        }
-                    };
+            ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordApplier = (resumeRecord) -> {
+                if (resumeRecord.value == null) {
+                    kvBatchWriter.delete(resumeRecord.key);
+                } else {
+                    kvBatchWriter.put(resumeRecord.key, resumeRecord.value);
+                }
+            };
 
-            nextLogOffset =
-                    readLogRecordsAndApply(
-                            nextLogOffset, FetchIsolation.HIGH_WATERMARK, resumeRecordApplier);
+            nextLogOffset = readLogRecordsAndApply(nextLogOffset, FetchIsolation.HIGH_WATERMARK, resumeRecordApplier);
         }
 
         // the all data up to nextLogOffset has been flush into kv
         kvTablet.setFlushedLogOffset(nextLogOffset);
 
         // read to log end offset
-        ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordApplier =
-                (resumeRecord) ->
-                        kvTablet.putToPreWriteBuffer(
-                                resumeRecord.key, resumeRecord.value, resumeRecord.logOffset);
+        ThrowingConsumer<KeyValueAndLogOffset, Exception> resumeRecordApplier = (resumeRecord) ->
+                kvTablet.putToPreWriteBuffer(resumeRecord.key, resumeRecord.value, resumeRecord.logOffset);
         readLogRecordsAndApply(nextLogOffset, FetchIsolation.LOG_END, resumeRecordApplier);
     }
 
@@ -124,15 +119,9 @@ public class KvRecoverHelper {
             throws Exception {
         long nextFetchOffset = startFetchOffset;
         while (true) {
-            LogRecords logRecords =
-                    logTablet
-                            .read(
-                                    nextFetchOffset,
-                                    recoverContext.maxFetchLogSizeInRecoverKv,
-                                    fetchIsolation,
-                                    true,
-                                    null)
-                            .getRecords();
+            LogRecords logRecords = logTablet
+                    .read(nextFetchOffset, recoverContext.maxFetchLogSizeInRecoverKv, fetchIsolation, true, null)
+                    .getRecords();
             if (logRecords == MemoryLogRecords.EMPTY) {
                 break;
             }
@@ -142,18 +131,15 @@ public class KvRecoverHelper {
                 if (currentSchemaId == null) {
                     initSchema(schemaId);
                 } else if (currentSchemaId != schemaId) {
-                    throw new KvStorageException(
-                            String.format(
-                                    "Can't recover kv tablet for table bucket from log %s since the schema changes from schema id %d to schema id %d. "
-                                            + "Currently, schema change is not supported.",
-                                    recoverContext.tableBucket, currentSchemaId, schemaId));
+                    throw new KvStorageException(String.format(
+                            "Can't recover kv tablet for table bucket from log %s since the schema changes from schema id %d to schema id %d. "
+                                    + "Currently, schema change is not supported.",
+                            recoverContext.tableBucket, currentSchemaId, schemaId));
                 }
 
                 try (LogRecordReadContext readContext =
-                                LogRecordReadContext.createArrowReadContext(
-                                        currentRowType, currentSchemaId);
-                        CloseableIterator<LogRecord> logRecordIter =
-                                logRecordBatch.records(readContext)) {
+                                LogRecordReadContext.createArrowReadContext(currentRowType, currentSchemaId);
+                        CloseableIterator<LogRecord> logRecordIter = logRecordBatch.records(readContext)) {
                     while (logRecordIter.hasNext()) {
                         LogRecord logRecord = logRecordIter.next();
                         if (logRecord.getChangeType() != ChangeType.UPDATE_BEFORE) {
@@ -166,8 +152,7 @@ public class KvRecoverHelper {
                                 BinaryRow row = toKvRow(logRecord.getRow());
                                 value = ValueEncoder.encodeValue(schemaId, row);
                             }
-                            resumeRecordConsumer.accept(
-                                    new KeyValueAndLogOffset(key, value, logRecord.logOffset()));
+                            resumeRecordConsumer.accept(new KeyValueAndLogOffset(key, value, logRecord.logOffset()));
                         }
                     }
                 }
@@ -207,7 +192,8 @@ public class KvRecoverHelper {
         DataType[] dataTypes = currentRowType.getChildren().toArray(new DataType[0]);
         currentSchemaId = schemaId;
 
-        DataLakeFormat lakeFormat = tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
+        DataLakeFormat lakeFormat =
+                tableInfo.getTableConfig().getDataLakeFormat().orElse(null);
         keyEncoder = KeyEncoder.of(currentRowType, tableInfo.getPhysicalPrimaryKeys(), lakeFormat);
         rowEncoder = RowEncoder.create(kvFormat, dataTypes);
         currentFieldGetters = new InternalRow.FieldGetter[currentRowType.getFieldCount()];

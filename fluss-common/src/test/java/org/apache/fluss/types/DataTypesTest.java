@@ -64,20 +64,17 @@ public class DataTypesTest {
 
         assertThatThrownBy(() -> new CharType(-1))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "Character string length must be between 1 and 2147483647 (both inclusive)");
+                .hasMessageContaining("Character string length must be between 1 and 2147483647 (both inclusive)");
 
         assertThatThrownBy(() -> new CharType(0))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "Character string length must be between 1 and 2147483647 (both inclusive)");
+                .hasMessageContaining("Character string length must be between 1 and 2147483647 (both inclusive)");
 
         // test get children.
         assertThat(charType.getChildren().size()).isEqualTo(0);
         // test getTypeRoot.
         assertThat(charType.getTypeRoot().getFamilies())
-                .containsExactlyInAnyOrder(
-                        DataTypeFamily.PREDEFINED, DataTypeFamily.CHARACTER_STRING);
+                .containsExactlyInAnyOrder(DataTypeFamily.PREDEFINED, DataTypeFamily.CHARACTER_STRING);
     }
 
     @Test
@@ -95,8 +92,7 @@ public class DataTypesTest {
         assertThat(stringType.getChildren().size()).isEqualTo(0);
         // test getTypeRoot.
         assertThat(stringType.getTypeRoot().getFamilies())
-                .containsExactlyInAnyOrder(
-                        DataTypeFamily.PREDEFINED, DataTypeFamily.CHARACTER_STRING);
+                .containsExactlyInAnyOrder(DataTypeFamily.PREDEFINED, DataTypeFamily.CHARACTER_STRING);
     }
 
     @Test
@@ -113,8 +109,7 @@ public class DataTypesTest {
         // test get children.
         assertThat(booleanType.getChildren().size()).isEqualTo(0);
         // test getTypeRoot.
-        assertThat(booleanType.getTypeRoot().getFamilies())
-                .containsExactlyInAnyOrder(DataTypeFamily.PREDEFINED);
+        assertThat(booleanType.getTypeRoot().getFamilies()).containsExactlyInAnyOrder(DataTypeFamily.PREDEFINED);
     }
 
     @Test
@@ -137,13 +132,11 @@ public class DataTypesTest {
 
         assertThatThrownBy(() -> new BinaryType(-1))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "Binary string length must be between 1 and 2147483647 (both inclusive)");
+                .hasMessageContaining("Binary string length must be between 1 and 2147483647 (both inclusive)");
 
         assertThatThrownBy(() -> new BinaryType(0))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "Binary string length must be between 1 and 2147483647 (both inclusive)");
+                .hasMessageContaining("Binary string length must be between 1 and 2147483647 (both inclusive)");
 
         // test get children.
         assertThat(binaryType.getChildren().size()).isEqualTo(0);
@@ -199,27 +192,22 @@ public class DataTypesTest {
 
         assertThatThrownBy(() -> new DecimalType(0))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "Decimal precision must be between 1 and 38 (both inclusive)");
+                .hasMessageContaining("Decimal precision must be between 1 and 38 (both inclusive)");
 
         assertThatThrownBy(() -> new DecimalType(40))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "Decimal precision must be between 1 and 38 (both inclusive)");
+                .hasMessageContaining("Decimal precision must be between 1 and 38 (both inclusive)");
 
         assertThatThrownBy(() -> new DecimalType(1, 5))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "Decimal scale must be between 0 and the precision 1 (both inclusive)");
+                .hasMessageContaining("Decimal scale must be between 0 and the precision 1 (both inclusive)");
 
         // test get children.
         assertThat(decimalType.getChildren().size()).isEqualTo(0);
         // test getTypeRoot.
         assertThat(decimalType.getTypeRoot().getFamilies())
                 .containsExactlyInAnyOrder(
-                        DataTypeFamily.PREDEFINED,
-                        DataTypeFamily.NUMERIC,
-                        DataTypeFamily.EXACT_NUMERIC);
+                        DataTypeFamily.PREDEFINED, DataTypeFamily.NUMERIC, DataTypeFamily.EXACT_NUMERIC);
     }
 
     @Test
@@ -326,9 +314,7 @@ public class DataTypesTest {
         // test getTypeRoot.
         assertThat(floatType.getTypeRoot().getFamilies())
                 .containsExactlyInAnyOrder(
-                        DataTypeFamily.PREDEFINED,
-                        DataTypeFamily.NUMERIC,
-                        DataTypeFamily.APPROXIMATE_NUMERIC);
+                        DataTypeFamily.PREDEFINED, DataTypeFamily.NUMERIC, DataTypeFamily.APPROXIMATE_NUMERIC);
     }
 
     @Test
@@ -347,9 +333,7 @@ public class DataTypesTest {
         // test getTypeRoot.
         assertThat(doubleType.getTypeRoot().getFamilies())
                 .containsExactlyInAnyOrder(
-                        DataTypeFamily.PREDEFINED,
-                        DataTypeFamily.NUMERIC,
-                        DataTypeFamily.APPROXIMATE_NUMERIC);
+                        DataTypeFamily.PREDEFINED, DataTypeFamily.NUMERIC, DataTypeFamily.APPROXIMATE_NUMERIC);
     }
 
     @Test
@@ -404,8 +388,7 @@ public class DataTypesTest {
         assertThat(timeType.getChildren().size()).isEqualTo(0);
         // test getTypeRoot.
         assertThat(timeType.getTypeRoot().getFamilies())
-                .containsExactlyInAnyOrder(
-                        DataTypeFamily.PREDEFINED, DataTypeFamily.DATETIME, DataTypeFamily.TIME);
+                .containsExactlyInAnyOrder(DataTypeFamily.PREDEFINED, DataTypeFamily.DATETIME, DataTypeFamily.TIME);
     }
 
     @Test
@@ -432,22 +415,18 @@ public class DataTypesTest {
 
         assertThatThrownBy(() -> new TimestampType(-1))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "Timestamp precision must be between 0 and 9 (both inclusive)");
+                .hasMessageContaining("Timestamp precision must be between 0 and 9 (both inclusive)");
 
         assertThatThrownBy(() -> new TimestampType(15))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "Timestamp precision must be between 0 and 9 (both inclusive)");
+                .hasMessageContaining("Timestamp precision must be between 0 and 9 (both inclusive)");
 
         // test get children.
         assertThat(timestampType.getChildren().size()).isEqualTo(0);
         // test getTypeRoot.
         assertThat(timestampType.getTypeRoot().getFamilies())
                 .containsExactlyInAnyOrder(
-                        DataTypeFamily.PREDEFINED,
-                        DataTypeFamily.DATETIME,
-                        DataTypeFamily.TIMESTAMP);
+                        DataTypeFamily.PREDEFINED, DataTypeFamily.DATETIME, DataTypeFamily.TIMESTAMP);
     }
 
     @Test
@@ -455,18 +434,12 @@ public class DataTypesTest {
         LocalZonedTimestampType localZonedTimestampType = new LocalZonedTimestampType();
         assertThat(localZonedTimestampType.getPrecision()).isEqualTo(6);
         dataTypeBaseAssert(
-                localZonedTimestampType,
-                true,
-                "TIMESTAMP(6) WITH LOCAL TIME ZONE",
-                new LocalZonedTimestampType(1));
+                localZonedTimestampType, true, "TIMESTAMP(6) WITH LOCAL TIME ZONE", new LocalZonedTimestampType(1));
 
         localZonedTimestampType = new LocalZonedTimestampType(3);
         assertThat(localZonedTimestampType.getPrecision()).isEqualTo(3);
         dataTypeBaseAssert(
-                localZonedTimestampType,
-                true,
-                "TIMESTAMP(3) WITH LOCAL TIME ZONE",
-                new LocalZonedTimestampType(1));
+                localZonedTimestampType, true, "TIMESTAMP(3) WITH LOCAL TIME ZONE", new LocalZonedTimestampType(1));
 
         localZonedTimestampType = new LocalZonedTimestampType(false, 4);
         assertThat(localZonedTimestampType.getPrecision()).isEqualTo(4);
@@ -479,18 +452,12 @@ public class DataTypesTest {
         localZonedTimestampType = DataTypes.TIMESTAMP_LTZ();
         assertThat(localZonedTimestampType.getPrecision()).isEqualTo(6);
         dataTypeBaseAssert(
-                localZonedTimestampType,
-                true,
-                "TIMESTAMP(6) WITH LOCAL TIME ZONE",
-                new LocalZonedTimestampType(1));
+                localZonedTimestampType, true, "TIMESTAMP(6) WITH LOCAL TIME ZONE", new LocalZonedTimestampType(1));
 
         localZonedTimestampType = DataTypes.TIMESTAMP_LTZ(3);
         assertThat(localZonedTimestampType.getPrecision()).isEqualTo(3);
         dataTypeBaseAssert(
-                localZonedTimestampType,
-                true,
-                "TIMESTAMP(3) WITH LOCAL TIME ZONE",
-                new LocalZonedTimestampType(1));
+                localZonedTimestampType, true, "TIMESTAMP(3) WITH LOCAL TIME ZONE", new LocalZonedTimestampType(1));
 
         assertThatThrownBy(() -> new LocalZonedTimestampType(-1))
                 .isInstanceOf(IllegalArgumentException.class)
@@ -521,15 +488,10 @@ public class DataTypesTest {
 
         arrayType = new ArrayType(false, new CharType(5));
         dataTypeBaseAssert(arrayType.getElementType(), true, "CHAR(5)", new CharType(1));
-        dataTypeBaseAssert(
-                arrayType, false, "ARRAY<CHAR(5)> NOT NULL", new ArrayType(new CharType(1)));
+        dataTypeBaseAssert(arrayType, false, "ARRAY<CHAR(5)> NOT NULL", new ArrayType(new CharType(1)));
 
         arrayType = new ArrayType(new ArrayType(new CharType(5)));
-        dataTypeBaseAssert(
-                arrayType,
-                true,
-                "ARRAY<ARRAY<CHAR(5)>>",
-                new ArrayType(new ArrayType(new CharType(1))));
+        dataTypeBaseAssert(arrayType, true, "ARRAY<ARRAY<CHAR(5)>>", new ArrayType(new ArrayType(new CharType(1))));
 
         arrayType = DataTypes.ARRAY(new CharType(5));
         dataTypeBaseAssert(arrayType, true, "ARRAY<CHAR(5)>", new ArrayType(new CharType(1)));
@@ -551,12 +513,10 @@ public class DataTypesTest {
         MapType mapType = new MapType(new IntType(), new CharType(5));
         dataTypeBaseAssert(mapType.getKeyType(), true, "INT", new IntType(false));
         dataTypeBaseAssert(mapType.getValueType(), true, "CHAR(5)", new CharType(1));
-        dataTypeBaseAssert(
-                mapType, true, "MAP<INT, CHAR(5)>", new MapType(new IntType(), new CharType(1)));
+        dataTypeBaseAssert(mapType, true, "MAP<INT, CHAR(5)>", new MapType(new IntType(), new CharType(1)));
 
         mapType = DataTypes.MAP(new IntType(), new CharType(5));
-        dataTypeBaseAssert(
-                mapType, true, "MAP<INT, CHAR(5)>", new MapType(new IntType(), new CharType(1)));
+        dataTypeBaseAssert(mapType, true, "MAP<INT, CHAR(5)>", new MapType(new IntType(), new CharType(1)));
 
         assertThatThrownBy(() -> new MapType(null, new CharType(5)))
                 .isInstanceOf(NullPointerException.class)
@@ -576,17 +536,13 @@ public class DataTypesTest {
 
     @Test
     void testRowType() {
-        RowType rowType =
-                new RowType(
-                        Arrays.asList(
-                                new DataField("a", new IntType(), "column a"),
-                                new DataField("b", new CharType(5), "column b")));
+        RowType rowType = new RowType(Arrays.asList(
+                new DataField("a", new IntType(), "column a"), new DataField("b", new CharType(5), "column b")));
         assertThat(rowType.getFieldCount()).isEqualTo(2);
         assertThat(rowType.getFields().size()).isEqualTo(2);
         assertThat(rowType.getFields())
                 .containsExactlyInAnyOrder(
-                        new DataField("a", new IntType(), "column a"),
-                        new DataField("b", new CharType(5), "column b"));
+                        new DataField("a", new IntType(), "column a"), new DataField("b", new CharType(5), "column b"));
         assertThat(rowType.getFieldNames()).containsExactlyInAnyOrder("a", "b");
         assertThat(rowType.getTypeAt(0)).isInstanceOf(IntType.class);
         assertThat(rowType.getTypeAt(1)).isInstanceOf(CharType.class);
@@ -595,65 +551,48 @@ public class DataTypesTest {
                 rowType,
                 true,
                 "ROW<`a` INT 'column a', `b` CHAR(5) 'column b'>",
-                new RowType(
-                        Arrays.asList(
-                                new DataField("a1", new IntType(), "column a1"),
-                                new DataField("b", new CharType(5), "column b"))));
+                new RowType(Arrays.asList(
+                        new DataField("a1", new IntType(), "column a1"),
+                        new DataField("b", new CharType(5), "column b"))));
 
-        rowType =
-                new RowType(
-                        false,
-                        Arrays.asList(
-                                new DataField("a", new IntType(), "column a"),
-                                new DataField("b", new CharType(5), "column b")));
+        rowType = new RowType(
+                false,
+                Arrays.asList(
+                        new DataField("a", new IntType(), "column a"),
+                        new DataField("b", new CharType(5), "column b")));
         dataTypeBaseAssert(
                 rowType,
                 false,
                 "ROW<`a` INT 'column a', `b` CHAR(5) 'column b'> NOT NULL",
-                new RowType(
-                        Arrays.asList(
-                                new DataField("a", new IntType(), "column a"),
-                                new DataField("b", new CharType(5), "column b"))));
-
-        rowType =
-                DataTypes.ROW(
+                new RowType(Arrays.asList(
                         new DataField("a", new IntType(), "column a"),
-                        new DataField("b", new CharType(5), "column b"));
+                        new DataField("b", new CharType(5), "column b"))));
+
+        rowType = DataTypes.ROW(
+                new DataField("a", new IntType(), "column a"), new DataField("b", new CharType(5), "column b"));
         dataTypeBaseAssert(
                 rowType,
                 true,
                 "ROW<`a` INT 'column a', `b` CHAR(5) 'column b'>",
-                new RowType(
-                        Arrays.asList(
-                                new DataField("a1", new IntType(), "column a1"),
-                                new DataField("b", new CharType(5), "column b"))));
+                new RowType(Arrays.asList(
+                        new DataField("a1", new IntType(), "column a1"),
+                        new DataField("b", new CharType(5), "column b"))));
 
         rowType = DataTypes.ROW(new IntType(), new CharType(5));
         dataTypeBaseAssert(
-                rowType,
-                true,
-                "ROW<`f0` INT, `f1` CHAR(5)>",
-                DataTypes.ROW(new IntType(false), new CharType(5)));
+                rowType, true, "ROW<`f0` INT, `f1` CHAR(5)>", DataTypes.ROW(new IntType(false), new CharType(5)));
 
-        rowType =
-                DataTypes.ROW(
-                        DataTypes.FIELD("a", new IntType(), "column a"),
-                        DataTypes.FIELD("b", new CharType(5)));
+        rowType = DataTypes.ROW(DataTypes.FIELD("a", new IntType(), "column a"), DataTypes.FIELD("b", new CharType(5)));
         dataTypeBaseAssert(
                 rowType,
                 true,
                 "ROW<`a` INT 'column a', `b` CHAR(5)>",
-                new RowType(
-                        Arrays.asList(
-                                new DataField("a1", new IntType(), "column a1"),
-                                new DataField("b", new CharType(5)))));
+                new RowType(Arrays.asList(
+                        new DataField("a1", new IntType(), "column a1"), new DataField("b", new CharType(5)))));
 
         rowType = RowType.of(DataTypes.CHAR(1), DataTypes.CHAR(2));
         dataTypeBaseAssert(
-                rowType,
-                true,
-                "ROW<`f0` CHAR(1), `f1` CHAR(2)>",
-                RowType.of(DataTypes.CHAR(2), DataTypes.CHAR(2)));
+                rowType, true, "ROW<`f0` CHAR(1), `f1` CHAR(2)>", RowType.of(DataTypes.CHAR(2), DataTypes.CHAR(2)));
 
         rowType = RowType.of(false, DataTypes.CHAR(1), DataTypes.CHAR(2));
         dataTypeBaseAssert(
@@ -662,14 +601,11 @@ public class DataTypesTest {
                 "ROW<`f0` CHAR(1), `f1` CHAR(2)> NOT NULL",
                 RowType.of(DataTypes.CHAR(2), DataTypes.CHAR(2)));
 
-        rowType =
-                RowType.builder()
-                        .fields(Arrays.asList(DataTypes.CHAR(1), DataTypes.CHAR(2)))
-                        .fields(
-                                new DataType[] {DataTypes.CHAR(3), DataTypes.CHAR(4)},
-                                new String[] {"c", "d"})
-                        .field("e", DataTypes.CHAR(5))
-                        .build();
+        rowType = RowType.builder()
+                .fields(Arrays.asList(DataTypes.CHAR(1), DataTypes.CHAR(2)))
+                .fields(new DataType[] {DataTypes.CHAR(3), DataTypes.CHAR(4)}, new String[] {"c", "d"})
+                .field("e", DataTypes.CHAR(5))
+                .build();
         dataTypeBaseAssert(
                 rowType,
                 true,
@@ -680,15 +616,11 @@ public class DataTypesTest {
         assertThat(rowType.getChildren().size()).isEqualTo(2);
         assertThat(rowType.getChildren()).containsExactly(new IntType(), new CharType(5));
         // test getTypeRoot.
-        assertThat(rowType.getTypeRoot().getFamilies())
-                .containsExactlyInAnyOrder(DataTypeFamily.CONSTRUCTED);
+        assertThat(rowType.getTypeRoot().getFamilies()).containsExactlyInAnyOrder(DataTypeFamily.CONSTRUCTED);
     }
 
     private static void dataTypeBaseAssert(
-            DataType dataType,
-            boolean isNullable,
-            String serializableString,
-            DataType otherDataType) {
+            DataType dataType, boolean isNullable, String serializableString, DataType otherDataType) {
         assertThat(dataType.isNullable()).isEqualTo(isNullable);
         assertThat(dataType.asSerializableString()).isEqualTo(serializableString);
         assertThat(dataType).isNotEqualTo(otherDataType);

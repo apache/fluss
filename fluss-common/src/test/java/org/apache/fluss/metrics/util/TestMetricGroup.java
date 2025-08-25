@@ -139,8 +139,7 @@ public class TestMetricGroup implements MetricGroup {
         }
 
         public TestMetricGroup build() {
-            return new TestMetricGroup(
-                    scopeComponents, variables, metricIdentifierFunction, logicalScopeFunction);
+            return new TestMetricGroup(scopeComponents, variables, metricIdentifierFunction, logicalScopeFunction);
         }
     }
 }

@@ -44,11 +44,7 @@ public class LeafPredicate implements Predicate {
     private final List<Object> literals;
 
     public LeafPredicate(
-            LeafFunction function,
-            DataType type,
-            int fieldIndex,
-            String fieldName,
-            List<Object> literals) {
+            LeafFunction function, DataType type, int fieldIndex, String fieldName, List<Object> literals) {
         this.function = function;
         this.type = type;
         this.fieldIndex = fieldIndex;
@@ -90,8 +86,7 @@ public class LeafPredicate implements Predicate {
     }
 
     @Override
-    public boolean test(
-            long rowCount, InternalRow minValues, InternalRow maxValues, Long[] nullCounts) {
+    public boolean test(long rowCount, InternalRow minValues, InternalRow maxValues, Long[] nullCounts) {
         Object min = get(minValues, fieldIndex, type);
         Object max = get(maxValues, fieldIndex, type);
         Long nullCount = nullCounts != null ? nullCounts[fieldIndex] : null;
@@ -108,8 +103,7 @@ public class LeafPredicate implements Predicate {
 
     @Override
     public Optional<Predicate> negate() {
-        return function.negate()
-                .map(negate -> new LeafPredicate(negate, type, fieldIndex, fieldName, literals));
+        return function.negate().map(negate -> new LeafPredicate(negate, type, fieldIndex, fieldName, literals));
     }
 
     @Override
@@ -185,8 +179,7 @@ public class LeafPredicate implements Predicate {
                 return internalRow.getString(pos);
             case DECIMAL:
                 DecimalType decimalType = (DecimalType) fieldType;
-                return internalRow.getDecimal(
-                        pos, decimalType.getPrecision(), decimalType.getScale());
+                return internalRow.getDecimal(pos, decimalType.getPrecision(), decimalType.getScale());
             case BINARY:
                 return internalRow.getBytes(pos);
             default:

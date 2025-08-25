@@ -94,24 +94,14 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
     public static MemoryLogRecordsIndexedBuilder builder(
             int schemaId, int writeLimit, AbstractPagedOutputView outputView, boolean appendOnly) {
         return new MemoryLogRecordsIndexedBuilder(
-                BUILDER_DEFAULT_OFFSET,
-                schemaId,
-                writeLimit,
-                CURRENT_LOG_MAGIC_VALUE,
-                outputView,
-                appendOnly);
+                BUILDER_DEFAULT_OFFSET, schemaId, writeLimit, CURRENT_LOG_MAGIC_VALUE, outputView, appendOnly);
     }
 
     @VisibleForTesting
     public static MemoryLogRecordsIndexedBuilder builder(
-            long baseLogOffset,
-            int schemaId,
-            int writeLimit,
-            byte magic,
-            AbstractPagedOutputView outputView)
+            long baseLogOffset, int schemaId, int writeLimit, byte magic, AbstractPagedOutputView outputView)
             throws IOException {
-        return new MemoryLogRecordsIndexedBuilder(
-                baseLogOffset, schemaId, writeLimit, magic, outputView, false);
+        return new MemoryLogRecordsIndexedBuilder(baseLogOffset, schemaId, writeLimit, magic, outputView, false);
     }
 
     /**
@@ -138,8 +128,7 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
         }
         if (appendOnly && changeType != ChangeType.APPEND_ONLY) {
             throw new IllegalArgumentException(
-                    "Only append-only change type is allowed for append-only arrow log builder, but got "
-                            + changeType);
+                    "Only append-only change type is allowed for append-only arrow log builder, but got " + changeType);
         }
 
         int recordByteSizes = IndexedLogRecord.writeTo(pagedOutputView, changeType, row);
@@ -157,10 +146,9 @@ public class MemoryLogRecordsIndexedBuilder implements AutoCloseable {
         }
 
         writeBatchHeader();
-        builtBuffer =
-                MultiBytesView.builder()
-                        .addMemorySegmentByteViewList(pagedOutputView.getWrittenSegments())
-                        .build();
+        builtBuffer = MultiBytesView.builder()
+                .addMemorySegmentByteViewList(pagedOutputView.getWrittenSegments())
+                .build();
         return builtBuffer;
     }
 

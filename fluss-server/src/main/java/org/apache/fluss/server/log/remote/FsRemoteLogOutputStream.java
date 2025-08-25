@@ -44,8 +44,7 @@ public class FsRemoteLogOutputStream extends FSDataOutputStream {
     private FSDataOutputStream outStream;
     private volatile boolean closed;
 
-    public FsRemoteLogOutputStream(FsPath basePath, int bufferSize, String fileName)
-            throws IOException {
+    public FsRemoteLogOutputStream(FsPath basePath, int bufferSize, String fileName) throws IOException {
         this.basePath = basePath;
         this.fs = basePath.getFileSystem();
         this.writeBuffer = new byte[bufferSize];
@@ -138,10 +137,7 @@ public class FsRemoteLogOutputStream extends FSDataOutputStream {
                 try {
                     outStream.close();
                 } catch (Throwable throwable) {
-                    LOG.warn(
-                            "Could not close the remote log fs stream for {}.",
-                            remoteLogFilePath,
-                            throwable);
+                    LOG.warn("Could not close the remote log fs stream for {}.", remoteLogFilePath, throwable);
                 } finally {
                     try {
                         fs.delete(remoteLogFilePath, false);
@@ -173,10 +169,7 @@ public class FsRemoteLogOutputStream extends FSDataOutputStream {
                         }
 
                     } catch (Exception deleteException) {
-                        LOG.warn(
-                                "Could not delete the log file {}.",
-                                remoteLogFilePath,
-                                deleteException);
+                        LOG.warn("Could not delete the log file {}.", remoteLogFilePath, deleteException);
                     }
 
                     throw new IOException(
@@ -211,7 +204,6 @@ public class FsRemoteLogOutputStream extends FSDataOutputStream {
             }
         }
 
-        throw new IOException(
-                "Could not open output stream for uploading remote log files", latestException);
+        throw new IOException("Could not open output stream for uploading remote log files", latestException);
     }
 }

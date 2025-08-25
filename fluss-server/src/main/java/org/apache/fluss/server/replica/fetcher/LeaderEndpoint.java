@@ -65,8 +65,7 @@ interface LeaderEndpoint {
         private final Map<TableBucket, FetchLogResultForBucket> fetchLogResultMap;
 
         public FetchData(
-                FetchLogResponse fetchLogResponse,
-                Map<TableBucket, FetchLogResultForBucket> fetchLogResultMap) {
+                FetchLogResponse fetchLogResponse, Map<TableBucket, FetchLogResultForBucket> fetchLogResultMap) {
             this.fetchLogResponse = fetchLogResponse;
             this.fetchLogResultMap = fetchLogResultMap;
         }

@@ -59,8 +59,7 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
     // Need to use a Queue to store the inflight responses, because Kafka clients require the
     // responses to be sent in order.
     // See: org.apache.kafka.clients.InFlightRequests#completeNext
-    private final ConcurrentLinkedDeque<KafkaRequest> inflightResponses =
-            new ConcurrentLinkedDeque<>();
+    private final ConcurrentLinkedDeque<KafkaRequest> inflightResponses = new ConcurrentLinkedDeque<>();
     protected final AtomicBoolean isActive = new AtomicBoolean(true);
     protected volatile ChannelHandlerContext ctx;
     protected SocketAddress remoteAddress;
@@ -168,10 +167,7 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
     protected void close() {
         isActive.set(false);
         ctx.close();
-        LOG.warn(
-                "Close channel {} with {} pending requests.",
-                remoteAddress,
-                inflightResponses.size());
+        LOG.warn("Close channel {} with {} pending requests.", remoteAddress, inflightResponses.size());
         for (KafkaRequest request : inflightResponses) {
             request.cancel();
         }
@@ -188,19 +184,14 @@ public class KafkaCommandDecoder extends SimpleChannelInboundHandler<ByteBuf> {
         ByteBuffer nioBuffer = buffer.nioBuffer();
         RequestHeader header = RequestHeader.parse(nioBuffer);
         if (isUnsupportedApiVersionRequest(header)) {
-            ApiVersionsRequest request =
-                    new ApiVersionsRequest.Builder(header.apiVersion()).build();
-            return new KafkaRequest(
-                    API_VERSIONS, header.apiVersion(), header, request, buffer, ctx, future);
+            ApiVersionsRequest request = new ApiVersionsRequest.Builder(header.apiVersion()).build();
+            return new KafkaRequest(API_VERSIONS, header.apiVersion(), header, request, buffer, ctx, future);
         }
-        RequestAndSize request =
-                AbstractRequest.parseRequest(header.apiKey(), header.apiVersion(), nioBuffer);
-        return new KafkaRequest(
-                header.apiKey(), header.apiVersion(), header, request.request, buffer, ctx, future);
+        RequestAndSize request = AbstractRequest.parseRequest(header.apiKey(), header.apiVersion(), nioBuffer);
+        return new KafkaRequest(header.apiKey(), header.apiVersion(), header, request.request, buffer, ctx, future);
     }
 
     private static boolean isUnsupportedApiVersionRequest(RequestHeader header) {
-        return header.apiKey() == API_VERSIONS
-                && !API_VERSIONS.isVersionSupported(header.apiVersion());
+        return header.apiKey() == API_VERSIONS && !API_VERSIONS.isVersionSupported(header.apiVersion());
     }
 }

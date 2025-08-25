@@ -38,8 +38,7 @@ public class DynamicTemporaryAWSCredentialsProvider implements AWSCredentialsPro
 
     public static final String COMPONENT = "Dynamic session credentials for Fluss";
 
-    private static final Logger LOG =
-            LoggerFactory.getLogger(DynamicTemporaryAWSCredentialsProvider.class);
+    private static final Logger LOG = LoggerFactory.getLogger(DynamicTemporaryAWSCredentialsProvider.class);
 
     @Override
     public AWSCredentials getCredentials() {
@@ -50,9 +49,7 @@ public class DynamicTemporaryAWSCredentialsProvider implements AWSCredentialsPro
         }
         LOG.debug("Providing session credentials");
         return new BasicSessionCredentials(
-                credentials.getAccessKeyId(),
-                credentials.getSecretAccessKey(),
-                credentials.getSecurityToken());
+                credentials.getAccessKeyId(), credentials.getSecretAccessKey(), credentials.getSecurityToken());
     }
 
     @Override

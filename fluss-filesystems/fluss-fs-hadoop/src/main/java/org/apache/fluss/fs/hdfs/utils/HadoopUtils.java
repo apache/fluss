@@ -50,8 +50,7 @@ public class HadoopUtils {
     /** The prefixes that Fluss adds to the Hadoop config. */
     private static final String[] FLUSS_CONFIG_PREFIXES = {"fluss.hadoop."};
 
-    public static Configuration getHadoopConfiguration(
-            org.apache.fluss.config.Configuration flussConfiguration) {
+    public static Configuration getHadoopConfiguration(org.apache.fluss.config.Configuration flussConfiguration) {
 
         // Instantiate an HdfsConfiguration to load the hdfs-site.xml and hdfs-default.xml
         // from the classpath
@@ -85,8 +84,7 @@ public class HadoopUtils {
         String hadoopConfDir = System.getenv("HADOOP_CONF_DIR");
         if (hadoopConfDir != null) {
             LOG.debug("Searching Hadoop configuration files in HADOOP_CONF_DIR: {}", hadoopConfDir);
-            foundHadoopConfiguration =
-                    addHadoopConfIfFound(result, hadoopConfDir) || foundHadoopConfiguration;
+            foundHadoopConfiguration = addHadoopConfIfFound(result, hadoopConfDir) || foundHadoopConfiguration;
         }
 
         // Approach 3: Fluss configuration
@@ -95,24 +93,18 @@ public class HadoopUtils {
             for (String prefix : FLUSS_CONFIG_PREFIXES) {
                 if (key.startsWith(prefix)) {
                     String newKey = key.substring(prefix.length());
-                    String value =
-                            flussConfiguration.getString(
-                                    ConfigBuilder.key(key).stringType().noDefaultValue(), null);
+                    String value = flussConfiguration.getString(
+                            ConfigBuilder.key(key).stringType().noDefaultValue(), null);
                     result.set(newKey, value);
-                    LOG.debug(
-                            "Adding Fluss config entry for {} as {}={} to Hadoop config",
-                            key,
-                            newKey,
-                            value);
+                    LOG.debug("Adding Fluss config entry for {} as {}={} to Hadoop config", key, newKey, value);
                     foundHadoopConfiguration = true;
                 }
             }
         }
 
         if (!foundHadoopConfiguration) {
-            LOG.warn(
-                    "Could not find Hadoop configuration via any of the supported methods "
-                            + "(Fluss configuration, environment variables).");
+            LOG.warn("Could not find Hadoop configuration via any of the supported methods "
+                    + "(Fluss configuration, environment variables).");
         }
 
         return result;
@@ -120,12 +112,10 @@ public class HadoopUtils {
 
     public static boolean isKerberosSecurityEnabled(UserGroupInformation ugi) {
         return UserGroupInformation.isSecurityEnabled()
-                && ugi.getAuthenticationMethod()
-                        == UserGroupInformation.AuthenticationMethod.KERBEROS;
+                && ugi.getAuthenticationMethod() == UserGroupInformation.AuthenticationMethod.KERBEROS;
     }
 
-    public static boolean areKerberosCredentialsValid(
-            UserGroupInformation ugi, boolean useTicketCache) {
+    public static boolean areKerberosCredentialsValid(UserGroupInformation ugi, boolean useTicketCache) {
         checkState(isKerberosSecurityEnabled(ugi));
 
         // note: UGI::hasKerberosCredentials inaccurately reports false
@@ -133,14 +123,12 @@ public class HadoopUtils {
         // so we check only in ticket cache scenario.
         if (useTicketCache && !ugi.hasKerberosCredentials()) {
             if (hasHDFSDelegationToken(ugi)) {
-                LOG.warn(
-                        "Hadoop security is enabled but current login user does not have Kerberos credentials, "
-                                + "use delegation token instead. Fluss application will terminate after token expires.");
+                LOG.warn("Hadoop security is enabled but current login user does not have Kerberos credentials, "
+                        + "use delegation token instead. Fluss application will terminate after token expires.");
                 return true;
             } else {
-                LOG.error(
-                        "Hadoop security is enabled, but current login user has neither Kerberos credentials "
-                                + "nor delegation tokens!");
+                LOG.error("Hadoop security is enabled, but current login user has neither Kerberos credentials "
+                        + "nor delegation tokens!");
                 return false;
             }
         }
@@ -163,26 +151,17 @@ public class HadoopUtils {
      * Search Hadoop configuration files in the given path, and add them to the configuration if
      * found.
      */
-    private static boolean addHadoopConfIfFound(
-            Configuration configuration, String possibleHadoopConfPath) {
+    private static boolean addHadoopConfIfFound(Configuration configuration, String possibleHadoopConfPath) {
         boolean foundHadoopConfiguration = false;
         if (new File(possibleHadoopConfPath).exists()) {
             if (new File(possibleHadoopConfPath + "/core-site.xml").exists()) {
-                configuration.addResource(
-                        new org.apache.hadoop.fs.Path(possibleHadoopConfPath + "/core-site.xml"));
-                LOG.debug(
-                        "Adding "
-                                + possibleHadoopConfPath
-                                + "/core-site.xml to hadoop configuration");
+                configuration.addResource(new org.apache.hadoop.fs.Path(possibleHadoopConfPath + "/core-site.xml"));
+                LOG.debug("Adding " + possibleHadoopConfPath + "/core-site.xml to hadoop configuration");
                 foundHadoopConfiguration = true;
             }
             if (new File(possibleHadoopConfPath + "/hdfs-site.xml").exists()) {
-                configuration.addResource(
-                        new org.apache.hadoop.fs.Path(possibleHadoopConfPath + "/hdfs-site.xml"));
-                LOG.debug(
-                        "Adding "
-                                + possibleHadoopConfPath
-                                + "/hdfs-site.xml to hadoop configuration");
+                configuration.addResource(new org.apache.hadoop.fs.Path(possibleHadoopConfPath + "/hdfs-site.xml"));
+                LOG.debug("Adding " + possibleHadoopConfPath + "/hdfs-site.xml to hadoop configuration");
                 foundHadoopConfiguration = true;
             }
         }

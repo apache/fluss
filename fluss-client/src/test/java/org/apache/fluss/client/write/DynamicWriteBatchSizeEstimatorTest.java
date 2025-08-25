@@ -43,19 +43,16 @@ public class DynamicWriteBatchSizeEstimatorTest {
         // test decrease 5%
         estimator.updateEstimation(DATA1_PHYSICAL_TABLE_PATH, 450);
         int expectedSize = 950;
-        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH))
-                .isEqualTo(expectedSize);
+        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(expectedSize);
 
         // test increase 5%
         estimator.updateEstimation(DATA1_PHYSICAL_TABLE_PATH, 350);
         expectedSize = (int) (950 * 0.95);
-        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH))
-                .isEqualTo(expectedSize);
+        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo(expectedSize);
 
         // test increase 10%
         estimator.updateEstimation(DATA1_PHYSICAL_TABLE_PATH, 930);
-        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH))
-                .isEqualTo((int) (expectedSize * 1.1));
+        assertThat(estimator.getEstimatedBatchSize(DATA1_PHYSICAL_TABLE_PATH)).isEqualTo((int) (expectedSize * 1.1));
     }
 
     @Test

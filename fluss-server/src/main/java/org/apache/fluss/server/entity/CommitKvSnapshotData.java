@@ -32,8 +32,7 @@ public class CommitKvSnapshotData {
     /** The leader epoch of the bucket when the snapshot is triggered. */
     private final int bucketLeaderEpoch;
 
-    public CommitKvSnapshotData(
-            CompletedSnapshot completedSnapshot, int coordinatorEpoch, int bucketLeaderEpoch) {
+    public CommitKvSnapshotData(CompletedSnapshot completedSnapshot, int coordinatorEpoch, int bucketLeaderEpoch) {
         this.completedSnapshot = completedSnapshot;
         this.coordinatorEpoch = coordinatorEpoch;
         this.bucketLeaderEpoch = bucketLeaderEpoch;

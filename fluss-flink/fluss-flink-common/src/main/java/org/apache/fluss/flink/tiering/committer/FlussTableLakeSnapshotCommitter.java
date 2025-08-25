@@ -54,30 +54,24 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
         String clientId = flussConf.getString(ConfigOptions.CLIENT_ID);
         MetricRegistry metricRegistry = MetricRegistry.create(flussConf, null);
         // don't care about metrics, but pass a ClientMetricGroup to make compiler happy
-        rpcClient =
-                RpcClient.create(flussConf, new ClientMetricGroup(metricRegistry, clientId), false);
+        rpcClient = RpcClient.create(flussConf, new ClientMetricGroup(metricRegistry, clientId), false);
         MetadataUpdater metadataUpdater = new MetadataUpdater(flussConf, rpcClient);
-        this.coordinatorGateway =
-                GatewayClientProxy.createGatewayProxy(
-                        metadataUpdater::getCoordinatorServer, rpcClient, CoordinatorGateway.class);
+        this.coordinatorGateway = GatewayClientProxy.createGatewayProxy(
+                metadataUpdater::getCoordinatorServer, rpcClient, CoordinatorGateway.class);
     }
 
     void commit(FlussTableLakeSnapshot flussTableLakeSnapshot) throws IOException {
         try {
-            CommitLakeTableSnapshotRequest request =
-                    toCommitLakeTableSnapshotRequest(flussTableLakeSnapshot);
+            CommitLakeTableSnapshotRequest request = toCommitLakeTableSnapshotRequest(flussTableLakeSnapshot);
             coordinatorGateway.commitLakeTableSnapshot(request).get();
         } catch (Exception e) {
             throw new IOException(
-                    String.format(
-                            "Fail to commit table lake snapshot %s to Fluss.",
-                            flussTableLakeSnapshot),
+                    String.format("Fail to commit table lake snapshot %s to Fluss.", flussTableLakeSnapshot),
                     ExceptionUtils.stripExecutionException(e));
         }
     }
 
-    public void commit(long tableId, CommittedLakeSnapshot committedLakeSnapshot)
-            throws IOException {
+    public void commit(long tableId, CommittedLakeSnapshot committedLakeSnapshot) throws IOException {
         // construct lake snapshot to commit to Fluss
         FlussTableLakeSnapshot flussTableLakeSnapshot =
                 new FlussTableLakeSnapshot(tableId, committedLakeSnapshot.getLakeSnapshotId());
@@ -107,17 +101,14 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
 
     private CommitLakeTableSnapshotRequest toCommitLakeTableSnapshotRequest(
             FlussTableLakeSnapshot flussTableLakeSnapshot) {
-        CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest =
-                new CommitLakeTableSnapshotRequest();
-        PbLakeTableSnapshotInfo pbLakeTableSnapshotInfo =
-                commitLakeTableSnapshotRequest.addTablesReq();
+        CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest = new CommitLakeTableSnapshotRequest();
+        PbLakeTableSnapshotInfo pbLakeTableSnapshotInfo = commitLakeTableSnapshotRequest.addTablesReq();
 
         pbLakeTableSnapshotInfo.setTableId(flussTableLakeSnapshot.tableId());
         pbLakeTableSnapshotInfo.setSnapshotId(flussTableLakeSnapshot.lakeSnapshotId());
         for (Map.Entry<Tuple2<TableBucket, String>, Long> bucketEndOffsetEntry :
                 flussTableLakeSnapshot.logEndOffsets().entrySet()) {
-            PbLakeTableOffsetForBucket pbLakeTableOffsetForBucket =
-                    pbLakeTableSnapshotInfo.addBucketsReq();
+            PbLakeTableOffsetForBucket pbLakeTableOffsetForBucket = pbLakeTableSnapshotInfo.addBucketsReq();
             TableBucket tableBucket = bucketEndOffsetEntry.getKey().f0;
             String partitionName = bucketEndOffsetEntry.getKey().f1;
             long endOffset = bucketEndOffsetEntry.getValue();

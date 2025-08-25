@@ -33,8 +33,7 @@ import java.util.Iterator;
 import java.util.Set;
 
 /** Json serializer and deserializer for {@link ResourceAcl}. */
-public class ResourceAclJsonSerde
-        implements JsonSerializer<ResourceAcl>, JsonDeserializer<ResourceAcl> {
+public class ResourceAclJsonSerde implements JsonSerializer<ResourceAcl>, JsonDeserializer<ResourceAcl> {
     public static final ResourceAclJsonSerde INSTANCE = new ResourceAclJsonSerde();
 
     private static final String VERSION_KEY = "version";
@@ -62,14 +61,14 @@ public class ResourceAclJsonSerde
     }
 
     private static void serializeAccessControlEntries(
-            JsonGenerator generator, Collection<AccessControlEntry> accessControlEntries)
-            throws IOException {
+            JsonGenerator generator, Collection<AccessControlEntry> accessControlEntries) throws IOException {
         generator.writeArrayFieldStart(ACLS);
         for (AccessControlEntry entry : accessControlEntries) {
             generator.writeStartObject();
             generator.writeStringField(PRINCIPAL_TYPE, entry.getPrincipal().getType());
             generator.writeStringField(PRINCIPAL_NAME, entry.getPrincipal().getName());
-            generator.writeStringField(PERMISSION_TYPE, entry.getPermissionType().name());
+            generator.writeStringField(
+                    PERMISSION_TYPE, entry.getPermissionType().name());
             generator.writeStringField(HOST, entry.getHost());
             generator.writeStringField(OPERATION_TYPE, entry.getOperationType().name());
             generator.writeEndObject();
@@ -82,14 +81,13 @@ public class ResourceAclJsonSerde
         Set<AccessControlEntry> entries = new HashSet<>();
         while (elements.hasNext()) {
             JsonNode aclNode = elements.next();
-            AccessControlEntry entry =
-                    new AccessControlEntry(
-                            new FlussPrincipal(
-                                    aclNode.get(PRINCIPAL_NAME).asText(),
-                                    aclNode.get(PRINCIPAL_TYPE).asText()),
-                            aclNode.get(HOST).asText(),
-                            OperationType.valueOf(aclNode.get(OPERATION_TYPE).asText()),
-                            PermissionType.valueOf(aclNode.get(PERMISSION_TYPE).asText()));
+            AccessControlEntry entry = new AccessControlEntry(
+                    new FlussPrincipal(
+                            aclNode.get(PRINCIPAL_NAME).asText(),
+                            aclNode.get(PRINCIPAL_TYPE).asText()),
+                    aclNode.get(HOST).asText(),
+                    OperationType.valueOf(aclNode.get(OPERATION_TYPE).asText()),
+                    PermissionType.valueOf(aclNode.get(PERMISSION_TYPE).asText()));
             entries.add(entry);
         }
         return entries;

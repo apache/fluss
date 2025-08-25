@@ -81,8 +81,7 @@ public final class OffsetIndex extends AbstractIndex {
         this(file, baseOffset, maxIndexSize, true);
     }
 
-    public OffsetIndex(File file, long baseOffset, int maxIndexSize, boolean writable)
-            throws IOException {
+    public OffsetIndex(File file, long baseOffset, int maxIndexSize, boolean writable) throws IOException {
         super(file, baseOffset, maxIndexSize, writable);
 
         lastOffset = lastEntry().getOffset();
@@ -100,24 +99,22 @@ public final class OffsetIndex extends AbstractIndex {
     @Override
     public void sanityCheck() {
         if (entries() != 0 && lastOffset < baseOffset()) {
-            throw new CorruptIndexException(
-                    "Corrupt index found, index file "
-                            + file().getAbsolutePath()
-                            + " has non-zero size "
-                            + "but the last offset is "
-                            + lastOffset
-                            + " which is less than the base offset "
-                            + baseOffset());
+            throw new CorruptIndexException("Corrupt index found, index file "
+                    + file().getAbsolutePath()
+                    + " has non-zero size "
+                    + "but the last offset is "
+                    + lastOffset
+                    + " which is less than the base offset "
+                    + baseOffset());
         }
 
         if (length() % entrySize() != 0) {
-            throw new CorruptIndexException(
-                    "Index file "
-                            + file().getAbsolutePath()
-                            + " is corrupt, found "
-                            + length()
-                            + " bytes which is neither positive nor a multiple of "
-                            + ENTRY_SIZE);
+            throw new CorruptIndexException("Index file "
+                    + file().getAbsolutePath()
+                    + " is corrupt, found "
+                    + length()
+                    + " bytes which is neither positive nor a multiple of "
+                    + ENTRY_SIZE);
         }
     }
 
@@ -131,17 +128,15 @@ public final class OffsetIndex extends AbstractIndex {
      *     (baseOffset, 0) is returned.
      */
     public OffsetPosition lookup(long targetOffset) {
-        return inReadLock(
-                remapLock,
-                () -> {
-                    ByteBuffer idx = mmap().duplicate();
-                    int slot = largestLowerBoundSlotFor(idx, targetOffset, IndexSearchType.KEY);
-                    if (slot == -1) {
-                        return new OffsetPosition(baseOffset(), 0);
-                    } else {
-                        return parseEntry(idx, slot);
-                    }
-                });
+        return inReadLock(remapLock, () -> {
+            ByteBuffer idx = mmap().duplicate();
+            int slot = largestLowerBoundSlotFor(idx, targetOffset, IndexSearchType.KEY);
+            if (slot == -1) {
+                return new OffsetPosition(baseOffset(), 0);
+            } else {
+                return parseEntry(idx, slot);
+            }
+        });
     }
 
     /**
@@ -151,20 +146,17 @@ public final class OffsetIndex extends AbstractIndex {
      * @return The offset/position pair at that entry
      */
     public OffsetPosition entry(int n) {
-        return inReadLock(
-                remapLock,
-                () -> {
-                    if (n >= entries()) {
-                        throw new IllegalArgumentException(
-                                "Attempt to fetch the "
-                                        + n
-                                        + "th entry from index "
-                                        + file().getAbsolutePath()
-                                        + ", which has size "
-                                        + entries());
-                    }
-                    return parseEntry(mmap(), n);
-                });
+        return inReadLock(remapLock, () -> {
+            if (n >= entries()) {
+                throw new IllegalArgumentException("Attempt to fetch the "
+                        + n
+                        + "th entry from index "
+                        + file().getAbsolutePath()
+                        + ", which has size "
+                        + entries());
+            }
+            return parseEntry(mmap(), n);
+        });
     }
 
     /**
@@ -172,23 +164,16 @@ public final class OffsetIndex extends AbstractIndex {
      * which is guaranteed to be outside the fetched range, but note that it will not generally be
      * the smallest such offset.
      */
-    public Optional<OffsetPosition> fetchUpperBoundOffset(
-            OffsetPosition fetchOffset, int fetchSize) {
-        return inReadLock(
-                remapLock,
-                () -> {
-                    ByteBuffer idx = mmap().duplicate();
-                    int slot =
-                            smallestUpperBoundSlotFor(
-                                    idx,
-                                    fetchOffset.getPosition() + fetchSize,
-                                    IndexSearchType.VALUE);
-                    if (slot == -1) {
-                        return Optional.empty();
-                    } else {
-                        return Optional.of(parseEntry(idx, slot));
-                    }
-                });
+    public Optional<OffsetPosition> fetchUpperBoundOffset(OffsetPosition fetchOffset, int fetchSize) {
+        return inReadLock(remapLock, () -> {
+            ByteBuffer idx = mmap().duplicate();
+            int slot = smallestUpperBoundSlotFor(idx, fetchOffset.getPosition() + fetchSize, IndexSearchType.VALUE);
+            if (slot == -1) {
+                return Optional.empty();
+            } else {
+                return Optional.of(parseEntry(idx, slot));
+            }
+        });
     }
 
     /**
@@ -199,70 +184,58 @@ public final class OffsetIndex extends AbstractIndex {
      * @throws InvalidOffsetException if provided offset is not larger than the last offset
      */
     public void append(long offset, int position) {
-        inLock(
-                lock,
-                () -> {
-                    if (isFull()) {
-                        throw new IllegalArgumentException(
-                                "Attempt to append to a full index (size = " + entries() + ").");
-                    }
+        inLock(lock, () -> {
+            if (isFull()) {
+                throw new IllegalArgumentException("Attempt to append to a full index (size = " + entries() + ").");
+            }
 
-                    if (entries() == 0 || offset > lastOffset) {
-                        if (LOG.isTraceEnabled()) {
-                            LOG.trace(
-                                    "Adding index entry {} => {} to {}",
-                                    offset,
-                                    position,
-                                    file().getAbsolutePath());
-                        }
+            if (entries() == 0 || offset > lastOffset) {
+                if (LOG.isTraceEnabled()) {
+                    LOG.trace("Adding index entry {} => {} to {}", offset, position, file().getAbsolutePath());
+                }
 
-                        mmap().putInt(relativeOffset(offset));
-                        mmap().putInt(position);
-                        incrementEntries();
-                        lastOffset = offset;
-                        if (entries() * ENTRY_SIZE != mmap().position()) {
-                            throw new IllegalStateException(
-                                    entries()
-                                            + " entries but file position in index is "
-                                            + mmap().position());
-                        }
-                    } else {
-                        throw new InvalidOffsetException(
-                                "Attempt to append an offset "
-                                        + offset
-                                        + " to position "
-                                        + entries()
-                                        + " no larger than the last offset appended ("
-                                        + lastOffset
-                                        + ") to "
-                                        + file().getAbsolutePath());
-                    }
-                });
+                mmap().putInt(relativeOffset(offset));
+                mmap().putInt(position);
+                incrementEntries();
+                lastOffset = offset;
+                if (entries() * ENTRY_SIZE != mmap().position()) {
+                    throw new IllegalStateException(
+                            entries() + " entries but file position in index is " + mmap().position());
+                }
+            } else {
+                throw new InvalidOffsetException("Attempt to append an offset "
+                        + offset
+                        + " to position "
+                        + entries()
+                        + " no larger than the last offset appended ("
+                        + lastOffset
+                        + ") to "
+                        + file().getAbsolutePath());
+            }
+        });
     }
 
     @Override
     public void truncateTo(long offset) {
-        inLock(
-                lock,
-                () -> {
-                    ByteBuffer idx = mmap().duplicate();
-                    int slot = largestLowerBoundSlotFor(idx, offset, IndexSearchType.KEY);
+        inLock(lock, () -> {
+            ByteBuffer idx = mmap().duplicate();
+            int slot = largestLowerBoundSlotFor(idx, offset, IndexSearchType.KEY);
 
-                    /* There are 3 cases for choosing the new size
-                     * 1) if there is no entry in the index <= the offset, delete everything
-                     * 2) if there is an entry for this exact offset, delete it and everything larger than it
-                     * 3) if there is no entry for this offset, delete everything larger than the next smallest
-                     */
-                    int newEntries;
-                    if (slot < 0) {
-                        newEntries = 0;
-                    } else if (relativeOffset(idx, slot) == offset - baseOffset()) {
-                        newEntries = slot;
-                    } else {
-                        newEntries = slot + 1;
-                    }
-                    truncateToEntries(newEntries);
-                });
+            /* There are 3 cases for choosing the new size
+             * 1) if there is no entry in the index <= the offset, delete everything
+             * 2) if there is an entry for this exact offset, delete it and everything larger than it
+             * 3) if there is no entry for this offset, delete everything larger than the next smallest
+             */
+            int newEntries;
+            if (slot < 0) {
+                newEntries = 0;
+            } else if (relativeOffset(idx, slot) == offset - baseOffset()) {
+                newEntries = slot;
+            } else {
+                newEntries = slot + 1;
+            }
+            truncateToEntries(newEntries);
+        });
     }
 
     public long lastOffset() {
@@ -294,31 +267,27 @@ public final class OffsetIndex extends AbstractIndex {
 
     /** Truncates index to a known number of entries. */
     private void truncateToEntries(int entries) {
-        inLock(
-                lock,
-                () -> {
-                    super.truncateToEntries0(entries);
-                    this.lastOffset = lastEntry().getOffset();
-                    LOG.debug(
-                            "Truncated index {} to {} entries; position is now {} and last offset is now {}",
-                            file().getAbsolutePath(),
-                            entries,
-                            mmap().position(),
-                            lastOffset);
-                });
+        inLock(lock, () -> {
+            super.truncateToEntries0(entries);
+            this.lastOffset = lastEntry().getOffset();
+            LOG.debug(
+                    "Truncated index {} to {} entries; position is now {} and last offset is now {}",
+                    file().getAbsolutePath(),
+                    entries,
+                    mmap().position(),
+                    lastOffset);
+        });
     }
 
     /** The last entry in the index. */
     private OffsetPosition lastEntry() {
-        return inReadLock(
-                remapLock,
-                () -> {
-                    int entries = entries();
-                    if (entries == 0) {
-                        return new OffsetPosition(baseOffset(), 0);
-                    } else {
-                        return parseEntry(mmap(), entries - 1);
-                    }
-                });
+        return inReadLock(remapLock, () -> {
+            int entries = entries();
+            if (entries == 0) {
+                return new OffsetPosition(baseOffset(), 0);
+            } else {
+                return parseEntry(mmap(), entries - 1);
+            }
+        });
     }
 }

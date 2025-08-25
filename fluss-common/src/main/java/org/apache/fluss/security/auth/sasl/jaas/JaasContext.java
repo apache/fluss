@@ -61,21 +61,15 @@ public class JaasContext {
     private final List<AppConfigurationEntry> configurationEntries;
     private final @Nullable String dynamicJaasConfig;
 
-    public JaasContext(
-            String name,
-            Type type,
-            Configuration configuration,
-            @Nullable String dynamicJaasConfig) {
+    public JaasContext(String name, Type type, Configuration configuration, @Nullable String dynamicJaasConfig) {
         this.name = name;
         this.type = type;
         this.configuration = configuration;
         AppConfigurationEntry[] entries = configuration.getAppConfigurationEntry(name);
         if (entries == null) {
-            throw new IllegalArgumentException(
-                    "Could not find a '" + name + "' entry in this JAAS configuration.");
+            throw new IllegalArgumentException("Could not find a '" + name + "' entry in this JAAS configuration.");
         }
-        this.configurationEntries =
-                Collections.unmodifiableList(new ArrayList<>(Arrays.asList(entries)));
+        this.configurationEntries = Collections.unmodifiableList(new ArrayList<>(Arrays.asList(entries)));
         this.dynamicJaasConfig = dynamicJaasConfig;
     }
 
@@ -123,16 +117,13 @@ public class JaasContext {
      * @return A constructed {@link JaasContext} instance for server authentication
      * @throws IllegalArgumentException if {@code listenerName} is null
      */
-    public static JaasContext loadServerContext(
-            String listenerName, @Nullable String dynamicJaasConfig) {
+    public static JaasContext loadServerContext(String listenerName, @Nullable String dynamicJaasConfig) {
         if (listenerName == null) {
             throw new IllegalArgumentException("listenerName should not be null for SERVER");
         }
 
-        String listenerContextName =
-                listenerName.toLowerCase(Locale.ROOT) + "." + GLOBAL_CONTEXT_NAME_SERVER;
-        return load(
-                Type.SERVER, listenerContextName, GLOBAL_CONTEXT_NAME_SERVER, dynamicJaasConfig);
+        String listenerContextName = listenerName.toLowerCase(Locale.ROOT) + "." + GLOBAL_CONTEXT_NAME_SERVER;
+        return load(Type.SERVER, listenerContextName, GLOBAL_CONTEXT_NAME_SERVER, dynamicJaasConfig);
     }
 
     /**
@@ -170,16 +161,12 @@ public class JaasContext {
             @Nullable String dynamicJaasConfig) {
         if (dynamicJaasConfig != null) {
             JaasConfig jaasConfig = new JaasConfig(globalContextName, dynamicJaasConfig);
-            AppConfigurationEntry[] contextModules =
-                    jaasConfig.getAppConfigurationEntry(globalContextName);
+            AppConfigurationEntry[] contextModules = jaasConfig.getAppConfigurationEntry(globalContextName);
             if (contextModules == null || contextModules.length == 0) {
-                throw new IllegalArgumentException(
-                        "JAAS config property does not contain any jaas modules");
+                throw new IllegalArgumentException("JAAS config property does not contain any jaas modules");
             } else if (contextModules.length != 1) {
                 throw new IllegalArgumentException(
-                        "JAAS config property contains "
-                                + contextModules.length
-                                + " jaas modules, should be 1 module");
+                        "JAAS config property contains " + contextModules.length + " jaas modules, should be 1 module");
             }
 
             return new JaasContext(globalContextName, contextType, jaasConfig, dynamicJaasConfig);
@@ -202,23 +189,20 @@ public class JaasContext {
      * java.security.auth.jaas.config}, the system's default JAAS configuration (typically
      * `jaas.conf`) will be used.
      */
-    private static JaasContext defaultContext(
-            Type contextType, String listenerContextName, String globalContextName) {
+    private static JaasContext defaultContext(Type contextType, String listenerContextName, String globalContextName) {
         String jaasConfigFile = System.getProperty(JAVA_LOGIN_CONFIG_PARAM);
         if (jaasConfigFile == null) {
             if (contextType == Type.CLIENT) {
-                LOG.debug(
-                        "System property '"
-                                + JAVA_LOGIN_CONFIG_PARAM
-                                + "' and Fluss SASL property '"
-                                + SASL_JAAS_CONFIG
-                                + "' are not set, using default JAAS configuration.");
+                LOG.debug("System property '"
+                        + JAVA_LOGIN_CONFIG_PARAM
+                        + "' and Fluss SASL property '"
+                        + SASL_JAAS_CONFIG
+                        + "' are not set, using default JAAS configuration.");
             } else {
-                LOG.debug(
-                        "System property '"
-                                + JAVA_LOGIN_CONFIG_PARAM
-                                + "' is not set, using default JAAS "
-                                + "configuration.");
+                LOG.debug("System property '"
+                        + JAVA_LOGIN_CONFIG_PARAM
+                        + "' is not set, using default JAAS "
+                        + "configuration.");
             }
         }
 
@@ -239,18 +223,16 @@ public class JaasContext {
         }
 
         if (configEntries == null) {
-            String listenerNameText =
-                    listenerContextName == null ? "" : " or '" + listenerContextName + "'";
-            String errorMessage =
-                    "Could not find a '"
-                            + globalContextName
-                            + "'"
-                            + listenerNameText
-                            + " entry in the JAAS "
-                            + "configuration. System property '"
-                            + JAVA_LOGIN_CONFIG_PARAM
-                            + "' is "
-                            + (jaasConfigFile == null ? "not set" : jaasConfigFile);
+            String listenerNameText = listenerContextName == null ? "" : " or '" + listenerContextName + "'";
+            String errorMessage = "Could not find a '"
+                    + globalContextName
+                    + "'"
+                    + listenerNameText
+                    + " entry in the JAAS "
+                    + "configuration. System property '"
+                    + JAVA_LOGIN_CONFIG_PARAM
+                    + "' is "
+                    + (jaasConfigFile == null ? "not set" : jaasConfigFile);
             throw new IllegalArgumentException(errorMessage);
         }
 

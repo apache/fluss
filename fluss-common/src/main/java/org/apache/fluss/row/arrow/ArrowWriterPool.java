@@ -66,56 +66,44 @@ public class ArrowWriterPool implements ArrowWriterProvider {
 
     @Override
     public void recycleWriter(ArrowWriter writer) {
-        inLock(
-                lock,
-                () -> {
-                    if (closed) {
-                        // close the vector schema root in place
-                        writer.root.close();
-                    } else {
-                        Deque<ArrowWriter> roots =
-                                freeWriters.computeIfAbsent(
-                                        writer.writerKey, k -> new ArrayDeque<>());
-                        writer.increaseEpoch();
-                        roots.add(writer);
-                    }
-                });
+        inLock(lock, () -> {
+            if (closed) {
+                // close the vector schema root in place
+                writer.root.close();
+            } else {
+                Deque<ArrowWriter> roots = freeWriters.computeIfAbsent(writer.writerKey, k -> new ArrayDeque<>());
+                writer.increaseEpoch();
+                roots.add(writer);
+            }
+        });
     }
 
     @Override
     public ArrowWriter getOrCreateWriter(
-            long tableId,
-            int schemaId,
-            int bufferSizeInBytes,
-            RowType schema,
-            ArrowCompressionInfo compressionInfo) {
+            long tableId, int schemaId, int bufferSizeInBytes, RowType schema, ArrowCompressionInfo compressionInfo) {
         final String writerKey = tableId + "-" + schemaId + "-" + compressionInfo.toString();
-        return inLock(
-                lock,
-                () -> {
-                    if (closed) {
-                        throw new FlussRuntimeException(
-                                "Arrow VectorSchemaRoot pool closed while getting/creating root.");
-                    }
-                    Deque<ArrowWriter> writers = freeWriters.get(writerKey);
-                    ArrowCompressionRatioEstimator compressionRatioEstimator =
-                            compressionRatioEstimators.computeIfAbsent(
-                                    writerKey, k -> new ArrowCompressionRatioEstimator());
-                    if (writers != null && !writers.isEmpty()) {
-                        return initialize(writers.pollFirst(), bufferSizeInBytes);
-                    } else {
-                        return initialize(
-                                new ArrowWriter(
-                                        writerKey,
-                                        bufferSizeInBytes,
-                                        schema,
-                                        allocator,
-                                        this,
-                                        compressionInfo,
-                                        compressionRatioEstimator),
-                                bufferSizeInBytes);
-                    }
-                });
+        return inLock(lock, () -> {
+            if (closed) {
+                throw new FlussRuntimeException("Arrow VectorSchemaRoot pool closed while getting/creating root.");
+            }
+            Deque<ArrowWriter> writers = freeWriters.get(writerKey);
+            ArrowCompressionRatioEstimator compressionRatioEstimator =
+                    compressionRatioEstimators.computeIfAbsent(writerKey, k -> new ArrowCompressionRatioEstimator());
+            if (writers != null && !writers.isEmpty()) {
+                return initialize(writers.pollFirst(), bufferSizeInBytes);
+            } else {
+                return initialize(
+                        new ArrowWriter(
+                                writerKey,
+                                bufferSizeInBytes,
+                                schema,
+                                allocator,
+                                this,
+                                compressionInfo,
+                                compressionRatioEstimator),
+                        bufferSizeInBytes);
+            }
+        });
     }
 
     private ArrowWriter initialize(ArrowWriter writer, int bufferSizeInBytes) {

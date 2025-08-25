@@ -58,8 +58,7 @@ public class ReplicaFetcherManager {
 
     // map of (source tablet_server_id, fetcher_id per source tablet server) => fetcher.
     @GuardedBy("lock")
-    private final Map<ServerIdAndFetcherId, ReplicaFetcherThread> fetcherThreadMap =
-            new HashMap<>();
+    private final Map<ServerIdAndFetcherId, ReplicaFetcherThread> fetcherThreadMap = new HashMap<>();
 
     private final Configuration conf;
     private final RpcClient rpcClient;
@@ -89,58 +88,42 @@ public class ReplicaFetcherManager {
             // this can reuse the fetcher thread.
             Map<ServerAndFetcherId, Map<TableBucket, InitialFetchStatus>> replicasPerFetcher =
                     bucketAndStatus.entrySet().stream()
-                            .collect(
-                                    Collectors.groupingBy(
-                                            entry ->
-                                                    new ServerAndFetcherId(
-                                                            entry.getValue().leader(),
-                                                            getFetcherId(entry.getKey())),
-                                            Collectors.toMap(
-                                                    Map.Entry::getKey, Map.Entry::getValue)));
+                            .collect(Collectors.groupingBy(
+                                    entry -> new ServerAndFetcherId(
+                                            entry.getValue().leader(), getFetcherId(entry.getKey())),
+                                    Collectors.toMap(Map.Entry::getKey, Map.Entry::getValue)));
 
-            replicasPerFetcher.forEach(
-                    (serverAndFetcherId, initialFetchStatusMap) -> {
-                        ServerIdAndFetcherId serverIdAndFetcherId =
-                                new ServerIdAndFetcherId(
-                                        serverAndFetcherId.leaderId, serverAndFetcherId.fetcherId);
-                        // default reuse the exists thread.
-                        ReplicaFetcherThread fetcherThread =
-                                fetcherThreadMap.get(serverIdAndFetcherId);
-                        if (fetcherThread == null) {
-                            fetcherThread =
-                                    addAndStartFetcherThread(
-                                            serverAndFetcherId, serverIdAndFetcherId);
-                        } else if (fetcherThread.getLeader().leaderServerId()
-                                != serverAndFetcherId.leaderId) {
-                            try {
-                                fetcherThread.shutdown();
-                            } catch (InterruptedException e) {
-                                LOG.error("Interrupted while shutting down fetcher threads.", e);
-                            }
-                            fetcherThread =
-                                    addAndStartFetcherThread(
-                                            serverAndFetcherId, serverIdAndFetcherId);
-                        }
+            replicasPerFetcher.forEach((serverAndFetcherId, initialFetchStatusMap) -> {
+                ServerIdAndFetcherId serverIdAndFetcherId =
+                        new ServerIdAndFetcherId(serverAndFetcherId.leaderId, serverAndFetcherId.fetcherId);
+                // default reuse the exists thread.
+                ReplicaFetcherThread fetcherThread = fetcherThreadMap.get(serverIdAndFetcherId);
+                if (fetcherThread == null) {
+                    fetcherThread = addAndStartFetcherThread(serverAndFetcherId, serverIdAndFetcherId);
+                } else if (fetcherThread.getLeader().leaderServerId() != serverAndFetcherId.leaderId) {
+                    try {
+                        fetcherThread.shutdown();
+                    } catch (InterruptedException e) {
+                        LOG.error("Interrupted while shutting down fetcher threads.", e);
+                    }
+                    fetcherThread = addAndStartFetcherThread(serverAndFetcherId, serverIdAndFetcherId);
+                }
 
-                        // failed buckets are removed when added buckets to thread
-                        addBucketsToFetcherThread(fetcherThread, initialFetchStatusMap);
-                    });
+                // failed buckets are removed when added buckets to thread
+                addBucketsToFetcherThread(fetcherThread, initialFetchStatusMap);
+            });
         }
     }
 
     public void removeFetcherForBuckets(Set<TableBucket> tableBuckets) {
         synchronized (lock) {
-            fetcherThreadMap
-                    .values()
-                    .forEach(
-                            fetcher -> {
-                                try {
-                                    fetcher.removeBuckets(tableBuckets);
-                                } catch (InterruptedException e) {
-                                    LOG.error(
-                                            "Interrupted while shutting down fetcher threads.", e);
-                                }
-                            });
+            fetcherThreadMap.values().forEach(fetcher -> {
+                try {
+                    fetcher.removeBuckets(tableBuckets);
+                } catch (InterruptedException e) {
+                    LOG.error("Interrupted while shutting down fetcher threads.", e);
+                }
+            });
         }
 
         if (!tableBuckets.isEmpty()) {
@@ -151,17 +134,16 @@ public class ReplicaFetcherManager {
     public void shutdownIdleFetcherThreads() {
         synchronized (lock) {
             Set<ServerIdAndFetcherId> keysToBeRemoved = new HashSet<>();
-            fetcherThreadMap.forEach(
-                    (serverIdAndFetcherId, fetcher) -> {
-                        if (fetcher.getBucketCount() <= 0) {
-                            try {
-                                fetcher.shutdown();
-                            } catch (InterruptedException e) {
-                                LOG.error("Interrupted while shutting down fetcher threads.", e);
-                            }
-                            keysToBeRemoved.add(serverIdAndFetcherId);
-                        }
-                    });
+            fetcherThreadMap.forEach((serverIdAndFetcherId, fetcher) -> {
+                if (fetcher.getBucketCount() <= 0) {
+                    try {
+                        fetcher.shutdown();
+                    } catch (InterruptedException e) {
+                        LOG.error("Interrupted while shutting down fetcher threads.", e);
+                    }
+                    keysToBeRemoved.add(serverIdAndFetcherId);
+                }
+            });
 
             keysToBeRemoved.forEach(fetcherThreadMap::remove);
         }
@@ -183,11 +165,8 @@ public class ReplicaFetcherManager {
     ReplicaFetcherThread createFetcherThread(int fetcherId, int leaderId) {
         String threadName = "ReplicaFetcherThread-" + fetcherId + "-" + leaderId;
         LeaderEndpoint leaderEndpoint = buildRemoteLogEndpoint(leaderId);
-        return new ReplicaFetcherThread(
-                threadName,
-                replicaManager,
-                leaderEndpoint,
-                (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_BACKOFF_INTERVAL).toMillis());
+        return new ReplicaFetcherThread(threadName, replicaManager, leaderEndpoint, (int)
+                conf.get(ConfigOptions.LOG_REPLICA_FETCH_BACKOFF_INTERVAL).toMillis());
     }
 
     @VisibleForTesting
@@ -198,17 +177,14 @@ public class ReplicaFetcherManager {
                 leaderId,
                 GatewayClientProxy.createGatewayProxy(
                         () -> {
-                            Optional<ServerNode> optionalServerNode =
-                                    serverNodeMetadataCache.apply(leaderId);
+                            Optional<ServerNode> optionalServerNode = serverNodeMetadataCache.apply(leaderId);
                             if (optionalServerNode.isPresent()) {
                                 return optionalServerNode.get();
                             } else {
                                 // no available serverNode to connect, throw exception,
                                 // fetch thead expects to retry
                                 throw new RuntimeException(
-                                        "ServerNode "
-                                                + leaderId
-                                                + " is not available in metadata cache.");
+                                        "ServerNode " + leaderId + " is not available in metadata cache.");
                             }
                         },
                         rpcClient,
@@ -216,8 +192,7 @@ public class ReplicaFetcherManager {
     }
 
     private void addBucketsToFetcherThread(
-            ReplicaFetcherThread fetcherThread,
-            Map<TableBucket, InitialFetchStatus> initialFetchStatusMap) {
+            ReplicaFetcherThread fetcherThread, Map<TableBucket, InitialFetchStatus> initialFetchStatusMap) {
         try {
             fetcherThread.addBuckets(initialFetchStatusMap);
             LOG.info(

@@ -51,33 +51,29 @@ public class FlussRequestHandler implements RequestHandler<FlussRequest> {
         ApiMethod api = request.getApiMethod();
         ApiMessage message = request.getMessage();
         try {
-            service.setCurrentSession(
-                    new Session(
-                            request.getApiVersion(),
-                            request.getListenerName(),
-                            request.isInternal(),
-                            request.getAddress(),
-                            request.getPrincipal()));
+            service.setCurrentSession(new Session(
+                    request.getApiVersion(),
+                    request.getListenerName(),
+                    request.isInternal(),
+                    request.getAddress(),
+                    request.getPrincipal()));
             // invoke the corresponding method on RpcGateway instance.
             CompletableFuture<?> responseFuture =
                     (CompletableFuture<?>) api.getMethod().invoke(service, message);
-            responseFuture.whenComplete(
-                    (response, throwable) -> {
-                        request.setRequestCompletedTimeMs(System.currentTimeMillis());
-                        if (throwable != null) {
-                            request.fail(throwable);
-                        } else {
-                            if (response instanceof ApiMessage) {
-                                request.complete((ApiMessage) response);
-                            } else {
-                                request.fail(
-                                        new ClassCastException(
-                                                "The response "
-                                                        + response.getClass().getName()
-                                                        + " is not an instance of ApiMessage."));
-                            }
-                        }
-                    });
+            responseFuture.whenComplete((response, throwable) -> {
+                request.setRequestCompletedTimeMs(System.currentTimeMillis());
+                if (throwable != null) {
+                    request.fail(throwable);
+                } else {
+                    if (response instanceof ApiMessage) {
+                        request.complete((ApiMessage) response);
+                    } else {
+                        request.fail(new ClassCastException("The response "
+                                + response.getClass().getName()
+                                + " is not an instance of ApiMessage."));
+                    }
+                }
+            });
         } catch (Throwable t) {
             LOG.debug("Error while executing RPC {}", api, t);
             request.fail(stripException(t, InvocationTargetException.class));

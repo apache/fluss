@@ -101,8 +101,7 @@ abstract class CompletedFetch {
         for (int i = 0; i < selectedFieldGetters.length; i++) {
             newRow.setField(i, selectedFieldGetters[i].getFieldOrNull(internalRow));
         }
-        return new ScanRecord(
-                record.logOffset(), record.timestamp(), record.getChangeType(), newRow);
+        return new ScanRecord(record.logOffset(), record.timestamp(), record.getChangeType(), newRow);
     }
 
     boolean isConsumed() {
@@ -237,13 +236,12 @@ abstract class CompletedFetch {
             try {
                 batch.ensureValid();
             } catch (CorruptRecordException e) {
-                throw new FetchException(
-                        "Record batch for bucket "
-                                + tableBucket
-                                + " at offset "
-                                + batch.baseLogOffset()
-                                + " is invalid, cause: "
-                                + e.getMessage());
+                throw new FetchException("Record batch for bucket "
+                        + tableBucket
+                        + " at offset "
+                        + batch.baseLogOffset()
+                        + " is invalid, cause: "
+                        + e.getMessage());
             }
         }
     }

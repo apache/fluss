@@ -150,17 +150,16 @@ class SendWritableOutputTest {
         FileChannel fileChannel = FileChannel.open(tempFile);
         MemorySegment mem = MemorySegment.wrap(" world!".getBytes());
 
-        MultiBytesView bv =
-                MultiBytesView.builder()
-                        // zero-copy file region of "foo" = 3 bytes
-                        .addBytes(fileChannel, 0, foo.length)
-                        // no-zero-copy part = 7 bytes
-                        .addBytes(" HELLO ".getBytes())
-                        // region of "bar" = 3 bytes
-                        .addBytes(fileChannel, foo.length, bar.length)
-                        // zero-copy memory part = 7 bytes
-                        .addBytes(mem, 0, mem.size())
-                        .build();
+        MultiBytesView bv = MultiBytesView.builder()
+                // zero-copy file region of "foo" = 3 bytes
+                .addBytes(fileChannel, 0, foo.length)
+                // no-zero-copy part = 7 bytes
+                .addBytes(" HELLO ".getBytes())
+                // region of "bar" = 3 bytes
+                .addBytes(fileChannel, foo.length, bar.length)
+                // zero-copy memory part = 7 bytes
+                .addBytes(mem, 0, mem.size())
+                .build();
 
         assertThat(bv.getBytesLength()).isEqualTo(20);
         assertThat(bv.getZeroCopyLength()).isEqualTo(13);

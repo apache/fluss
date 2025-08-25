@@ -43,11 +43,7 @@ public class LanceConfig implements Serializable {
     private final String tableName;
     private final String datasetUri;
 
-    public LanceConfig(
-            String databaseName,
-            String tableName,
-            String warehouse,
-            Map<String, String> properties) {
+    public LanceConfig(String databaseName, String tableName, String warehouse, Map<String, String> properties) {
         this.databaseName = databaseName;
         this.tableName = tableName;
         this.options = properties;

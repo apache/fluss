@@ -84,9 +84,7 @@ public class TableBucket implements Serializable {
             return false;
         }
         TableBucket that = (TableBucket) o;
-        return tableId == that.tableId
-                && bucket == that.bucket
-                && Objects.equals(partitionId, that.partitionId);
+        return tableId == that.tableId && bucket == that.bucket && Objects.equals(partitionId, that.partitionId);
     }
 
     @Override
@@ -108,7 +106,10 @@ public class TableBucket implements Serializable {
         if (partitionId == null) {
             builder.append(", bucket=").append(bucket);
         } else {
-            builder.append(", partitionId=").append(partitionId).append(", bucket=").append(bucket);
+            builder.append(", partitionId=")
+                    .append(partitionId)
+                    .append(", bucket=")
+                    .append(bucket);
         }
         builder.append('}');
         return builder.toString();

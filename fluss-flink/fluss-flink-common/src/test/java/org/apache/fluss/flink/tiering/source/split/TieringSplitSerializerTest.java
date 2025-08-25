@@ -35,8 +35,7 @@ class TieringSplitSerializerTest {
     private static final TableBucket tableBucket = new TableBucket(1, 2);
     private static final TablePath tablePath = TablePath.of("test_db", "test_table");
     private static final TableBucket partitionedTableBucket = new TableBucket(1, 100L, 2);
-    private static final TablePath partitionedTablePath =
-            TablePath.of("test_db", "test_partitioned_table");
+    private static final TablePath partitionedTablePath = TablePath.of("test_db", "test_partitioned_table");
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
@@ -44,8 +43,7 @@ class TieringSplitSerializerTest {
         TableBucket bucket = isPartitionedTable ? partitionedTableBucket : tableBucket;
         TablePath path = isPartitionedTable ? partitionedTablePath : tablePath;
         String partitionName = isPartitionedTable ? "1024" : null;
-        TieringSnapshotSplit tieringSplit =
-                new TieringSnapshotSplit(path, bucket, partitionName, 0L, 200L, 10);
+        TieringSnapshotSplit tieringSplit = new TieringSnapshotSplit(path, bucket, partitionName, 0L, 200L, 10);
 
         byte[] serialized = serializer.serialize(tieringSplit);
         TieringSnapshotSplit deserializedSplit =
@@ -59,17 +57,13 @@ class TieringSplitSerializerTest {
         TableBucket bucket = isPartitionedTable ? partitionedTableBucket : tableBucket;
         TablePath path = isPartitionedTable ? partitionedTablePath : tablePath;
         String partitionName = isPartitionedTable ? "1024" : null;
-        String expectedSplitId =
-                isPartitionedTable
-                        ? "tiering-snapshot-split-1-p100-2"
-                        : "tiering-snapshot-split-1-2";
+        String expectedSplitId = isPartitionedTable ? "tiering-snapshot-split-1-p100-2" : "tiering-snapshot-split-1-2";
         assertThat(new TieringSnapshotSplit(path, bucket, partitionName, 0L, 200L, 20).splitId())
                 .isEqualTo(expectedSplitId);
 
-        String expectedSplitString =
-                isPartitionedTable
-                        ? "TieringSnapshotSplit{tablePath=test_db.test_partitioned_table, tableBucket=TableBucket{tableId=1, partitionId=100, bucket=2}, partitionName='1024', snapshotId=0, logOffsetOfSnapshot=200, numberOfSplits=30}"
-                        : "TieringSnapshotSplit{tablePath=test_db.test_table, tableBucket=TableBucket{tableId=1, bucket=2}, partitionName='null', snapshotId=0, logOffsetOfSnapshot=200, numberOfSplits=30}";
+        String expectedSplitString = isPartitionedTable
+                ? "TieringSnapshotSplit{tablePath=test_db.test_partitioned_table, tableBucket=TableBucket{tableId=1, partitionId=100, bucket=2}, partitionName='1024', snapshotId=0, logOffsetOfSnapshot=200, numberOfSplits=30}"
+                : "TieringSnapshotSplit{tablePath=test_db.test_table, tableBucket=TableBucket{tableId=1, bucket=2}, partitionName='null', snapshotId=0, logOffsetOfSnapshot=200, numberOfSplits=30}";
         assertThat(new TieringSnapshotSplit(path, bucket, partitionName, 0L, 200L, 30).toString())
                 .isEqualTo(expectedSplitString);
     }
@@ -80,8 +74,7 @@ class TieringSplitSerializerTest {
         TableBucket bucket = isPartitionedTable ? partitionedTableBucket : tableBucket;
         TablePath path = isPartitionedTable ? partitionedTablePath : tablePath;
         String partitionName = isPartitionedTable ? "1024" : null;
-        TieringLogSplit tieringSplit =
-                new TieringLogSplit(path, bucket, partitionName, 100, 200, 40);
+        TieringLogSplit tieringSplit = new TieringLogSplit(path, bucket, partitionName, 100, 200, 40);
 
         byte[] serialized = serializer.serialize(tieringSplit);
         TieringLogSplit deserializedSplit =
@@ -95,15 +88,13 @@ class TieringSplitSerializerTest {
         TableBucket bucket = isPartitionedTable ? partitionedTableBucket : tableBucket;
         TablePath path = isPartitionedTable ? partitionedTablePath : tablePath;
         String partitionName = isPartitionedTable ? "1024" : null;
-        String expectedSplitId =
-                isPartitionedTable ? "tiering-log-split-1-p100-2" : "tiering-log-split-1-2";
+        String expectedSplitId = isPartitionedTable ? "tiering-log-split-1-p100-2" : "tiering-log-split-1-2";
         assertThat(new TieringLogSplit(path, bucket, partitionName, 100, 200, 3).splitId())
                 .isEqualTo(expectedSplitId);
 
-        String expectedSplitString =
-                isPartitionedTable
-                        ? "TieringLogSplit{tablePath=test_db.test_partitioned_table, tableBucket=TableBucket{tableId=1, partitionId=100, bucket=2}, partitionName='1024', startingOffset=100, stoppingOffset=200, numberOfSplits=2}"
-                        : "TieringLogSplit{tablePath=test_db.test_table, tableBucket=TableBucket{tableId=1, bucket=2}, partitionName='null', startingOffset=100, stoppingOffset=200, numberOfSplits=2}";
+        String expectedSplitString = isPartitionedTable
+                ? "TieringLogSplit{tablePath=test_db.test_partitioned_table, tableBucket=TableBucket{tableId=1, partitionId=100, bucket=2}, partitionName='1024', startingOffset=100, stoppingOffset=200, numberOfSplits=2}"
+                : "TieringLogSplit{tablePath=test_db.test_table, tableBucket=TableBucket{tableId=1, bucket=2}, partitionName='null', startingOffset=100, stoppingOffset=200, numberOfSplits=2}";
         assertThat(new TieringLogSplit(path, bucket, partitionName, 100, 200, 2).toString())
                 .isEqualTo(expectedSplitString);
     }

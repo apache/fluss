@@ -104,22 +104,20 @@ public class VarLengthUtilsTest {
         assertThat(readVarLong(buffer, len1)).isEqualTo(10L);
         assertThat(readVarLong(buffer, len1 + len2)).isEqualTo(1000L);
 
-        final byte[] buffer2 =
-                new byte[] {
-                    (byte) 0x80,
-                    (byte) 0x80,
-                    (byte) 0x80,
-                    (byte) 0x80,
-                    (byte) 0x80,
-                    (byte) 0x80,
-                    (byte) 0x80,
-                    (byte) 0x80,
-                    (byte) 0x80,
-                    (byte) 0x80
-                };
+        final byte[] buffer2 = new byte[] {
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80,
+            (byte) 0x80
+        };
         assertThatThrownBy(() -> readVarLong(buffer2, 0))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "VarLong is too long, most significant bit in the 10th byte is set");
+                .hasMessageContaining("VarLong is too long, most significant bit in the 10th byte is set");
     }
 }

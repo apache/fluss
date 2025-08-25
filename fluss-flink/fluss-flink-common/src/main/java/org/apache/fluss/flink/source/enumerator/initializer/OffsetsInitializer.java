@@ -42,20 +42,16 @@ public interface OffsetsInitializer extends Serializable {
      * @return A mapping from fluss bucket to their offsets to start scanning from.
      */
     Map<Integer, Long> getBucketOffsets(
-            @Nullable String partitionName,
-            Collection<Integer> buckets,
-            BucketOffsetsRetriever bucketOffsetsRetriever);
+            @Nullable String partitionName, Collection<Integer> buckets, BucketOffsetsRetriever bucketOffsetsRetriever);
 
     /**
      * An interface that provides necessary information to the {@link OffsetsInitializer} to get the
      * initial offsets of the fluss buckets.
      */
     interface BucketOffsetsRetriever {
-        Map<Integer, Long> latestOffsets(
-                @Nullable String partitionName, Collection<Integer> buckets);
+        Map<Integer, Long> latestOffsets(@Nullable String partitionName, Collection<Integer> buckets);
 
-        Map<Integer, Long> earliestOffsets(
-                @Nullable String partitionName, Collection<Integer> buckets);
+        Map<Integer, Long> earliestOffsets(@Nullable String partitionName, Collection<Integer> buckets);
 
         Map<Integer, Long> offsetsFromTimestamp(
                 @Nullable String partitionName, Collection<Integer> buckets, long timestamp);

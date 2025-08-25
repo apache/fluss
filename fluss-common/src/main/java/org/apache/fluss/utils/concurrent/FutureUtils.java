@@ -60,8 +60,7 @@ public class FutureUtils {
 
     private FutureUtils() {}
 
-    private static final CompletableFuture<Void> COMPLETED_VOID_FUTURE =
-            CompletableFuture.completedFuture(null);
+    private static final CompletableFuture<Void> COMPLETED_VOID_FUTURE = CompletableFuture.completedFuture(null);
 
     /**
      * Returns a completed future of type {@link Void}.
@@ -79,8 +78,7 @@ public class FutureUtils {
      * @param operation to executed
      * @param <T> type of the result
      */
-    public static <T> void completeFromCallable(
-            CompletableFuture<T> future, Callable<T> operation) {
+    public static <T> void completeFromCallable(CompletableFuture<T> future, Callable<T> operation) {
         try {
             future.complete(operation.call());
         } catch (Exception e) {
@@ -112,9 +110,8 @@ public class FutureUtils {
      */
     private enum Delayer {
         ;
-        static final ScheduledThreadPoolExecutor DELAYER =
-                new ScheduledThreadPoolExecutor(
-                        1, new ExecutorThreadFactory("fluss-completable-future-delay-scheduler"));
+        static final ScheduledThreadPoolExecutor DELAYER = new ScheduledThreadPoolExecutor(
+                1, new ExecutorThreadFactory("fluss-completable-future-delay-scheduler"));
 
         /**
          * Delay the given action by the given delay.
@@ -143,10 +140,7 @@ public class FutureUtils {
      * @return The timeout enriched future
      */
     public static <T> CompletableFuture<T> orTimeout(
-            CompletableFuture<T> future,
-            long timeout,
-            TimeUnit timeUnit,
-            @Nullable String timeoutMsg) {
+            CompletableFuture<T> future, long timeout, TimeUnit timeUnit, @Nullable String timeoutMsg) {
         return orTimeout(future, timeout, timeUnit, Executors.directExecutor(), timeoutMsg);
     }
 
@@ -170,18 +164,14 @@ public class FutureUtils {
             @Nullable String timeoutMsg) {
 
         if (!future.isDone()) {
-            final ScheduledFuture<?> timeoutFuture =
-                    Delayer.delay(
-                            () -> timeoutFailExecutor.execute(new Timeout(future, timeoutMsg)),
-                            timeout,
-                            timeUnit);
+            final ScheduledFuture<?> timeoutFuture = Delayer.delay(
+                    () -> timeoutFailExecutor.execute(new Timeout(future, timeoutMsg)), timeout, timeUnit);
 
-            future.whenComplete(
-                    (T value, Throwable throwable) -> {
-                        if (!timeoutFuture.isDone()) {
-                            timeoutFuture.cancel(false);
-                        }
-                    });
+            future.whenComplete((T value, Throwable throwable) -> {
+                if (!timeoutFuture.isDone()) {
+                    timeoutFuture.cancel(false);
+                }
+            });
         }
 
         return future;
@@ -200,8 +190,7 @@ public class FutureUtils {
      * @throws ExecutionException if a problem occurred
      * @throws InterruptedException if the current thread has been interrupted
      */
-    public static <T> T runIfNotDoneAndGet(RunnableFuture<T> future)
-            throws ExecutionException, InterruptedException {
+    public static <T> T runIfNotDoneAndGet(RunnableFuture<T> future) throws ExecutionException, InterruptedException {
 
         if (null == future) {
             return null;
@@ -232,23 +221,20 @@ public class FutureUtils {
             CompletableFuture<?> future, Supplier<CompletableFuture<?>> composedAction) {
         final CompletableFuture<Void> resultFuture = new CompletableFuture<>();
 
-        future.whenComplete(
-                (Object outerIgnored, Throwable outerThrowable) -> {
-                    final CompletableFuture<?> composedActionFuture = composedAction.get();
+        future.whenComplete((Object outerIgnored, Throwable outerThrowable) -> {
+            final CompletableFuture<?> composedActionFuture = composedAction.get();
 
-                    composedActionFuture.whenComplete(
-                            (Object innerIgnored, Throwable innerThrowable) -> {
-                                if (innerThrowable != null) {
-                                    resultFuture.completeExceptionally(
-                                            ExceptionUtils.firstOrSuppressed(
-                                                    innerThrowable, outerThrowable));
-                                } else if (outerThrowable != null) {
-                                    resultFuture.completeExceptionally(outerThrowable);
-                                } else {
-                                    resultFuture.complete(null);
-                                }
-                            });
-                });
+            composedActionFuture.whenComplete((Object innerIgnored, Throwable innerThrowable) -> {
+                if (innerThrowable != null) {
+                    resultFuture.completeExceptionally(
+                            ExceptionUtils.firstOrSuppressed(innerThrowable, outerThrowable));
+                } else if (outerThrowable != null) {
+                    resultFuture.completeExceptionally(outerThrowable);
+                } else {
+                    resultFuture.complete(null);
+                }
+            });
+        });
 
         return resultFuture;
     }
@@ -281,8 +267,7 @@ public class FutureUtils {
      * @param futures The futures to wait on. No null entries are allowed.
      * @return The WaitingFuture that completes once all given futures are complete (or one fails).
      */
-    public static ConjunctFuture<Void> waitForAll(
-            Collection<? extends CompletableFuture<?>> futures) {
+    public static ConjunctFuture<Void> waitForAll(Collection<? extends CompletableFuture<?>> futures) {
         checkNotNull(futures, "futures");
         //noinspection unchecked,rawtypes
         return new WaitingConjunctFuture(futures, (ignore, throwable) -> {});
@@ -299,8 +284,7 @@ public class FutureUtils {
      * @return The WaitingFuture that completes once all given futures are complete (or one fails).
      */
     public static <T> ConjunctFuture<Void> waitForAll(
-            Collection<? extends CompletableFuture<T>> futures,
-            BiConsumer<T, Throwable> completeAction) {
+            Collection<? extends CompletableFuture<T>> futures, BiConsumer<T, Throwable> completeAction) {
         checkNotNull(futures, "futures");
         return new WaitingConjunctFuture<>(futures, completeAction);
     }
@@ -315,8 +299,7 @@ public class FutureUtils {
      * @param futuresToComplete futures to complete
      * @return Future which is completed after all given futures have been completed.
      */
-    public static ConjunctFuture<Void> completeAll(
-            Collection<? extends CompletableFuture<?>> futuresToComplete) {
+    public static ConjunctFuture<Void> completeAll(Collection<? extends CompletableFuture<?>> futuresToComplete) {
         //noinspection unchecked,rawtypes
         return new CompletionConjunctFuture(futuresToComplete, (ignored, throwable) -> {});
     }
@@ -333,8 +316,7 @@ public class FutureUtils {
      * @return Future which is completed after all given futures have been completed.
      */
     public static <T> ConjunctFuture<Void> completeAll(
-            Collection<? extends CompletableFuture<T>> futuresToComplete,
-            BiConsumer<T, Throwable> completeAction) {
+            Collection<? extends CompletableFuture<T>> futuresToComplete, BiConsumer<T, Throwable> completeAction) {
         return new CompletionConjunctFuture<>(futuresToComplete, completeAction);
     }
 
@@ -348,8 +330,7 @@ public class FutureUtils {
      * @return Future which is completed after the action has completed. This future can contain an
      *     exception, if an error occurred in the given future or action.
      */
-    public static CompletableFuture<Void> runAfterwards(
-            CompletableFuture<?> future, RunnableWithException runnable) {
+    public static CompletableFuture<Void> runAfterwards(CompletableFuture<?> future, RunnableWithException runnable) {
         return runAfterwardsAsync(future, runnable, Executors.directExecutor());
     }
 
@@ -491,8 +472,7 @@ public class FutureUtils {
                 for (CompletableFuture<? extends T> future : resultFutures) {
                     final int index = counter;
                     counter++;
-                    future.whenComplete(
-                            (value, throwable) -> handleCompletedFuture(index, value, throwable));
+                    future.whenComplete((value, throwable) -> handleCompletedFuture(index, value, throwable));
                 }
             }
         }
@@ -542,8 +522,7 @@ public class FutureUtils {
         }
 
         private WaitingConjunctFuture(
-                Collection<? extends CompletableFuture<T>> futures,
-                BiConsumer<T, Throwable> completeAction) {
+                Collection<? extends CompletableFuture<T>> futures, BiConsumer<T, Throwable> completeAction) {
             this.numTotal = futures.size();
             this.completeAction = completeAction;
 
@@ -585,8 +564,7 @@ public class FutureUtils {
         private Throwable globalThrowable;
 
         private CompletionConjunctFuture(
-                Collection<? extends CompletableFuture<T>> futuresToComplete,
-                BiConsumer<T, Throwable> completeAction) {
+                Collection<? extends CompletableFuture<T>> futuresToComplete, BiConsumer<T, Throwable> completeAction) {
             this.numFuturesTotal = futuresToComplete.size();
             this.completeAction = completeAction;
 
@@ -665,8 +643,7 @@ public class FutureUtils {
      * @param executor to execute the runnable
      * @return Future which is completed when runnable is finished
      */
-    public static CompletableFuture<Void> runAsync(
-            RunnableWithException runnable, Executor executor) {
+    public static CompletableFuture<Void> runAsync(RunnableWithException runnable, Executor executor) {
         return CompletableFuture.runAsync(
                 () -> {
                     try {
@@ -696,10 +673,8 @@ public class FutureUtils {
      * @param uncaughtExceptionHandler to call if the future is completed exceptionally
      */
     public static void handleUncaughtException(
-            CompletableFuture<?> completableFuture,
-            Thread.UncaughtExceptionHandler uncaughtExceptionHandler) {
-        handleUncaughtException(
-                completableFuture, uncaughtExceptionHandler, FatalExitExceptionHandler.INSTANCE);
+            CompletableFuture<?> completableFuture, Thread.UncaughtExceptionHandler uncaughtExceptionHandler) {
+        handleUncaughtException(completableFuture, uncaughtExceptionHandler, FatalExitExceptionHandler.INSTANCE);
     }
 
     @VisibleForTesting
@@ -707,27 +682,22 @@ public class FutureUtils {
             CompletableFuture<?> completableFuture,
             Thread.UncaughtExceptionHandler uncaughtExceptionHandler,
             Thread.UncaughtExceptionHandler fatalErrorHandler) {
-        checkNotNull(completableFuture)
-                .whenComplete(
-                        (ignored, throwable) -> {
-                            if (throwable != null) {
-                                final Thread currentThread = Thread.currentThread();
-                                try {
-                                    uncaughtExceptionHandler.uncaughtException(
-                                            currentThread, throwable);
-                                } catch (Throwable t) {
-                                    final RuntimeException errorHandlerException =
-                                            new IllegalStateException(
-                                                    "An error occurred while executing the error handling for a "
-                                                            + throwable.getClass().getSimpleName()
-                                                            + ".",
-                                                    t);
-                                    errorHandlerException.addSuppressed(throwable);
-                                    fatalErrorHandler.uncaughtException(
-                                            currentThread, errorHandlerException);
-                                }
-                            }
-                        });
+        checkNotNull(completableFuture).whenComplete((ignored, throwable) -> {
+            if (throwable != null) {
+                final Thread currentThread = Thread.currentThread();
+                try {
+                    uncaughtExceptionHandler.uncaughtException(currentThread, throwable);
+                } catch (Throwable t) {
+                    final RuntimeException errorHandlerException = new IllegalStateException(
+                            "An error occurred while executing the error handling for a "
+                                    + throwable.getClass().getSimpleName()
+                                    + ".",
+                            t);
+                    errorHandlerException.addSuppressed(throwable);
+                    fatalErrorHandler.uncaughtException(currentThread, errorHandlerException);
+                }
+            }
+        });
     }
 
     /**
@@ -738,8 +708,7 @@ public class FutureUtils {
      * @param executor executor to forward the source value to the target future
      * @param <T> type of the value
      */
-    public static <T> void forwardAsync(
-            CompletableFuture<T> source, CompletableFuture<T> target, Executor executor) {
+    public static <T> void forwardAsync(CompletableFuture<T> source, CompletableFuture<T> target, Executor executor) {
         source.whenCompleteAsync(forwardTo(target), executor);
     }
 
@@ -756,8 +725,7 @@ public class FutureUtils {
      * @param target future to complete
      * @param <T> completed future
      */
-    public static <T> void doForward(
-            @Nullable T value, @Nullable Throwable throwable, CompletableFuture<T> target) {
+    public static <T> void doForward(@Nullable T value, @Nullable Throwable throwable, CompletableFuture<T> target) {
         if (throwable != null) {
             target.completeExceptionally(throwable);
         } else {

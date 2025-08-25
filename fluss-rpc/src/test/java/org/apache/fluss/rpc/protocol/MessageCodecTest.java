@@ -65,14 +65,13 @@ class MessageCodecTest {
         this.clientHandler = new NettyClientHandler(responseReceiver, false);
         this.requestChannel = new RequestChannel(100);
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
-        this.serverHandler =
-                new NettyServerHandler(
-                        requestChannel,
-                        new ApiManager(ServerType.TABLET_SERVER),
-                        "FLUSS",
-                        true,
-                        RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup),
-                        new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
+        this.serverHandler = new NettyServerHandler(
+                requestChannel,
+                new ApiManager(ServerType.TABLET_SERVER),
+                "FLUSS",
+                true,
+                RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup),
+                new PlainTextAuthenticationPlugin.PlainTextServerAuthenticator());
         this.ctx = mockChannelHandlerContext();
     }
 
@@ -80,20 +79,18 @@ class MessageCodecTest {
     void testEncodeRequest() throws Exception {
         ApiVersionsRequest request = new ApiVersionsRequest();
         request.setClientSoftwareName("test").setClientSoftwareVersion("1.0.0");
-        ByteBuf byteBuf =
-                MessageCodec.encodeRequest(
-                        ByteBufAllocator.DEFAULT,
-                        ApiKeys.API_VERSIONS.id,
-                        ApiKeys.API_VERSIONS.highestSupportedVersion,
-                        1001,
-                        request);
+        ByteBuf byteBuf = MessageCodec.encodeRequest(
+                ByteBufAllocator.DEFAULT,
+                ApiKeys.API_VERSIONS.id,
+                ApiKeys.API_VERSIONS.highestSupportedVersion,
+                1001,
+                request);
         serverHandler.channelRead(ctx, byteBuf);
 
         FlussRequest rpcRequest = (FlussRequest) requestChannel.pollRequest(1000);
         assertThat(rpcRequest).isNotNull();
         assertThat(rpcRequest.getApiKey()).isEqualTo(ApiKeys.API_VERSIONS.id);
-        assertThat(rpcRequest.getApiVersion())
-                .isEqualTo(ApiKeys.API_VERSIONS.highestSupportedVersion);
+        assertThat(rpcRequest.getApiVersion()).isEqualTo(ApiKeys.API_VERSIONS.highestSupportedVersion);
         assertThat(rpcRequest.getRequestId()).isEqualTo(1001);
         assertThat(rpcRequest.getMessage().totalSize()).isEqualTo(request.totalSize());
         assertThat(rpcRequest.getMessage()).isInstanceOf(ApiVersionsRequest.class);

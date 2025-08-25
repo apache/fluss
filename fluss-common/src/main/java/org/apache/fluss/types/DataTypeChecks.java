@@ -50,10 +50,9 @@ public final class DataTypeChecks {
     private static class Extractor<T> extends DataTypeDefaultVisitor<T> {
         @Override
         protected T defaultMethod(DataType dataType) {
-            throw new IllegalArgumentException(
-                    String.format(
-                            "Invalid use of extractor %s. Called on data type: %s",
-                            this.getClass().getSimpleName(), dataType));
+            throw new IllegalArgumentException(String.format(
+                    "Invalid use of extractor %s. Called on data type: %s",
+                    this.getClass().getSimpleName(), dataType));
         }
     }
 

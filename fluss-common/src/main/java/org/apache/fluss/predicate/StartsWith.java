@@ -45,13 +45,7 @@ public class StartsWith extends NullFalseLeafBinaryFunction {
     }
 
     @Override
-    public boolean test(
-            DataType type,
-            long rowCount,
-            Object min,
-            Object max,
-            Long nullCount,
-            Object patternLiteral) {
+    public boolean test(DataType type, long rowCount, Object min, Object max, Long nullCount, Object patternLiteral) {
         String minStr = min.toString();
         String maxStr = max.toString();
         String pattern = patternLiteral.toString();

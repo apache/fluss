@@ -38,22 +38,19 @@ class AdjustIsrManagerTest {
     void testSubmitShrinkIsr() throws Exception {
         int tabletServerId = 0;
         AdjustIsrManager adjustIsrManager =
-                new AdjustIsrManager(
-                        new FlussScheduler(1), new TestCoordinatorGateway(), tabletServerId);
+                new AdjustIsrManager(new FlussScheduler(1), new TestCoordinatorGateway(), tabletServerId);
 
         // shrink isr
         TableBucket tb = new TableBucket(150001L, 0);
         List<Integer> currentIsr = Arrays.asList(1, 2);
         LeaderAndIsr adjustIsr = new LeaderAndIsr(tabletServerId, 0, currentIsr, 0, 0);
         LeaderAndIsr result = adjustIsrManager.submit(tb, adjustIsr).get();
-        assertThat(result)
-                .isEqualTo(new LeaderAndIsr(tabletServerId, 0, Arrays.asList(1, 2), 0, 1));
+        assertThat(result).isEqualTo(new LeaderAndIsr(tabletServerId, 0, Arrays.asList(1, 2), 0, 1));
 
         // expand isr
         currentIsr = Arrays.asList(1, 2, 3);
         adjustIsr = new LeaderAndIsr(tabletServerId, 0, currentIsr, 0, 1);
         result = adjustIsrManager.submit(tb, adjustIsr).get();
-        assertThat(result)
-                .isEqualTo(new LeaderAndIsr(tabletServerId, 0, Arrays.asList(1, 2, 3), 0, 2));
+        assertThat(result).isEqualTo(new LeaderAndIsr(tabletServerId, 0, Arrays.asList(1, 2, 3), 0, 2));
     }
 }

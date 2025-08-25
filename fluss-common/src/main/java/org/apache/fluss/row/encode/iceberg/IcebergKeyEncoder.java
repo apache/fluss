@@ -38,10 +38,7 @@ public class IcebergKeyEncoder implements KeyEncoder {
     public IcebergKeyEncoder(RowType rowType, List<String> keys) {
 
         // Validate single key field requirement as per FIP
-        checkArgument(
-                keys.size() == 1,
-                "Key fields must have exactly one field for iceberg format, but got: %s",
-                keys);
+        checkArgument(keys.size() == 1, "Key fields must have exactly one field for iceberg format, but got: %s", keys);
 
         // for get fields from fluss internal row
         fieldGetters = new InternalRow.FieldGetter[keys.size()];
@@ -62,8 +59,7 @@ public class IcebergKeyEncoder implements KeyEncoder {
         icebergBinaryRowWriter.reset();
         // iterate all the fields of the row, and encode each field
         for (int i = 0; i < fieldGetters.length; i++) {
-            fieldEncoders[i].writeField(
-                    icebergBinaryRowWriter, fieldGetters[i].getFieldOrNull(row));
+            fieldEncoders[i].writeField(icebergBinaryRowWriter, fieldGetters[i].getFieldOrNull(row));
         }
         return icebergBinaryRowWriter.toBytes();
     }

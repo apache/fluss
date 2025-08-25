@@ -78,21 +78,16 @@ public class MetricRegistryImpl implements MetricRegistry {
     private boolean isShutdown;
 
     public MetricRegistryImpl(List<MetricReporter> reporters) {
-        this(
-                reporters,
-                Executors.newSingleThreadScheduledExecutor(
-                        new ExecutorThreadFactory("fluss-metric-reporter")));
+        this(reporters, Executors.newSingleThreadScheduledExecutor(new ExecutorThreadFactory("fluss-metric-reporter")));
     }
 
     @VisibleForTesting
-    protected MetricRegistryImpl(
-            List<MetricReporter> reporters, ScheduledExecutorService reporterScheduledExecutor) {
+    protected MetricRegistryImpl(List<MetricReporter> reporters, ScheduledExecutorService reporterScheduledExecutor) {
         this.terminationFuture = new CompletableFuture<>();
         this.isShutdown = false;
         this.reporters = new ArrayList<>(4);
         this.viewUpdaterScheduledExecutor =
-                Executors.newSingleThreadScheduledExecutor(
-                        new ExecutorThreadFactory("fluss-metric-view-updater"));
+                Executors.newSingleThreadScheduledExecutor(new ExecutorThreadFactory("fluss-metric-view-updater"));
         this.reporterScheduledExecutor = reporterScheduledExecutor;
         initMetricReporters(reporters);
     }
@@ -106,8 +101,7 @@ public class MetricRegistryImpl implements MetricRegistry {
         for (MetricReporter reporter : reporterInstances) {
             final String className = reporter.getClass().getName();
             if (reporter instanceof ScheduledMetricReporter) {
-                ScheduledMetricReporter scheduledMetricReporter =
-                        (ScheduledMetricReporter) reporter;
+                ScheduledMetricReporter scheduledMetricReporter = (ScheduledMetricReporter) reporter;
                 LOG.info(
                         "Periodically reporting metrics in intervals of {} for reporter of type {}.",
                         TimeUtils.formatWithHighestUnit(scheduledMetricReporter.scheduleInterval()),
@@ -120,9 +114,7 @@ public class MetricRegistryImpl implements MetricRegistry {
             } else {
                 LOG.info("Reporting metrics for reporter of type {}.", className);
             }
-            reporters.add(
-                    new ReporterAndSettings(
-                            reporter, new ReporterScopedSettings(reporterInstances.size())));
+            reporters.add(new ReporterAndSettings(reporter, new ReporterScopedSettings(reporterInstances.size())));
         }
     }
 
@@ -169,37 +161,26 @@ public class MetricRegistryImpl implements MetricRegistry {
                 reporters.clear();
 
                 if (throwable != null) {
-                    terminationFutures.add(
-                            FutureUtils.completedExceptionally(
-                                    new FlussException(
-                                            "Could not shut down the metric reporters properly.",
-                                            throwable)));
+                    terminationFutures.add(FutureUtils.completedExceptionally(
+                            new FlussException("Could not shut down the metric reporters properly.", throwable)));
                 }
 
-                final CompletableFuture<Void> reporterExecutorShutdownFuture =
-                        ExecutorUtils.nonBlockingShutdown(
-                                gracePeriod.toMillis(),
-                                TimeUnit.MILLISECONDS,
-                                reporterScheduledExecutor);
+                final CompletableFuture<Void> reporterExecutorShutdownFuture = ExecutorUtils.nonBlockingShutdown(
+                        gracePeriod.toMillis(), TimeUnit.MILLISECONDS, reporterScheduledExecutor);
                 terminationFutures.add(reporterExecutorShutdownFuture);
 
-                final CompletableFuture<Void> viewUpdaterExecutorShutdownFuture =
-                        ExecutorUtils.nonBlockingShutdown(
-                                gracePeriod.toMillis(),
-                                TimeUnit.MILLISECONDS,
-                                viewUpdaterScheduledExecutor);
+                final CompletableFuture<Void> viewUpdaterExecutorShutdownFuture = ExecutorUtils.nonBlockingShutdown(
+                        gracePeriod.toMillis(), TimeUnit.MILLISECONDS, viewUpdaterScheduledExecutor);
 
                 terminationFutures.add(viewUpdaterExecutorShutdownFuture);
 
-                FutureUtils.completeAll(terminationFutures)
-                        .whenComplete(
-                                (Void ignored, Throwable error) -> {
-                                    if (error != null) {
-                                        terminationFuture.completeExceptionally(error);
-                                    } else {
-                                        terminationFuture.complete(null);
-                                    }
-                                });
+                FutureUtils.completeAll(terminationFutures).whenComplete((Void ignored, Throwable error) -> {
+                    if (error != null) {
+                        terminationFuture.completeExceptionally(error);
+                    } else {
+                        terminationFuture.complete(null);
+                    }
+                });
             }
             return terminationFuture;
         }
@@ -209,8 +190,7 @@ public class MetricRegistryImpl implements MetricRegistry {
     public void register(Metric metric, String metricName, AbstractMetricGroup group) {
         synchronized (lock) {
             if (isShutdown()) {
-                LOG.warn(
-                        "Cannot register metric, because the MetricRegistry has already been shut down.");
+                LOG.warn("Cannot register metric, because the MetricRegistry has already been shut down.");
             } else {
                 if (reporters != null) {
                     forAllReporters(MetricReporter::notifyOfAddedMetric, metric, metricName, group);
@@ -234,12 +214,10 @@ public class MetricRegistryImpl implements MetricRegistry {
     public void unregister(Metric metric, String metricName, AbstractMetricGroup group) {
         synchronized (lock) {
             if (isShutdown()) {
-                LOG.warn(
-                        "Cannot unregister metric, because the MetricRegistry has already been shut down.");
+                LOG.warn("Cannot unregister metric, because the MetricRegistry has already been shut down.");
             } else {
                 if (reporters != null) {
-                    forAllReporters(
-                            MetricReporter::notifyOfRemovedMetric, metric, metricName, group);
+                    forAllReporters(MetricReporter::notifyOfRemovedMetric, metric, metricName, group);
                 }
 
                 try {
@@ -264,8 +242,7 @@ public class MetricRegistryImpl implements MetricRegistry {
         for (ReporterAndSettings reporterAndSettings : reporters) {
             try {
                 if (reporterAndSettings != null) {
-                    FrontMetricGroup<?> front =
-                            new FrontMetricGroup<>(reporterAndSettings.getSettings(), group);
+                    FrontMetricGroup<?> front = new FrontMetricGroup<>(reporterAndSettings.getSettings(), group);
                     operation.accept(reporterAndSettings.reporter, metric, metricName, front);
                 }
             } catch (Exception e) {

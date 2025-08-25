@@ -68,8 +68,7 @@ public class SendWritableOutput extends ByteBufWritableOutput {
             // This is important to retain the slice here, because Netty will release the slice
             // after writeAndFlush which will cause reference count of the underlying {@link #buf}
             // decreased to < 0.
-            ByteBuf slice =
-                    buf.retainedSlice(currentReaderIndex, buf.readableBytes() - currentReaderIndex);
+            ByteBuf slice = buf.retainedSlice(currentReaderIndex, buf.readableBytes() - currentReaderIndex);
             // next slice should start from the current writer position (= readable bytes)
             currentReaderIndex = buf.readableBytes();
             sends.add(new ByteBufSend(slice));

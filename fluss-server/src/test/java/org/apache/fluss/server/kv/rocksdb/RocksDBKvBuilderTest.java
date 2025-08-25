@@ -45,13 +45,9 @@ class RocksDBKvBuilderTest {
     @Test
     void testTempLibFolderDeletedOnFail(@TempDir Path tempDir) {
         RocksDBKvBuilder.resetRocksDbInitialized();
-        assertThatThrownBy(
-                        () ->
-                                RocksDBKvBuilder.ensureRocksDBIsLoaded(
-                                        tempDir.toString(),
-                                        () -> {
-                                            throw new FlussRuntimeException("expected exception");
-                                        }))
+        assertThatThrownBy(() -> RocksDBKvBuilder.ensureRocksDBIsLoaded(tempDir.toString(), () -> {
+                    throw new FlussRuntimeException("expected exception");
+                }))
                 .isInstanceOf(IOException.class);
         File[] files = tempDir.toFile().listFiles();
         assertThat(files).isNotNull();
@@ -62,10 +58,7 @@ class RocksDBKvBuilderTest {
     void testBuildFail() {
         RocksDBResourceContainer rocksDBResourceContainer = new RocksDBResourceContainer();
         RocksDBKvBuilder rocksDBKvBuilder =
-                new RocksDBKvBuilder(
-                        null,
-                        rocksDBResourceContainer,
-                        rocksDBResourceContainer.getColumnOptions());
+                new RocksDBKvBuilder(null, rocksDBResourceContainer, rocksDBResourceContainer.getColumnOptions());
         assertThatThrownBy(rocksDBKvBuilder::build).isInstanceOf(KvBuildingException.class);
     }
 }

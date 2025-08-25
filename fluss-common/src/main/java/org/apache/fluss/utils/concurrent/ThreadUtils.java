@@ -28,8 +28,7 @@ import java.util.stream.Collectors;
 public class ThreadUtils {
 
     public static void errorLogThreadDump(Logger logger) {
-        final ThreadInfo[] perThreadInfo =
-                ManagementFactory.getThreadMXBean().dumpAllThreads(true, true);
+        final ThreadInfo[] perThreadInfo = ManagementFactory.getThreadMXBean().dumpAllThreads(true, true);
         logger.error(
                 "Thread dump: \n{}",
                 Arrays.stream(perThreadInfo).map(Object::toString).collect(Collectors.joining()));

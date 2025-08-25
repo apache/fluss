@@ -125,25 +125,24 @@ public class FlussDeserializationSchemaTest {
 
     @Test
     public void testJsonStringDeserialize() throws Exception {
-        List<DataField> fields =
-                Arrays.asList(
-                        new DataField("char", DataTypes.CHAR(64)),
-                        new DataField("string", DataTypes.STRING()),
-                        new DataField("boolean", DataTypes.BOOLEAN()),
-                        new DataField("binary", DataTypes.BINARY(64)),
-                        new DataField("bytes", DataTypes.BYTES()),
-                        new DataField("decimal", DataTypes.DECIMAL(6, 3)),
-                        new DataField("tinyInt", DataTypes.TINYINT()),
-                        new DataField("smallInt", DataTypes.SMALLINT()),
-                        new DataField("integer", DataTypes.INT()),
-                        new DataField("bigInt", DataTypes.BIGINT()),
-                        new DataField("float", DataTypes.FLOAT()),
-                        new DataField("double", DataTypes.DOUBLE()),
-                        new DataField("date", DataTypes.DATE()),
-                        new DataField("timeWithoutTimeZone", DataTypes.TIME()),
-                        new DataField("timestampWithoutTimeZone", DataTypes.TIMESTAMP()),
-                        new DataField("timestampWithLocalTimeZone", DataTypes.TIMESTAMP_LTZ()),
-                        new DataField("nullVal", DataTypes.STRING()));
+        List<DataField> fields = Arrays.asList(
+                new DataField("char", DataTypes.CHAR(64)),
+                new DataField("string", DataTypes.STRING()),
+                new DataField("boolean", DataTypes.BOOLEAN()),
+                new DataField("binary", DataTypes.BINARY(64)),
+                new DataField("bytes", DataTypes.BYTES()),
+                new DataField("decimal", DataTypes.DECIMAL(6, 3)),
+                new DataField("tinyInt", DataTypes.TINYINT()),
+                new DataField("smallInt", DataTypes.SMALLINT()),
+                new DataField("integer", DataTypes.INT()),
+                new DataField("bigInt", DataTypes.BIGINT()),
+                new DataField("float", DataTypes.FLOAT()),
+                new DataField("double", DataTypes.DOUBLE()),
+                new DataField("date", DataTypes.DATE()),
+                new DataField("timeWithoutTimeZone", DataTypes.TIME()),
+                new DataField("timestampWithoutTimeZone", DataTypes.TIMESTAMP()),
+                new DataField("timestampWithLocalTimeZone", DataTypes.TIMESTAMP_LTZ()),
+                new DataField("nullVal", DataTypes.STRING()));
 
         RowType rowType = new RowType(fields);
 
@@ -177,43 +176,38 @@ public class FlussDeserializationSchemaTest {
         deserializer.open(new DeserializerInitContextImpl(null, null, rowType));
         String result = deserializer.deserialize(scanRecord);
 
-        String rowJson =
-                "{"
-                        + "\"char\":\"a\","
-                        + "\"string\":\"test value\","
-                        + "\"boolean\":false,"
-                        + "\"binary\":\"dGVzdCBiaW5hcnk=\","
-                        + "\"bytes\":\"dGVzdCBieXRlcw==\","
-                        + "\"decimal\":123,"
-                        + "\"tinyInt\":1,"
-                        + "\"smallInt\":64,"
-                        + "\"integer\":1024,"
-                        + "\"bigInt\":2048,"
-                        + "\"float\":1.1,"
-                        + "\"double\":3.14,"
-                        + "\"date\":\"2025-04-21\","
-                        + "\"timeWithoutTimeZone\":\"10:00:00\","
-                        + "\"timestampWithoutTimeZone\":\"2025-04-21T10:00:00\","
-                        + "\"timestampWithLocalTimeZone\":\"2025-04-21T10:00:00Z\","
-                        + "\"nullVal\":null"
-                        + "}";
+        String rowJson = "{"
+                + "\"char\":\"a\","
+                + "\"string\":\"test value\","
+                + "\"boolean\":false,"
+                + "\"binary\":\"dGVzdCBiaW5hcnk=\","
+                + "\"bytes\":\"dGVzdCBieXRlcw==\","
+                + "\"decimal\":123,"
+                + "\"tinyInt\":1,"
+                + "\"smallInt\":64,"
+                + "\"integer\":1024,"
+                + "\"bigInt\":2048,"
+                + "\"float\":1.1,"
+                + "\"double\":3.14,"
+                + "\"date\":\"2025-04-21\","
+                + "\"timeWithoutTimeZone\":\"10:00:00\","
+                + "\"timestampWithoutTimeZone\":\"2025-04-21T10:00:00\","
+                + "\"timestampWithLocalTimeZone\":\"2025-04-21T10:00:00Z\","
+                + "\"nullVal\":null"
+                + "}";
         // Verify result
         assertThat(result).isNotNull();
         assertThat(result)
-                .isEqualTo(
-                        "{\"offset\":-1,\"timestamp\":-1,\"change_type\":\"INSERT\",\"row\":"
-                                + rowJson
-                                + "}");
+                .isEqualTo("{\"offset\":-1,\"timestamp\":-1,\"change_type\":\"INSERT\",\"row\":" + rowJson + "}");
 
         // Verify with offset and timestamp
         ScanRecord scanRecord2 = new ScanRecord(1001, 1743261788400L, ChangeType.DELETE, row);
         String result2 = deserializer.deserialize(scanRecord2);
         assertThat(result2).isNotNull();
         assertThat(result2)
-                .isEqualTo(
-                        "{\"offset\":1001,\"timestamp\":1743261788400,\"change_type\":\"DELETE\",\"row\":"
-                                + rowJson
-                                + "}");
+                .isEqualTo("{\"offset\":1001,\"timestamp\":1743261788400,\"change_type\":\"DELETE\",\"row\":"
+                        + rowJson
+                        + "}");
 
         // change several value to test reuse node
         row.setField(0, BinaryString.fromString("b"));
@@ -222,32 +216,29 @@ public class FlussDeserializationSchemaTest {
         row.setField(13, 72000000);
         ScanRecord changedRecord = new ScanRecord(row);
         String changedResult = deserializer.deserialize(changedRecord);
-        String changedRowJson =
-                "{"
-                        + "\"char\":\"b\","
-                        + "\"string\":\"test value\","
-                        + "\"boolean\":true,"
-                        + "\"binary\":\"dGVzdCBiaW5hcnk=\","
-                        + "\"bytes\":\"dGVzdCBieXRlcw==\","
-                        + "\"decimal\":123,"
-                        + "\"tinyInt\":1,"
-                        + "\"smallInt\":64,"
-                        + "\"integer\":512,"
-                        + "\"bigInt\":2048,"
-                        + "\"float\":1.1,"
-                        + "\"double\":3.14,"
-                        + "\"date\":\"2025-04-21\","
-                        + "\"timeWithoutTimeZone\":\"20:00:00\","
-                        + "\"timestampWithoutTimeZone\":\"2025-04-21T10:00:00\","
-                        + "\"timestampWithLocalTimeZone\":\"2025-04-21T10:00:00Z\","
-                        + "\"nullVal\":null"
-                        + "}";
+        String changedRowJson = "{"
+                + "\"char\":\"b\","
+                + "\"string\":\"test value\","
+                + "\"boolean\":true,"
+                + "\"binary\":\"dGVzdCBiaW5hcnk=\","
+                + "\"bytes\":\"dGVzdCBieXRlcw==\","
+                + "\"decimal\":123,"
+                + "\"tinyInt\":1,"
+                + "\"smallInt\":64,"
+                + "\"integer\":512,"
+                + "\"bigInt\":2048,"
+                + "\"float\":1.1,"
+                + "\"double\":3.14,"
+                + "\"date\":\"2025-04-21\","
+                + "\"timeWithoutTimeZone\":\"20:00:00\","
+                + "\"timestampWithoutTimeZone\":\"2025-04-21T10:00:00\","
+                + "\"timestampWithLocalTimeZone\":\"2025-04-21T10:00:00Z\","
+                + "\"nullVal\":null"
+                + "}";
         assertThat(changedResult).isNotNull();
         assertThat(changedResult)
                 .isEqualTo(
-                        "{\"offset\":-1,\"timestamp\":-1,\"change_type\":\"INSERT\",\"row\":"
-                                + changedRowJson
-                                + "}");
+                        "{\"offset\":-1,\"timestamp\":-1,\"change_type\":\"INSERT\",\"row\":" + changedRowJson + "}");
     }
 
     @Test

@@ -60,8 +60,7 @@ class SourceSplitStateTest {
         TableBucket tableBucket = new TableBucket(0, 0L, 0);
 
         // verify the split that snapshot is not finished
-        HybridSnapshotLogSplit hybridSnapshotLogSplit =
-                new HybridSnapshotLogSplit(tableBucket, "partition1", 1L, 100L);
+        HybridSnapshotLogSplit hybridSnapshotLogSplit = new HybridSnapshotLogSplit(tableBucket, "partition1", 1L, 100L);
         HybridSnapshotLogSplitState hybridSnapshotLogSplitState =
                 new HybridSnapshotLogSplitState(hybridSnapshotLogSplit);
         assertThat(hybridSnapshotLogSplitState.toSourceSplit()).isEqualTo(hybridSnapshotLogSplit);
@@ -70,28 +69,22 @@ class SourceSplitStateTest {
         hybridSnapshotLogSplitState.setRecordsToSkip(200L);
         HybridSnapshotLogSplit expectedHybridSnapshotLogSplit =
                 new HybridSnapshotLogSplit(tableBucket, "partition1", 1L, 200L, false, 100L);
-        assertThat(hybridSnapshotLogSplitState.toSourceSplit())
-                .isEqualTo(expectedHybridSnapshotLogSplit);
+        assertThat(hybridSnapshotLogSplitState.toSourceSplit()).isEqualTo(expectedHybridSnapshotLogSplit);
 
         // set next offset and verify
         hybridSnapshotLogSplitState.setNextOffset(500L);
-        expectedHybridSnapshotLogSplit =
-                new HybridSnapshotLogSplit(tableBucket, "partition1", 1L, 200L, true, 500L);
-        assertThat(hybridSnapshotLogSplitState.toSourceSplit())
-                .isEqualTo(expectedHybridSnapshotLogSplit);
+        expectedHybridSnapshotLogSplit = new HybridSnapshotLogSplit(tableBucket, "partition1", 1L, 200L, true, 500L);
+        assertThat(hybridSnapshotLogSplitState.toSourceSplit()).isEqualTo(expectedHybridSnapshotLogSplit);
 
         // verify the split that snapshot is finished
-        hybridSnapshotLogSplit =
-                new HybridSnapshotLogSplit(tableBucket, "partition1", 1L, 100L, true, 100L);
+        hybridSnapshotLogSplit = new HybridSnapshotLogSplit(tableBucket, "partition1", 1L, 100L, true, 100L);
         hybridSnapshotLogSplitState = new HybridSnapshotLogSplitState(hybridSnapshotLogSplit);
         assertThat(hybridSnapshotLogSplitState.toSourceSplit()).isEqualTo(hybridSnapshotLogSplit);
 
         // set next offset and verify
         hybridSnapshotLogSplitState = new HybridSnapshotLogSplitState(hybridSnapshotLogSplit);
         hybridSnapshotLogSplitState.setNextOffset(500L);
-        expectedHybridSnapshotLogSplit =
-                new HybridSnapshotLogSplit(tableBucket, "partition1", 1L, 100L, true, 500L);
-        assertThat(hybridSnapshotLogSplitState.toSourceSplit())
-                .isEqualTo(expectedHybridSnapshotLogSplit);
+        expectedHybridSnapshotLogSplit = new HybridSnapshotLogSplit(tableBucket, "partition1", 1L, 100L, true, 500L);
+        assertThat(hybridSnapshotLogSplitState.toSourceSplit()).isEqualTo(expectedHybridSnapshotLogSplit);
     }
 }

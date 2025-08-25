@@ -48,14 +48,12 @@ public class LakeSplitSerializer {
 
     public void serialize(DataOutputSerializer out, SourceSplitBase split) throws IOException {
         if (split instanceof LakeSnapshotSplit) {
-            byte[] serializeBytes =
-                    sourceSplitSerializer.serialize(((LakeSnapshotSplit) split).getLakeSplit());
+            byte[] serializeBytes = sourceSplitSerializer.serialize(((LakeSnapshotSplit) split).getLakeSplit());
             out.writeInt(serializeBytes.length);
             out.write(serializeBytes);
         } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
             // writing file store source split
-            LakeSnapshotAndFlussLogSplit lakeSnapshotAndFlussLogSplit =
-                    ((LakeSnapshotAndFlussLogSplit) split);
+            LakeSnapshotAndFlussLogSplit lakeSnapshotAndFlussLogSplit = ((LakeSnapshotAndFlussLogSplit) split);
             List<LakeSplit> lakeSplits = lakeSnapshotAndFlussLogSplit.getLakeSplits();
             if (lakeSplits == null) {
                 // no snapshot data for the bucket
@@ -71,10 +69,7 @@ public class LakeSplitSerializer {
             }
             // writing starting/stopping offset
             out.writeLong(lakeSnapshotAndFlussLogSplit.getStartingOffset());
-            out.writeLong(
-                    lakeSnapshotAndFlussLogSplit
-                            .getStoppingOffset()
-                            .orElse(LogSplit.NO_STOPPING_OFFSET));
+            out.writeLong(lakeSnapshotAndFlussLogSplit.getStoppingOffset().orElse(LogSplit.NO_STOPPING_OFFSET));
             out.writeLong(lakeSnapshotAndFlussLogSplit.getRecordsToSkip());
         } else {
             throw new UnsupportedOperationException(
@@ -83,17 +78,13 @@ public class LakeSplitSerializer {
     }
 
     public SourceSplitBase deserialize(
-            byte splitKind,
-            TableBucket tableBucket,
-            @Nullable String partition,
-            DataInputDeserializer input)
+            byte splitKind, TableBucket tableBucket, @Nullable String partition, DataInputDeserializer input)
             throws IOException {
         if (splitKind == LAKE_SNAPSHOT_SPLIT_KIND) {
             byte[] serializeBytes = new byte[input.readInt()];
             input.read(serializeBytes);
             LakeSplit fileStoreSourceSplit =
-                    sourceSplitSerializer.deserialize(
-                            sourceSplitSerializer.getVersion(), serializeBytes);
+                    sourceSplitSerializer.deserialize(sourceSplitSerializer.getVersion(), serializeBytes);
             return new LakeSnapshotSplit(tableBucket, partition, fileStoreSourceSplit);
         } else if (splitKind == LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND) {
             List<LakeSplit> lakeSplits = null;
@@ -104,20 +95,14 @@ public class LakeSplitSerializer {
                     byte[] serializeBytes = new byte[input.readInt()];
                     input.read(serializeBytes);
                     lakeSplits.add(
-                            sourceSplitSerializer.deserialize(
-                                    sourceSplitSerializer.getVersion(), serializeBytes));
+                            sourceSplitSerializer.deserialize(sourceSplitSerializer.getVersion(), serializeBytes));
                 }
             }
             long startingOffset = input.readLong();
             long stoppingOffset = input.readLong();
             long recordsToSkip = input.readLong();
             return new LakeSnapshotAndFlussLogSplit(
-                    tableBucket,
-                    partition,
-                    lakeSplits,
-                    startingOffset,
-                    stoppingOffset,
-                    recordsToSkip);
+                    tableBucket, partition, lakeSplits, startingOffset, stoppingOffset, recordsToSkip);
         } else {
             throw new UnsupportedOperationException("Unsupported split kind: " + splitKind);
         }

@@ -70,11 +70,10 @@ public class KafkaRequestITCase {
         conf.set(ConfigOptions.KAFKA_ENABLED, true);
         nettyServer = startNettyServer();
         client = createNetworkClient();
-        Endpoint endpoint =
-                nettyServer.getBindEndpoints().stream()
-                        .filter(e -> e.getListenerName().equals("KAFKA"))
-                        .findFirst()
-                        .get();
+        Endpoint endpoint = nettyServer.getBindEndpoints().stream()
+                .filter(e -> e.getListenerName().equals("KAFKA"))
+                .findFirst()
+                .get();
         node = new Node(0, endpoint.getHost(), endpoint.getPort());
     }
 
@@ -96,31 +95,26 @@ public class KafkaRequestITCase {
         // check that the ApiVersionsRequest has been initiated
         assertThat(client.hasInFlightRequests(node.idString())).isTrue();
 
-        retry(
-                Duration.ofMinutes(1),
-                () -> {
-                    // handle completed receives
-                    client.poll(0, 100);
+        retry(Duration.ofMinutes(1), () -> {
+            // handle completed receives
+            client.poll(0, 100);
 
-                    // the ApiVersionsRequest is gone
-                    assertThat(client.hasInFlightRequests(node.idString())).isFalse();
+            // the ApiVersionsRequest is gone
+            assertThat(client.hasInFlightRequests(node.idString())).isFalse();
 
-                    // various assertions
-                    assertThat(client.isReady(node, 100)).isTrue();
-                });
+            // various assertions
+            assertThat(client.isReady(node, 100)).isTrue();
+        });
     }
 
     private NettyServer startNettyServer() throws Exception {
         MetricGroup metricGroup = NOPMetricsGroup.newInstance();
-        NettyServer server =
-                new NettyServer(
-                        conf,
-                        Arrays.asList(
-                                new Endpoint("localhost", 0, "INTERNAL"),
-                                new Endpoint("localhost", 0, "KAFKA")),
-                        new TestingTabletGatewayService(),
-                        metricGroup,
-                        RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
+        NettyServer server = new NettyServer(
+                conf,
+                Arrays.asList(new Endpoint("localhost", 0, "INTERNAL"), new Endpoint("localhost", 0, "KAFKA")),
+                new TestingTabletGatewayService(),
+                metricGroup,
+                RequestsMetrics.createCoordinatorServerRequestMetrics(metricGroup));
         server.start();
         return server;
     }
@@ -130,21 +124,16 @@ public class KafkaRequestITCase {
         config.put("key.serializer", StringSerializer.class.getName());
         config.put("value.serializer", StringSerializer.class.getName());
         Metrics metrics =
-                new Metrics(
-                        new MetricConfig(),
-                        Collections.emptyList(),
-                        Time.SYSTEM,
-                        new KafkaMetricsContext("test"));
+                new Metrics(new MetricConfig(), Collections.emptyList(), Time.SYSTEM, new KafkaMetricsContext("test"));
         long refreshBackoffMs = 100;
         long refreshBackoffMaxMs = 1000;
         long metadataExpireMs = 1000;
-        Metadata metadata =
-                new Metadata(
-                        refreshBackoffMs,
-                        refreshBackoffMaxMs,
-                        metadataExpireMs,
-                        new LogContext(),
-                        new ClusterResourceListeners());
+        Metadata metadata = new Metadata(
+                refreshBackoffMs,
+                refreshBackoffMaxMs,
+                metadataExpireMs,
+                new LogContext(),
+                new ClusterResourceListeners());
         ProducerMetrics metricsRegistry = new ProducerMetrics(metrics);
         Sensor sensor = Sender.throttleTimeSensor(metricsRegistry.senderMetrics);
         return ClientUtils.createNetworkClient(
