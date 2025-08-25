@@ -32,17 +32,9 @@ public class LanceConfig implements Serializable {
 
     private static final String block_size = "block_size";
     private static final String version = "version";
-    private static final String index_cache_size = "index_cache_size";
-    private static final String metadata_cache_size = "metadata_cache_size";
     private static final String max_row_per_file = "max_row_per_file";
     private static final String max_rows_per_group = "max_rows_per_group";
     private static final String max_bytes_per_file = "max_bytes_per_file";
-    private static final String ak = "access_key_id";
-    private static final String sk = "secret_access_key";
-    private static final String endpoint = "aws_endpoint";
-    private static final String region = "aws_region";
-    private static final String virtual_hosted_style = "virtual_hosted_style_request";
-    private static final String allow_http = "allow_http";
     private static final String batch_size = "batch_size";
     private static final String warehouse = "warehouse";
 
@@ -64,11 +56,17 @@ public class LanceConfig implements Serializable {
     }
 
     public static LanceConfig from(
-            Map<String, String> properties, String databaseName, String tableName) {
-        if (!properties.containsKey(warehouse)) {
+            Map<String, String> clusterConf,
+            Map<String, String> tableCustomProperties,
+            String databaseName,
+            String tableName) {
+        if (!clusterConf.containsKey(warehouse)) {
             throw new IllegalArgumentException("Missing required option " + warehouse);
         }
-        return new LanceConfig(databaseName, tableName, properties.get(warehouse), properties);
+        Map<String, String> options = new HashMap<>();
+        options.putAll(clusterConf);
+        options.putAll(tableCustomProperties);
+        return new LanceConfig(databaseName, tableName, clusterConf.get(warehouse), options);
     }
 
     public static int getBatchSize(LanceConfig config) {
@@ -83,14 +81,6 @@ public class LanceConfig implements Serializable {
         return options;
     }
 
-    public String getDatabaseName() {
-        return databaseName;
-    }
-
-    public String getTableName() {
-        return tableName;
-    }
-
     public String getDatasetUri() {
         return datasetUri;
     }
@@ -103,12 +93,6 @@ public class LanceConfig implements Serializable {
         }
         if (maps.containsKey(version)) {
             builder.setVersion(Integer.parseInt(maps.get(version)));
-        }
-        if (maps.containsKey(index_cache_size)) {
-            builder.setIndexCacheSize(Integer.parseInt(maps.get(index_cache_size)));
-        }
-        if (maps.containsKey(metadata_cache_size)) {
-            builder.setMetadataCacheSize(Integer.parseInt(maps.get(metadata_cache_size)));
         }
         builder.setStorageOptions(genStorageOptions(config));
         return builder.build();
@@ -130,24 +114,8 @@ public class LanceConfig implements Serializable {
         return builder.build();
     }
 
-    private static Map<String, String> genStorageOptions(LanceConfig config) {
-        Map<String, String> storageOptions = new HashMap<>();
-        Map<String, String> maps = config.getOptions();
-        if (maps.containsKey(ak) && maps.containsKey(sk) && maps.containsKey(endpoint)) {
-            storageOptions.put(ak, maps.get(ak));
-            storageOptions.put(sk, maps.get(sk));
-            storageOptions.put(endpoint, maps.get(endpoint));
-        }
-        if (maps.containsKey(region)) {
-            storageOptions.put(region, maps.get(region));
-        }
-        if (maps.containsKey(virtual_hosted_style)) {
-            storageOptions.put(virtual_hosted_style, maps.get(virtual_hosted_style));
-        }
-        if (maps.containsKey(allow_http)) {
-            storageOptions.put(allow_http, maps.get(allow_http));
-        }
-        return storageOptions;
+    public static Map<String, String> genStorageOptions(LanceConfig config) {
+        return config.getOptions();
     }
 
     @Override

@@ -126,7 +126,6 @@ public class FlinkPaimonTieringTestBase {
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         execEnv.setRuntimeMode(RuntimeExecutionMode.STREAMING);
         execEnv.setParallelism(2);
-        execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
     }
 
     protected JobClient buildTieringJob(StreamExecutionEnvironment execEnv) throws Exception {

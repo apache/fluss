@@ -33,7 +33,7 @@
     <packaging>jar</packaging>
 
     <properties>
-        <lance.version>0.26.1</lance.version>
+        <lance.version>0.33.0</lance.version>
     </properties>
 
     <dependencies>

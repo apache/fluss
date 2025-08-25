@@ -20,6 +20,7 @@ package com.alibaba.fluss.lake.lance;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.lake.lakestorage.LakeStorage;
 import com.alibaba.fluss.lake.lance.tiering.LanceCommittable;
+import com.alibaba.fluss.lake.lance.tiering.LanceLakeTieringFactory;
 import com.alibaba.fluss.lake.lance.tiering.LanceWriteResult;
 import com.alibaba.fluss.lake.source.LakeSource;
 import com.alibaba.fluss.lake.writer.LakeTieringFactory;
@@ -35,7 +36,7 @@ public class LanceLakeStorage implements LakeStorage {
 
     @Override
     public LakeTieringFactory<LanceWriteResult, LanceCommittable> createLakeTieringFactory() {
-        throw new UnsupportedOperationException("Not implemented");
+        return new LanceLakeTieringFactory(config);
     }
 
     @Override

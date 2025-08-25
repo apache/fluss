@@ -45,10 +45,9 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.nio.file.Files;
 import java.util.Arrays;
+import java.util.HashMap;
+import java.util.Map;
 
-import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
-import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
-import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -111,6 +110,8 @@ class LakeEnabledTableCreateITCase {
 
     @Test
     void testLogTable() throws Exception {
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("lance.batch_size", "256");
         // test bucket key log table
         TableDescriptor logTable =
                 TableDescriptor.builder()
@@ -134,11 +135,13 @@ class LakeEnabledTableCreateITCase {
                                         .column("log_c16", DataTypes.TIMESTAMP())
                                         .build())
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperties(customProperties)
                         .distributedBy(BUCKET_NUM, "log_c1", "log_c2")
                         .build();
         TablePath logTablePath = TablePath.of(DATABASE, "log_table");
         admin.createTable(logTablePath, logTable, false).get();
-        LanceConfig config = LanceConfig.from(lanceConf.toMap(), DATABASE, "log_table");
+        LanceConfig config =
+                LanceConfig.from(lanceConf.toMap(), customProperties, DATABASE, "log_table");
 
         // check the gotten log table
         Field logC1 = new Field("log_c1", FieldType.nullable(new ArrowType.Int(4 * 8, true)), null);
@@ -182,25 +185,11 @@ class LakeEnabledTableCreateITCase {
                         FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MICROSECOND, null)),
                         null);
 
-        // for __bucket, __offset, __timestamp
-        Field logC17 =
-                new Field(
-                        BUCKET_COLUMN_NAME, FieldType.nullable(new ArrowType.Int(32, true)), null);
-        Field logC18 =
-                new Field(
-                        OFFSET_COLUMN_NAME, FieldType.nullable(new ArrowType.Int(64, true)), null);
-        Field logC19 =
-                new Field(
-                        TIMESTAMP_COLUMN_NAME,
-                        FieldType.nullable(new ArrowType.Timestamp(TimeUnit.MICROSECOND, null)),
-                        null);
-
         org.apache.arrow.vector.types.pojo.Schema expectedSchema =
                 new org.apache.arrow.vector.types.pojo.Schema(
                         Arrays.asList(
                                 logC1, logC2, logC3, logC4, logC5, logC6, logC7, logC8, logC9,
-                                logC10, logC11, logC12, logC13, logC14, logC15, logC16, logC17,
-                                logC18, logC19));
+                                logC10, logC11, logC12, logC13, logC14, logC15, logC16));
         assertThat(expectedSchema).isEqualTo(LanceDatasetAdapter.getSchema(config).get());
     }
 

@@ -17,6 +17,23 @@
 
 package com.alibaba.fluss.lake.lance.utils;
 
+import com.alibaba.fluss.lake.lance.writers.ArrowBigIntWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowBinaryWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowBooleanWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowDateWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowDecimalWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowDoubleWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowFieldWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowFloatWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowIntWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowSmallIntWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowTimeWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowTimestampLtzWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowTimestampNtzWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowTinyIntWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowVarBinaryWriter;
+import com.alibaba.fluss.lake.lance.writers.ArrowVarCharWriter;
+import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.BigIntType;
 import com.alibaba.fluss.types.BinaryType;
 import com.alibaba.fluss.types.BooleanType;
@@ -37,6 +54,24 @@ import com.alibaba.fluss.types.TimeType;
 import com.alibaba.fluss.types.TimestampType;
 import com.alibaba.fluss.types.TinyIntType;
 
+import org.apache.arrow.vector.BigIntVector;
+import org.apache.arrow.vector.BitVector;
+import org.apache.arrow.vector.DateDayVector;
+import org.apache.arrow.vector.DecimalVector;
+import org.apache.arrow.vector.FixedSizeBinaryVector;
+import org.apache.arrow.vector.Float4Vector;
+import org.apache.arrow.vector.Float8Vector;
+import org.apache.arrow.vector.IntVector;
+import org.apache.arrow.vector.SmallIntVector;
+import org.apache.arrow.vector.TimeMicroVector;
+import org.apache.arrow.vector.TimeMilliVector;
+import org.apache.arrow.vector.TimeNanoVector;
+import org.apache.arrow.vector.TimeSecVector;
+import org.apache.arrow.vector.TimeStampVector;
+import org.apache.arrow.vector.TinyIntVector;
+import org.apache.arrow.vector.ValueVector;
+import org.apache.arrow.vector.VarBinaryVector;
+import org.apache.arrow.vector.VarCharVector;
 import org.apache.arrow.vector.types.DateUnit;
 import org.apache.arrow.vector.types.FloatingPointPrecision;
 import org.apache.arrow.vector.types.TimeUnit;
@@ -185,6 +220,59 @@ public class LanceArrowUtils {
             throw new UnsupportedOperationException(
                     String.format(
                             "Unsupported data type %s currently.", dataType.asSummaryString()));
+        }
+    }
+
+    private static int getPrecision(DecimalVector decimalVector) {
+        return decimalVector.getPrecision();
+    }
+
+    public static ArrowFieldWriter<InternalRow> createArrowFieldWriter(
+            ValueVector vector, DataType dataType) {
+        if (vector instanceof TinyIntVector) {
+            return ArrowTinyIntWriter.forField((TinyIntVector) vector);
+        } else if (vector instanceof SmallIntVector) {
+            return ArrowSmallIntWriter.forField((SmallIntVector) vector);
+        } else if (vector instanceof IntVector) {
+            return ArrowIntWriter.forField((IntVector) vector);
+        } else if (vector instanceof BigIntVector) {
+            return ArrowBigIntWriter.forField((BigIntVector) vector);
+        } else if (vector instanceof BitVector) {
+            return ArrowBooleanWriter.forField((BitVector) vector);
+        } else if (vector instanceof Float4Vector) {
+            return ArrowFloatWriter.forField((Float4Vector) vector);
+        } else if (vector instanceof Float8Vector) {
+            return ArrowDoubleWriter.forField((Float8Vector) vector);
+        } else if (vector instanceof VarCharVector) {
+            return ArrowVarCharWriter.forField((VarCharVector) vector);
+        } else if (vector instanceof FixedSizeBinaryVector) {
+            return ArrowBinaryWriter.forField((FixedSizeBinaryVector) vector);
+        } else if (vector instanceof VarBinaryVector) {
+            return ArrowVarBinaryWriter.forField((VarBinaryVector) vector);
+        } else if (vector instanceof DecimalVector) {
+            DecimalVector decimalVector = (DecimalVector) vector;
+            return ArrowDecimalWriter.forField(
+                    decimalVector, getPrecision(decimalVector), decimalVector.getScale());
+        } else if (vector instanceof DateDayVector) {
+            return ArrowDateWriter.forField((DateDayVector) vector);
+        } else if (vector instanceof TimeSecVector
+                || vector instanceof TimeMilliVector
+                || vector instanceof TimeMicroVector
+                || vector instanceof TimeNanoVector) {
+            return ArrowTimeWriter.forField(vector);
+        } else if (vector instanceof TimeStampVector
+                && ((ArrowType.Timestamp) vector.getField().getType()).getTimezone() == null) {
+            int precision;
+            if (dataType instanceof LocalZonedTimestampType) {
+                precision = ((LocalZonedTimestampType) dataType).getPrecision();
+                return ArrowTimestampLtzWriter.forField(vector, precision);
+            } else {
+                precision = ((TimestampType) dataType).getPrecision();
+                return ArrowTimestampNtzWriter.forField(vector, precision);
+            }
+        } else {
+            throw new UnsupportedOperationException(
+                    String.format("Unsupported type %s.", dataType));
         }
     }
 }
