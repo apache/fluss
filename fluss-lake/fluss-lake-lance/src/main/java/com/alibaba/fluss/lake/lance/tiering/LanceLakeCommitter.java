@@ -24,8 +24,6 @@ import com.alibaba.fluss.lake.committer.LakeCommitter;
 import com.alibaba.fluss.lake.lance.LanceConfig;
 import com.alibaba.fluss.lake.lance.utils.LanceDatasetAdapter;
 import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import com.alibaba.fluss.utils.json.BucketOffsetJsonSerde;
 import com.alibaba.fluss.utils.types.Tuple2;
 
@@ -35,6 +33,8 @@ import com.lancedb.lance.ReadOptions;
 import com.lancedb.lance.Transaction;
 import com.lancedb.lance.Version;
 import org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 
 import javax.annotation.Nullable;
 
