@@ -40,6 +40,7 @@ import com.alibaba.fluss.server.replica.Replica;
 import com.alibaba.fluss.server.testutils.FlussClusterExtension;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
 import com.alibaba.fluss.types.DataTypes;
+import com.alibaba.fluss.utils.DateTimeUtils;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.core.execution.JobClient;
@@ -64,6 +65,10 @@ import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.time.Duration;
+import java.time.LocalDate;
+import java.time.LocalTime;
+import java.time.OffsetDateTime;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -219,9 +224,26 @@ public class FlinkIcebergTieringTestBase {
                 TableDescriptor.builder()
                         .schema(
                                 Schema.newBuilder()
-                                        .column("a", DataTypes.INT())
-                                        .column("b", DataTypes.STRING())
-                                        .primaryKey("a")
+                                        .column("f_boolean", DataTypes.BOOLEAN())
+                                        .column("f_byte", DataTypes.TINYINT())
+                                        .column("f_short", DataTypes.SMALLINT())
+                                        .column("f_int", DataTypes.INT())
+                                        .column("f_long", DataTypes.BIGINT())
+                                        .column("f_float", DataTypes.FLOAT())
+                                        .column("f_double", DataTypes.DOUBLE())
+                                        .column("f_string", DataTypes.STRING())
+                                        .column("f_decimal1", DataTypes.DECIMAL(5, 2))
+                                        .column("f_decimal2", DataTypes.DECIMAL(20, 0))
+                                        .column("f_timestamp_ltz1", DataTypes.TIMESTAMP_LTZ(3))
+                                        .column("f_timestamp_ltz2", DataTypes.TIMESTAMP_LTZ(6))
+                                        .column("f_timestamp_ntz1", DataTypes.TIMESTAMP(3))
+                                        .column("f_timestamp_ntz2", DataTypes.TIMESTAMP(6))
+                                        .column("f_binary", DataTypes.BINARY(4))
+                                        .column("f_date", DataTypes.DATE())
+                                        .column("f_time", DataTypes.TIME())
+                                        .column("f_char", DataTypes.CHAR(3))
+                                        .column("f_bytes", DataTypes.BYTES())
+                                        .primaryKey("f_int")
                                         .build())
                         .distributedBy(bucketNum)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
@@ -309,8 +331,37 @@ public class FlinkIcebergTieringTestBase {
         try (CloseableIterator<Record> records = getIcebergRows(tablePath)) {
             for (InternalRow row : expectedRows) {
                 Record record = records.next();
-                assertThat(record.get(0)).isEqualTo(row.getInt(0));
-                assertThat(record.get(1)).isEqualTo(row.getString(1).toString());
+                assertThat(record.get(0)).isEqualTo(row.getBoolean(0));
+                assertThat(record.get(1)).isEqualTo((int) row.getByte(1));
+                assertThat(record.get(2)).isEqualTo((int) row.getShort(2));
+                assertThat(record.get(3)).isEqualTo(row.getInt(3));
+                assertThat(record.get(4)).isEqualTo(row.getLong(4));
+                assertThat(record.get(5)).isEqualTo(row.getFloat(5));
+                assertThat(record.get(6)).isEqualTo(row.getDouble(6));
+                assertThat(record.get(7)).isEqualTo(row.getString(7).toString());
+                // Iceberg expects BigDecimal for decimal types.
+                assertThat(record.get(8)).isEqualTo(row.getDecimal(8, 5, 2).toBigDecimal());
+                assertThat(record.get(9)).isEqualTo(row.getDecimal(9, 20, 0).toBigDecimal());
+                assertThat(record.get(10))
+                        .isEqualTo(
+                                OffsetDateTime.ofInstant(
+                                        row.getTimestampLtz(10, 3).toInstant(), ZoneOffset.UTC));
+                assertThat(record.get(11))
+                        .isEqualTo(
+                                OffsetDateTime.ofInstant(
+                                        row.getTimestampLtz(11, 6).toInstant(), ZoneOffset.UTC));
+                assertThat(record.get(12)).isEqualTo(row.getTimestampNtz(12, 6).toLocalDateTime());
+                assertThat(record.get(13)).isEqualTo(row.getTimestampNtz(13, 6).toLocalDateTime());
+                // Iceberg's Record interface expects ByteBuffer for binary types.
+                assertThat(record.get(14)).isEqualTo(ByteBuffer.wrap(row.getBinary(14, 4)));
+                assertThat(record.get(15))
+                        .isEqualTo(DateTimeUtils.toLocalDate(row.getInt(15)))
+                        .isEqualTo(LocalDate.of(2023, 10, 25));
+                assertThat(record.get(16))
+                        .isEqualTo(DateTimeUtils.toLocalTime(row.getInt(16)))
+                        .isEqualTo(LocalTime.of(9, 30, 0, 0));
+                assertThat(record.get(17)).isEqualTo(row.getChar(17, 3).toString());
+                assertThat(record.get(18)).isEqualTo(ByteBuffer.wrap(row.getBytes(18)));
             }
             assertThat(records.hasNext()).isFalse();
         }

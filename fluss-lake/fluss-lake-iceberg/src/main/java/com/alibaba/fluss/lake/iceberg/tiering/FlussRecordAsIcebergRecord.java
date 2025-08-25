@@ -23,6 +23,8 @@ import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.BigIntType;
 import com.alibaba.fluss.types.BinaryType;
 import com.alibaba.fluss.types.BooleanType;
+import com.alibaba.fluss.types.BytesType;
+import com.alibaba.fluss.types.CharType;
 import com.alibaba.fluss.types.DataType;
 import com.alibaba.fluss.types.DateType;
 import com.alibaba.fluss.types.DecimalType;
@@ -126,7 +128,7 @@ public class FlussRecordAsIcebergRecord implements Record {
         } else if (dataType instanceof TinyIntType) {
             return (int) internalRow.getByte(pos);
         } else if (dataType instanceof SmallIntType) {
-            return internalRow.getShort(pos);
+            return (int) internalRow.getShort(pos);
         } else if (dataType instanceof IntType) {
             return internalRow.getInt(pos);
         } else if (dataType instanceof BigIntType) {
@@ -137,6 +139,11 @@ public class FlussRecordAsIcebergRecord implements Record {
             return internalRow.getDouble(pos);
         } else if (dataType instanceof StringType) {
             return internalRow.getString(pos).toString();
+        } else if (dataType instanceof CharType) {
+            CharType charType = (CharType) dataType;
+            return internalRow.getChar(pos, charType.getLength()).toString();
+        } else if (dataType instanceof BytesType) {
+            return ByteBuffer.wrap(internalRow.getBytes(pos));
         } else if (dataType instanceof BinaryType) {
             // Iceberg's Record interface expects ByteBuffer for binary types.
             return ByteBuffer.wrap(internalRow.getBytes(pos));
