@@ -170,7 +170,6 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
                 authenticator.isCompleted()
                         ? ConnectionState.READY
                         : ConnectionState.AUTHENTICATING);
-
         // TODO: connection metrics (count, client tags, receive request avg idle time, etc.)
     }
 

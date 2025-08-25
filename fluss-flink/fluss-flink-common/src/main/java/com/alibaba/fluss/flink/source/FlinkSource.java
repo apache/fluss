@@ -53,6 +53,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 
 import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.flink.connector.base.source.reader.SourceReaderOptions.ELEMENT_QUEUE_CAPACITY;
 
 /** Flink source for Fluss. */
 public class FlinkSource<OUT>
@@ -182,7 +183,8 @@ public class FlinkSource<OUT>
     public SourceReader<OUT, SourceSplitBase> createReader(SourceReaderContext context)
             throws Exception {
         FutureCompletingBlockingQueue<RecordsWithSplitIds<RecordAndPos>> elementsQueue =
-                new FutureCompletingBlockingQueue<>();
+                new FutureCompletingBlockingQueue<>(
+                        context.getConfiguration().get(ELEMENT_QUEUE_CAPACITY));
         FlinkSourceReaderMetrics flinkSourceReaderMetrics =
                 new FlinkSourceReaderMetrics(context.metricGroup());
 

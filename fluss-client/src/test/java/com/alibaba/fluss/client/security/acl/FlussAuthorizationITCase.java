@@ -28,6 +28,8 @@ import com.alibaba.fluss.client.utils.ClientRpcMessageUtils;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
 import com.alibaba.fluss.config.MemorySize;
+import com.alibaba.fluss.config.dynamic.AlterConfigOp;
+import com.alibaba.fluss.config.dynamic.ConfigEntry;
 import com.alibaba.fluss.exception.AuthorizationException;
 import com.alibaba.fluss.metadata.DataLakeFormat;
 import com.alibaba.fluss.metadata.DatabaseDescriptor;
@@ -69,6 +71,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
+import static com.alibaba.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
@@ -651,6 +654,70 @@ public class FlussAuthorizationITCase {
                                                     })))
                                     .doesNotThrowAnyException());
         }
+    }
+
+    @Test
+    void testDynamicConfigs() throws ExecutionException, InterruptedException {
+        assertThatThrownBy(
+                        () ->
+                                guestAdmin
+                                        .alterConfigs(
+                                                Collections.singletonList(
+                                                        new AlterConfigOp(
+                                                                DATALAKE_FORMAT.key(),
+                                                                null,
+                                                                AlterConfigOp.OpType.SET)))
+                                        .get())
+                .rootCause()
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate ALTER_CONFIGS on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                guestPrincipal));
+
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.cluster(),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.ALTER_CONFIGS,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+        guestAdmin
+                .alterConfigs(
+                        Collections.singletonList(
+                                new AlterConfigOp(
+                                        DATALAKE_FORMAT.key(), null, AlterConfigOp.OpType.SET)))
+                .get();
+
+        assertThatThrownBy(() -> guestAdmin.describeConfigs().get())
+                .rootCause()
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate DESCRIBE_CONFIGS on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                guestPrincipal));
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.cluster(),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.DESCRIBE_CONFIGS,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+        Collection<ConfigEntry> configToResourceConfigs = guestAdmin.describeConfigs().get();
+        assertThat(configToResourceConfigs)
+                .contains(
+                        new ConfigEntry(
+                                DATALAKE_FORMAT.key(),
+                                null,
+                                ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG));
     }
 
     private static Configuration initConfig() {
