@@ -15,32 +15,32 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.authorizer;
+package org.apache.fluss.server.authorizer;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.ApiException;
-import com.alibaba.fluss.rpc.netty.server.Session;
-import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.security.acl.AccessControlEntry;
-import com.alibaba.fluss.security.acl.AclBinding;
-import com.alibaba.fluss.security.acl.AclBindingFilter;
-import com.alibaba.fluss.security.acl.FlussPrincipal;
-import com.alibaba.fluss.security.acl.OperationType;
-import com.alibaba.fluss.security.acl.PermissionType;
-import com.alibaba.fluss.security.acl.Resource;
-import com.alibaba.fluss.security.acl.ResourceType;
-import com.alibaba.fluss.server.utils.FatalErrorHandler;
-import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.server.zk.ZooKeeperUtils;
-import com.alibaba.fluss.server.zk.data.ZkData.AclChangeNotificationNode;
-import com.alibaba.fluss.server.zk.data.ZkData.AclChangesNode;
-import com.alibaba.fluss.utils.clock.SystemClock;
-import com.alibaba.fluss.utils.types.Tuple2;
-
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.ApiException;
+import org.apache.fluss.rpc.netty.server.Session;
+import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.security.acl.AccessControlEntry;
+import org.apache.fluss.security.acl.AclBinding;
+import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.security.acl.OperationType;
+import org.apache.fluss.security.acl.PermissionType;
+import org.apache.fluss.security.acl.Resource;
+import org.apache.fluss.security.acl.ResourceType;
+import org.apache.fluss.server.utils.FatalErrorHandler;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperUtils;
+import org.apache.fluss.server.zk.data.ZkData.AclChangeNotificationNode;
+import org.apache.fluss.server.zk.data.ZkData.AclChangesNode;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Maps;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Sets;
+import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.types.Tuple2;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -63,8 +63,8 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
-import static com.alibaba.fluss.security.acl.Resource.TABLE_SPLITTER;
-import static com.alibaba.fluss.server.zk.ZooKeeperClient.UNKNOWN_VERSION;
+import static org.apache.fluss.security.acl.Resource.TABLE_SPLITTER;
+import static org.apache.fluss.server.zk.ZooKeeperClient.UNKNOWN_VERSION;
 
 /**
  * A default authorization manager that leverages ZooKeeper to store access control lists (ACLs).

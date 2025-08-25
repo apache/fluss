@@ -15,12 +15,11 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.row.arrow.vectors;
+package org.apache.fluss.row.arrow.vectors;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.row.TimestampLtz;
-import com.alibaba.fluss.row.columnar.TimestampLtzColumnVector;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.columnar.TimestampLtzColumnVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampMicroVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampMilliVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampNanoVector;
@@ -29,8 +28,8 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
 
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Arrow column vector for TimestampLtz. */
 @Internal

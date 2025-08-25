@@ -15,13 +15,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.protocol;
+package org.apache.fluss.rpc.protocol;
 
-import com.alibaba.fluss.cluster.ServerType;
-import com.alibaba.fluss.rpc.messages.ApiMessage;
-import com.alibaba.fluss.utils.InstantiationUtils;
-
+import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
+import org.apache.fluss.utils.InstantiationUtils;
 
 import javax.annotation.concurrent.ThreadSafe;
 

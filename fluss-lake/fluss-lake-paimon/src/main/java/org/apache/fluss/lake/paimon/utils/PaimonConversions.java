@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.paimon.utils;
+package org.apache.fluss.lake.paimon.utils;
 
-import com.alibaba.fluss.lake.paimon.source.FlussRowAsPaimonRow;
-import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.record.ChangeType;
-import com.alibaba.fluss.row.GenericRow;
-import com.alibaba.fluss.row.InternalRow;
+import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
 
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.BinaryRow;

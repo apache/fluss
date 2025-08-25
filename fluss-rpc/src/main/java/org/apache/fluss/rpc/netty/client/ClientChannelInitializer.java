@@ -15,10 +15,9 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.netty.client;
+package org.apache.fluss.rpc.netty.client;
 
-import com.alibaba.fluss.rpc.netty.NettyChannelInitializer;
-
+import org.apache.fluss.rpc.netty.NettyChannelInitializer;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 

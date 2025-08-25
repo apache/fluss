@@ -15,35 +15,35 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.kv;
+package org.apache.fluss.server.kv;
 
-import com.alibaba.fluss.compression.ArrowCompressionInfo;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.config.TableConfig;
-import com.alibaba.fluss.exception.KvStorageException;
-import com.alibaba.fluss.fs.FileSystem;
-import com.alibaba.fluss.fs.FsPath;
-import com.alibaba.fluss.memory.LazyMemorySegmentPool;
-import com.alibaba.fluss.memory.MemorySegmentPool;
-import com.alibaba.fluss.metadata.KvFormat;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.Schema;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.server.TabletManagerBase;
-import com.alibaba.fluss.server.kv.rowmerger.RowMerger;
-import com.alibaba.fluss.server.log.LogManager;
-import com.alibaba.fluss.server.log.LogTablet;
-import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.utils.FileUtils;
-import com.alibaba.fluss.utils.FlussPaths;
-import com.alibaba.fluss.utils.MapUtils;
-import com.alibaba.fluss.utils.types.Tuple2;
-
+import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.KvStorageException;
+import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.memory.LazyMemorySegmentPool;
+import org.apache.fluss.memory.MemorySegmentPool;
+import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.TabletManagerBase;
+import org.apache.fluss.server.kv.rowmerger.RowMerger;
+import org.apache.fluss.server.log.LogManager;
+import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.utils.FileUtils;
+import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.MapUtils;
+import org.apache.fluss.utils.types.Tuple2;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,7 +56,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
+import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /**
  * The entry point to the fluss kv management subsystem. The kv manager is responsible for kv tablet

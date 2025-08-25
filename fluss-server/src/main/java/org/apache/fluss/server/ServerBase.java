@@ -15,26 +15,26 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server;
+package org.apache.fluss.server;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.FlussException;
-import com.alibaba.fluss.fs.FileSystem;
-import com.alibaba.fluss.fs.FsPath;
-import com.alibaba.fluss.plugin.PluginManager;
-import com.alibaba.fluss.plugin.PluginUtils;
-import com.alibaba.fluss.server.authorizer.Authorizer;
-import com.alibaba.fluss.server.coordinator.CoordinatorServer;
-import com.alibaba.fluss.server.exception.FlussParseException;
-import com.alibaba.fluss.server.tablet.TabletServer;
-import com.alibaba.fluss.server.utils.ConfigurationParserUtils;
-import com.alibaba.fluss.server.utils.FatalErrorHandler;
-import com.alibaba.fluss.server.utils.ShutdownHookUtil;
-import com.alibaba.fluss.utils.AutoCloseableAsync;
-import com.alibaba.fluss.utils.ExceptionUtils;
-import com.alibaba.fluss.utils.concurrent.FutureUtils;
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussException;
+import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.plugin.PluginManager;
+import org.apache.fluss.plugin.PluginUtils;
+import org.apache.fluss.server.authorizer.Authorizer;
+import org.apache.fluss.server.coordinator.CoordinatorServer;
+import org.apache.fluss.server.exception.FlussParseException;
+import org.apache.fluss.server.tablet.TabletServer;
+import org.apache.fluss.server.utils.ConfigurationParserUtils;
+import org.apache.fluss.server.utils.FatalErrorHandler;
+import org.apache.fluss.server.utils.ShutdownHookUtil;
+import org.apache.fluss.utils.AutoCloseableAsync;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

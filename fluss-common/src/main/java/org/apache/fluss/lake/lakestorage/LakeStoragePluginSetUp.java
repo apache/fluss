@@ -15,10 +15,9 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.lakestorage;
+package org.apache.fluss.lake.lakestorage;
 
-import com.alibaba.fluss.plugin.PluginManager;
-
+import org.apache.fluss.plugin.PluginManager;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 
 import javax.annotation.Nullable;

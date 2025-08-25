@@ -15,14 +15,13 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.compression;
-
-import com.alibaba.fluss.utils.IOUtils;
+package org.apache.fluss.compression;
 
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.AbstractCompressionCodec;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
+import org.apache.fluss.utils.IOUtils;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
@@ -31,7 +30,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.ByteBuffer;
 
-import static com.alibaba.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /* This file is based on source code of Apache Arrow-java Project (https://github.com/apache/arrow-java), licensed by
  * the Apache Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with

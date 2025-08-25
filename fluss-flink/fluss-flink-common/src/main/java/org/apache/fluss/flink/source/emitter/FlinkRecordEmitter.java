@@ -15,15 +15,15 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.source.emitter;
+package org.apache.fluss.flink.source.emitter;
 
-import com.alibaba.fluss.client.table.scanner.ScanRecord;
-import com.alibaba.fluss.flink.lake.LakeRecordRecordEmitter;
-import com.alibaba.fluss.flink.source.deserializer.FlussDeserializationSchema;
-import com.alibaba.fluss.flink.source.reader.FlinkSourceReader;
-import com.alibaba.fluss.flink.source.reader.RecordAndPos;
-import com.alibaba.fluss.flink.source.split.HybridSnapshotLogSplitState;
-import com.alibaba.fluss.flink.source.split.SourceSplitState;
+import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.flink.lake.LakeRecordRecordEmitter;
+import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
+import org.apache.fluss.flink.source.reader.FlinkSourceReader;
+import org.apache.fluss.flink.source.reader.RecordAndPos;
+import org.apache.fluss.flink.source.split.HybridSnapshotLogSplitState;
+import org.apache.fluss.flink.source.split.SourceSplitState;
 
 import org.apache.flink.api.connector.source.SourceOutput;
 import org.apache.flink.connector.base.source.reader.RecordEmitter;

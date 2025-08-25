@@ -15,29 +15,31 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.tiering.committer;
+package org.apache.fluss.flink.tiering.committer;
 
-import com.alibaba.fluss.client.Connection;
-import com.alibaba.fluss.client.ConnectionFactory;
-import com.alibaba.fluss.client.admin.Admin;
-import com.alibaba.fluss.client.metadata.LakeSnapshot;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.LakeTableSnapshotNotExistException;
-import com.alibaba.fluss.flink.tiering.event.FailedTieringEvent;
-import com.alibaba.fluss.flink.tiering.event.FinishedTieringEvent;
-import com.alibaba.fluss.flink.tiering.source.TableBucketWriteResult;
-import com.alibaba.fluss.flink.tiering.source.TieringSource;
-import com.alibaba.fluss.lake.committer.BucketOffset;
-import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
-import com.alibaba.fluss.lake.committer.LakeCommitter;
-import com.alibaba.fluss.lake.writer.LakeTieringFactory;
-import com.alibaba.fluss.lake.writer.LakeWriter;
-import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.utils.ExceptionUtils;
-import com.alibaba.fluss.utils.json.BucketOffsetJsonSerde;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
+import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
+import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
+import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
+import org.apache.fluss.flink.tiering.source.TieringSource;
+import org.apache.fluss.lake.committer.BucketOffset;
+import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonFactory;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
 
 import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
 import org.apache.flink.runtime.source.event.SourceEventWrapper;
@@ -45,8 +47,6 @@ import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonFactory;
-import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 
 import javax.annotation.Nullable;
 
@@ -60,8 +60,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * A Flink operator to aggregate {@link WriteResult}s by table to {@link Committable} which will

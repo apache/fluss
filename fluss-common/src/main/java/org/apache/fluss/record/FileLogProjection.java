@@ -15,16 +15,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.record;
+package org.apache.fluss.record;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.compression.ArrowCompressionInfo;
-import com.alibaba.fluss.exception.InvalidColumnProjectionException;
-import com.alibaba.fluss.record.bytesview.MultiBytesView;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.utils.ArrowUtils;
-import com.alibaba.fluss.utils.types.Tuple2;
-
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.exception.InvalidColumnProjectionException;
+import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.shaded.arrow.com.google.flatbuffers.FlatBufferBuilder;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.Buffer;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.FieldNode;
@@ -40,6 +36,9 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRe
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Field;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.ArrowUtils;
+import org.apache.fluss.utils.types.Tuple2;
 
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
@@ -54,16 +53,16 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.APPEND_ONLY_FLAG_MASK;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.ARROW_CHANGETYPE_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.ATTRIBUTES_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.LENGTH_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.LOG_OVERHEAD;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.RECORDS_COUNT_OFFSET;
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
-import static com.alibaba.fluss.utils.FileUtils.readFullyOrFail;
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.record.DefaultLogRecordBatch.APPEND_ONLY_FLAG_MASK;
+import static org.apache.fluss.record.DefaultLogRecordBatch.ARROW_CHANGETYPE_OFFSET;
+import static org.apache.fluss.record.DefaultLogRecordBatch.ATTRIBUTES_OFFSET;
+import static org.apache.fluss.record.DefaultLogRecordBatch.LENGTH_OFFSET;
+import static org.apache.fluss.record.DefaultLogRecordBatch.LOG_OVERHEAD;
+import static org.apache.fluss.record.DefaultLogRecordBatch.RECORDS_COUNT_OFFSET;
+import static org.apache.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+import static org.apache.fluss.utils.FileUtils.readFullyOrFail;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Column projection util on Arrow format {@link FileLogRecords}. */
 public class FileLogProjection {

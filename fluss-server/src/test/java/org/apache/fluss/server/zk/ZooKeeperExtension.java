@@ -15,13 +15,13 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.zk;
+package org.apache.fluss.server.zk;
 
-import com.alibaba.fluss.server.utils.FatalErrorHandler;
-import com.alibaba.fluss.testutils.common.CustomExtension;
+import org.apache.fluss.server.utils.FatalErrorHandler;
+import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.testutils.common.CustomExtension;
 
 import org.apache.curator.test.TestingServer;
-import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.zookeeper.server.ZooKeeperServer;
 import org.junit.jupiter.api.extension.Extension;
 import org.junit.jupiter.api.extension.ExtensionContext;
@@ -32,8 +32,8 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** A Junit {@link Extension} which starts a {@link ZooKeeperServer}. */
 public class ZooKeeperExtension implements CustomExtension {

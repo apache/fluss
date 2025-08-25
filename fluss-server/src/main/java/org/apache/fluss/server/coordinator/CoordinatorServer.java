@@ -15,41 +15,41 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.coordinator;
+package org.apache.fluss.server.coordinator;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.cluster.Endpoint;
-import com.alibaba.fluss.cluster.ServerType;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.IllegalConfigurationException;
-import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
-import com.alibaba.fluss.lake.lakestorage.LakeStorage;
-import com.alibaba.fluss.lake.lakestorage.LakeStoragePlugin;
-import com.alibaba.fluss.lake.lakestorage.LakeStoragePluginSetUp;
-import com.alibaba.fluss.metadata.DataLakeFormat;
-import com.alibaba.fluss.metadata.DatabaseDescriptor;
-import com.alibaba.fluss.metrics.registry.MetricRegistry;
-import com.alibaba.fluss.rpc.RpcClient;
-import com.alibaba.fluss.rpc.RpcServer;
-import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
-import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
-import com.alibaba.fluss.server.ServerBase;
-import com.alibaba.fluss.server.authorizer.Authorizer;
-import com.alibaba.fluss.server.authorizer.AuthorizerLoader;
-import com.alibaba.fluss.server.metadata.CoordinatorMetadataCache;
-import com.alibaba.fluss.server.metadata.ServerMetadataCache;
-import com.alibaba.fluss.server.metrics.ServerMetricUtils;
-import com.alibaba.fluss.server.metrics.group.CoordinatorMetricGroup;
-import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.server.zk.ZooKeeperUtils;
-import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
-import com.alibaba.fluss.utils.ExceptionUtils;
-import com.alibaba.fluss.utils.ExecutorUtils;
-import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
-import com.alibaba.fluss.utils.concurrent.FutureUtils;
-
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.IllegalConfigurationException;
+import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.lake.lakestorage.LakeStorage;
+import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
+import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp;
+import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metrics.registry.MetricRegistry;
+import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.RpcServer;
+import org.apache.fluss.rpc.metrics.ClientMetricGroup;
+import org.apache.fluss.rpc.netty.server.RequestsMetrics;
+import org.apache.fluss.server.ServerBase;
+import org.apache.fluss.server.authorizer.Authorizer;
+import org.apache.fluss.server.authorizer.AuthorizerLoader;
+import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
+import org.apache.fluss.server.metadata.ServerMetadataCache;
+import org.apache.fluss.server.metrics.ServerMetricUtils;
+import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperUtils;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.ExecutorUtils;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
+import org.apache.fluss.utils.concurrent.FutureUtils;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -67,8 +67,8 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static com.alibaba.fluss.server.utils.LakeStorageUtils.extractLakeProperties;
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.server.utils.LakeStorageUtils.extractLakeProperties;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Coordinator server implementation. The coordinator server is responsible to:

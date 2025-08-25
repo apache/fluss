@@ -15,32 +15,32 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.write;
+package org.apache.fluss.client.write;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.client.metadata.MetadataUpdater;
-import com.alibaba.fluss.client.metrics.WriterMetricGroup;
-import com.alibaba.fluss.client.write.RecordAccumulator.ReadyCheckResult;
-import com.alibaba.fluss.cluster.Cluster;
-import com.alibaba.fluss.exception.InvalidMetadataException;
-import com.alibaba.fluss.exception.LeaderNotAvailableException;
-import com.alibaba.fluss.exception.OutOfOrderSequenceException;
-import com.alibaba.fluss.exception.PartitionNotExistException;
-import com.alibaba.fluss.exception.RetriableException;
-import com.alibaba.fluss.exception.UnknownTableOrBucketException;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
-import com.alibaba.fluss.rpc.messages.PbProduceLogRespForBucket;
-import com.alibaba.fluss.rpc.messages.PbPutKvRespForBucket;
-import com.alibaba.fluss.rpc.messages.ProduceLogRequest;
-import com.alibaba.fluss.rpc.messages.ProduceLogResponse;
-import com.alibaba.fluss.rpc.messages.PutKvRequest;
-import com.alibaba.fluss.rpc.messages.PutKvResponse;
-import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.rpc.protocol.Errors;
-import com.alibaba.fluss.utils.ExceptionUtils;
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.metrics.WriterMetricGroup;
+import org.apache.fluss.client.write.RecordAccumulator.ReadyCheckResult;
+import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.exception.InvalidMetadataException;
+import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.exception.OutOfOrderSequenceException;
+import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.RetriableException;
+import org.apache.fluss.exception.UnknownTableOrBucketException;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
+import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
+import org.apache.fluss.rpc.messages.ProduceLogRequest;
+import org.apache.fluss.rpc.messages.ProduceLogResponse;
+import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.utils.ExceptionUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -54,9 +54,9 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeProduceLogRequest;
-import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makePutKvRequest;
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeProduceLogRequest;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePutKvRequest;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for

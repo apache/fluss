@@ -15,23 +15,23 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.kv.wal;
+package org.apache.fluss.server.kv.wal;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.config.MemorySize;
-import com.alibaba.fluss.memory.LazyMemorySegmentPool;
-import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.memory.MemorySegmentPool;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.record.ChangeType;
-import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.row.arrow.ArrowWriterPool;
-import com.alibaba.fluss.row.arrow.ArrowWriterProvider;
-import com.alibaba.fluss.utils.types.Tuple2;
-
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.memory.LazyMemorySegmentPool;
+import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.memory.MemorySegmentPool;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.row.arrow.ArrowWriterPool;
+import org.apache.fluss.row.arrow.ArrowWriterProvider;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.utils.types.Tuple2;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -40,12 +40,12 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID_PK;
-import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
-import static com.alibaba.fluss.testutils.DataTestUtils.assertLogRecordsEqualsWithRowKind;
-import static com.alibaba.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
+import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_ID_PK;
+import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEqualsWithRowKind;
+import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link ArrowWalBuilder}. */

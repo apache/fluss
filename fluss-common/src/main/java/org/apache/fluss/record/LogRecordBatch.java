@@ -15,15 +15,14 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.record;
+package org.apache.fluss.record;
 
-import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.metadata.LogFormat;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.utils.CloseableIterator;
-
+import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.CloseableIterator;
 
 import java.util.Iterator;
 

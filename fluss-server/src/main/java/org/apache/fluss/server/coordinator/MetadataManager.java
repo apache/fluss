@@ -15,41 +15,41 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.coordinator;
+package org.apache.fluss.server.coordinator;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
-import com.alibaba.fluss.exception.DatabaseNotEmptyException;
-import com.alibaba.fluss.exception.DatabaseNotExistException;
-import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.exception.InvalidPartitionException;
-import com.alibaba.fluss.exception.PartitionAlreadyExistsException;
-import com.alibaba.fluss.exception.PartitionNotExistException;
-import com.alibaba.fluss.exception.SchemaNotExistException;
-import com.alibaba.fluss.exception.TableAlreadyExistException;
-import com.alibaba.fluss.exception.TableNotExistException;
-import com.alibaba.fluss.exception.TableNotPartitionedException;
-import com.alibaba.fluss.exception.TooManyBucketsException;
-import com.alibaba.fluss.exception.TooManyPartitionsException;
-import com.alibaba.fluss.metadata.DatabaseDescriptor;
-import com.alibaba.fluss.metadata.DatabaseInfo;
-import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
-import com.alibaba.fluss.metadata.SchemaInfo;
-import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePartition;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.server.utils.LakeStorageUtils;
-import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.server.zk.data.DatabaseRegistration;
-import com.alibaba.fluss.server.zk.data.PartitionAssignment;
-import com.alibaba.fluss.server.zk.data.TableAssignment;
-import com.alibaba.fluss.server.zk.data.TableRegistration;
-import com.alibaba.fluss.utils.function.RunnableWithException;
-import com.alibaba.fluss.utils.function.ThrowingRunnable;
-
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.DatabaseAlreadyExistException;
+import org.apache.fluss.exception.DatabaseNotEmptyException;
+import org.apache.fluss.exception.DatabaseNotExistException;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.PartitionAlreadyExistsException;
+import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.SchemaNotExistException;
+import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.exception.TableNotPartitionedException;
+import org.apache.fluss.exception.TooManyBucketsException;
+import org.apache.fluss.exception.TooManyPartitionsException;
+import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.DatabaseInfo;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.SchemaInfo;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.utils.LakeStorageUtils;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.DatabaseRegistration;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.utils.function.RunnableWithException;
+import org.apache.fluss.utils.function.ThrowingRunnable;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -61,7 +61,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
 
-import static com.alibaba.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
+import static org.apache.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
 
 /** A manager for metadata. */
 public class MetadataManager {

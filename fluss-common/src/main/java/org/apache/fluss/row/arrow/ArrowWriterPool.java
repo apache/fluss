@@ -15,17 +15,16 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.row.arrow;
+package org.apache.fluss.row.arrow;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.compression.ArrowCompressionInfo;
-import com.alibaba.fluss.compression.ArrowCompressionRatioEstimator;
-import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.types.RowType;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.compression.ArrowCompressionRatioEstimator;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.fluss.types.RowType;
 
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
@@ -36,7 +35,7 @@ import java.util.HashMap;
 import java.util.Map;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
+import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /**
  * A pool that pools {@link ArrowWriter}. See Javadoc of {@link VectorSchemaRoot} for more

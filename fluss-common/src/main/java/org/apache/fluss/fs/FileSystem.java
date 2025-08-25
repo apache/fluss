@@ -15,21 +15,21 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.fs;
+package org.apache.fluss.fs;
 
-import com.alibaba.fluss.annotation.PublicStable;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.IllegalConfigurationException;
-import com.alibaba.fluss.fs.local.LocalFileSystem;
-import com.alibaba.fluss.fs.local.LocalFileSystemPlugin;
-import com.alibaba.fluss.fs.token.ObtainedSecurityToken;
-import com.alibaba.fluss.plugin.PluginManager;
-import com.alibaba.fluss.utils.ExceptionUtils;
-import com.alibaba.fluss.utils.TemporaryClassLoaderContext;
-
+import org.apache.fluss.annotation.PublicStable;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.IllegalConfigurationException;
+import org.apache.fluss.fs.local.LocalFileSystem;
+import org.apache.fluss.fs.local.LocalFileSystemPlugin;
+import org.apache.fluss.fs.token.ObtainedSecurityToken;
+import org.apache.fluss.plugin.PluginManager;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableMultimap;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Multimap;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.TemporaryClassLoaderContext;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -50,8 +50,8 @@ import java.util.ServiceLoader;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Supplier;
 
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
-import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for

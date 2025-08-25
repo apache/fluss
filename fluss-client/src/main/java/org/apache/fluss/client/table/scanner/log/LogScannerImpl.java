@@ -15,21 +15,21 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.table.scanner.log;
+package org.apache.fluss.client.table.scanner.log;
 
-import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.client.metadata.MetadataUpdater;
-import com.alibaba.fluss.client.metrics.ScannerMetricGroup;
-import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
-import com.alibaba.fluss.client.table.scanner.ScanRecord;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.WakeupException;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.utils.Projection;
+import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.metrics.ScannerMetricGroup;
+import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
+import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.WakeupException;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.metrics.ClientMetricGroup;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.Projection;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

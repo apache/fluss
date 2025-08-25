@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.committer;
+package org.apache.fluss.lake.committer;
 
 import javax.annotation.Nullable;
 

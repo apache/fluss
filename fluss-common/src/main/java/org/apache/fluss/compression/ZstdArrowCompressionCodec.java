@@ -15,13 +15,14 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.compression;
+package org.apache.fluss.compression;
 
-import com.github.luben.zstd.Zstd;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.AbstractCompressionCodec;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
+
+import com.github.luben.zstd.Zstd;
 
 import java.nio.ByteBuffer;
 

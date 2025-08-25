@@ -15,16 +15,16 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.protocol;
+package org.apache.fluss.rpc.protocol;
 
-import com.alibaba.fluss.rpc.messages.FetchLogRequest;
-import com.alibaba.fluss.rpc.messages.GetTableInfoRequest;
-import com.alibaba.fluss.rpc.netty.server.FlussRequest;
-import com.alibaba.fluss.rpc.netty.server.RequestChannel;
-import com.alibaba.fluss.rpc.netty.server.RpcRequest;
-
+import org.apache.fluss.rpc.messages.FetchLogRequest;
+import org.apache.fluss.rpc.messages.GetTableInfoRequest;
+import org.apache.fluss.rpc.netty.server.FlussRequest;
+import org.apache.fluss.rpc.netty.server.RequestChannel;
+import org.apache.fluss.rpc.netty.server.RpcRequest;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.EmptyByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.UnpooledByteBufAllocator;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;

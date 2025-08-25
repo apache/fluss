@@ -15,18 +15,18 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.coordinator.event;
+package org.apache.fluss.server.coordinator.event;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.metadata.TableBucketReplica;
-import com.alibaba.fluss.metadata.TablePartition;
-import com.alibaba.fluss.metrics.DescriptiveStatisticsHistogram;
-import com.alibaba.fluss.metrics.Histogram;
-import com.alibaba.fluss.metrics.MetricNames;
-import com.alibaba.fluss.server.coordinator.CoordinatorContext;
-import com.alibaba.fluss.server.coordinator.statemachine.ReplicaState;
-import com.alibaba.fluss.server.metrics.group.CoordinatorMetricGroup;
-import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.metadata.TableBucketReplica;
+import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.metrics.DescriptiveStatisticsHistogram;
+import org.apache.fluss.metrics.Histogram;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.server.coordinator.CoordinatorContext;
+import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
+import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
+import org.apache.fluss.utils.concurrent.ShutdownableThread;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -35,8 +35,8 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static com.alibaba.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
-import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
+import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /**
  * A manager for the events happens in Coordinator Server. It will poll the event from a queue and

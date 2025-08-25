@@ -15,13 +15,13 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.row.encode;
+package org.apache.fluss.row.encode;
 
-import com.alibaba.fluss.metadata.DataLakeFormat;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.encode.iceberg.IcebergKeyEncoder;
-import com.alibaba.fluss.row.encode.paimon.PaimonKeyEncoder;
-import com.alibaba.fluss.types.RowType;
+import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.encode.iceberg.IcebergKeyEncoder;
+import org.apache.fluss.row.encode.paimon.PaimonKeyEncoder;
+import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 

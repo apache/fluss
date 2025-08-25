@@ -15,10 +15,11 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.row.arrow;
+package org.apache.fluss.row.arrow;
 
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -26,9 +27,9 @@ import org.junit.jupiter.api.Test;
 import java.util.Deque;
 import java.util.Map;
 
-import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
-import static com.alibaba.fluss.row.arrow.ArrowWriter.BUFFER_USAGE_RATIO;
+import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
+import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.row.arrow.ArrowWriter.BUFFER_USAGE_RATIO;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link ArrowWriterPool}. */

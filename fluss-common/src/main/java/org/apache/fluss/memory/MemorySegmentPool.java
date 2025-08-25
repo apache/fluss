@@ -66,10 +66,14 @@ public interface MemorySegmentPool {
      */
     void returnAll(List<MemorySegment> memory);
 
-    /** @return Free page number. */
+    /**
+     * @return Free page number.
+     */
     int freePages();
 
-    /** @return the available memory size in bytes. */
+    /**
+     * @return the available memory size in bytes.
+     */
     long availableMemory();
 
     void close();

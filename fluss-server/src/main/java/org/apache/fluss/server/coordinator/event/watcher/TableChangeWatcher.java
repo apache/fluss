@@ -15,31 +15,31 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.coordinator.event.watcher;
+package org.apache.fluss.server.coordinator.event.watcher;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.config.TableConfig;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.SchemaInfo;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePartition;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.server.coordinator.event.CreatePartitionEvent;
-import com.alibaba.fluss.server.coordinator.event.CreateTableEvent;
-import com.alibaba.fluss.server.coordinator.event.DropPartitionEvent;
-import com.alibaba.fluss.server.coordinator.event.DropTableEvent;
-import com.alibaba.fluss.server.coordinator.event.EventManager;
-import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.server.zk.data.PartitionAssignment;
-import com.alibaba.fluss.server.zk.data.TableAssignment;
-import com.alibaba.fluss.server.zk.data.TableRegistration;
-import com.alibaba.fluss.server.zk.data.ZkData.DatabasesZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.PartitionZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.TableZNode;
-
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.SchemaInfo;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.coordinator.event.CreatePartitionEvent;
+import org.apache.fluss.server.coordinator.event.CreateTableEvent;
+import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
+import org.apache.fluss.server.coordinator.event.DropTableEvent;
+import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.ZkData.DatabasesZNode;
+import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
+import org.apache.fluss.server.zk.data.ZkData.TableZNode;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

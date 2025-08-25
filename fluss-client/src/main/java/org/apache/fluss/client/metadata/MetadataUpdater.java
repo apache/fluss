@@ -15,30 +15,30 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.metadata;
+package org.apache.fluss.client.metadata;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.client.utils.ClientUtils;
-import com.alibaba.fluss.cluster.BucketLocation;
-import com.alibaba.fluss.cluster.Cluster;
-import com.alibaba.fluss.cluster.ServerNode;
-import com.alibaba.fluss.cluster.ServerType;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.exception.PartitionNotExistException;
-import com.alibaba.fluss.exception.RetriableException;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePartition;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.rpc.GatewayClientProxy;
-import com.alibaba.fluss.rpc.RpcClient;
-import com.alibaba.fluss.rpc.gateway.AdminReadOnlyGateway;
-import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
-import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
-import com.alibaba.fluss.utils.ExceptionUtils;
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.utils.ClientUtils;
+import org.apache.fluss.cluster.BucketLocation;
+import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.RetriableException;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.GatewayClientProxy;
+import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.utils.ExceptionUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -55,7 +55,7 @@ import java.util.Set;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
+import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 
 /** The updater to initialize and update client metadata. */
 public class MetadataUpdater {

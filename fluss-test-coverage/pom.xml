@@ -21,7 +21,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <groupId>com.alibaba.fluss</groupId>
+        <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
         <version>0.8-SNAPSHOT</version>
     </parent>
@@ -34,63 +34,63 @@
     <dependencies>
         <!-- All Fluss modules which should report code coverage -->
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-client</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-common</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-rpc</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-server</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-flink-common</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-flink-2.1</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-flink-1.20</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-flink-1.19</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-flink-1.18</artifactId>
             <version>${project.version}</version>
             <scope>compile</scope>
@@ -165,7 +165,7 @@
                                                 <exclude>fluss-test-coverage/**</exclude>
                                                 <exclude>fluss-test-utils/**</exclude>
                                                 <!-- exclude adapter classes to avoid Jacoco error: "Can't add different class with same name" -->
-                                                <exclude>fluss-flink/**/target/classes/com/alibaba/fluss/flink/adapter/**</exclude>
+                                                <exclude>fluss-flink/**/target/classes/org/apache/fluss/flink/adapter/**</exclude>
                                             </excludes>
                                         </resource>
                                     </resources>
@@ -207,7 +207,7 @@
                                                 <exclude>fluss-test-coverage/**</exclude>
                                                 <exclude>fluss-test-utils/**</exclude>
                                                 <!-- exclude adapter classes to avoid Jacoco error: "Can't add different class with same name" -->
-                                                <exclude>fluss-flink/**/target/classes/com/alibaba/fluss/flink/adapter/**</exclude>
+                                                <exclude>fluss-flink/**/target/classes/org/apache/fluss/flink/adapter/**</exclude>
                                             </excludes>
                                         </resource>
                                     </resources>
@@ -287,132 +287,132 @@
                                         </limit>
                                     </limits>
                                     <excludes>
-                                        <exclude>com.alibaba.fluss.protogen.*</exclude>
-                                        <exclude>com.alibaba.fluss.memory.*</exclude>
-                                        <exclude>com.alibaba.fluss.utils.*</exclude>
-                                        <exclude>com.alibaba.fluss.exception.*</exclude>
-                                        <exclude>com.alibaba.fluss.row.arrow.*</exclude>
+                                        <exclude>org.apache.fluss.protogen.*</exclude>
+                                        <exclude>org.apache.fluss.memory.*</exclude>
+                                        <exclude>org.apache.fluss.utils.*</exclude>
+                                        <exclude>org.apache.fluss.exception.*</exclude>
+                                        <exclude>org.apache.fluss.row.arrow.*</exclude>
                                         <exclude>
-                                            com.alibaba.fluss.row.columnar.BytesColumnVector.Bytes
+                                            org.apache.fluss.row.columnar.BytesColumnVector.Bytes
                                         </exclude>
-                                        <exclude>com.alibaba.fluss.row.encode.RowEncoder</exclude>
-                                        <exclude>com.alibaba.fluss.row.encode.KeyEncoder</exclude>
-                                        <exclude>com.alibaba.fluss.table.*</exclude>
-                                        <exclude>com.alibaba.fluss.record.*</exclude>
-                                        <exclude>com.alibaba.fluss.kv.*</exclude>
-                                        <exclude>com.alibaba.fluss.io.*</exclude>
-                                        <exclude>com.alibaba.fluss.bucketing.BucketingFunction</exclude>
-                                        <exclude>com.alibaba.fluss.server.ServerBase</exclude>
-                                        <exclude>com.alibaba.fluss.server.utils.ShutdownHookUtil
+                                        <exclude>org.apache.fluss.row.encode.RowEncoder</exclude>
+                                        <exclude>org.apache.fluss.row.encode.KeyEncoder</exclude>
+                                        <exclude>org.apache.fluss.table.*</exclude>
+                                        <exclude>org.apache.fluss.record.*</exclude>
+                                        <exclude>org.apache.fluss.kv.*</exclude>
+                                        <exclude>org.apache.fluss.io.*</exclude>
+                                        <exclude>org.apache.fluss.bucketing.BucketingFunction</exclude>
+                                        <exclude>org.apache.fluss.server.ServerBase</exclude>
+                                        <exclude>org.apache.fluss.server.utils.ShutdownHookUtil
                                         </exclude>
-                                        <exclude>com.alibaba.fluss.fs.FSData*StreamWrapper
+                                        <exclude>org.apache.fluss.fs.FSData*StreamWrapper
                                         </exclude>
                                         <exclude>
-                                            com.alibaba.fluss.server.tablet.TabletServerGateway
+                                            org.apache.fluss.server.tablet.TabletServerGateway
                                         </exclude>
-                                        <exclude>com.alibaba.fluss.client.*</exclude>
-                                        <exclude>com.alibaba.fluss.server.*</exclude>
-                                        <exclude>com.alibaba.fluss.replica.*</exclude>
-                                        <exclude>com.alibaba.fluss.api.*</exclude>
-                                        <exclude>com.alibaba.fluss.rpc.*</exclude>
-                                        <exclude>com.alibaba.fluss.metadata.*</exclude>
-                                        <exclude>com.alibaba.fluss.cluster.*</exclude>
-                                        <exclude>com.alibaba.fluss.Bucket</exclude>
-                                        <exclude>com.alibaba.fluss.remote.*</exclude>
-                                        <exclude>com.alibaba.fluss.compression.*</exclude>
+                                        <exclude>org.apache.fluss.client.*</exclude>
+                                        <exclude>org.apache.fluss.server.*</exclude>
+                                        <exclude>org.apache.fluss.replica.*</exclude>
+                                        <exclude>org.apache.fluss.api.*</exclude>
+                                        <exclude>org.apache.fluss.rpc.*</exclude>
+                                        <exclude>org.apache.fluss.metadata.*</exclude>
+                                        <exclude>org.apache.fluss.cluster.*</exclude>
+                                        <exclude>org.apache.fluss.Bucket</exclude>
+                                        <exclude>org.apache.fluss.remote.*</exclude>
+                                        <exclude>org.apache.fluss.compression.*</exclude>
                                         <exclude>
-                                            com.alibaba.fluss.security.auth.sasl.plain.PlainSaslServer.PlainSaslServerFactory
+                                            org.apache.fluss.security.auth.sasl.plain.PlainSaslServer.PlainSaslServerFactory
                                         </exclude>
-                                        <exclude>com.alibaba.fluss.security.auth.ServerAuthenticator</exclude>
+                                        <exclude>org.apache.fluss.security.auth.ServerAuthenticator</exclude>
                                         <!-- start exclude for flink-connector -->
-                                        <exclude>com.alibaba.fluss.flink.utils.*</exclude>
-                                        <exclude>com.alibaba.fluss.flink.source.*
+                                        <exclude>org.apache.fluss.flink.utils.*</exclude>
+                                        <exclude>org.apache.fluss.flink.source.*
                                         </exclude>
                                         <exclude>
-                                            com.alibaba.fluss.flink.source.FlinkTableSource.*
+                                            org.apache.fluss.flink.source.FlinkTableSource.*
                                         </exclude>
                                         <exclude>
-                                            com.alibaba.fluss.flink.source.split.HybridSnapshotLogSplitState
+                                            org.apache.fluss.flink.source.split.HybridSnapshotLogSplitState
                                         </exclude>
                                         <exclude>
-                                            com.alibaba.fluss.flink.source.split.LogSplitState
+                                            org.apache.fluss.flink.source.split.LogSplitState
                                         </exclude>
                                         <exclude>
-                                            com.alibaba.fluss.flink.source.state.SourceEnumeratorState
+                                            org.apache.fluss.flink.source.state.SourceEnumeratorState
                                         </exclude>
                                         <exclude>
-                                            com.alibaba.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent
+                                            org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent
                                         </exclude>
                                         <exclude>
-                                            com.alibaba.fluss.flink.source.emitter.FlinkRecordEmitter
+                                            org.apache.fluss.flink.source.emitter.FlinkRecordEmitter
                                         </exclude>
                                         <exclude>
-                                            com.alibaba.fluss.flink.source.reader.FlinkSourceReader
+                                            org.apache.fluss.flink.source.reader.FlinkSourceReader
                                         </exclude>
-                                        <exclude>com.alibaba.fluss.flink.sink.*</exclude>
+                                        <exclude>org.apache.fluss.flink.sink.*</exclude>
                                         <exclude>
-                                            com.alibaba.fluss.flink.metrics.*
+                                            org.apache.fluss.flink.metrics.*
                                         </exclude>
                                         <!-- end exclude for flink-connector -->
-                                        <exclude>com.alibaba.fluss.fs.hdfs.HadoopFsPlugin
+                                        <exclude>org.apache.fluss.fs.hdfs.HadoopFsPlugin
                                         </exclude>
-                                        <exclude>com.alibaba.fluss.fs.hdfs.HadoopSecurityTokenReceiver</exclude>
-                                        <exclude>com.alibaba.fluss.fs.oss.*</exclude>
-                                        <exclude>com.alibaba.fluss.fs.s3.*</exclude>
-                                        <exclude>com.alibaba.fluss.fs.obs.*</exclude>
+                                        <exclude>org.apache.fluss.fs.hdfs.HadoopSecurityTokenReceiver</exclude>
+                                        <exclude>org.apache.fluss.fs.oss.*</exclude>
+                                        <exclude>org.apache.fluss.fs.s3.*</exclude>
+                                        <exclude>org.apache.fluss.fs.obs.*</exclude>
                                         <exclude>com.amazonaws.services.s3.model.transform.XmlResponsesSaxParser*
                                         </exclude>
-                                        <exclude>com.alibaba.fluss.rocksdb.RocksIteratorWrapper
+                                        <exclude>org.apache.fluss.rocksdb.RocksIteratorWrapper
                                         </exclude>
-                                        <exclude>com.alibaba.fluss.plugin.PluginUtils</exclude>
+                                        <exclude>org.apache.fluss.plugin.PluginUtils</exclude>
                                         <!-- start exclude for metric -->
-                                        <exclude>com.alibaba.fluss.metrics.*</exclude>
+                                        <exclude>org.apache.fluss.metrics.*</exclude>
                                         <!-- end exclude for metric -->
-                                        <exclude>com.alibaba.fluss.flink.lake.*</exclude>
-                                        <exclude>com.alibaba.fluss.kafka.*</exclude>
+                                        <exclude>org.apache.fluss.flink.lake.*</exclude>
+                                        <exclude>org.apache.fluss.kafka.*</exclude>
                                         <!-- exclude for fluss-ci-tools -->
-                                        <exclude>com.alibaba.fluss.tools.ci.*</exclude>
+                                        <exclude>org.apache.fluss.tools.ci.*</exclude>
                                         <!-- end exclude for predicate -->
-                                        <exclude>com.alibaba.fluss.predicate.*</exclude>
+                                        <exclude>org.apache.fluss.predicate.*</exclude>
                                         <!-- end exclude for lake source -->
-                                        <exclude>com.alibaba.fluss.lake.source.*</exclude>
+                                        <exclude>org.apache.fluss.lake.source.*</exclude>
                                         <!-- exclude for dummy class -->
-                                        <exclude>com.alibaba.fluss.dist.DummyClass</exclude>
-                                        <exclude>com.alibaba.fluss.flink.DummyClass120</exclude>
-                                        <exclude>com.alibaba.fluss.lake.batch.ArrowRecordBatch</exclude>
-                                        <exclude>com.alibaba.fluss.lake.committer.CommittedLakeSnapshot</exclude>
-                                        <exclude>com.alibaba.fluss.lake.paimon.FlussDataTypeToPaimonDataType</exclude>
+                                        <exclude>org.apache.fluss.dist.DummyClass</exclude>
+                                        <exclude>org.apache.fluss.flink.DummyClass120</exclude>
+                                        <exclude>org.apache.fluss.lake.batch.ArrowRecordBatch</exclude>
+                                        <exclude>org.apache.fluss.lake.committer.CommittedLakeSnapshot</exclude>
+                                        <exclude>org.apache.fluss.lake.paimon.FlussDataTypeToPaimonDataType</exclude>
                                         <!-- start exclude for lake lance -->
-                                        <exclude>com.alibaba.fluss.lake.lance.*</exclude>
+                                        <exclude>org.apache.fluss.lake.lance.*</exclude>
                                         <!-- temporarily exclude iceberg -->
-                                        <exclude>com.alibaba.fluss.lake.iceberg.*</exclude>
+                                        <exclude>org.apache.fluss.lake.iceberg.*</exclude>
                                         <!-- start exclude for flink tiering service -->
-                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringSourceOptions</exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringSource.Builder</exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringSource</exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.source.TieringSourceOptions</exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.source.TieringSource.Builder</exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.source.TieringSource</exclude>
                                         <exclude>
-                                            com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator
-                                        </exclude>
-                                        <exclude>
-                                            com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper
-                                        </exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringWriterInitContext
-                                        </exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.source.TieringSourceReader</exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.source.TableBucketWriteResultEmitter
+                                            org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator
                                         </exclude>
                                         <exclude>
-                                            com.alibaba.fluss.flink.tiering.source.TableBucketWriteResultTypeInfo*
+                                            org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper
+                                        </exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.source.TieringWriterInitContext
+                                        </exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.source.TieringSourceReader</exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.source.TableBucketWriteResultEmitter
                                         </exclude>
                                         <exclude>
-                                            com.alibaba.fluss.flink.tiering.committer.TieringCommitOperatorFactory
-                                        </exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.committer.CommittableMessageTypeInfo*
+                                            org.apache.fluss.flink.tiering.source.TableBucketWriteResultTypeInfo*
                                         </exclude>
                                         <exclude>
-                                            com.alibaba.fluss.flink.tiering.LakeTieringJobBuilder
+                                            org.apache.fluss.flink.tiering.committer.TieringCommitOperatorFactory
                                         </exclude>
-                                        <exclude>com.alibaba.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.committer.CommittableMessageTypeInfo*
+                                        </exclude>
+                                        <exclude>
+                                            org.apache.fluss.flink.tiering.LakeTieringJobBuilder
+                                        </exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <!-- end exclude for flink tiering service -->
                                     </excludes>
                                 </rule>

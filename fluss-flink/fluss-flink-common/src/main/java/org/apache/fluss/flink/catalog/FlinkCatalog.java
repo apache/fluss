@@ -15,28 +15,28 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.catalog;
+package org.apache.fluss.flink.catalog;
 
-import com.alibaba.fluss.client.Connection;
-import com.alibaba.fluss.client.ConnectionFactory;
-import com.alibaba.fluss.client.admin.Admin;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.exception.InvalidTableException;
-import com.alibaba.fluss.flink.lake.LakeCatalog;
-import com.alibaba.fluss.flink.procedure.ProcedureManager;
-import com.alibaba.fluss.flink.utils.CatalogExceptionUtils;
-import com.alibaba.fluss.flink.utils.DataLakeUtils;
-import com.alibaba.fluss.flink.utils.FlinkConversions;
-import com.alibaba.fluss.metadata.DatabaseDescriptor;
-import com.alibaba.fluss.metadata.PartitionInfo;
-import com.alibaba.fluss.metadata.PartitionSpec;
-import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.utils.ExceptionUtils;
-import com.alibaba.fluss.utils.IOUtils;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.flink.lake.LakeCatalog;
+import org.apache.fluss.flink.procedure.ProcedureManager;
+import org.apache.fluss.flink.utils.CatalogExceptionUtils;
+import org.apache.fluss.flink.utils.DataLakeUtils;
+import org.apache.fluss.flink.utils.FlinkConversions;
+import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.IOUtils;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.table.catalog.AbstractCatalog;
@@ -80,15 +80,15 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 
-import static com.alibaba.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
-import static com.alibaba.fluss.flink.utils.CatalogExceptionUtils.isPartitionAlreadyExists;
-import static com.alibaba.fluss.flink.utils.CatalogExceptionUtils.isPartitionInvalid;
-import static com.alibaba.fluss.flink.utils.CatalogExceptionUtils.isPartitionNotExist;
-import static com.alibaba.fluss.flink.utils.CatalogExceptionUtils.isTableInvalid;
-import static com.alibaba.fluss.flink.utils.CatalogExceptionUtils.isTableNotExist;
-import static com.alibaba.fluss.flink.utils.CatalogExceptionUtils.isTableNotPartitioned;
-import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlussDatabase;
 import static org.apache.flink.util.Preconditions.checkArgument;
+import static org.apache.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
+import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionAlreadyExists;
+import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionInvalid;
+import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionNotExist;
+import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isTableInvalid;
+import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isTableNotExist;
+import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isTableNotPartitioned;
+import static org.apache.fluss.flink.utils.FlinkConversions.toFlussDatabase;
 
 /**
  * A Flink Catalog for fluss.

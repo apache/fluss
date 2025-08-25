@@ -15,27 +15,27 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.lance.tiering;
+package org.apache.fluss.lake.lance.tiering;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
-import com.alibaba.fluss.lake.committer.LakeCommitter;
-import com.alibaba.fluss.lake.lance.LanceConfig;
-import com.alibaba.fluss.lake.lance.utils.LanceArrowUtils;
-import com.alibaba.fluss.lake.lance.utils.LanceDatasetAdapter;
-import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
-import com.alibaba.fluss.lake.writer.LakeWriter;
-import com.alibaba.fluss.lake.writer.WriterInitContext;
-import com.alibaba.fluss.metadata.Schema;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.record.ChangeType;
-import com.alibaba.fluss.record.GenericRecord;
-import com.alibaba.fluss.record.LogRecord;
-import com.alibaba.fluss.row.BinaryString;
-import com.alibaba.fluss.row.GenericRow;
-import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.utils.types.Tuple2;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.lance.LanceConfig;
+import org.apache.fluss.lake.lance.utils.LanceArrowUtils;
+import org.apache.fluss.lake.lance.utils.LanceDatasetAdapter;
+import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
+import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.GenericRecord;
+import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.types.Tuple2;
 
 import com.lancedb.lance.Dataset;
 import com.lancedb.lance.WriteParams;
@@ -61,7 +61,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
-import static com.alibaba.fluss.flink.tiering.committer.TieringCommitOperator.toBucketOffsetsProperty;
+import static org.apache.fluss.flink.tiering.committer.TieringCommitOperator.toBucketOffsetsProperty;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The UT for tiering to Lance via {@link LanceLakeTieringFactory}. */
@@ -265,7 +265,7 @@ class LanceTieringTest {
                     }
 
                     @Override
-                    public com.alibaba.fluss.metadata.Schema schema() {
+                    public org.apache.fluss.metadata.Schema schema() {
                         return schema;
                     }
 

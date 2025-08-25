@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.messages;
+package org.apache.fluss.rpc.messages;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.record.send.WritableOutput;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.record.send.WritableOutput;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 
 /**

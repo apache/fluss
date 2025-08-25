@@ -15,25 +15,25 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.source.reader;
+package org.apache.fluss.flink.source.reader;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapter;
-import com.alibaba.fluss.flink.lake.LakeSplitStateInitializer;
-import com.alibaba.fluss.flink.source.emitter.FlinkRecordEmitter;
-import com.alibaba.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
-import com.alibaba.fluss.flink.source.event.PartitionsRemovedEvent;
-import com.alibaba.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
-import com.alibaba.fluss.flink.source.reader.fetcher.FlinkSourceFetcherManager;
-import com.alibaba.fluss.flink.source.split.HybridSnapshotLogSplitState;
-import com.alibaba.fluss.flink.source.split.LogSplitState;
-import com.alibaba.fluss.flink.source.split.SourceSplitBase;
-import com.alibaba.fluss.flink.source.split.SourceSplitState;
-import com.alibaba.fluss.lake.source.LakeSource;
-import com.alibaba.fluss.lake.source.LakeSplit;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.types.RowType;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.adapter.SingleThreadMultiplexSourceReaderBaseAdapter;
+import org.apache.fluss.flink.lake.LakeSplitStateInitializer;
+import org.apache.fluss.flink.source.emitter.FlinkRecordEmitter;
+import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
+import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
+import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
+import org.apache.fluss.flink.source.reader.fetcher.FlinkSourceFetcherManager;
+import org.apache.fluss.flink.source.split.HybridSnapshotLogSplitState;
+import org.apache.fluss.flink.source.split.LogSplitState;
+import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.flink.source.split.SourceSplitState;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.types.RowType;
 
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SourceReaderContext;

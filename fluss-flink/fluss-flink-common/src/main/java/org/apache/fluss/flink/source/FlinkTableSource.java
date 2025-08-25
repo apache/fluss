@@ -15,26 +15,26 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.source;
+package org.apache.fluss.flink.source;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.flink.FlinkConnectorOptions;
-import com.alibaba.fluss.flink.source.deserializer.RowDataDeserializationSchema;
-import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
-import com.alibaba.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
-import com.alibaba.fluss.flink.source.lookup.FlinkLookupFunction;
-import com.alibaba.fluss.flink.source.lookup.LookupNormalizer;
-import com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils;
-import com.alibaba.fluss.flink.utils.FlinkConversions;
-import com.alibaba.fluss.flink.utils.PushdownUtils;
-import com.alibaba.fluss.flink.utils.PushdownUtils.FieldEqual;
-import com.alibaba.fluss.lake.source.LakeSource;
-import com.alibaba.fluss.lake.source.LakeSplit;
-import com.alibaba.fluss.metadata.MergeEngineType;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.predicate.Predicate;
-import com.alibaba.fluss.predicate.PredicateBuilder;
-import com.alibaba.fluss.types.RowType;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.FlinkConnectorOptions;
+import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
+import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.fluss.flink.source.lookup.FlinkAsyncLookupFunction;
+import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
+import org.apache.fluss.flink.source.lookup.LookupNormalizer;
+import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
+import org.apache.fluss.flink.utils.FlinkConversions;
+import org.apache.fluss.flink.utils.PushdownUtils;
+import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.metadata.MergeEngineType;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.predicate.PredicateBuilder;
+import org.apache.fluss.types.RowType;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
@@ -82,11 +82,11 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.flink.utils.LakeSourceUtils.createLakeSource;
-import static com.alibaba.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
-import static com.alibaba.fluss.flink.utils.PushdownUtils.ValueConversion.FLUSS_INTERNAL_VALUE;
-import static com.alibaba.fluss.flink.utils.PushdownUtils.extractFieldEquals;
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
+import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
+import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLUSS_INTERNAL_VALUE;
+import static org.apache.fluss.flink.utils.PushdownUtils.extractFieldEquals;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Flink table source to scan Fluss data. */
 public class FlinkTableSource

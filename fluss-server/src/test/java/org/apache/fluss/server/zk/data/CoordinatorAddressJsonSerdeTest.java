@@ -15,20 +15,20 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.zk.data;
+package org.apache.fluss.server.zk.data;
 
-import com.alibaba.fluss.cluster.Endpoint;
-import com.alibaba.fluss.utils.json.JsonSerdeTestBase;
-
+import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.fluss.utils.json.JsonSerdeTestBase;
+
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
-/** Test for {@link com.alibaba.fluss.server.zk.data.CoordinatorAddressJsonSerde}. */
+/** Test for {@link org.apache.fluss.server.zk.data.CoordinatorAddressJsonSerde}. */
 public class CoordinatorAddressJsonSerdeTest extends JsonSerdeTestBase<CoordinatorAddress> {
 
     CoordinatorAddressJsonSerdeTest() {

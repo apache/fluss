@@ -15,11 +15,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.protogen.benchmark;
+package org.apache.fluss.protogen.benchmark;
 
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufUtil;
+
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Measurement;

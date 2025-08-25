@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.zk.data;
+package org.apache.fluss.server.zk.data;
 
-import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TableDescriptor.TableDistribution;
-import com.alibaba.fluss.record.TestData;
-import com.alibaba.fluss.utils.json.JsonSerdeTestBase;
-
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableDescriptor.TableDistribution;
+import org.apache.fluss.record.TestData;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Maps;
+import org.apache.fluss.utils.json.JsonSerdeTestBase;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -30,7 +30,7 @@ import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Test for {@link com.alibaba.fluss.server.zk.data.TableRegistrationJsonSerde}. */
+/** Test for {@link org.apache.fluss.server.zk.data.TableRegistrationJsonSerde}. */
 class TableRegistrationJsonSerdeTest extends JsonSerdeTestBase<TableRegistration> {
     TableRegistrationJsonSerdeTest() {
         super(TableRegistrationJsonSerde.INSTANCE);

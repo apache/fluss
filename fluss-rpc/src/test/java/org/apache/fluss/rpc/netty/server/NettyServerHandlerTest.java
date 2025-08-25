@@ -15,30 +15,30 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.netty.server;
+package org.apache.fluss.rpc.netty.server;
 
-import com.alibaba.fluss.cluster.ServerType;
-import com.alibaba.fluss.metrics.groups.MetricGroup;
-import com.alibaba.fluss.metrics.util.NOPMetricsGroup;
-import com.alibaba.fluss.rpc.messages.ApiVersionsRequest;
-import com.alibaba.fluss.rpc.messages.ApiVersionsResponse;
-import com.alibaba.fluss.rpc.messages.LookupRequest;
-import com.alibaba.fluss.rpc.messages.LookupResponse;
-import com.alibaba.fluss.rpc.messages.PbApiVersion;
-import com.alibaba.fluss.rpc.messages.PbLookupReqForBucket;
-import com.alibaba.fluss.rpc.messages.PbLookupRespForBucket;
-import com.alibaba.fluss.rpc.messages.PbValue;
-import com.alibaba.fluss.rpc.protocol.ApiKeys;
-import com.alibaba.fluss.rpc.protocol.ApiManager;
-import com.alibaba.fluss.rpc.protocol.MessageCodec;
-import com.alibaba.fluss.security.auth.PlainTextAuthenticationPlugin;
-
+import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.metrics.util.NOPMetricsGroup;
+import org.apache.fluss.rpc.messages.ApiVersionsRequest;
+import org.apache.fluss.rpc.messages.ApiVersionsResponse;
+import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.LookupResponse;
+import org.apache.fluss.rpc.messages.PbApiVersion;
+import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
+import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
+import org.apache.fluss.rpc.messages.PbValue;
+import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.rpc.protocol.ApiManager;
+import org.apache.fluss.rpc.protocol.MessageCodec;
+import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelId;
 import org.apache.fluss.shaded.netty4.io.netty.util.concurrent.DefaultEventExecutor;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
@@ -49,7 +49,7 @@ import java.util.Deque;
 import java.util.HashSet;
 import java.util.Set;
 
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
@@ -78,7 +78,7 @@ final class NettyServerHandlerTest {
     }
 
     @Test
-    @Disabled("TODO: add back in https://github.com/alibaba/fluss/issues/771")
+    @Disabled("TODO: add back in https://github.com/apache/fluss/issues/771")
     void testResponseReturnInOrder() throws Exception {
         // first write 10 requests to serverHandler.
         for (int i = 0; i < 10; i++) {
@@ -149,7 +149,7 @@ final class NettyServerHandlerTest {
     }
 
     @Test
-    @Disabled("TODO: add back in https://github.com/alibaba/fluss/issues/771")
+    @Disabled("TODO: add back in https://github.com/apache/fluss/issues/771")
     void testDifferentResponseTypeReturnInSeparateOrder() throws Exception {
         // 1. first write 5 requests with api as ApiKeys.API_VERSIONS to serverHandler.
         for (int i = 0; i < 5; i++) {

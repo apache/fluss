@@ -15,16 +15,16 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.protocol;
+package org.apache.fluss.rpc.protocol;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.cluster.ServerType;
-import com.alibaba.fluss.rpc.RpcGateway;
-import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
-import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
-import com.alibaba.fluss.rpc.messages.ApiMessage;
-
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.rpc.RpcGateway;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableList;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

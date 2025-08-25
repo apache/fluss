@@ -15,29 +15,28 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.record;
+package org.apache.fluss.record;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.metadata.LogFormat;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.InternalRow.FieldGetter;
-import com.alibaba.fluss.types.DataType;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.utils.ArrowUtils;
-import com.alibaba.fluss.utils.Projection;
-
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.InternalRow.FieldGetter;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.ArrowUtils;
+import org.apache.fluss.utils.Projection;
 
 import javax.annotation.Nullable;
 
 import java.util.List;
 import java.util.stream.IntStream;
 
-import static com.alibaba.fluss.utils.Preconditions.checkArgument;
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** A simple implementation for {@link LogRecordBatch.ReadContext}. */
 public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoCloseable {

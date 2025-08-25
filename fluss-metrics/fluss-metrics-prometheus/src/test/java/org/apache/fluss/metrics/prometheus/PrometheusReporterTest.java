@@ -15,23 +15,23 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metrics.prometheus;
+package org.apache.fluss.metrics.prometheus;
 
-import com.alibaba.fluss.metrics.Counter;
-import com.alibaba.fluss.metrics.Gauge;
-import com.alibaba.fluss.metrics.Histogram;
-import com.alibaba.fluss.metrics.Meter;
-import com.alibaba.fluss.metrics.Metric;
-import com.alibaba.fluss.metrics.SimpleCounter;
-import com.alibaba.fluss.metrics.groups.MetricGroup;
-import com.alibaba.fluss.metrics.util.TestHistogram;
-import com.alibaba.fluss.metrics.util.TestMeter;
-import com.alibaba.fluss.utils.NetUtils;
+import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.Histogram;
+import org.apache.fluss.metrics.Meter;
+import org.apache.fluss.metrics.Metric;
+import org.apache.fluss.metrics.SimpleCounter;
+import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.metrics.util.TestHistogram;
+import org.apache.fluss.metrics.util.TestMeter;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
+import org.apache.fluss.utils.NetUtils;
 
 import com.mashape.unirest.http.HttpResponse;
 import com.mashape.unirest.http.Unirest;
 import com.mashape.unirest.http.exceptions.UnirestException;
-import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;

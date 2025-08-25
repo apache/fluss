@@ -15,18 +15,18 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.paimon.tiering;
+package org.apache.fluss.lake.paimon.tiering;
 
-import com.alibaba.fluss.lake.paimon.source.FlussRowAsPaimonRow;
-import com.alibaba.fluss.record.LogRecord;
+import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
+import org.apache.fluss.record.LogRecord;
 
 import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
 
-import static com.alibaba.fluss.lake.paimon.utils.PaimonConversions.toRowKind;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toRowKind;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** To wrap Fluss {@link LogRecord} as paimon {@link InternalRow}. */
 public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {

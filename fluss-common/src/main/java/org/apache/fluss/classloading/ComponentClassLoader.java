@@ -15,12 +15,11 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.classloading;
+package org.apache.fluss.classloading;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.utils.function.FunctionWithException;
-
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators;
+import org.apache.fluss.utils.function.FunctionWithException;
 
 import java.io.IOException;
 import java.io.InputStream;

@@ -35,7 +35,9 @@ public class FlussAssertions {
 
     private FlussAssertions() {}
 
-    /** @see #chainOfCauses(Throwable) */
+    /**
+     * @see #chainOfCauses(Throwable)
+     */
     @SuppressWarnings({"rawtypes", "unused"})
     public static final InstanceOfAssertFactory<Stream, ListAssert<Throwable>> STREAM_THROWABLE =
             new InstanceOfAssertFactory<>(Stream.class, Assertions::<Throwable>assertThat);

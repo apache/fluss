@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.compression;
+package org.apache.fluss.compression;
 
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.ArrowBuf;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
@@ -34,6 +34,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowFi
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Field;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;

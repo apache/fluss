@@ -15,13 +15,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.row.arrow.writers;
+package org.apache.fluss.row.arrow.writers;
 
-import com.alibaba.fluss.annotation.Internal;
-
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
 
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Base class for arrow field writer which is used to convert a field to an Arrow format.

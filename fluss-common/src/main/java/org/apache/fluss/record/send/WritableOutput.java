@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.record.send;
+package org.apache.fluss.record.send;
 
-import com.alibaba.fluss.record.bytesview.BytesView;
-import com.alibaba.fluss.rpc.messages.ApiMessage;
-
+import org.apache.fluss.record.bytesview.BytesView;
+import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 
 /** A writable output for writing {@link ApiMessage}. */

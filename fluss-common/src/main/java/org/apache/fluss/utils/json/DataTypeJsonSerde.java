@@ -15,31 +15,30 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.utils.json;
+package org.apache.fluss.utils.json;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.metadata.TableException;
-import com.alibaba.fluss.types.ArrayType;
-import com.alibaba.fluss.types.DataField;
-import com.alibaba.fluss.types.DataType;
-import com.alibaba.fluss.types.DataTypeRoot;
-import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.types.DecimalType;
-import com.alibaba.fluss.types.LocalZonedTimestampType;
-import com.alibaba.fluss.types.MapType;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.types.TimeType;
-import com.alibaba.fluss.types.TimestampType;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.metadata.TableException;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ArrayNode;
+import org.apache.fluss.types.ArrayType;
+import org.apache.fluss.types.DataField;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.DecimalType;
+import org.apache.fluss.types.LocalZonedTimestampType;
+import org.apache.fluss.types.MapType;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.TimeType;
+import org.apache.fluss.types.TimestampType;
 
 import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import static com.alibaba.fluss.types.DataTypeChecks.getLength;
+import static org.apache.fluss.types.DataTypeChecks.getLength;
 
 /** Json serializer and deserializer for {@link DataType}. */
 @Internal

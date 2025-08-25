@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.security.auth;
+package org.apache.fluss.security.auth;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.metadata.ValidationException;
-import com.alibaba.fluss.security.auth.TestIdentifierAuthenticationPlugin.TestIdentifierClientAuthenticator;
-import com.alibaba.fluss.security.auth.TestIdentifierAuthenticationPlugin.TestIdentifierServerAuthenticator;
-import com.alibaba.fluss.utils.ParentResourceBlockingClassLoader;
-import com.alibaba.fluss.utils.TemporaryClassLoaderContext;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.ValidationException;
+import org.apache.fluss.security.auth.TestIdentifierAuthenticationPlugin.TestIdentifierClientAuthenticator;
+import org.apache.fluss.security.auth.TestIdentifierAuthenticationPlugin.TestIdentifierServerAuthenticator;
+import org.apache.fluss.utils.ParentResourceBlockingClassLoader;
+import org.apache.fluss.utils.TemporaryClassLoaderContext;
 
 import org.junit.jupiter.api.Test;
 
@@ -42,8 +42,8 @@ public class AuthenticationFactoryTest {
         String errorMsg =
                 "Multiple plugins for the same protocol 'conflicting' are found in the classpath.\n\n"
                         + "Available plugins are:\n\n"
-                        + "com.alibaba.fluss.security.auth.TestConflictingAuthenticationPlugin1\n"
-                        + "com.alibaba.fluss.security.auth.TestConflictingAuthenticationPlugin2";
+                        + "org.apache.fluss.security.auth.TestConflictingAuthenticationPlugin1\n"
+                        + "org.apache.fluss.security.auth.TestConflictingAuthenticationPlugin2";
         assertThatThrownBy(
                         () -> AuthenticationFactory.loadClientAuthenticatorSupplier(configuration))
                 .isExactlyInstanceOf(ValidationException.class)
@@ -80,7 +80,8 @@ public class AuthenticationFactoryTest {
                 .isInstanceOf(TestIdentifierClientAuthenticator.class);
         assertThat(
                         AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration)
-                                .values().stream()
+                                .values()
+                                .stream()
                                 .findAny()
                                 .get()
                                 .get())
@@ -93,7 +94,8 @@ public class AuthenticationFactoryTest {
                 .isInstanceOf(TestIdentifierClientAuthenticator.class);
         assertThat(
                         AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration)
-                                .values().stream()
+                                .values()
+                                .stream()
                                 .findAny()
                                 .get()
                                 .get())

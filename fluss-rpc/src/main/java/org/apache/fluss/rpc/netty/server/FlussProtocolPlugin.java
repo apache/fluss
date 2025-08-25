@@ -15,18 +15,17 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.netty.server;
+package org.apache.fluss.rpc.netty.server;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.cluster.ServerType;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.rpc.RpcGatewayService;
-import com.alibaba.fluss.rpc.protocol.ApiManager;
-import com.alibaba.fluss.rpc.protocol.NetworkProtocolPlugin;
-import com.alibaba.fluss.security.auth.AuthenticationFactory;
-import com.alibaba.fluss.security.auth.PlainTextAuthenticationPlugin;
-
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.rpc.RpcGatewayService;
+import org.apache.fluss.rpc.protocol.ApiManager;
+import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
+import org.apache.fluss.security.auth.AuthenticationFactory;
+import org.apache.fluss.security.auth.PlainTextAuthenticationPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 
 import java.util.List;

@@ -15,13 +15,13 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.source.reader.fetcher;
+package org.apache.fluss.flink.source.reader.fetcher;
 
-import com.alibaba.fluss.flink.adapter.SingleThreadFetcherManagerAdapter;
-import com.alibaba.fluss.flink.source.reader.FlinkSourceSplitReader;
-import com.alibaba.fluss.flink.source.reader.RecordAndPos;
-import com.alibaba.fluss.flink.source.split.SourceSplitBase;
-import com.alibaba.fluss.metadata.TableBucket;
+import org.apache.fluss.flink.adapter.SingleThreadFetcherManagerAdapter;
+import org.apache.fluss.flink.source.reader.FlinkSourceSplitReader;
+import org.apache.fluss.flink.source.reader.RecordAndPos;
+import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.metadata.TableBucket;
 
 import org.apache.flink.annotation.Internal;
 import org.apache.flink.configuration.Configuration;

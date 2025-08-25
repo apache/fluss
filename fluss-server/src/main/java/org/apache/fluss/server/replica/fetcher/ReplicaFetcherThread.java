@@ -15,36 +15,36 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.replica.fetcher;
+package org.apache.fluss.server.replica.fetcher;
 
-import com.alibaba.fluss.exception.CorruptRecordException;
-import com.alibaba.fluss.exception.DuplicateSequenceException;
-import com.alibaba.fluss.exception.InvalidOffsetException;
-import com.alibaba.fluss.exception.InvalidRecordException;
-import com.alibaba.fluss.exception.OutOfOrderSequenceException;
-import com.alibaba.fluss.exception.RemoteStorageException;
-import com.alibaba.fluss.exception.StorageException;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.remote.RemoteLogFetchInfo;
-import com.alibaba.fluss.remote.RemoteLogSegment;
-import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
-import com.alibaba.fluss.rpc.messages.FetchLogRequest;
-import com.alibaba.fluss.server.log.LogAppendInfo;
-import com.alibaba.fluss.server.log.LogTablet;
-import com.alibaba.fluss.server.log.remote.RemoteLogManager;
-import com.alibaba.fluss.server.log.remote.RemoteLogStorage.IndexType;
-import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
-import com.alibaba.fluss.server.replica.Replica;
-import com.alibaba.fluss.server.replica.ReplicaManager;
-import com.alibaba.fluss.server.replica.fetcher.LeaderEndpoint.FetchData;
-import com.alibaba.fluss.utils.FileUtils;
-import com.alibaba.fluss.utils.FlussPaths;
-import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
-import com.alibaba.fluss.utils.log.FairBucketStatusMap;
-
+import org.apache.fluss.exception.CorruptRecordException;
+import org.apache.fluss.exception.DuplicateSequenceException;
+import org.apache.fluss.exception.InvalidOffsetException;
+import org.apache.fluss.exception.InvalidRecordException;
+import org.apache.fluss.exception.OutOfOrderSequenceException;
+import org.apache.fluss.exception.RemoteStorageException;
+import org.apache.fluss.exception.StorageException;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.remote.RemoteLogFetchInfo;
+import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
+import org.apache.fluss.rpc.messages.FetchLogRequest;
+import org.apache.fluss.server.log.LogAppendInfo;
+import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.log.remote.RemoteLogManager;
+import org.apache.fluss.server.log.remote.RemoteLogStorage.IndexType;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
+import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.replica.ReplicaManager;
+import org.apache.fluss.server.replica.fetcher.LeaderEndpoint.FetchData;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.utils.FileUtils;
+import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.concurrent.ShutdownableThread;
+import org.apache.fluss.utils.log.FairBucketStatusMap;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -65,8 +65,8 @@ import java.util.concurrent.locks.Condition;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
-import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -338,7 +338,7 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                     || e instanceof OutOfOrderSequenceException
                     || e instanceof InvalidOffsetException) {
                 // TODO this part of logic need to be removed after we introduce leader epoch cache.
-                // Trace by https://github.com/alibaba/fluss/issues/673
+                // Trace by https://github.com/apache/fluss/issues/673
                 LOG.error(
                         "Founding recoverable error while processing data for bucket {} at offset {}, try to "
                                 + "truncate to LeaderEndOffsetSnapshot",
@@ -552,7 +552,7 @@ final class ReplicaFetcherThread extends ShutdownableThread {
         // https://cwiki.apache.org/confluence/display/KAFKA/KIP-101+-+Alter+Replication+Protocol+to+use+Leader+Epoch+rather+than+High+Watermark+for+Truncation
         // for more details. However, this is just a temporary solution, if we want to have a strong
         // consistency guarantee, we should do as KIP-101 do, trace by:
-        // https://github.com/alibaba/fluss/issues/673
+        // https://github.com/apache/fluss/issues/673
         logTablet.updateHighWatermark(logTablet.localLogEndOffset());
         LOG.trace(
                 "Follower received high watermark {} from the leader for replica {}",
@@ -572,7 +572,7 @@ final class ReplicaFetcherThread extends ShutdownableThread {
         RemoteLogManager rlm = replicaManager.getRemoteLogManager();
 
         // TODO after introduce leader epoch cache, we need to rebuild the local leader epoch
-        // cache. Trace by https://github.com/alibaba/fluss/issues/673
+        // cache. Trace by https://github.com/apache/fluss/issues/673
 
         // update next fetch offset and writer id snapshot in local.
         RemoteLogSegment remoteLogSegmentWithMaxStartOffset =

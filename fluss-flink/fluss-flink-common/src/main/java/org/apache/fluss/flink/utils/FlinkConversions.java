@@ -15,25 +15,25 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.utils;
+package org.apache.fluss.flink.utils;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.config.ConfigOption;
-import com.alibaba.fluss.config.FlussConfigUtils;
-import com.alibaba.fluss.config.MemorySize;
-import com.alibaba.fluss.config.Password;
-import com.alibaba.fluss.flink.FlinkConnectorOptions;
-import com.alibaba.fluss.flink.catalog.FlinkCatalogFactory;
-import com.alibaba.fluss.metadata.DataLakeFormat;
-import com.alibaba.fluss.metadata.DatabaseDescriptor;
-import com.alibaba.fluss.metadata.Schema;
-import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.record.ChangeType;
-import com.alibaba.fluss.types.DataType;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.utils.StringUtils;
-import com.alibaba.fluss.utils.TimeUtils;
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.ConfigOption;
+import org.apache.fluss.config.FlussConfigUtils;
+import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.config.Password;
+import org.apache.fluss.flink.FlinkConnectorOptions;
+import org.apache.fluss.flink.catalog.FlinkCatalogFactory;
+import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.StringUtils;
+import org.apache.fluss.utils.TimeUtils;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.catalog.CatalogDatabase;
@@ -55,10 +55,10 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
-import static com.alibaba.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
-import static com.alibaba.fluss.flink.adapter.CatalogTableAdapter.toCatalogTable;
 import static org.apache.flink.table.factories.FactoryUtil.CONNECTOR;
+import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
+import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static org.apache.fluss.flink.adapter.CatalogTableAdapter.toCatalogTable;
 
 /** Utils for conversion between Flink and Fluss. */
 public class FlinkConversions {

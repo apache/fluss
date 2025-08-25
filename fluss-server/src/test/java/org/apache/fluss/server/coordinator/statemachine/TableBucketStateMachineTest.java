@@ -15,35 +15,35 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.coordinator.statemachine;
+package org.apache.fluss.server.coordinator.statemachine;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.rpc.RpcClient;
-import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
-import com.alibaba.fluss.server.coordinator.AutoPartitionManager;
-import com.alibaba.fluss.server.coordinator.CoordinatorChannelManager;
-import com.alibaba.fluss.server.coordinator.CoordinatorContext;
-import com.alibaba.fluss.server.coordinator.CoordinatorEventProcessor;
-import com.alibaba.fluss.server.coordinator.CoordinatorRequestBatch;
-import com.alibaba.fluss.server.coordinator.CoordinatorTestUtils;
-import com.alibaba.fluss.server.coordinator.LakeTableTieringManager;
-import com.alibaba.fluss.server.coordinator.MetadataManager;
-import com.alibaba.fluss.server.coordinator.TestCoordinatorChannelManager;
-import com.alibaba.fluss.server.coordinator.event.CoordinatorEventManager;
-import com.alibaba.fluss.server.metadata.CoordinatorMetadataCache;
-import com.alibaba.fluss.server.metrics.group.TestingMetricGroups;
-import com.alibaba.fluss.server.zk.NOPErrorHandler;
-import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.server.zk.ZooKeeperExtension;
-import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
-import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
-import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
-
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.server.coordinator.AutoPartitionManager;
+import org.apache.fluss.server.coordinator.CoordinatorChannelManager;
+import org.apache.fluss.server.coordinator.CoordinatorContext;
+import org.apache.fluss.server.coordinator.CoordinatorEventProcessor;
+import org.apache.fluss.server.coordinator.CoordinatorRequestBatch;
+import org.apache.fluss.server.coordinator.CoordinatorTestUtils;
+import org.apache.fluss.server.coordinator.LakeTableTieringManager;
+import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.coordinator.TestCoordinatorChannelManager;
+import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
+import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
+import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Sets;
+import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
+
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -56,12 +56,12 @@ import java.util.Collections;
 import java.util.Optional;
 import java.util.concurrent.Executors;
 
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.NewBucket;
-import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.NonExistentBucket;
-import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
-import static com.alibaba.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.server.coordinator.statemachine.BucketState.NewBucket;
+import static org.apache.fluss.server.coordinator.statemachine.BucketState.NonExistentBucket;
+import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
+import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link TableBucketStateMachine}. */

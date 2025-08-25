@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.kafka;
+package org.apache.fluss.kafka;
 
-import com.alibaba.fluss.rpc.netty.NettyChannelInitializer;
-import com.alibaba.fluss.rpc.netty.server.RequestChannel;
-
+import org.apache.fluss.rpc.netty.NettyChannelInitializer;
+import org.apache.fluss.rpc.netty.server.RequestChannel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
 import org.apache.fluss.shaded.netty4.io.netty.handler.codec.LengthFieldPrepender;

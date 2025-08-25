@@ -17,7 +17,7 @@
 
 package org.apache.fluss.security.auth.sasl.jaas;
 
-import com.alibaba.fluss.utils.TemporaryClassLoaderContext;
+import org.apache.fluss.utils.TemporaryClassLoaderContext;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

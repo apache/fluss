@@ -15,41 +15,41 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.table.scanner.log;
+package org.apache.fluss.client.table.scanner.log;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.client.metadata.MetadataUpdater;
-import com.alibaba.fluss.client.metrics.ScannerMetricGroup;
-import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
-import com.alibaba.fluss.client.table.scanner.ScanRecord;
-import com.alibaba.fluss.cluster.BucketLocation;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.InvalidMetadataException;
-import com.alibaba.fluss.exception.LeaderNotAvailableException;
-import com.alibaba.fluss.fs.FsPath;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePartition;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.record.LogRecordReadContext;
-import com.alibaba.fluss.record.LogRecords;
-import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.remote.RemoteLogFetchInfo;
-import com.alibaba.fluss.remote.RemoteLogSegment;
-import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
-import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
-import com.alibaba.fluss.rpc.messages.FetchLogRequest;
-import com.alibaba.fluss.rpc.messages.FetchLogResponse;
-import com.alibaba.fluss.rpc.messages.PbFetchLogReqForBucket;
-import com.alibaba.fluss.rpc.messages.PbFetchLogReqForTable;
-import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
-import com.alibaba.fluss.rpc.messages.PbFetchLogRespForTable;
-import com.alibaba.fluss.rpc.protocol.Errors;
-import com.alibaba.fluss.utils.IOUtils;
-import com.alibaba.fluss.utils.Projection;
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.metrics.ScannerMetricGroup;
+import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
+import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.cluster.BucketLocation;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidMetadataException;
+import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.LogRecordReadContext;
+import org.apache.fluss.record.LogRecords;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.remote.RemoteLogFetchInfo;
+import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.FetchLogRequest;
+import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
+import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
+import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
+import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
+import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.utils.IOUtils;
+import org.apache.fluss.utils.Projection;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -68,8 +68,8 @@ import java.util.Map;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.rpc.util.CommonRpcMessageUtils.getFetchLogResultForBucket;
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.getFetchLogResultForBucket;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for

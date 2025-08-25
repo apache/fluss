@@ -36,7 +36,9 @@ import java.util.concurrent.CompletableFuture;
 /** Utils of netty. */
 public class NettyUtils {
 
-    /** @return an EventLoopGroup suitable for the current platform */
+    /**
+     * @return an EventLoopGroup suitable for the current platform
+     */
     public static EventLoopGroup newEventLoopGroup(int nThreads, String threadNamePrefix) {
         if (Epoll.isAvailable()) {
             // Regular Epoll based event loop

@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.zk.data;
-
-import com.alibaba.fluss.utils.json.JsonSerdeTestBase;
+package org.apache.fluss.server.zk.data;
 
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Maps;
+import org.apache.fluss.utils.json.JsonSerdeTestBase;
 
 import java.util.Collections;
 

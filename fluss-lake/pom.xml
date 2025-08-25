@@ -65,7 +65,7 @@
                 <version>${flink.version}</version>
             </dependency>
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-flink-${flink.major.version}</artifactId>
                 <version>${project.version}</version>
             </dependency>

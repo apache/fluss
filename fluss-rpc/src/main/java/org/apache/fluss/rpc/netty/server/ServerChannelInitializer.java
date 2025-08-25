@@ -15,16 +15,16 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.netty.server;
+package org.apache.fluss.rpc.netty.server;
 
-import com.alibaba.fluss.rpc.netty.NettyChannelInitializer;
-import com.alibaba.fluss.rpc.protocol.ApiManager;
-import com.alibaba.fluss.security.auth.ServerAuthenticator;
-import com.alibaba.fluss.utils.MathUtils;
-
+import org.apache.fluss.rpc.netty.NettyChannelInitializer;
+import org.apache.fluss.rpc.protocol.ApiManager;
+import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInitializer;
 import org.apache.fluss.shaded.netty4.io.netty.channel.socket.SocketChannel;
+import org.apache.fluss.utils.MathUtils;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

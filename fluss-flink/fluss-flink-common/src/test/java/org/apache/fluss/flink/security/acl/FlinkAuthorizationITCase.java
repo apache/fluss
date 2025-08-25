@@ -15,25 +15,25 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.security.acl;
+package org.apache.fluss.flink.security.acl;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.config.MemorySize;
-import com.alibaba.fluss.exception.AuthorizationException;
-import com.alibaba.fluss.flink.catalog.FlinkCatalogOptions;
-import com.alibaba.fluss.metadata.DataLakeFormat;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.security.acl.AccessControlEntry;
-import com.alibaba.fluss.security.acl.AclBinding;
-import com.alibaba.fluss.security.acl.FlussPrincipal;
-import com.alibaba.fluss.security.acl.OperationType;
-import com.alibaba.fluss.security.acl.PermissionType;
-import com.alibaba.fluss.security.acl.Resource;
-import com.alibaba.fluss.security.auth.sasl.jaas.LoginManager;
-import com.alibaba.fluss.server.testutils.FlussClusterExtension;
-import com.alibaba.fluss.utils.ParentResourceBlockingClassLoader;
-import com.alibaba.fluss.utils.TemporaryClassLoaderContext;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.flink.catalog.FlinkCatalogOptions;
+import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.security.acl.AccessControlEntry;
+import org.apache.fluss.security.acl.AclBinding;
+import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.security.acl.OperationType;
+import org.apache.fluss.security.acl.PermissionType;
+import org.apache.fluss.security.acl.Resource;
+import org.apache.fluss.security.auth.sasl.jaas.LoginManager;
+import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.utils.ParentResourceBlockingClassLoader;
+import org.apache.fluss.utils.TemporaryClassLoaderContext;
 
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.flink.table.api.EnvironmentSettings;
@@ -55,13 +55,13 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.concurrent.ExecutionException;
 
-import static com.alibaba.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertQueryResultExactOrder;
-import static com.alibaba.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
-import static com.alibaba.fluss.security.acl.OperationType.CREATE;
-import static com.alibaba.fluss.security.acl.OperationType.DESCRIBE;
-import static com.alibaba.fluss.security.acl.OperationType.DROP;
-import static com.alibaba.fluss.security.acl.OperationType.READ;
-import static com.alibaba.fluss.security.acl.OperationType.WRITE;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertQueryResultExactOrder;
+import static org.apache.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
+import static org.apache.fluss.security.acl.OperationType.CREATE;
+import static org.apache.fluss.security.acl.OperationType.DESCRIBE;
+import static org.apache.fluss.security.acl.OperationType.DROP;
+import static org.apache.fluss.security.acl.OperationType.READ;
+import static org.apache.fluss.security.acl.OperationType.WRITE;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -470,7 +470,7 @@ abstract class FlinkAuthorizationITCase extends AbstractTestBase {
         conf.setString("security.sasl.enabled.mechanisms", "plain");
         conf.setString(
                 "security.sasl.plain.jaas.config",
-                "com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required "
+                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required "
                         + "    user_root=\"password\" "
                         + "    user_guest=\"password2\";");
         conf.set(ConfigOptions.SUPER_USERS, "User:root");

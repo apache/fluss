@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.utils;
+package org.apache.fluss.utils;
 
-import com.alibaba.fluss.row.TimestampLtz;
-import com.alibaba.fluss.row.TimestampNtz;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
 
 import java.time.DateTimeException;
 import java.time.LocalDate;

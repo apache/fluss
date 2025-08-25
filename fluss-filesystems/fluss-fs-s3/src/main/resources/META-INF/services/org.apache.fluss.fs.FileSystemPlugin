@@ -14,5 +14,5 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-com.alibaba.fluss.fs.s3.S3AFileSystemPlugin
-com.alibaba.fluss.fs.s3.S3FileSystemPlugin
+org.apache.fluss.fs.s3.S3AFileSystemPlugin
+org.apache.fluss.fs.s3.S3FileSystemPlugin

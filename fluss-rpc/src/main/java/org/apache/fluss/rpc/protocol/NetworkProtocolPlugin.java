@@ -15,14 +15,13 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.protocol;
+package org.apache.fluss.rpc.protocol;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.plugin.Plugin;
-import com.alibaba.fluss.rpc.RpcGatewayService;
-import com.alibaba.fluss.rpc.netty.server.RequestChannel;
-import com.alibaba.fluss.rpc.netty.server.RequestHandler;
-
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.plugin.Plugin;
+import org.apache.fluss.rpc.RpcGatewayService;
+import org.apache.fluss.rpc.netty.server.RequestChannel;
+import org.apache.fluss.rpc.netty.server.RequestHandler;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 
 import java.util.List;

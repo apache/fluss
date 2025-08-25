@@ -147,7 +147,9 @@ public final class Cluster {
         return coordinatorServer;
     }
 
-    /** @return The known set of alive tablet servers. */
+    /**
+     * @return The known set of alive tablet servers.
+     */
     public Map<Integer, ServerNode> getAliveTabletServers() {
         return aliveTabletServersById;
     }

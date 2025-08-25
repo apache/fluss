@@ -15,20 +15,20 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.utils;
+package org.apache.fluss.flink.utils;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.lake.lakestorage.LakeStorage;
-import com.alibaba.fluss.lake.lakestorage.LakeStoragePlugin;
-import com.alibaba.fluss.lake.lakestorage.LakeStoragePluginSetUp;
-import com.alibaba.fluss.lake.source.LakeSource;
-import com.alibaba.fluss.lake.source.LakeSplit;
-import com.alibaba.fluss.metadata.TablePath;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.lakestorage.LakeStorage;
+import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
+import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.metadata.TablePath;
 
 import java.util.Map;
 
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Utils for create lake source. */
 public class LakeSourceUtils {

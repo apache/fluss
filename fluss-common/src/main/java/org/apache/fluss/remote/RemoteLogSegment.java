@@ -93,12 +93,16 @@ public class RemoteLogSegment {
         return remoteLogSegmentId;
     }
 
-    /** @return Remote log start offset of this segment (inclusive). */
+    /**
+     * @return Remote log start offset of this segment (inclusive).
+     */
     public long remoteLogStartOffset() {
         return remoteLogStartOffset;
     }
 
-    /** @return Remote log end offset of this segment (inclusive). */
+    /**
+     * @return Remote log end offset of this segment (inclusive).
+     */
     public long remoteLogEndOffset() {
         return remoteLogEndOffset;
     }

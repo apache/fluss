@@ -15,22 +15,22 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.netty.server;
+package org.apache.fluss.rpc.netty.server;
 
-import com.alibaba.fluss.rpc.messages.ApiMessage;
-import com.alibaba.fluss.rpc.protocol.ApiMethod;
-import com.alibaba.fluss.rpc.protocol.RequestType;
-import com.alibaba.fluss.security.acl.FlussPrincipal;
-
+import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.protocol.ApiMethod;
+import org.apache.fluss.rpc.protocol.RequestType;
+import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.net.InetAddress;
 import java.util.concurrent.CompletableFuture;
 
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Represents a request received from Fluss protocol channel. */
 public final class FlussRequest implements RpcRequest {

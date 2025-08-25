@@ -15,17 +15,17 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.protogen.tests;
+package org.apache.fluss.protogen.tests;
 
-import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.record.bytesview.MultiBytesView;
-import com.alibaba.fluss.record.send.Send;
-import com.alibaba.fluss.record.send.SendWritableOutput;
+import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.record.bytesview.MultiBytesView;
+import org.apache.fluss.record.send.Send;
+import org.apache.fluss.record.send.SendWritableOutput;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 
 import com.google.protobuf.ByteString;
 import com.google.protobuf.CodedOutputStream;
-import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -36,7 +36,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Arrays;
 
-import static com.alibaba.fluss.testutils.ByteBufChannel.toByteArray;
+import static org.apache.fluss.testutils.ByteBufChannel.toByteArray;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link Bytes}. */
@@ -62,8 +62,7 @@ public class BytesTest {
 
         // test binary equals to protobuf
         Bytes.B pbb =
-                Bytes.B
-                        .newBuilder()
+                Bytes.B.newBuilder()
                         .setPayload(ByteString.copyFrom(new byte[] {1, 2, 3, 4, 5}))
                         .build();
 
@@ -255,8 +254,7 @@ public class BytesTest {
         assertThat(lpb.getExtraItemAt(1)).isEqualTo(new byte[] {4, 5, 6, 7});
 
         Bytes.B pbb =
-                Bytes.B
-                        .newBuilder()
+                Bytes.B.newBuilder()
                         .addExtraItems(ByteString.copyFrom(new byte[] {1, 2, 3}))
                         .addExtraItems(ByteString.copyFrom(new byte[] {4, 5, 6, 7}))
                         .build();

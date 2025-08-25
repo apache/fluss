@@ -15,12 +15,11 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.row.arrow.writers;
+package org.apache.fluss.row.arrow.writers;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.TimestampLtz;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampMicroVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampMilliVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampSecVector;
@@ -28,7 +27,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
 
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** {@link ArrowFieldWriter} for TimestampLtz. */
 @Internal

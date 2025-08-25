@@ -15,31 +15,31 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.source.reader;
+package org.apache.fluss.flink.source.reader;
 
-import com.alibaba.fluss.client.Connection;
-import com.alibaba.fluss.client.ConnectionFactory;
-import com.alibaba.fluss.client.table.Table;
-import com.alibaba.fluss.client.table.scanner.ScanRecord;
-import com.alibaba.fluss.client.table.scanner.batch.BatchScanner;
-import com.alibaba.fluss.client.table.scanner.log.LogScanner;
-import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.PartitionNotExistException;
-import com.alibaba.fluss.flink.lake.LakeSplitReaderGenerator;
-import com.alibaba.fluss.flink.metrics.FlinkMetricRegistry;
-import com.alibaba.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
-import com.alibaba.fluss.flink.source.split.HybridSnapshotLogSplit;
-import com.alibaba.fluss.flink.source.split.LogSplit;
-import com.alibaba.fluss.flink.source.split.SnapshotSplit;
-import com.alibaba.fluss.flink.source.split.SourceSplitBase;
-import com.alibaba.fluss.lake.source.LakeSource;
-import com.alibaba.fluss.lake.source.LakeSplit;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.utils.CloseableIterator;
-import com.alibaba.fluss.utils.ExceptionUtils;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.scanner.batch.BatchScanner;
+import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.flink.lake.LakeSplitReaderGenerator;
+import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
+import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
+import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
+import org.apache.fluss.flink.source.split.LogSplit;
+import org.apache.fluss.flink.source.split.SnapshotSplit;
+import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
 import org.apache.flink.connector.base.source.reader.splitreader.SplitReader;
@@ -67,8 +67,8 @@ import java.util.Optional;
 import java.util.Queue;
 import java.util.Set;
 
-import static com.alibaba.fluss.utils.Preconditions.checkArgument;
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * An implementation of {@link SplitReader} for reading splits into {@link RecordAndPos}.

@@ -585,7 +585,7 @@
                 <inherited>false</inherited>
                 <executions>
                     <execution>
-                        <phase>verify</phase>
+                        <phase>validate</phase>
                         <goals>
                             <goal>check</goal>
                         </goals>
@@ -987,9 +987,10 @@
                     <artifactId>spotless-maven-plugin</artifactId>
                     <version>${spotless.version}</version>
                     <configuration>
+                        <skip>${skip.on.java8}</skip>
                         <java>
                             <googleJavaFormat>
-                                <version>1.7</version>
+                                <version>1.15.0</version>
                                 <style>AOSP</style>
                             </googleJavaFormat>
 

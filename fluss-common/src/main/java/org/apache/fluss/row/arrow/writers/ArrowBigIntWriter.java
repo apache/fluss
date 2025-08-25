@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.row.arrow.writers;
+package org.apache.fluss.row.arrow.writers;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.row.InternalRow;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BigIntVector;
 
 /** {@link ArrowFieldWriter} for BigInt. */

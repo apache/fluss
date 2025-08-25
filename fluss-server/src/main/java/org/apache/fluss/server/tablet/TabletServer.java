@@ -15,45 +15,45 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.tablet;
+package org.apache.fluss.server.tablet;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.cluster.Endpoint;
-import com.alibaba.fluss.cluster.ServerType;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.IllegalConfigurationException;
-import com.alibaba.fluss.exception.InvalidServerRackInfoException;
-import com.alibaba.fluss.metrics.registry.MetricRegistry;
-import com.alibaba.fluss.rpc.GatewayClientProxy;
-import com.alibaba.fluss.rpc.RpcClient;
-import com.alibaba.fluss.rpc.RpcServer;
-import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
-import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
-import com.alibaba.fluss.rpc.netty.server.RequestsMetrics;
-import com.alibaba.fluss.server.ServerBase;
-import com.alibaba.fluss.server.authorizer.Authorizer;
-import com.alibaba.fluss.server.authorizer.AuthorizerLoader;
-import com.alibaba.fluss.server.coordinator.MetadataManager;
-import com.alibaba.fluss.server.kv.KvManager;
-import com.alibaba.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
-import com.alibaba.fluss.server.log.LogManager;
-import com.alibaba.fluss.server.log.remote.RemoteLogManager;
-import com.alibaba.fluss.server.metadata.TabletServerMetadataCache;
-import com.alibaba.fluss.server.metrics.ServerMetricUtils;
-import com.alibaba.fluss.server.metrics.group.TabletServerMetricGroup;
-import com.alibaba.fluss.server.replica.ReplicaManager;
-import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.server.zk.ZooKeeperUtils;
-import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
-import com.alibaba.fluss.utils.ExceptionUtils;
-import com.alibaba.fluss.utils.clock.Clock;
-import com.alibaba.fluss.utils.clock.SystemClock;
-import com.alibaba.fluss.utils.concurrent.FlussScheduler;
-import com.alibaba.fluss.utils.concurrent.FutureUtils;
-import com.alibaba.fluss.utils.concurrent.Scheduler;
-
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.IllegalConfigurationException;
+import org.apache.fluss.exception.InvalidServerRackInfoException;
+import org.apache.fluss.metrics.registry.MetricRegistry;
+import org.apache.fluss.rpc.GatewayClientProxy;
+import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.RpcServer;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.metrics.ClientMetricGroup;
+import org.apache.fluss.rpc.netty.server.RequestsMetrics;
+import org.apache.fluss.server.ServerBase;
+import org.apache.fluss.server.authorizer.Authorizer;
+import org.apache.fluss.server.authorizer.AuthorizerLoader;
+import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.kv.KvManager;
+import org.apache.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
+import org.apache.fluss.server.log.LogManager;
+import org.apache.fluss.server.log.remote.RemoteLogManager;
+import org.apache.fluss.server.metadata.TabletServerMetadataCache;
+import org.apache.fluss.server.metrics.ServerMetricUtils;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
+import org.apache.fluss.server.replica.ReplicaManager;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperUtils;
+import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.clock.Clock;
+import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.concurrent.FlussScheduler;
+import org.apache.fluss.utils.concurrent.FutureUtils;
+import org.apache.fluss.utils.concurrent.Scheduler;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -67,7 +67,7 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-import static com.alibaba.fluss.config.ConfigOptions.BACKGROUND_THREADS;
+import static org.apache.fluss.config.ConfigOptions.BACKGROUND_THREADS;
 
 /**
  * Tablet server implementation. The tablet server is responsible to manage the log tablet and kv
