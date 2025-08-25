@@ -15,16 +15,16 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.lakestorage;
+package org.apache.fluss.lake.lakestorage;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.TableAlreadyExistException;
-import com.alibaba.fluss.lake.source.LakeSource;
-import com.alibaba.fluss.lake.writer.LakeTieringFactory;
-import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.utils.TemporaryClassLoaderContext;
-import com.alibaba.fluss.utils.WrappingProxy;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.TemporaryClassLoaderContext;
+import org.apache.fluss.utils.WrappingProxy;
 
 /**
  * A wrapper around {@link LakeStoragePlugin} that ensures the plugin classloader is used for all

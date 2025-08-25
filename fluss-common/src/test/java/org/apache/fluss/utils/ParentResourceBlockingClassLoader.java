@@ -15,14 +15,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.utils;
+package org.apache.fluss.utils;
 
 import java.io.IOException;
 import java.net.URL;
 import java.net.URLClassLoader;
 import java.util.Enumeration;
-
-import static org.apache.logging.log4j.util.LoaderUtil.findResources;
 
 /**
  * A class loader that blocks resource loading from parent class loader. Designed to simulate SPI

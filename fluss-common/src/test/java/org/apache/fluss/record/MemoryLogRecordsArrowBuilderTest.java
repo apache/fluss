@@ -15,25 +15,25 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.record;
+package org.apache.fluss.record;
 
-import com.alibaba.fluss.compression.ArrowCompressionInfo;
-import com.alibaba.fluss.compression.ArrowCompressionType;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.config.MemorySize;
-import com.alibaba.fluss.memory.ManagedPagedOutputView;
-import com.alibaba.fluss.memory.TestingMemorySegmentPool;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.arrow.ArrowWriter;
-import com.alibaba.fluss.row.arrow.ArrowWriterPool;
-import com.alibaba.fluss.testutils.DataTestUtils;
-import com.alibaba.fluss.utils.CloseableIterator;
+import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.compression.ArrowCompressionType;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.memory.ManagedPagedOutputView;
+import org.apache.fluss.memory.TestingMemorySegmentPool;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.arrow.ArrowWriter;
+import org.apache.fluss.row.arrow.ArrowWriterPool;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.testutils.DataTestUtils;
+import org.apache.fluss.utils.CloseableIterator;
 
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.commons.lang3.StringUtils;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
-import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -47,14 +47,14 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
-import static com.alibaba.fluss.compression.ArrowCompressionInfo.NO_COMPRESSION;
-import static com.alibaba.fluss.record.TestData.DATA1;
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
-import static com.alibaba.fluss.record.TestData.DEFAULT_SCHEMA_ID;
-import static com.alibaba.fluss.row.arrow.ArrowWriter.BUFFER_USAGE_RATIO;
-import static com.alibaba.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
-import static com.alibaba.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
+import static org.apache.fluss.compression.ArrowCompressionInfo.NO_COMPRESSION;
+import static org.apache.fluss.record.TestData.DATA1;
+import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.row.arrow.ArrowWriter.BUFFER_USAGE_RATIO;
+import static org.apache.fluss.testutils.DataTestUtils.assertLogRecordsEquals;
+import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

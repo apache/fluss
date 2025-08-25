@@ -15,20 +15,20 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.source.deserializer;
+package org.apache.fluss.flink.source.deserializer;
 
-import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.flink.utils.FlussRowToJsonConverters;
-import com.alibaba.fluss.flink.utils.TimestampFormat;
-import com.alibaba.fluss.record.LogRecord;
-import com.alibaba.fluss.types.RowType;
-
-import org.apache.flink.api.common.typeinfo.TypeInformation;
-import org.apache.flink.api.common.typeinfo.Types;
+import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.flink.utils.FlussRowToJsonConverters;
+import org.apache.fluss.flink.utils.TimestampFormat;
+import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.SerializationFeature;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.apache.fluss.types.RowType;
+
+import org.apache.flink.api.common.typeinfo.TypeInformation;
+import org.apache.flink.api.common.typeinfo.Types;
 
 import java.util.LinkedHashMap;
 import java.util.Map;

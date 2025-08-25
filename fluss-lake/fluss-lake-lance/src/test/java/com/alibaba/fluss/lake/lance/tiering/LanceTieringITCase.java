@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.lance.tiering;
+package org.apache.fluss.lake.lance.tiering;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.lake.lance.LanceConfig;
-import com.alibaba.fluss.lake.lance.testutils.FlinkLanceTieringTestBase;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.row.InternalRow;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.lance.LanceConfig;
+import org.apache.fluss.lake.lance.testutils.FlinkLanceTieringTestBase;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.InternalRow;
 
 import com.lancedb.lance.Dataset;
 import com.lancedb.lance.ReadOptions;
@@ -44,9 +44,9 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
-import static com.alibaba.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
-import static com.alibaba.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
+import static org.apache.fluss.lake.writer.LakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
+import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT case for tiering tables to lance. */

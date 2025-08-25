@@ -15,12 +15,11 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.utils.json;
+package org.apache.fluss.utils.json;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.metadata.Schema;
-import com.alibaba.fluss.metadata.TableDescriptor;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 

@@ -15,10 +15,9 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.record.bytesview;
+package org.apache.fluss.record.bytesview;
 
-import com.alibaba.fluss.memory.MemorySegment;
-
+import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 

@@ -273,7 +273,9 @@ public class DefaultValueRecordBatch implements ValueRecordBatch {
             currentRecordNumber++;
         }
 
-        /** @param valueBytes consisted of schema id and the row encoded in the value bytes */
+        /**
+         * @param valueBytes consisted of schema id and the row encoded in the value bytes
+         */
         public void append(byte[] valueBytes) throws IOException {
             if (isClosed) {
                 throw new IllegalStateException(

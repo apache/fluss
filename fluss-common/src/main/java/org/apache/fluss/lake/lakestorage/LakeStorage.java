@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.lakestorage;
+package org.apache.fluss.lake.lakestorage;
 
-import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.lake.source.LakeSource;
-import com.alibaba.fluss.lake.writer.LakeTieringFactory;
-import com.alibaba.fluss.metadata.TablePath;
+import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.metadata.TablePath;
 
 /**
  * The LakeStorage interface defines how to implement lakehouse storage system such as Paimon and

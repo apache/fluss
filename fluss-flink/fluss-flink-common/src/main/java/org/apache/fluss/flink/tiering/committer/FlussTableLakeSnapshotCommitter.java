@@ -15,24 +15,24 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.tiering.committer;
+package org.apache.fluss.flink.tiering.committer;
 
-import com.alibaba.fluss.client.metadata.MetadataUpdater;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
-import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metrics.registry.MetricRegistry;
-import com.alibaba.fluss.rpc.GatewayClientProxy;
-import com.alibaba.fluss.rpc.RpcClient;
-import com.alibaba.fluss.rpc.gateway.CoordinatorGateway;
-import com.alibaba.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
-import com.alibaba.fluss.rpc.messages.PbLakeTableOffsetForBucket;
-import com.alibaba.fluss.rpc.messages.PbLakeTableSnapshotInfo;
-import com.alibaba.fluss.rpc.metrics.ClientMetricGroup;
-import com.alibaba.fluss.utils.ExceptionUtils;
-import com.alibaba.fluss.utils.types.Tuple2;
+import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metrics.registry.MetricRegistry;
+import org.apache.fluss.rpc.GatewayClientProxy;
+import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
+import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
+import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
+import org.apache.fluss.rpc.metrics.ClientMetricGroup;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.types.Tuple2;
 
 import java.io.IOException;
 import java.util.Map;

@@ -15,18 +15,18 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.lakehouse;
+package org.apache.fluss.server.lakehouse;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.TableAlreadyExistException;
-import com.alibaba.fluss.lake.lakestorage.LakeCatalog;
-import com.alibaba.fluss.lake.lakestorage.LakeStorage;
-import com.alibaba.fluss.lake.lakestorage.LakeStoragePlugin;
-import com.alibaba.fluss.lake.source.LakeSource;
-import com.alibaba.fluss.lake.writer.LakeTieringFactory;
-import com.alibaba.fluss.metadata.DataLakeFormat;
-import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TablePath;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.lake.lakestorage.LakeStorage;
+import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
 
 import java.util.HashMap;
 import java.util.Map;

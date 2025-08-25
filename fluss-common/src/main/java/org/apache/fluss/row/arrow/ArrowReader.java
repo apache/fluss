@@ -15,17 +15,16 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.row.arrow;
+package org.apache.fluss.row.arrow;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.columnar.ColumnVector;
-import com.alibaba.fluss.row.columnar.ColumnarRow;
-import com.alibaba.fluss.row.columnar.VectorizedColumnBatch;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.columnar.ColumnVector;
+import org.apache.fluss.row.columnar.ColumnarRow;
+import org.apache.fluss.row.columnar.VectorizedColumnBatch;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
 
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** {@link ArrowReader} which read the underlying Arrow format data as {@link InternalRow}. */
 @Internal

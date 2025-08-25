@@ -15,15 +15,18 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.tiering.source;
+package org.apache.fluss.flink.tiering.source;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator;
-import com.alibaba.fluss.flink.tiering.source.split.TieringSplit;
-import com.alibaba.fluss.flink.tiering.source.split.TieringSplitSerializer;
-import com.alibaba.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
-import com.alibaba.fluss.flink.tiering.source.state.TieringSourceEnumeratorStateSerializer;
-import com.alibaba.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator;
+import org.apache.fluss.flink.tiering.source.split.TieringSplit;
+import org.apache.fluss.flink.tiering.source.split.TieringSplitSerializer;
+import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
+import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorStateSerializer;
+import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.shaded.guava32.com.google.common.hash.HashFunction;
+import org.apache.fluss.shaded.guava32.com.google.common.hash.Hasher;
+import org.apache.fluss.shaded.guava32.com.google.common.hash.Hashing;
 
 import org.apache.flink.api.connector.source.Boundedness;
 import org.apache.flink.api.connector.source.Source;
@@ -34,13 +37,10 @@ import org.apache.flink.api.connector.source.SplitEnumeratorContext;
 import org.apache.flink.core.io.SimpleVersionedSerializer;
 import org.apache.flink.runtime.jobgraph.OperatorID;
 import org.apache.flink.streaming.api.graph.StreamGraphHasherV2;
-import org.apache.fluss.shaded.guava32.com.google.common.hash.HashFunction;
-import org.apache.fluss.shaded.guava32.com.google.common.hash.Hasher;
-import org.apache.fluss.shaded.guava32.com.google.common.hash.Hashing;
 
 import java.nio.charset.StandardCharsets;
 
-import static com.alibaba.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
+import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
 
 /**
  * The flink source implementation for tiering data from Fluss to downstream lake.

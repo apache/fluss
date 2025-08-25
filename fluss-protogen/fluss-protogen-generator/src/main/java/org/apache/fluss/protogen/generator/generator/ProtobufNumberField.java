@@ -15,10 +15,11 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.protogen.generator.generator;
+package org.apache.fluss.protogen.generator.generator;
+
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Maps;
 
 import io.protostuff.parser.Field;
-import org.apache.fluss.shaded.guava32.com.google.common.collect.Maps;
 
 import java.io.PrintWriter;
 import java.util.Map;

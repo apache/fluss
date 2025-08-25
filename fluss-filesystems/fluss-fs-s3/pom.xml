@@ -380,7 +380,7 @@
                                     </excludes>
                                 </filter>
                                 <filter>
-                                    <artifact>com.alibaba.fluss:fluss-fs-hadoop</artifact>
+                                    <artifact>org.apache.fluss:fluss-fs-hadoop</artifact>
                                     <excludes>
                                         <exclude>META-INF/**</exclude>
                                     </excludes>

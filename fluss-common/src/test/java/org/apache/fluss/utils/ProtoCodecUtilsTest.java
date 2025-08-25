@@ -15,12 +15,13 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.utils;
+package org.apache.fluss.utils;
+
+import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 
 import com.google.protobuf.CodedInputStream;
 import com.google.protobuf.CodedOutputStream;
-import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
-import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -30,7 +31,7 @@ import java.util.Arrays;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Tests for {@link com.alibaba.fluss.utils.ProtoCodecUtils}. */
+/** Tests for {@link org.apache.fluss.utils.ProtoCodecUtils}. */
 public class ProtoCodecUtilsTest {
 
     private final byte[] b = new byte[4096];

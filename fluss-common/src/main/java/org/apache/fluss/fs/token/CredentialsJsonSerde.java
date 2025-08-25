@@ -15,14 +15,13 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.fs.token;
-
-import com.alibaba.fluss.utils.json.JsonDeserializer;
-import com.alibaba.fluss.utils.json.JsonSerdeUtils;
-import com.alibaba.fluss.utils.json.JsonSerializer;
+package org.apache.fluss.fs.token;
 
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.utils.json.JsonDeserializer;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
+import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
 

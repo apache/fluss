@@ -15,35 +15,35 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.zk;
+package org.apache.fluss.server.zk;
 
-import com.alibaba.fluss.cluster.Endpoint;
-import com.alibaba.fluss.cluster.TabletServerInfo;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.metadata.Schema;
-import com.alibaba.fluss.metadata.SchemaInfo;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TablePartition;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
-import com.alibaba.fluss.server.zk.data.BucketAssignment;
-import com.alibaba.fluss.server.zk.data.BucketSnapshot;
-import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
-import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
-import com.alibaba.fluss.server.zk.data.PartitionAssignment;
-import com.alibaba.fluss.server.zk.data.TableAssignment;
-import com.alibaba.fluss.server.zk.data.TableRegistration;
-import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
-import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
-import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.utils.types.Tuple2;
-
+import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaInfo;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
+import org.apache.fluss.server.zk.data.BucketAssignment;
+import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.ZooKeeper;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
+import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.types.Tuple2;
+
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -60,7 +60,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.server.utils.TableAssignmentUtils.generateAssignment;
+import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

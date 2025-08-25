@@ -15,10 +15,9 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.compression;
+package org.apache.fluss.compression;
 
-import com.alibaba.fluss.annotation.Internal;
-
+import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionCodec;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionUtil;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec;

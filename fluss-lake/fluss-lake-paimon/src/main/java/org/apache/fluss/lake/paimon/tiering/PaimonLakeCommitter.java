@@ -15,16 +15,16 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.paimon.tiering;
+package org.apache.fluss.lake.paimon.tiering;
 
-import com.alibaba.fluss.lake.committer.BucketOffset;
-import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
-import com.alibaba.fluss.lake.committer.LakeCommitter;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.utils.json.BucketOffsetJsonSerde;
-
+import org.apache.fluss.lake.committer.BucketOffset;
+import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
+
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
@@ -43,10 +43,10 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
-import static com.alibaba.fluss.lake.paimon.tiering.PaimonLakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
-import static com.alibaba.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
+import static org.apache.fluss.lake.paimon.tiering.PaimonLakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.paimon.table.sink.BatchWriteBuilder.COMMIT_IDENTIFIER;
 
 /** Implementation of {@link LakeCommitter} for Paimon. */

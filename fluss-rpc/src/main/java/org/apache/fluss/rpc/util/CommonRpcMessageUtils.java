@@ -15,36 +15,35 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.util;
+package org.apache.fluss.rpc.util;
 
-import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.record.LogRecords;
-import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.remote.RemoteLogFetchInfo;
-import com.alibaba.fluss.remote.RemoteLogSegment;
-import com.alibaba.fluss.rpc.entity.FetchLogResultForBucket;
-import com.alibaba.fluss.rpc.messages.PbAclFilter;
-import com.alibaba.fluss.rpc.messages.PbAclInfo;
-import com.alibaba.fluss.rpc.messages.PbFetchLogRespForBucket;
-import com.alibaba.fluss.rpc.messages.PbKeyValue;
-import com.alibaba.fluss.rpc.messages.PbPartitionSpec;
-import com.alibaba.fluss.rpc.messages.PbRemoteLogFetchInfo;
-import com.alibaba.fluss.rpc.messages.PbRemoteLogSegment;
-import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.security.acl.AccessControlEntry;
-import com.alibaba.fluss.security.acl.AccessControlEntryFilter;
-import com.alibaba.fluss.security.acl.AclBinding;
-import com.alibaba.fluss.security.acl.AclBindingFilter;
-import com.alibaba.fluss.security.acl.FlussPrincipal;
-import com.alibaba.fluss.security.acl.OperationType;
-import com.alibaba.fluss.security.acl.PermissionType;
-import com.alibaba.fluss.security.acl.Resource;
-import com.alibaba.fluss.security.acl.ResourceFilter;
-import com.alibaba.fluss.security.acl.ResourceType;
-
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.LogRecords;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.remote.RemoteLogFetchInfo;
+import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
+import org.apache.fluss.rpc.messages.PbAclFilter;
+import org.apache.fluss.rpc.messages.PbAclInfo;
+import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
+import org.apache.fluss.rpc.messages.PbKeyValue;
+import org.apache.fluss.rpc.messages.PbPartitionSpec;
+import org.apache.fluss.rpc.messages.PbRemoteLogFetchInfo;
+import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
+import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.security.acl.AccessControlEntry;
+import org.apache.fluss.security.acl.AccessControlEntryFilter;
+import org.apache.fluss.security.acl.AclBinding;
+import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.security.acl.OperationType;
+import org.apache.fluss.security.acl.PermissionType;
+import org.apache.fluss.security.acl.Resource;
+import org.apache.fluss.security.acl.ResourceFilter;
+import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 
 import java.nio.ByteBuffer;

@@ -15,21 +15,21 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.table.scanner.log;
+package org.apache.fluss.client.table.scanner.log;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.client.metrics.ScannerMetricGroup;
-import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.fs.FsPath;
-import com.alibaba.fluss.fs.FsPathAndFileName;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.remote.RemoteLogSegment;
-import com.alibaba.fluss.utils.ExceptionUtils;
-import com.alibaba.fluss.utils.FlussPaths;
-import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.metrics.ScannerMetricGroup;
+import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.fs.FsPathAndFileName;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.concurrent.ShutdownableThread;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -50,10 +50,10 @@ import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
-import static com.alibaba.fluss.utils.FileUtils.deleteDirectoryQuietly;
-import static com.alibaba.fluss.utils.FlussPaths.LOG_FILE_SUFFIX;
-import static com.alibaba.fluss.utils.FlussPaths.remoteLogSegmentDir;
-import static com.alibaba.fluss.utils.FlussPaths.remoteLogSegmentFile;
+import static org.apache.fluss.utils.FileUtils.deleteDirectoryQuietly;
+import static org.apache.fluss.utils.FlussPaths.LOG_FILE_SUFFIX;
+import static org.apache.fluss.utils.FlussPaths.remoteLogSegmentDir;
+import static org.apache.fluss.utils.FlussPaths.remoteLogSegmentFile;
 
 /** Downloader to read remote log files to local disk. */
 @ThreadSafe

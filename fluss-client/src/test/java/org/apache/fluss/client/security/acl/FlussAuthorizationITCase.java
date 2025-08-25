@@ -15,48 +15,48 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.security.acl;
+package org.apache.fluss.client.security.acl;
 
-import com.alibaba.fluss.client.Connection;
-import com.alibaba.fluss.client.ConnectionFactory;
-import com.alibaba.fluss.client.FlussConnection;
-import com.alibaba.fluss.client.admin.Admin;
-import com.alibaba.fluss.client.table.Table;
-import com.alibaba.fluss.client.table.scanner.batch.BatchScanner;
-import com.alibaba.fluss.client.table.writer.AppendWriter;
-import com.alibaba.fluss.client.utils.ClientRpcMessageUtils;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.config.MemorySize;
-import com.alibaba.fluss.exception.AuthorizationException;
-import com.alibaba.fluss.metadata.DataLakeFormat;
-import com.alibaba.fluss.metadata.DatabaseDescriptor;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.rpc.GatewayClientProxy;
-import com.alibaba.fluss.rpc.RpcClient;
-import com.alibaba.fluss.rpc.gateway.AdminGateway;
-import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
-import com.alibaba.fluss.rpc.messages.InitWriterRequest;
-import com.alibaba.fluss.rpc.messages.InitWriterResponse;
-import com.alibaba.fluss.rpc.messages.MetadataRequest;
-import com.alibaba.fluss.rpc.metrics.TestingClientMetricGroup;
-import com.alibaba.fluss.security.acl.AccessControlEntry;
-import com.alibaba.fluss.security.acl.AccessControlEntryFilter;
-import com.alibaba.fluss.security.acl.AclBinding;
-import com.alibaba.fluss.security.acl.AclBindingFilter;
-import com.alibaba.fluss.security.acl.FlussPrincipal;
-import com.alibaba.fluss.security.acl.OperationType;
-import com.alibaba.fluss.security.acl.PermissionType;
-import com.alibaba.fluss.security.acl.Resource;
-import com.alibaba.fluss.security.acl.ResourceFilter;
-import com.alibaba.fluss.server.testutils.FlussClusterExtension;
-import com.alibaba.fluss.utils.CloseableIterator;
-
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.FlussConnection;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.batch.BatchScanner;
+import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.client.utils.ClientRpcMessageUtils;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.rpc.GatewayClientProxy;
+import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.gateway.AdminGateway;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.InitWriterRequest;
+import org.apache.fluss.rpc.messages.InitWriterResponse;
+import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.security.acl.AccessControlEntry;
+import org.apache.fluss.security.acl.AccessControlEntryFilter;
+import org.apache.fluss.security.acl.AclBinding;
+import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.security.acl.OperationType;
+import org.apache.fluss.security.acl.PermissionType;
+import org.apache.fluss.security.acl.Resource;
+import org.apache.fluss.security.acl.ResourceFilter;
+import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Lists;
+import org.apache.fluss.utils.CloseableIterator;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -69,16 +69,16 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
-import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH_PK;
-import static com.alibaba.fluss.security.acl.AccessControlEntry.WILD_CARD_HOST;
-import static com.alibaba.fluss.security.acl.FlussPrincipal.WILD_CARD_PRINCIPAL;
-import static com.alibaba.fluss.security.acl.OperationType.READ;
-import static com.alibaba.fluss.testutils.DataTestUtils.row;
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
+import static org.apache.fluss.security.acl.AccessControlEntry.WILD_CARD_HOST;
+import static org.apache.fluss.security.acl.FlussPrincipal.WILD_CARD_PRINCIPAL;
+import static org.apache.fluss.security.acl.OperationType.READ;
+import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.catchThrowable;
@@ -671,7 +671,7 @@ public class FlussAuthorizationITCase {
         conf.setString("security.sasl.enabled.mechanisms", "plain");
         conf.setString(
                 "security.sasl.plain.jaas.config",
-                "com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required "
+                "org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required "
                         + "    user_root=\"password\" "
                         + "    user_guest=\"password2\";");
         conf.set(ConfigOptions.SUPER_USERS, "User:root");

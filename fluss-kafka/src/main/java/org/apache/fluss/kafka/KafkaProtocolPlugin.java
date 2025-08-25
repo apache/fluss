@@ -15,16 +15,15 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.kafka;
+package org.apache.fluss.kafka;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.rpc.RpcGatewayService;
-import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
-import com.alibaba.fluss.rpc.netty.server.RequestChannel;
-import com.alibaba.fluss.rpc.netty.server.RequestHandler;
-import com.alibaba.fluss.rpc.protocol.NetworkProtocolPlugin;
-
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.rpc.RpcGatewayService;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.netty.server.RequestChannel;
+import org.apache.fluss.rpc.netty.server.RequestHandler;
+import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 
 import java.util.List;

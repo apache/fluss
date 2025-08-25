@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.tiering.committer;
+package org.apache.fluss.flink.tiering.committer;
 
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.utils.types.Tuple2;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.utils.types.Tuple2;
 
 import java.util.HashMap;
 import java.util.Map;

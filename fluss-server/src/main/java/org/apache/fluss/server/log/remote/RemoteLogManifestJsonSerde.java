@@ -15,17 +15,16 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.log.remote;
+package org.apache.fluss.server.log.remote;
 
-import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.remote.RemoteLogSegment;
-import com.alibaba.fluss.utils.json.JsonDeserializer;
-import com.alibaba.fluss.utils.json.JsonSerdeUtils;
-import com.alibaba.fluss.utils.json.JsonSerializer;
-
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.utils.json.JsonDeserializer;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
+import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
 import java.util.ArrayList;

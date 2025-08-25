@@ -15,15 +15,8 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.utils;
+package org.apache.fluss.utils;
 
-import com.alibaba.fluss.types.DataField;
-import com.alibaba.fluss.types.DataType;
-import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.types.RowType;
-
-import org.apache.commons.lang3.RandomStringUtils;
-import org.apache.commons.lang3.RandomUtils;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BigIntVector;
@@ -47,6 +40,13 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRe
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.util.Text;
+import org.apache.fluss.types.DataField;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
+
+import org.apache.commons.lang3.RandomStringUtils;
+import org.apache.commons.lang3.RandomUtils;
 import org.junit.jupiter.api.Test;
 
 import java.io.ByteArrayOutputStream;
@@ -59,7 +59,7 @@ import java.util.List;
 import static org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec.DEFAULT_BODY_COMPRESSION;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Tests for {@link com.alibaba.fluss.utils.ArrowUtils}. */
+/** Tests for {@link org.apache.fluss.utils.ArrowUtils}. */
 class ArrowUtilsTest {
 
     private static final List<DataType> TYPES =

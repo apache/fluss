@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.bucketing;
+package org.apache.fluss.bucketing;
 
 import org.apache.fluss.shaded.guava32.com.google.common.hash.HashFunction;
 import org.apache.fluss.shaded.guava32.com.google.common.hash.Hashing;

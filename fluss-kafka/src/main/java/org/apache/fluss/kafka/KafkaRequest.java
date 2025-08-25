@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.kafka;
+package org.apache.fluss.kafka;
 
-import com.alibaba.fluss.rpc.netty.server.RpcRequest;
-import com.alibaba.fluss.rpc.protocol.RequestType;
-
+import org.apache.fluss.rpc.netty.server.RpcRequest;
+import org.apache.fluss.rpc.protocol.RequestType;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.util.ReferenceCountUtil;
+
 import org.apache.kafka.common.protocol.ApiKeys;
 import org.apache.kafka.common.protocol.ApiMessage;
 import org.apache.kafka.common.protocol.ByteBufferAccessor;

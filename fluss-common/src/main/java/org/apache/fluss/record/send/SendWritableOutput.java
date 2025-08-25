@@ -15,13 +15,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.record.send;
+package org.apache.fluss.record.send;
 
-import com.alibaba.fluss.record.bytesview.BytesView;
-import com.alibaba.fluss.record.bytesview.FileRegionBytesView;
-import com.alibaba.fluss.record.bytesview.MemorySegmentBytesView;
-import com.alibaba.fluss.record.bytesview.MultiBytesView;
-
+import org.apache.fluss.record.bytesview.BytesView;
+import org.apache.fluss.record.bytesview.FileRegionBytesView;
+import org.apache.fluss.record.bytesview.MemorySegmentBytesView;
+import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 
 import java.util.ArrayDeque;
@@ -35,7 +34,9 @@ public class SendWritableOutput extends ByteBufWritableOutput {
     /** The current reader index of the underlying {@link #buf} for building next {@link Send}. */
     private int currentReaderIndex = 0;
 
-    /** @param buf The ByteBuf that has capacity of data size excluding zero-copy. */
+    /**
+     * @param buf The ByteBuf that has capacity of data size excluding zero-copy.
+     */
     public SendWritableOutput(ByteBuf buf) {
         super(buf);
         this.sends = new ArrayDeque<>(1);

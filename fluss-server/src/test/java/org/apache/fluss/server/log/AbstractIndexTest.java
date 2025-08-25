@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.log;
+package org.apache.fluss.server.log;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

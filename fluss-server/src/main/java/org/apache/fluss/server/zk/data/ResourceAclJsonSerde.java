@@ -15,17 +15,16 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.zk.data;
+package org.apache.fluss.server.zk.data;
 
-import com.alibaba.fluss.security.acl.AccessControlEntry;
-import com.alibaba.fluss.security.acl.FlussPrincipal;
-import com.alibaba.fluss.security.acl.OperationType;
-import com.alibaba.fluss.security.acl.PermissionType;
-import com.alibaba.fluss.utils.json.JsonDeserializer;
-import com.alibaba.fluss.utils.json.JsonSerializer;
-
+import org.apache.fluss.security.acl.AccessControlEntry;
+import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.security.acl.OperationType;
+import org.apache.fluss.security.acl.PermissionType;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.utils.json.JsonDeserializer;
+import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
 import java.util.Collection;

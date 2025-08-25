@@ -265,7 +265,7 @@ Flink SQL> SELECT * FROM user_rec_wide;
 
 Now let's switch to `batch` mode and query the current snapshot of the `user_rec_wide` table.
 
-But before that, let's start the [Tiering Service](https://alibaba.github.io/fluss-docs/docs/maintenance/tiered-storage/lakehouse-storage/#start-the-datalake-tiering-service) that allows offloading the tables as `Lakehouse` tables.
+But before that, let's start the [Tiering Service](/docs/maintenance/tiered-storage/lakehouse-storage/#start-the-datalake-tiering-service) that allows offloading the tables as `Lakehouse` tables.
 
 **Step 7:** Open a new terminal 💻 in the `Coordinator Server` and run the following command to start the `Tiering Service`:
 ```shell
@@ -297,7 +297,7 @@ Flink SQL> SELECT * FROM user_rec_wide;
 ### Conclusion
 Partial updates in Fluss enable an alternative approach in how we design streaming data pipelines for enriching or joining data. 
 
-When all your sources share a primary key - otherwise you can mix & match [streaming lookup joins](https://alibaba.github.io/fluss-docs/docs/engine-flink/lookups/#lookup) - you can turn the problem on its head: update a unified table incrementally, rather than joining streams on the fly. 
+When all your sources share a primary key - otherwise you can mix & match [streaming lookup joins](/docs/engine-flink/lookups/#lookup) - you can turn the problem on its head: update a unified table incrementally, rather than joining streams on the fly.
 
 The result is a more scalable, maintainable, and efficient pipeline. 
 Engineers can spend less time wrestling with Flink’s state, checkpoints and join mechanics, and more time delivering fresh, integrated data to power real-time analytics and applications. 

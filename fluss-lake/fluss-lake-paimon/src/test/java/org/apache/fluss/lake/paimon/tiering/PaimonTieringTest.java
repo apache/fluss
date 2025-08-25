@@ -15,22 +15,22 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.paimon.tiering;
+package org.apache.fluss.lake.paimon.tiering;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
-import com.alibaba.fluss.lake.committer.LakeCommitter;
-import com.alibaba.fluss.lake.serializer.SimpleVersionedSerializer;
-import com.alibaba.fluss.lake.writer.LakeWriter;
-import com.alibaba.fluss.lake.writer.WriterInitContext;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.record.ChangeType;
-import com.alibaba.fluss.record.GenericRecord;
-import com.alibaba.fluss.record.LogRecord;
-import com.alibaba.fluss.row.BinaryString;
-import com.alibaba.fluss.row.GenericRow;
-import com.alibaba.fluss.utils.types.Tuple2;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
+import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.GenericRecord;
+import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
@@ -67,17 +67,17 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
-import static com.alibaba.fluss.flink.tiering.committer.TieringCommitOperator.toBucketOffsetsProperty;
-import static com.alibaba.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
-import static com.alibaba.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
-import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
-import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
-import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
-import static com.alibaba.fluss.record.ChangeType.DELETE;
-import static com.alibaba.fluss.record.ChangeType.INSERT;
-import static com.alibaba.fluss.record.ChangeType.UPDATE_AFTER;
-import static com.alibaba.fluss.record.ChangeType.UPDATE_BEFORE;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.flink.tiering.committer.TieringCommitOperator.toBucketOffsetsProperty;
+import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
+import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
+import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
+import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
+import static org.apache.fluss.record.ChangeType.DELETE;
+import static org.apache.fluss.record.ChangeType.INSERT;
+import static org.apache.fluss.record.ChangeType.UPDATE_AFTER;
+import static org.apache.fluss.record.ChangeType.UPDATE_BEFORE;
+import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The UT for tiering to Paimon via {@link PaimonLakeTieringFactory}. */
@@ -667,7 +667,7 @@ class PaimonTieringTest {
                     }
 
                     @Override
-                    public com.alibaba.fluss.metadata.Schema schema() {
+                    public org.apache.fluss.metadata.Schema schema() {
                         throw new UnsupportedOperationException(
                                 "The lake writer in Paimon currently uses paimonCatalog to determine the schema.");
                     }

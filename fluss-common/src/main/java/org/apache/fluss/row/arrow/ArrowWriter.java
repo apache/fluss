@@ -15,19 +15,15 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.row.arrow;
+package org.apache.fluss.row.arrow;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.compression.ArrowCompressionInfo;
-import com.alibaba.fluss.compression.ArrowCompressionRatioEstimator;
-import com.alibaba.fluss.memory.AbstractPagedOutputView;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.arrow.writers.ArrowFieldWriter;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.utils.ArrowUtils;
-import com.alibaba.fluss.utils.PagedMemorySegmentWritableChannel;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.compression.ArrowCompressionRatioEstimator;
+import org.apache.fluss.memory.AbstractPagedOutputView;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.arrow.writers.ArrowFieldWriter;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BaseFixedWidthVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BaseVariableWidthVector;
@@ -40,11 +36,14 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowBlock;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.ArrowUtils;
+import org.apache.fluss.utils.PagedMemorySegmentWritableChannel;
 
 import java.io.IOException;
 
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * Writer which serializes the Fluss rows to Arrow record batches. The {@link ArrowWriter} is pooled

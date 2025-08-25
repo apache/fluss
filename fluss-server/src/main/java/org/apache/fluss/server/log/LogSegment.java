@@ -15,27 +15,27 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.log;
+package org.apache.fluss.server.log;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.CorruptRecordException;
-import com.alibaba.fluss.exception.InvalidColumnProjectionException;
-import com.alibaba.fluss.exception.InvalidRecordException;
-import com.alibaba.fluss.exception.LogSegmentOffsetOverflowException;
-import com.alibaba.fluss.metadata.LogFormat;
-import com.alibaba.fluss.record.FileChannelChunk;
-import com.alibaba.fluss.record.FileLogProjection;
-import com.alibaba.fluss.record.FileLogRecords;
-import com.alibaba.fluss.record.LogRecordBatch;
-import com.alibaba.fluss.record.LogRecords;
-import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.record.TimestampAndOffset;
-import com.alibaba.fluss.utils.FileUtils;
-import com.alibaba.fluss.utils.FlussPaths;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.CorruptRecordException;
+import org.apache.fluss.exception.InvalidColumnProjectionException;
+import org.apache.fluss.exception.InvalidRecordException;
+import org.apache.fluss.exception.LogSegmentOffsetOverflowException;
+import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.record.FileChannelChunk;
+import org.apache.fluss.record.FileLogProjection;
+import org.apache.fluss.record.FileLogRecords;
+import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.LogRecords;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.TimestampAndOffset;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterables;
+import org.apache.fluss.utils.FileUtils;
+import org.apache.fluss.utils.FlussPaths;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -46,8 +46,8 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Optional;
 
-import static com.alibaba.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
-import static com.alibaba.fluss.utils.IOUtils.closeQuietly;
+import static org.apache.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+import static org.apache.fluss.utils.IOUtils.closeQuietly;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for

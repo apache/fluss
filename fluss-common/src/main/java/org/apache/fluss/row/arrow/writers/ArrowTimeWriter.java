@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.row.arrow.writers;
+package org.apache.fluss.row.arrow.writers;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.row.InternalRow;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BaseFixedWidthVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeMicroVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeMilliVector;
@@ -27,7 +26,7 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeNanoVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeSecVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
 
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** {@link ArrowFieldWriter} for Time. */
 @Internal

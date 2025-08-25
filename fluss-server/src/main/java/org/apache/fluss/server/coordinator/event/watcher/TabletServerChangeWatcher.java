@@ -15,23 +15,23 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.coordinator.event.watcher;
+package org.apache.fluss.server.coordinator.event.watcher;
 
-import com.alibaba.fluss.cluster.ServerType;
-import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.server.coordinator.event.DeadTabletServerEvent;
-import com.alibaba.fluss.server.coordinator.event.EventManager;
-import com.alibaba.fluss.server.coordinator.event.NewTabletServerEvent;
-import com.alibaba.fluss.server.metadata.ServerInfo;
-import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
-import com.alibaba.fluss.server.zk.data.ZkData.ServerIdZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.ServerIdsZNode;
-
+import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.server.coordinator.event.DeadTabletServerEvent;
+import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
+import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.ZkData.ServerIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.ServerIdsZNode;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
 import org.apache.fluss.shaded.curator5.org.apache.curator.utils.ZKPaths;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

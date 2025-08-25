@@ -15,21 +15,19 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.netty.server;
+package org.apache.fluss.rpc.netty.server;
 
-import com.alibaba.fluss.cluster.Endpoint;
-import com.alibaba.fluss.cluster.ServerType;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.metrics.groups.MetricGroup;
-import com.alibaba.fluss.rpc.RpcGateway;
-import com.alibaba.fluss.rpc.RpcGatewayService;
-import com.alibaba.fluss.rpc.RpcServer;
-import com.alibaba.fluss.rpc.netty.NettyMetrics;
-import com.alibaba.fluss.rpc.netty.NettyUtils;
-import com.alibaba.fluss.rpc.protocol.NetworkProtocolPlugin;
-import com.alibaba.fluss.utils.concurrent.FutureUtils;
-
+import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.rpc.RpcGateway;
+import org.apache.fluss.rpc.RpcGatewayService;
+import org.apache.fluss.rpc.RpcServer;
+import org.apache.fluss.rpc.netty.NettyMetrics;
+import org.apache.fluss.rpc.netty.NettyUtils;
+import org.apache.fluss.rpc.protocol.NetworkProtocolPlugin;
 import org.apache.fluss.shaded.netty4.io.netty.bootstrap.ServerBootstrap;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.AdaptiveRecvByteBufAllocator;
@@ -37,6 +35,8 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.Channel;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandler;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOption;
 import org.apache.fluss.shaded.netty4.io.netty.channel.EventLoopGroup;
+import org.apache.fluss.utils.concurrent.FutureUtils;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -55,9 +55,9 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.rpc.netty.NettyUtils.shutdownGroup;
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.rpc.netty.NettyUtils.shutdownGroup;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * Netty based {@link RpcServer} implementation. The RPC server starts a handler to receive RPC

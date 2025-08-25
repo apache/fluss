@@ -15,26 +15,23 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.netty.server;
+package org.apache.fluss.rpc.netty.server;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.exception.AuthenticationException;
-import com.alibaba.fluss.exception.NetworkException;
-import com.alibaba.fluss.exception.RetriableAuthenticationException;
-import com.alibaba.fluss.record.send.Send;
-import com.alibaba.fluss.rpc.messages.ApiMessage;
-import com.alibaba.fluss.rpc.messages.AuthenticateRequest;
-import com.alibaba.fluss.rpc.messages.AuthenticateResponse;
-import com.alibaba.fluss.rpc.messages.FetchLogRequest;
-import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.rpc.protocol.ApiKeys;
-import com.alibaba.fluss.rpc.protocol.ApiManager;
-import com.alibaba.fluss.rpc.protocol.ApiMethod;
-import com.alibaba.fluss.rpc.protocol.MessageCodec;
-import com.alibaba.fluss.security.auth.ServerAuthenticator;
-import com.alibaba.fluss.utils.ExceptionUtils;
-import com.alibaba.fluss.utils.IOUtils;
-
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.exception.AuthenticationException;
+import org.apache.fluss.exception.NetworkException;
+import org.apache.fluss.exception.RetriableAuthenticationException;
+import org.apache.fluss.record.send.Send;
+import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.AuthenticateRequest;
+import org.apache.fluss.rpc.messages.AuthenticateResponse;
+import org.apache.fluss.rpc.messages.FetchLogRequest;
+import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.rpc.protocol.ApiManager;
+import org.apache.fluss.rpc.protocol.ApiMethod;
+import org.apache.fluss.rpc.protocol.MessageCodec;
+import org.apache.fluss.security.auth.ServerAuthenticator;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFutureListener;
@@ -42,6 +39,9 @@ import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAdapter;
 import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
 import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.IOUtils;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -52,9 +52,9 @@ import java.util.Deque;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
-import static com.alibaba.fluss.rpc.protocol.MessageCodec.encodeErrorResponse;
-import static com.alibaba.fluss.rpc.protocol.MessageCodec.encodeServerFailure;
-import static com.alibaba.fluss.rpc.protocol.MessageCodec.encodeSuccessResponse;
+import static org.apache.fluss.rpc.protocol.MessageCodec.encodeErrorResponse;
+import static org.apache.fluss.rpc.protocol.MessageCodec.encodeServerFailure;
+import static org.apache.fluss.rpc.protocol.MessageCodec.encodeSuccessResponse;
 
 /** Implementation of the channel handler to process inbound requests for RPC server. */
 public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
@@ -294,7 +294,7 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
     @VisibleForTesting
     Deque<FlussRequest> inflightResponses(short apiKey) {
         // TODO: implement this if we introduce inflight response in
-        // https://github.com/alibaba/fluss/issues/771
+        // https://github.com/apache/fluss/issues/771
         return new ArrayDeque<>();
     }
 

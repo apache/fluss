@@ -15,16 +15,16 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.protogen.benchmark;
+package org.apache.fluss.protogen.benchmark;
 
-import com.alibaba.fluss.protogen.tests.Frame;
-import com.alibaba.fluss.protogen.tests.Point;
-import com.alibaba.fluss.protogen.tests.PointFrame;
-
-import com.google.protobuf.CodedOutputStream;
+import org.apache.fluss.protogen.tests.Frame;
+import org.apache.fluss.protogen.tests.Point;
+import org.apache.fluss.protogen.tests.PointFrame;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
+
+import com.google.protobuf.CodedOutputStream;
 import org.openjdk.jmh.annotations.Benchmark;
 import org.openjdk.jmh.annotations.Fork;
 import org.openjdk.jmh.annotations.Measurement;

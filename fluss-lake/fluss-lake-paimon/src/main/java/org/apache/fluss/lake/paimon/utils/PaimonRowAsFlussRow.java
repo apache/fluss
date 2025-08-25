@@ -1,13 +1,12 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- *     http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,11 +15,7 @@
  * limitations under the License.
  */
 
-<<<<<<<< HEAD:fluss-lake/fluss-lake-paimon/src/main/java/org/apache/fluss/lake/paimon/utils/PaimonRowAsFlussRow.java
-package com.alibaba.fluss.lake.paimon.utils;
-========
-package org.apache.fluss.flink.lakehouse.paimon.reader;
->>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/paimon/reader/PaimonRowWrapper.java
+package org.apache.fluss.lake.paimon.utils;
 
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;

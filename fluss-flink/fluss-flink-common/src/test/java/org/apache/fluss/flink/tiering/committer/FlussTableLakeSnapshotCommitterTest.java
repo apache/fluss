@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.tiering.committer;
+package org.apache.fluss.flink.tiering.committer;
 
-import com.alibaba.fluss.client.metadata.LakeSnapshot;
-import com.alibaba.fluss.flink.utils.FlinkTestBase;
-import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
-import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TablePath;
+import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.flink.utils.FlinkTestBase;
+import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -35,8 +35,8 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link FlussTableLakeSnapshotCommitter}. */

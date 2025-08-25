@@ -29,7 +29,7 @@ Fluss is designed to support a wide range of use cases, from powering dashboards
 By serving as the real-time data layer on the Lakehouse, Fluss supports both **streaming-first** architectures and **unified batch and stream processing**. This flexibility should be appealing for organizations looking to modernize their analytics stack while keeping costs low and performance high.
 
 ### What’s Next for Fluss?
-Open-sourcing Fluss is just the beginning and it will be donated to the Apache Software Foundation (ASF). We’re committed to working closely with the community to expand its capabilities and adoption. You can find more information about the project’s roadmap [here](https://alibaba.github.io/fluss-docs/roadmap/).
+Open-sourcing Fluss is just the beginning and it will be donated to the Apache Software Foundation (ASF). We’re committed to working closely with the community to expand its capabilities and adoption. You can find more information about the project’s roadmap [here](https://fluss.apache.org/roadmap/).
 
 ![Banner](assets/fluss_announcement/banner.png)
 
@@ -40,7 +40,7 @@ Make sure to keep an eye on the project, give it a try and if you like it, don�
 
 ### Getting Started
 - Visit the [GitHub repository](https://github.com/apache/fluss).
-- Check out the [quickstart guide](https://alibaba.github.io/fluss-docs/docs/quickstart/flink/).
+- Check out the [quickstart guide](/docs/quickstart/flink/).
 
 ### Additional Resources
 - Announcement Blog Post: [Introducing Fluss: Unified Streaming Storage For Next-Generation Data Analytics](https://www.ververica.com/blog/introducing-fluss)

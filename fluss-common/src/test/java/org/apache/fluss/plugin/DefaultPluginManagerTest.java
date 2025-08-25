@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.plugin;
+package org.apache.fluss.plugin;
 
-import com.alibaba.fluss.plugin.jar.pluginb.TestServiceB;
-
+import org.apache.fluss.plugin.jar.pluginb.TestServiceB;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Lists;
+
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -35,7 +35,7 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link DefaultPluginManager}. */

@@ -15,29 +15,29 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.netty.client;
+package org.apache.fluss.rpc.netty.client;
 
-import com.alibaba.fluss.exception.CorruptMessageException;
-import com.alibaba.fluss.rpc.messages.ApiMessage;
-import com.alibaba.fluss.rpc.messages.ErrorResponse;
-import com.alibaba.fluss.rpc.messages.FetchLogResponse;
-import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.rpc.protocol.ApiMethod;
-import com.alibaba.fluss.rpc.protocol.ResponseType;
-
+import org.apache.fluss.exception.CorruptMessageException;
+import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.ErrorResponse;
+import org.apache.fluss.rpc.messages.FetchLogResponse;
+import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.rpc.protocol.ApiMethod;
+import org.apache.fluss.rpc.protocol.ResponseType;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelInboundHandlerAdapter;
 import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleState;
 import org.apache.fluss.shaded.netty4.io.netty.handler.timeout.IdleStateEvent;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.nio.channels.ClosedChannelException;
 
-import static com.alibaba.fluss.rpc.protocol.MessageCodec.RESPONSE_HEADER_LENGTH;
-import static com.alibaba.fluss.rpc.protocol.MessageCodec.SERVER_FAILURE_HEADER_LENGTH;
+import static org.apache.fluss.rpc.protocol.MessageCodec.RESPONSE_HEADER_LENGTH;
+import static org.apache.fluss.rpc.protocol.MessageCodec.SERVER_FAILURE_HEADER_LENGTH;
 
 /**
  * Implementation of the channel handler to process inbound requests for RPC client. The client
@@ -98,7 +98,7 @@ public final class NettyClientHandler extends ChannelInboundHandlerAdapter {
                         // processing the response.
                         // TODO for the FetchLogResponse returned by the FetchLogRequest sent by the
                         // Fluss client, We also aim to avoid this memory copy operation, traced by
-                        // https://github.com/alibaba/fluss/issues/1184
+                        // https://github.com/apache/fluss/issues/1184
                         response.parseFrom(buffer, messageSize);
                     } else {
                         // copy the buffer into a heap buffer, this can avoid the network buffer

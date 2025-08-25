@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.log;
+package org.apache.fluss.server.log;
 
-import com.alibaba.fluss.exception.InvalidOffsetException;
-import com.alibaba.fluss.server.exception.CorruptIndexException;
+import org.apache.fluss.exception.InvalidOffsetException;
+import org.apache.fluss.server.exception.CorruptIndexException;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -28,8 +28,8 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.MappedByteBuffer;
 
-import static com.alibaba.fluss.utils.concurrent.LockUtils.inLock;
-import static com.alibaba.fluss.utils.concurrent.LockUtils.inReadLock;
+import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
+import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for

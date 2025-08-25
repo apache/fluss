@@ -15,26 +15,26 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.source;
+package org.apache.fluss.flink.source;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.flink.source.deserializer.DeserializerInitContextImpl;
-import com.alibaba.fluss.flink.source.deserializer.FlussDeserializationSchema;
-import com.alibaba.fluss.flink.source.emitter.FlinkRecordEmitter;
-import com.alibaba.fluss.flink.source.enumerator.FlinkSourceEnumerator;
-import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
-import com.alibaba.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
-import com.alibaba.fluss.flink.source.reader.FlinkSourceReader;
-import com.alibaba.fluss.flink.source.reader.RecordAndPos;
-import com.alibaba.fluss.flink.source.split.SourceSplitBase;
-import com.alibaba.fluss.flink.source.split.SourceSplitSerializer;
-import com.alibaba.fluss.flink.source.state.FlussSourceEnumeratorStateSerializer;
-import com.alibaba.fluss.flink.source.state.SourceEnumeratorState;
-import com.alibaba.fluss.flink.utils.PushdownUtils.FieldEqual;
-import com.alibaba.fluss.lake.source.LakeSource;
-import com.alibaba.fluss.lake.source.LakeSplit;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.types.RowType;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.source.deserializer.DeserializerInitContextImpl;
+import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
+import org.apache.fluss.flink.source.emitter.FlinkRecordEmitter;
+import org.apache.fluss.flink.source.enumerator.FlinkSourceEnumerator;
+import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
+import org.apache.fluss.flink.source.reader.FlinkSourceReader;
+import org.apache.fluss.flink.source.reader.RecordAndPos;
+import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.flink.source.split.SourceSplitSerializer;
+import org.apache.fluss.flink.source.state.FlussSourceEnumeratorStateSerializer;
+import org.apache.fluss.flink.source.state.SourceEnumeratorState;
+import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.types.RowType;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.connector.source.Boundedness;
@@ -52,7 +52,7 @@ import javax.annotation.Nullable;
 
 import java.util.List;
 
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Flink source for Fluss. */
 public class FlinkSource<OUT>

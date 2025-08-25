@@ -15,17 +15,16 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.record;
+package org.apache.fluss.record;
 
-import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.record.bytesview.BytesView;
-import com.alibaba.fluss.record.bytesview.MultiBytesView;
-import com.alibaba.fluss.record.send.ByteBufWritableOutput;
-
+import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.record.bytesview.BytesView;
+import org.apache.fluss.record.bytesview.MultiBytesView;
+import org.apache.fluss.record.send.ByteBufWritableOutput;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * A {@link LogRecords} that represented as a view of bytes. The bytes may be a sequence of bytes

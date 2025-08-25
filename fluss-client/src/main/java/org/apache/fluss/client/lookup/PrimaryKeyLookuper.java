@@ -15,29 +15,29 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.lookup;
+package org.apache.fluss.client.lookup;
 
-import com.alibaba.fluss.bucketing.BucketingFunction;
-import com.alibaba.fluss.client.metadata.MetadataUpdater;
-import com.alibaba.fluss.client.table.getter.PartitionGetter;
-import com.alibaba.fluss.exception.PartitionNotExistException;
-import com.alibaba.fluss.metadata.DataLakeFormat;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.decode.RowDecoder;
-import com.alibaba.fluss.row.encode.KeyEncoder;
-import com.alibaba.fluss.row.encode.ValueDecoder;
-import com.alibaba.fluss.types.DataType;
-import com.alibaba.fluss.types.RowType;
+import org.apache.fluss.bucketing.BucketingFunction;
+import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.table.getter.PartitionGetter;
+import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.decode.RowDecoder;
+import org.apache.fluss.row.encode.KeyEncoder;
+import org.apache.fluss.row.encode.ValueDecoder;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
 
-import static com.alibaba.fluss.client.utils.ClientUtils.getPartitionId;
-import static com.alibaba.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** An implementation of {@link Lookuper} that lookups by primary key. */
 class PrimaryKeyLookuper implements Lookuper {

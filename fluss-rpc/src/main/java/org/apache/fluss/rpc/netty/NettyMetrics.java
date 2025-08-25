@@ -15,13 +15,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc.netty;
+package org.apache.fluss.rpc.netty;
 
-import com.alibaba.fluss.metrics.Gauge;
-import com.alibaba.fluss.metrics.MeterView;
-import com.alibaba.fluss.metrics.MetricNames;
-import com.alibaba.fluss.metrics.groups.MetricGroup;
-
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MeterView;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.PoolArenaMetric;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocator;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.PooledByteBufAllocatorMetric;

@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.compression;
+package org.apache.fluss.compression;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.CompressionCodec;
 
 /** Compression information for Arrow record batches. */

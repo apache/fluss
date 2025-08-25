@@ -15,24 +15,24 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.replica;
+package org.apache.fluss.server.replica;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.config.MemorySize;
-import com.alibaba.fluss.exception.NotLeaderOrFollowerException;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.record.KvRecord;
-import com.alibaba.fluss.record.KvRecordBatch;
-import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
-import com.alibaba.fluss.rpc.messages.PbLookupRespForBucket;
-import com.alibaba.fluss.rpc.messages.PutKvRequest;
-import com.alibaba.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
-import com.alibaba.fluss.server.testutils.FlussClusterExtension;
-import com.alibaba.fluss.utils.ExceptionUtils;
-import com.alibaba.fluss.utils.FileUtils;
-import com.alibaba.fluss.utils.types.Tuple2;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.exception.NotLeaderOrFollowerException;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.KvRecord;
+import org.apache.fluss.record.KvRecordBatch;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
+import org.apache.fluss.rpc.messages.PutKvRequest;
+import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
+import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.FileUtils;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -44,16 +44,16 @@ import java.util.List;
 import java.util.Random;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
-import static com.alibaba.fluss.server.testutils.KvTestUtils.assertLookupResponse;
-import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.createTable;
-import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
-import static com.alibaba.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
-import static com.alibaba.fluss.testutils.DataTestUtils.genKvRecordBatch;
-import static com.alibaba.fluss.testutils.DataTestUtils.genKvRecords;
-import static com.alibaba.fluss.testutils.DataTestUtils.getKeyValuePairs;
-import static com.alibaba.fluss.testutils.DataTestUtils.toKvRecordBatch;
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUntil;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
+import static org.apache.fluss.server.testutils.KvTestUtils.assertLookupResponse;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.createTable;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newLookupRequest;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequest;
+import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
+import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
+import static org.apache.fluss.testutils.DataTestUtils.getKeyValuePairs;
+import static org.apache.fluss.testutils.DataTestUtils.toKvRecordBatch;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 
 /** The IT case for the restoring of kv replica. */
 class KvReplicaRestoreITCase {

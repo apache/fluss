@@ -15,21 +15,20 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.utils;
+package org.apache.fluss.flink.utils;
 
-import com.alibaba.fluss.row.Decimal;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.TimestampLtz;
-import com.alibaba.fluss.row.TimestampNtz;
-import com.alibaba.fluss.types.ArrayType;
-import com.alibaba.fluss.types.DataField;
-import com.alibaba.fluss.types.DataType;
-import com.alibaba.fluss.types.MapType;
-import com.alibaba.fluss.types.RowType;
-
+import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.node.ObjectNode;
+import org.apache.fluss.types.ArrayType;
+import org.apache.fluss.types.DataField;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.MapType;
+import org.apache.fluss.types.RowType;
 
 import java.io.Serializable;
 import java.math.BigDecimal;
@@ -38,15 +37,15 @@ import java.time.LocalTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 
-import static com.alibaba.fluss.flink.utils.TimeFormats.ISO8601_TIMESTAMP_FORMAT;
-import static com.alibaba.fluss.flink.utils.TimeFormats.ISO8601_TIMESTAMP_WITH_LOCAL_TIMEZONE_FORMAT;
-import static com.alibaba.fluss.flink.utils.TimeFormats.SQL_TIMESTAMP_FORMAT;
-import static com.alibaba.fluss.flink.utils.TimeFormats.SQL_TIMESTAMP_WITH_LOCAL_TIMEZONE_FORMAT;
-import static com.alibaba.fluss.flink.utils.TimeFormats.SQL_TIME_FORMAT;
 import static java.time.format.DateTimeFormatter.ISO_LOCAL_DATE;
+import static org.apache.fluss.flink.utils.TimeFormats.ISO8601_TIMESTAMP_FORMAT;
+import static org.apache.fluss.flink.utils.TimeFormats.ISO8601_TIMESTAMP_WITH_LOCAL_TIMEZONE_FORMAT;
+import static org.apache.fluss.flink.utils.TimeFormats.SQL_TIMESTAMP_FORMAT;
+import static org.apache.fluss.flink.utils.TimeFormats.SQL_TIMESTAMP_WITH_LOCAL_TIMEZONE_FORMAT;
+import static org.apache.fluss.flink.utils.TimeFormats.SQL_TIME_FORMAT;
 import static org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator.Feature.WRITE_BIGDECIMAL_AS_PLAIN;
 
-/** A converter to convert Fluss's {@link com.alibaba.fluss.row.InternalRow} to {@link JsonNode}. */
+/** A converter to convert Fluss's {@link org.apache.fluss.row.InternalRow} to {@link JsonNode}. */
 public class FlussRowToJsonConverters {
 
     /** Timestamp format specification which is used to parse timestamp. */

@@ -15,11 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.utils;
+package org.apache.fluss.utils;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.exception.IllegalConfigurationException;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.shaded.guava32.com.google.common.net.InetAddresses;
 
 import java.io.IOException;
@@ -31,9 +30,9 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.Iterator;
 
-import static com.alibaba.fluss.utils.Preconditions.checkArgument;
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for

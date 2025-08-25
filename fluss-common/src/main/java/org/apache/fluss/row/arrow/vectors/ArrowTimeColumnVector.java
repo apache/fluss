@@ -15,19 +15,18 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.row.arrow.vectors;
+package org.apache.fluss.row.arrow.vectors;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.row.columnar.IntColumnVector;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.row.columnar.IntColumnVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeMicroVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeMilliVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeNanoVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeSecVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ValueVector;
 
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Arrow column vector for Time. */
 @Internal

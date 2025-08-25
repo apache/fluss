@@ -15,12 +15,11 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.record.send;
+package org.apache.fluss.record.send;
 
-import com.alibaba.fluss.record.bytesview.BytesView;
-import com.alibaba.fluss.utils.ProtoCodecUtils;
-
+import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
+import org.apache.fluss.utils.ProtoCodecUtils;
 
 /**
  * A basic implementation of {@link WritableOutput} that writes data into a {@link ByteBuf}.

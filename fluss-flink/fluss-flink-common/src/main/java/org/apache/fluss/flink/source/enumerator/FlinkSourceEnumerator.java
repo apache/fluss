@@ -15,35 +15,35 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.source.enumerator;
+package org.apache.fluss.flink.source.enumerator;
 
-import com.alibaba.fluss.client.Connection;
-import com.alibaba.fluss.client.ConnectionFactory;
-import com.alibaba.fluss.client.admin.Admin;
-import com.alibaba.fluss.client.metadata.KvSnapshots;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.flink.lake.LakeSplitGenerator;
-import com.alibaba.fluss.flink.source.enumerator.initializer.BucketOffsetsRetrieverImpl;
-import com.alibaba.fluss.flink.source.enumerator.initializer.NoStoppingOffsetsInitializer;
-import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
-import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer.BucketOffsetsRetriever;
-import com.alibaba.fluss.flink.source.enumerator.initializer.SnapshotOffsetsInitializer;
-import com.alibaba.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
-import com.alibaba.fluss.flink.source.event.PartitionsRemovedEvent;
-import com.alibaba.fluss.flink.source.split.HybridSnapshotLogSplit;
-import com.alibaba.fluss.flink.source.split.LogSplit;
-import com.alibaba.fluss.flink.source.split.SourceSplitBase;
-import com.alibaba.fluss.flink.source.state.SourceEnumeratorState;
-import com.alibaba.fluss.flink.utils.PushdownUtils.FieldEqual;
-import com.alibaba.fluss.lake.source.LakeSource;
-import com.alibaba.fluss.lake.source.LakeSplit;
-import com.alibaba.fluss.metadata.PartitionInfo;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.types.DataField;
-import com.alibaba.fluss.utils.ExceptionUtils;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.metadata.KvSnapshots;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.lake.LakeSplitGenerator;
+import org.apache.fluss.flink.source.enumerator.initializer.BucketOffsetsRetrieverImpl;
+import org.apache.fluss.flink.source.enumerator.initializer.NoStoppingOffsetsInitializer;
+import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer.BucketOffsetsRetriever;
+import org.apache.fluss.flink.source.enumerator.initializer.SnapshotOffsetsInitializer;
+import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
+import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
+import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
+import org.apache.fluss.flink.source.split.LogSplit;
+import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.flink.source.state.SourceEnumeratorState;
+import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.types.DataField;
+import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.connector.source.SourceEvent;
@@ -71,8 +71,8 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * An implementation of {@link SplitEnumerator} for the data of Fluss.

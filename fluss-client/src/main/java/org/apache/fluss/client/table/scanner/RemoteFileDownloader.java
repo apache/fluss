@@ -15,17 +15,17 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.table.scanner;
+package org.apache.fluss.client.table.scanner;
 
-import com.alibaba.fluss.fs.FSDataInputStream;
-import com.alibaba.fluss.fs.FileSystem;
-import com.alibaba.fluss.fs.FsPath;
-import com.alibaba.fluss.fs.FsPathAndFileName;
-import com.alibaba.fluss.fs.utils.FileDownloadSpec;
-import com.alibaba.fluss.fs.utils.FileDownloadUtils;
-import com.alibaba.fluss.utils.CloseableRegistry;
-import com.alibaba.fluss.utils.IOUtils;
-import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
+import org.apache.fluss.fs.FSDataInputStream;
+import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.fs.FsPathAndFileName;
+import org.apache.fluss.fs.utils.FileDownloadSpec;
+import org.apache.fluss.fs.utils.FileDownloadUtils;
+import org.apache.fluss.utils.CloseableRegistry;
+import org.apache.fluss.utils.IOUtils;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import java.io.Closeable;
 import java.io.IOException;

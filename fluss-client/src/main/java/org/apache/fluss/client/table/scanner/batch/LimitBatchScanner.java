@@ -15,31 +15,31 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.table.scanner.batch;
+package org.apache.fluss.client.table.scanner.batch;
 
-import com.alibaba.fluss.client.metadata.MetadataUpdater;
-import com.alibaba.fluss.exception.LeaderNotAvailableException;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.record.DefaultValueRecordBatch;
-import com.alibaba.fluss.record.LogRecord;
-import com.alibaba.fluss.record.LogRecordBatch;
-import com.alibaba.fluss.record.LogRecordReadContext;
-import com.alibaba.fluss.record.LogRecords;
-import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.record.ValueRecord;
-import com.alibaba.fluss.record.ValueRecordReadContext;
-import com.alibaba.fluss.row.GenericRow;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.ProjectedRow;
-import com.alibaba.fluss.row.decode.RowDecoder;
-import com.alibaba.fluss.row.encode.ValueDecoder;
-import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
-import com.alibaba.fluss.rpc.messages.LimitScanRequest;
-import com.alibaba.fluss.rpc.messages.LimitScanResponse;
-import com.alibaba.fluss.types.DataType;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.utils.CloseableIterator;
+import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.record.DefaultValueRecordBatch;
+import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.LogRecordReadContext;
+import org.apache.fluss.record.LogRecords;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.ValueRecord;
+import org.apache.fluss.record.ValueRecordReadContext;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.row.decode.RowDecoder;
+import org.apache.fluss.row.encode.ValueDecoder;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.LimitScanRequest;
+import org.apache.fluss.rpc.messages.LimitScanResponse;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.CloseableIterator;
 
 import javax.annotation.Nullable;
 

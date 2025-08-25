@@ -15,21 +15,21 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server;
+package org.apache.fluss.server;
 
-import com.alibaba.fluss.cluster.Endpoint;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.FlussException;
-import com.alibaba.fluss.server.coordinator.CoordinatorServer;
-import com.alibaba.fluss.server.zk.NOPErrorHandler;
-import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.server.zk.ZooKeeperExtension;
-import com.alibaba.fluss.server.zk.data.ZkData.CoordinatorZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.ServerIdZNode;
-import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
-
+import org.apache.fluss.cluster.Endpoint;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussException;
+import org.apache.fluss.server.coordinator.CoordinatorServer;
+import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.ZkData.CoordinatorZNode;
+import org.apache.fluss.server.zk.data.ZkData.ServerIdZNode;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
+import org.apache.fluss.testutils.common.AllCallbackWrapper;
+
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -38,7 +38,7 @@ import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

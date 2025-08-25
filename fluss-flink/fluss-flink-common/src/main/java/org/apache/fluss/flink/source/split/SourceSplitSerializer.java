@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.source.split;
+package org.apache.fluss.flink.source.split;
 
-import com.alibaba.fluss.flink.lake.LakeSplitSerializer;
-import com.alibaba.fluss.lake.source.LakeSource;
-import com.alibaba.fluss.lake.source.LakeSplit;
-import com.alibaba.fluss.metadata.TableBucket;
+import org.apache.fluss.flink.lake.LakeSplitSerializer;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.metadata.TableBucket;
 
 import org.apache.flink.core.io.SimpleVersionedSerializer;
 import org.apache.flink.core.memory.DataInputDeserializer;
@@ -30,7 +30,7 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** A serializer for the {@link SourceSplitBase}. */
 public class SourceSplitSerializer implements SimpleVersionedSerializer<SourceSplitBase> {

@@ -15,17 +15,17 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.catalog;
+package org.apache.fluss.flink.catalog;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.flink.FlinkConnectorOptions;
-import com.alibaba.fluss.flink.lake.LakeTableFactory;
-import com.alibaba.fluss.flink.sink.FlinkTableSink;
-import com.alibaba.fluss.flink.source.FlinkTableSource;
-import com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils;
-import com.alibaba.fluss.metadata.DataLakeFormat;
-import com.alibaba.fluss.metadata.TablePath;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.FlinkConnectorOptions;
+import org.apache.fluss.flink.lake.LakeTableFactory;
+import org.apache.fluss.flink.sink.FlinkTableSink;
+import org.apache.fluss.flink.source.FlinkTableSource;
+import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
+import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.TablePath;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.configuration.ConfigOption;
@@ -57,13 +57,13 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
-import static com.alibaba.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
-import static com.alibaba.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
-import static com.alibaba.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
-import static com.alibaba.fluss.flink.utils.DataLakeUtils.getDatalakeFormat;
-import static com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeyIndexes;
-import static com.alibaba.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeys;
-import static com.alibaba.fluss.flink.utils.FlinkConversions.toFlinkOption;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
+import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
+import static org.apache.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
+import static org.apache.fluss.flink.utils.DataLakeUtils.getDatalakeFormat;
+import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeyIndexes;
+import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeys;
+import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
 
 /** Factory to create table source and table sink for Fluss. */
 public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {

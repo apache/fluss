@@ -15,10 +15,9 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.testutils;
+package org.apache.fluss.testutils;
 
-import com.alibaba.fluss.record.send.Send;
-
+import org.apache.fluss.record.send.Send;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelFuture;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelOutboundInvoker;

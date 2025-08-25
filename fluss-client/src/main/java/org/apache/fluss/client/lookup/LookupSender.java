@@ -15,23 +15,23 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.lookup;
+package org.apache.fluss.client.lookup;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.client.metadata.MetadataUpdater;
-import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.exception.LeaderNotAvailableException;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.rpc.gateway.TabletServerGateway;
-import com.alibaba.fluss.rpc.messages.LookupRequest;
-import com.alibaba.fluss.rpc.messages.LookupResponse;
-import com.alibaba.fluss.rpc.messages.PbLookupRespForBucket;
-import com.alibaba.fluss.rpc.messages.PbPrefixLookupRespForBucket;
-import com.alibaba.fluss.rpc.messages.PbValueList;
-import com.alibaba.fluss.rpc.messages.PrefixLookupRequest;
-import com.alibaba.fluss.rpc.messages.PrefixLookupResponse;
-import com.alibaba.fluss.rpc.protocol.ApiError;
-import com.alibaba.fluss.utils.types.Tuple2;
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.LookupRequest;
+import org.apache.fluss.rpc.messages.LookupResponse;
+import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
+import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
+import org.apache.fluss.rpc.messages.PbValueList;
+import org.apache.fluss.rpc.messages.PrefixLookupRequest;
+import org.apache.fluss.rpc.messages.PrefixLookupResponse;
+import org.apache.fluss.rpc.protocol.ApiError;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -43,8 +43,8 @@ import java.util.Map;
 import java.util.concurrent.Semaphore;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makeLookupRequest;
-import static com.alibaba.fluss.client.utils.ClientRpcMessageUtils.makePrefixLookupRequest;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeLookupRequest;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePrefixLookupRequest;
 
 /**
  * This background thread pool lookup operations from {@link #lookupQueue}, and send lookup requests

@@ -15,32 +15,32 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.write;
+package org.apache.fluss.client.write;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.client.metrics.WriterMetricGroup;
-import com.alibaba.fluss.cluster.BucketLocation;
-import com.alibaba.fluss.cluster.Cluster;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.memory.LazyMemorySegmentPool;
-import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.memory.PreAllocatedPagedOutputView;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metrics.MetricNames;
-import com.alibaba.fluss.record.LogRecordBatch;
-import com.alibaba.fluss.row.arrow.ArrowWriter;
-import com.alibaba.fluss.row.arrow.ArrowWriterPool;
-import com.alibaba.fluss.utils.CopyOnWriteMap;
-import com.alibaba.fluss.utils.MathUtils;
-import com.alibaba.fluss.utils.clock.Clock;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.metrics.WriterMetricGroup;
+import org.apache.fluss.cluster.BucketLocation;
+import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.memory.LazyMemorySegmentPool;
+import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.memory.PreAllocatedPagedOutputView;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.row.arrow.ArrowWriter;
+import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.utils.CopyOnWriteMap;
+import org.apache.fluss.utils.MathUtils;
+import org.apache.fluss.utils.clock.Clock;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -61,8 +61,8 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
-import static com.alibaba.fluss.record.LogRecordBatch.NO_WRITER_ID;
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.record.LogRecordBatch.NO_WRITER_ID;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for

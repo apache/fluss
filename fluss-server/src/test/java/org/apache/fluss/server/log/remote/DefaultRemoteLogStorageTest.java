@@ -15,18 +15,18 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.log.remote;
+package org.apache.fluss.server.log.remote;
 
-import com.alibaba.fluss.exception.RemoteStorageException;
-import com.alibaba.fluss.fs.FsPath;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.remote.RemoteLogSegment;
-import com.alibaba.fluss.server.log.LogTablet;
-import com.alibaba.fluss.server.log.remote.RemoteLogStorage.IndexType;
-import com.alibaba.fluss.utils.FlussPaths;
-
+import org.apache.fluss.exception.RemoteStorageException;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.log.remote.RemoteLogStorage.IndexType;
 import org.apache.fluss.shaded.guava32.com.google.common.io.Files;
+import org.apache.fluss.utils.FlussPaths;
+
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.params.ParameterizedTest;

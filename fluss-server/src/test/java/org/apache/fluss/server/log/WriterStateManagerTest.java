@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.log;
+package org.apache.fluss.server.log;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.OutOfOrderSequenceException;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.utils.clock.ManualClock;
-import com.alibaba.fluss.utils.types.Tuple2;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.OutOfOrderSequenceException;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.utils.clock.ManualClock;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -45,9 +45,9 @@ import java.util.Set;
 import java.util.function.Consumer;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.server.log.WriterStateManager.listSnapshotFiles;
-import static com.alibaba.fluss.utils.FlussPaths.offsetFromFile;
-import static com.alibaba.fluss.utils.FlussPaths.writerSnapshotFile;
+import static org.apache.fluss.server.log.WriterStateManager.listSnapshotFiles;
+import static org.apache.fluss.utils.FlussPaths.offsetFromFile;
+import static org.apache.fluss.utils.FlussPaths.writerSnapshotFile;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

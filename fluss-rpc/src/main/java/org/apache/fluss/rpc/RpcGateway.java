@@ -15,15 +15,14 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.rpc;
+package org.apache.fluss.rpc;
 
-import com.alibaba.fluss.rpc.messages.ApiVersionsRequest;
-import com.alibaba.fluss.rpc.messages.ApiVersionsResponse;
-import com.alibaba.fluss.rpc.messages.AuthenticateRequest;
-import com.alibaba.fluss.rpc.messages.AuthenticateResponse;
-import com.alibaba.fluss.rpc.protocol.ApiKeys;
-import com.alibaba.fluss.rpc.protocol.RPC;
-
+import org.apache.fluss.rpc.messages.ApiVersionsRequest;
+import org.apache.fluss.rpc.messages.ApiVersionsResponse;
+import org.apache.fluss.rpc.messages.AuthenticateRequest;
+import org.apache.fluss.rpc.messages.AuthenticateResponse;
+import org.apache.fluss.rpc.protocol.ApiKeys;
+import org.apache.fluss.rpc.protocol.RPC;
 import org.apache.fluss.shaded.netty4.io.netty.channel.ChannelHandlerContext;
 
 import java.util.concurrent.CompletableFuture;
@@ -41,14 +40,14 @@ public interface RpcGateway {
      *
      * <p>This method does not handle the authentication logic itself. Instead, the {@link
      * AuthenticateRequest} is processed preemptively by {@link
-     * com.alibaba.fluss.rpc.netty.server.NettyServerHandler} during the initial connection
+     * org.apache.fluss.rpc.netty.server.NettyServerHandler} during the initial connection
      * handshake. The client uses this method definition to generate corresponding request/response
      * objects for API version compatibility.
      *
      * @param request The authenticate request (not used in this method's implementation).
      * @return Always returns {@code null} since the actual authentication handling occurs in {@link
-     *     com.alibaba.fluss.rpc.netty.server.NettyServerHandler}.
-     * @see com.alibaba.fluss.rpc.netty.server.NettyServerHandler#channelRead(ChannelHandlerContext,
+     *     org.apache.fluss.rpc.netty.server.NettyServerHandler}.
+     * @see org.apache.fluss.rpc.netty.server.NettyServerHandler#channelRead(ChannelHandlerContext,
      *     Object) For authentication processing implementation.
      */
     @RPC(api = ApiKeys.AUTHENTICATE)

@@ -16,15 +16,15 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.paimon.utils;
+package org.apache.fluss.lake.paimon.utils;
 
-import com.alibaba.fluss.predicate.And;
-import com.alibaba.fluss.predicate.CompoundPredicate;
-import com.alibaba.fluss.predicate.FieldRef;
-import com.alibaba.fluss.predicate.FunctionVisitor;
-import com.alibaba.fluss.predicate.LeafPredicate;
-import com.alibaba.fluss.predicate.Or;
-import com.alibaba.fluss.predicate.PredicateVisitor;
+import org.apache.fluss.predicate.And;
+import org.apache.fluss.predicate.CompoundPredicate;
+import org.apache.fluss.predicate.FieldRef;
+import org.apache.fluss.predicate.FunctionVisitor;
+import org.apache.fluss.predicate.LeafPredicate;
+import org.apache.fluss.predicate.Or;
+import org.apache.fluss.predicate.PredicateVisitor;
 
 import org.apache.paimon.predicate.Predicate;
 import org.apache.paimon.predicate.PredicateBuilder;
@@ -34,10 +34,10 @@ import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.lake.paimon.utils.PaimonConversions.toPaimonLiteral;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonLiteral;
 
 /**
- * Converts a Fluss {@link com.alibaba.fluss.predicate.Predicate} into a Paimon {@link Predicate}.
+ * Converts a Fluss {@link org.apache.fluss.predicate.Predicate} into a Paimon {@link Predicate}.
  *
  * <p>This class implements the {@link PredicateVisitor} pattern to traverse a tree of Fluss
  * predicates. It handles both leaf-level conditions (like equals, greater than) and compound
@@ -55,7 +55,7 @@ public class FlussToPaimonPredicateConverter implements PredicateVisitor<Predica
     }
 
     public static Optional<Predicate> convert(
-            RowType rowType, com.alibaba.fluss.predicate.Predicate flussPredicate) {
+            RowType rowType, org.apache.fluss.predicate.Predicate flussPredicate) {
         try {
             return Optional.of(flussPredicate.visit(new FlussToPaimonPredicateConverter(rowType)));
         } catch (UnsupportedOperationException e) {
@@ -87,7 +87,7 @@ public class FlussToPaimonPredicateConverter implements PredicateVisitor<Predica
 
     /**
      * A visitor that implements the logic to convert each type of {@link
-     * com.alibaba.fluss.predicate.LeafFunction} to a Paimon {@link Predicate}.
+     * org.apache.fluss.predicate.LeafFunction} to a Paimon {@link Predicate}.
      */
     private class LeafFunctionConverter implements FunctionVisitor<Predicate> {
 

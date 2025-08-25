@@ -69,7 +69,7 @@
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-fs-obs</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
@@ -98,14 +98,14 @@
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-lake-iceberg</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-lake-lance</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>

@@ -15,12 +15,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.cluster;
+package org.apache.fluss.cluster;
 
-import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.SchemaInfo;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePath;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.SchemaInfo;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -31,15 +31,15 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
-import static com.alibaba.fluss.record.TestData.DATA1_SCHEMA;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
-import static com.alibaba.fluss.record.TestData.DATA2_SCHEMA;
-import static com.alibaba.fluss.record.TestData.DATA2_TABLE_ID;
-import static com.alibaba.fluss.record.TestData.DATA2_TABLE_INFO;
-import static com.alibaba.fluss.record.TestData.DATA2_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
+import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA2_TABLE_INFO;
+import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

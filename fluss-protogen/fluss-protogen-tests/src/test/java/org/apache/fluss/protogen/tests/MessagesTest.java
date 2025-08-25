@@ -15,14 +15,14 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.protogen.tests;
+package org.apache.fluss.protogen.tests;
 
-import com.alibaba.fluss.rpc.messages.ApiMessage;
-import com.alibaba.fluss.rpc.messages.ErrorMessage;
-
-import com.google.protobuf.CodedOutputStream;
+import org.apache.fluss.rpc.messages.ApiMessage;
+import org.apache.fluss.rpc.messages.ErrorMessage;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
+
+import com.google.protobuf.CodedOutputStream;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 

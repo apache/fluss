@@ -15,18 +15,18 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.coordinator.statemachine;
+package org.apache.fluss.server.coordinator.statemachine;
 
-import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.server.coordinator.CoordinatorContext;
-import com.alibaba.fluss.server.coordinator.CoordinatorRequestBatch;
-import com.alibaba.fluss.server.entity.BatchRegisterLeadAndIsr;
-import com.alibaba.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
-import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
-
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.coordinator.CoordinatorContext;
+import org.apache.fluss.server.coordinator.CoordinatorRequestBatch;
+import org.apache.fluss.server.entity.BatchRegisterLeadAndIsr;
+import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Sets;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 

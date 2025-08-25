@@ -15,26 +15,26 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.write;
+package org.apache.fluss.client.write;
 
-import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.memory.PreAllocatedPagedOutputView;
-import com.alibaba.fluss.memory.TestingMemorySegmentPool;
-import com.alibaba.fluss.memory.UnmanagedPagedOutputView;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.record.LogRecord;
-import com.alibaba.fluss.record.LogRecordBatch;
-import com.alibaba.fluss.record.LogRecordReadContext;
-import com.alibaba.fluss.record.MemoryLogRecords;
-import com.alibaba.fluss.record.bytesview.BytesView;
-import com.alibaba.fluss.row.GenericRow;
-import com.alibaba.fluss.row.arrow.ArrowWriter;
-import com.alibaba.fluss.row.arrow.ArrowWriterPool;
-import com.alibaba.fluss.utils.CloseableIterator;
-
-import org.apache.commons.lang3.RandomStringUtils;
+import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.memory.PreAllocatedPagedOutputView;
+import org.apache.fluss.memory.TestingMemorySegmentPool;
+import org.apache.fluss.memory.UnmanagedPagedOutputView;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.LogRecordReadContext;
+import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.bytesview.BytesView;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.arrow.ArrowWriter;
+import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.utils.CloseableIterator;
+
+import org.apache.commons.lang3.RandomStringUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -43,13 +43,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
-import static com.alibaba.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
-import static com.alibaba.fluss.record.LogRecordReadContext.createArrowReadContext;
-import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
-import static com.alibaba.fluss.record.TestData.DATA1_ROW_TYPE;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_INFO;
-import static com.alibaba.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
+import static org.apache.fluss.record.LogRecordReadContext.createArrowReadContext;
+import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
+import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

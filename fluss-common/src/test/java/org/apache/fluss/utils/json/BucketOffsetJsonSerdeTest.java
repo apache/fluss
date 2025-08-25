@@ -15,9 +15,9 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.utils.json;
+package org.apache.fluss.utils.json;
 
-import com.alibaba.fluss.lake.committer.BucketOffset;
+import org.apache.fluss.lake.committer.BucketOffset;
 
 /** Test for {@link BucketOffset}. */
 public class BucketOffsetJsonSerdeTest extends JsonSerdeTestBase<BucketOffset> {

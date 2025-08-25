@@ -15,23 +15,22 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.record;
+package org.apache.fluss.record;
 
-import com.alibaba.fluss.annotation.PublicEvolving;
-import com.alibaba.fluss.exception.CorruptMessageException;
-import com.alibaba.fluss.exception.OutOfOrderSequenceException;
-import com.alibaba.fluss.memory.MemorySegment;
-import com.alibaba.fluss.metadata.LogFormat;
-import com.alibaba.fluss.row.arrow.ArrowReader;
-import com.alibaba.fluss.types.DataType;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.utils.ArrowUtils;
-import com.alibaba.fluss.utils.CloseableIterator;
-import com.alibaba.fluss.utils.MurmurHashUtils;
-import com.alibaba.fluss.utils.crc.Crc32C;
-
+import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.exception.CorruptMessageException;
+import org.apache.fluss.exception.OutOfOrderSequenceException;
+import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.row.arrow.ArrowReader;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.ArrowUtils;
+import org.apache.fluss.utils.CloseableIterator;
+import org.apache.fluss.utils.MurmurHashUtils;
+import org.apache.fluss.utils.crc.Crc32C;
 
 import java.nio.ByteBuffer;
 import java.util.NoSuchElementException;

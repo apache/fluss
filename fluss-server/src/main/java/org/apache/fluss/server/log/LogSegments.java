@@ -175,22 +175,30 @@ public final class LogSegments {
         return floorEntry(offset).map(Map.Entry::getValue);
     }
 
-    /** @return the entry associated with the greatest offset, if it exists. */
+    /**
+     * @return the entry associated with the greatest offset, if it exists.
+     */
     public Optional<Map.Entry<Long, LogSegment>> lastEntry() {
         return Optional.ofNullable(segments.lastEntry());
     }
 
-    /** @return the log segment with the greatest offset, if it exists. */
+    /**
+     * @return the log segment with the greatest offset, if it exists.
+     */
     public Optional<LogSegment> lastSegment() {
         return Optional.ofNullable(segments.lastEntry()).map(Map.Entry::getValue);
     }
 
-    /** @return the entry associated with the greatest offset, if it exists. */
+    /**
+     * @return the entry associated with the greatest offset, if it exists.
+     */
     public Optional<Map.Entry<Long, LogSegment>> firstEntry() {
         return Optional.ofNullable(segments.firstEntry());
     }
 
-    /** @return the log segment with the greatest offset, if it exists. */
+    /**
+     * @return the log segment with the greatest offset, if it exists.
+     */
     public Optional<LogSegment> firstSegment() {
         return Optional.ofNullable(segments.firstEntry()).map(Map.Entry::getValue);
     }

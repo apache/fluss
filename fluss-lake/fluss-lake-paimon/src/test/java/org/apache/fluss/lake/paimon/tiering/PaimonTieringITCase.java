@@ -15,18 +15,18 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.paimon.tiering;
+package org.apache.fluss.lake.paimon.tiering;
 
-import com.alibaba.fluss.config.AutoPartitionTimeUnit;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
-import com.alibaba.fluss.metadata.Schema;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.utils.types.Tuple2;
+import org.apache.fluss.config.AutoPartitionTimeUnit;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
@@ -47,8 +47,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
-import static com.alibaba.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
+import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** IT case for tiering tables to paimon. */

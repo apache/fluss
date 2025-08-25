@@ -15,20 +15,20 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.table.scanner.log;
+package org.apache.fluss.client.table.scanner.log;
 
-import com.alibaba.fluss.client.metrics.ScannerMetricGroup;
-import com.alibaba.fluss.client.metrics.TestingScannerMetricGroup;
-import com.alibaba.fluss.client.table.scanner.RemoteFileDownloader;
-import com.alibaba.fluss.client.table.scanner.log.RemoteLogDownloader.RemoteLogDownloadRequest;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.fs.FsPath;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.remote.RemoteLogSegment;
-import com.alibaba.fluss.utils.FileUtils;
-import com.alibaba.fluss.utils.IOUtils;
+import org.apache.fluss.client.metrics.ScannerMetricGroup;
+import org.apache.fluss.client.metrics.TestingScannerMetricGroup;
+import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
+import org.apache.fluss.client.table.scanner.log.RemoteLogDownloader.RemoteLogDownloadRequest;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.remote.RemoteLogSegment;
+import org.apache.fluss.utils.FileUtils;
+import org.apache.fluss.utils.IOUtils;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -50,14 +50,14 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_ID;
-import static com.alibaba.fluss.record.TestData.DATA1_TABLE_PATH;
-import static com.alibaba.fluss.testutils.DataTestUtils.genRemoteLogSegmentFile;
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUntil;
-import static com.alibaba.fluss.utils.FlussPaths.remoteLogDir;
-import static com.alibaba.fluss.utils.FlussPaths.remoteLogTabletDir;
+import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
+import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.testutils.DataTestUtils.genRemoteLogSegmentFile;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
+import static org.apache.fluss.utils.FlussPaths.remoteLogDir;
+import static org.apache.fluss.utils.FlussPaths.remoteLogTabletDir;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link RemoteLogDownloader}. */

@@ -15,21 +15,20 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.zk.data;
+package org.apache.fluss.server.zk.data;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.cluster.Endpoint;
-import com.alibaba.fluss.utils.json.JsonDeserializer;
-import com.alibaba.fluss.utils.json.JsonSerializer;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.utils.json.JsonDeserializer;
+import org.apache.fluss.utils.json.JsonSerializer;
 
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
 
-import static com.alibaba.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
+import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
 
 /** Json serializer and deserializer for {@link TabletServerRegistration}. */
 @Internal

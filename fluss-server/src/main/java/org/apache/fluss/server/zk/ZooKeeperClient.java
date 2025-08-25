@@ -15,63 +15,63 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.zk;
+package org.apache.fluss.server.zk;
 
-import com.alibaba.fluss.annotation.Internal;
-import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
-import com.alibaba.fluss.metadata.Schema;
-import com.alibaba.fluss.metadata.SchemaInfo;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TablePartition;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.security.acl.AccessControlEntry;
-import com.alibaba.fluss.security.acl.Resource;
-import com.alibaba.fluss.security.acl.ResourceType;
-import com.alibaba.fluss.server.authorizer.DefaultAuthorizer.VersionedAcls;
-import com.alibaba.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
-import com.alibaba.fluss.server.zk.data.BucketSnapshot;
-import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
-import com.alibaba.fluss.server.zk.data.DatabaseRegistration;
-import com.alibaba.fluss.server.zk.data.LakeTableSnapshot;
-import com.alibaba.fluss.server.zk.data.LeaderAndIsr;
-import com.alibaba.fluss.server.zk.data.PartitionAssignment;
-import com.alibaba.fluss.server.zk.data.RemoteLogManifestHandle;
-import com.alibaba.fluss.server.zk.data.ResourceAcl;
-import com.alibaba.fluss.server.zk.data.TableAssignment;
-import com.alibaba.fluss.server.zk.data.TableRegistration;
-import com.alibaba.fluss.server.zk.data.TabletServerRegistration;
-import com.alibaba.fluss.server.zk.data.ZkData;
-import com.alibaba.fluss.server.zk.data.ZkData.AclChangeNotificationNode;
-import com.alibaba.fluss.server.zk.data.ZkData.BucketIdsZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.BucketRemoteLogsZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.BucketSnapshotIdZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.BucketSnapshotsZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.CoordinatorZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.DatabaseZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.DatabasesZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.LakeTableZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.LeaderAndIsrZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.PartitionIdZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.PartitionSequenceIdZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.PartitionZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.PartitionsZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.ResourceAclNode;
-import com.alibaba.fluss.server.zk.data.ZkData.SchemaZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.SchemasZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.ServerIdZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.ServerIdsZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.TableIdZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.TableSequenceIdZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.TableZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.TablesZNode;
-import com.alibaba.fluss.server.zk.data.ZkData.WriterIdZNode;
-import com.alibaba.fluss.utils.types.Tuple2;
-
+import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaInfo;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePartition;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.security.acl.AccessControlEntry;
+import org.apache.fluss.security.acl.Resource;
+import org.apache.fluss.security.acl.ResourceType;
+import org.apache.fluss.server.authorizer.DefaultAuthorizer.VersionedAcls;
+import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
+import org.apache.fluss.server.zk.data.BucketSnapshot;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
+import org.apache.fluss.server.zk.data.DatabaseRegistration;
+import org.apache.fluss.server.zk.data.LakeTableSnapshot;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.server.zk.data.ResourceAcl;
+import org.apache.fluss.server.zk.data.TableAssignment;
+import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.server.zk.data.ZkData.AclChangeNotificationNode;
+import org.apache.fluss.server.zk.data.ZkData.BucketIdsZNode;
+import org.apache.fluss.server.zk.data.ZkData.BucketRemoteLogsZNode;
+import org.apache.fluss.server.zk.data.ZkData.BucketSnapshotIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.BucketSnapshotsZNode;
+import org.apache.fluss.server.zk.data.ZkData.CoordinatorZNode;
+import org.apache.fluss.server.zk.data.ZkData.DatabaseZNode;
+import org.apache.fluss.server.zk.data.ZkData.DatabasesZNode;
+import org.apache.fluss.server.zk.data.ZkData.LakeTableZNode;
+import org.apache.fluss.server.zk.data.ZkData.LeaderAndIsrZNode;
+import org.apache.fluss.server.zk.data.ZkData.PartitionIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.PartitionSequenceIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.PartitionZNode;
+import org.apache.fluss.server.zk.data.ZkData.PartitionsZNode;
+import org.apache.fluss.server.zk.data.ZkData.ResourceAclNode;
+import org.apache.fluss.server.zk.data.ZkData.SchemaZNode;
+import org.apache.fluss.server.zk.data.ZkData.SchemasZNode;
+import org.apache.fluss.server.zk.data.ZkData.ServerIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.ServerIdsZNode;
+import org.apache.fluss.server.zk.data.ZkData.TableIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.TableSequenceIdZNode;
+import org.apache.fluss.server.zk.data.ZkData.TableZNode;
+import org.apache.fluss.server.zk.data.ZkData.TablesZNode;
+import org.apache.fluss.server.zk.data.ZkData.WriterIdZNode;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.transaction.CuratorOp;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.data.Stat;
+import org.apache.fluss.utils.types.Tuple2;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -87,7 +87,7 @@ import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
 
-import static com.alibaba.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
+import static org.apache.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 
 /**
  * This class includes methods for write/read various metadata (leader address, tablet server

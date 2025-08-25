@@ -15,19 +15,19 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.log;
+package org.apache.fluss.server.log;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.exception.CorruptSnapshotException;
-import com.alibaba.fluss.exception.UnknownWriterIdException;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.record.LogRecordBatch;
-import com.alibaba.fluss.utils.json.JsonDeserializer;
-import com.alibaba.fluss.utils.json.JsonSerdeUtils;
-import com.alibaba.fluss.utils.json.JsonSerializer;
-
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.exception.CorruptSnapshotException;
+import org.apache.fluss.exception.UnknownWriterIdException;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.JsonGenerator;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.utils.json.JsonDeserializer;
+import org.apache.fluss.utils.json.JsonSerdeUtils;
+import org.apache.fluss.utils.json.JsonSerializer;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -56,8 +56,8 @@ import java.util.concurrent.ConcurrentSkipListMap;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static com.alibaba.fluss.utils.FlussPaths.WRITER_SNAPSHOT_FILE_SUFFIX;
-import static com.alibaba.fluss.utils.FlussPaths.writerSnapshotFile;
+import static org.apache.fluss.utils.FlussPaths.WRITER_SNAPSHOT_FILE_SUFFIX;
+import static org.apache.fluss.utils.FlussPaths.writerSnapshotFile;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for

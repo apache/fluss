@@ -15,9 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.utils.json;
+package org.apache.fluss.utils.json;
 
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+
 import org.junit.jupiter.api.Test;
 
 import java.io.IOException;

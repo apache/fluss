@@ -15,21 +15,21 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.flink.tiering.committer;
+package org.apache.fluss.flink.tiering.committer;
 
-import com.alibaba.fluss.client.metadata.LakeSnapshot;
-import com.alibaba.fluss.exception.LakeTableSnapshotNotExistException;
-import com.alibaba.fluss.flink.tiering.TestingLakeTieringFactory;
-import com.alibaba.fluss.flink.tiering.TestingWriteResult;
-import com.alibaba.fluss.flink.tiering.event.FailedTieringEvent;
-import com.alibaba.fluss.flink.tiering.event.FinishedTieringEvent;
-import com.alibaba.fluss.flink.tiering.source.TableBucketWriteResult;
-import com.alibaba.fluss.flink.utils.FlinkTestBase;
-import com.alibaba.fluss.lake.committer.CommittedLakeSnapshot;
-import com.alibaba.fluss.metadata.ResolvedPartitionSpec;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.utils.types.Tuple2;
+import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
+import org.apache.fluss.flink.tiering.TestingLakeTieringFactory;
+import org.apache.fluss.flink.tiering.TestingWriteResult;
+import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
+import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
+import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
+import org.apache.fluss.flink.utils.FlinkTestBase;
+import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.types.Tuple2;
 
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.runtime.jobgraph.OperatorID;
@@ -57,7 +57,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static com.alibaba.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
+import static org.apache.fluss.record.TestData.DATA1_PARTITIONED_TABLE_DESCRIPTOR;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 

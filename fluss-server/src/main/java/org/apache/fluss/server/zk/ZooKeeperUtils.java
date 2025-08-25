@@ -15,15 +15,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.zk;
+package org.apache.fluss.server.zk;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.server.utils.FatalErrorHandler;
-import com.alibaba.fluss.utils.function.ThrowingRunnable;
-
-import org.apache.commons.lang3.StringUtils;
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.UnhandledErrorListener;
@@ -33,6 +30,9 @@ import org.apache.fluss.shaded.curator5.org.apache.curator.framework.state.Sessi
 import org.apache.fluss.shaded.curator5.org.apache.curator.retry.ExponentialBackoffRetry;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.client.ZKClientConfig;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.server.quorum.QuorumPeerConfig;
+import org.apache.fluss.utils.function.ThrowingRunnable;
+
+import org.apache.commons.lang3.StringUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -40,7 +40,7 @@ import java.util.Arrays;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Class containing helper functions to interact with ZooKeeper. */
 public class ZooKeeperUtils {

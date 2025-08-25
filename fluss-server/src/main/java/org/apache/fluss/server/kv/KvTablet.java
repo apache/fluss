@@ -15,56 +15,56 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.kv;
+package org.apache.fluss.server.kv;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.compression.ArrowCompressionInfo;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.KvStorageException;
-import com.alibaba.fluss.memory.MemorySegmentPool;
-import com.alibaba.fluss.metadata.KvFormat;
-import com.alibaba.fluss.metadata.LogFormat;
-import com.alibaba.fluss.metadata.PhysicalTablePath;
-import com.alibaba.fluss.metadata.Schema;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.metrics.MeterView;
-import com.alibaba.fluss.metrics.MetricNames;
-import com.alibaba.fluss.metrics.groups.MetricGroup;
-import com.alibaba.fluss.record.ChangeType;
-import com.alibaba.fluss.record.KvRecord;
-import com.alibaba.fluss.record.KvRecordBatch;
-import com.alibaba.fluss.record.KvRecordReadContext;
-import com.alibaba.fluss.row.BinaryRow;
-import com.alibaba.fluss.row.arrow.ArrowWriterPool;
-import com.alibaba.fluss.row.arrow.ArrowWriterProvider;
-import com.alibaba.fluss.row.encode.ValueDecoder;
-import com.alibaba.fluss.row.encode.ValueEncoder;
-import com.alibaba.fluss.server.kv.prewrite.KvPreWriteBuffer;
-import com.alibaba.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
-import com.alibaba.fluss.server.kv.rocksdb.RocksDBKv;
-import com.alibaba.fluss.server.kv.rocksdb.RocksDBKvBuilder;
-import com.alibaba.fluss.server.kv.rocksdb.RocksDBResourceContainer;
-import com.alibaba.fluss.server.kv.rowmerger.RowMerger;
-import com.alibaba.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
-import com.alibaba.fluss.server.kv.snapshot.KvSnapshotDataUploader;
-import com.alibaba.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
-import com.alibaba.fluss.server.kv.wal.ArrowWalBuilder;
-import com.alibaba.fluss.server.kv.wal.IndexWalBuilder;
-import com.alibaba.fluss.server.kv.wal.WalBuilder;
-import com.alibaba.fluss.server.log.LogAppendInfo;
-import com.alibaba.fluss.server.log.LogTablet;
-import com.alibaba.fluss.server.metrics.group.BucketMetricGroup;
-import com.alibaba.fluss.server.utils.FatalErrorHandler;
-import com.alibaba.fluss.types.DataType;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.utils.BytesUtils;
-import com.alibaba.fluss.utils.FileUtils;
-import com.alibaba.fluss.utils.FlussPaths;
-import com.alibaba.fluss.utils.types.Tuple2;
-
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.compression.ArrowCompressionInfo;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.KvStorageException;
+import org.apache.fluss.memory.MemorySegmentPool;
+import org.apache.fluss.metadata.KvFormat;
+import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.MeterView;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.KvRecord;
+import org.apache.fluss.record.KvRecordBatch;
+import org.apache.fluss.record.KvRecordReadContext;
+import org.apache.fluss.row.BinaryRow;
+import org.apache.fluss.row.arrow.ArrowWriterPool;
+import org.apache.fluss.row.arrow.ArrowWriterProvider;
+import org.apache.fluss.row.encode.ValueDecoder;
+import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
+import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
+import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
+import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
+import org.apache.fluss.server.kv.rowmerger.RowMerger;
+import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotDataUploader;
+import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
+import org.apache.fluss.server.kv.wal.ArrowWalBuilder;
+import org.apache.fluss.server.kv.wal.IndexWalBuilder;
+import org.apache.fluss.server.kv.wal.WalBuilder;
+import org.apache.fluss.server.log.LogAppendInfo;
+import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.metrics.group.BucketMetricGroup;
+import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.BytesUtils;
+import org.apache.fluss.utils.FileUtils;
+import org.apache.fluss.utils.FlussPaths;
+import org.apache.fluss.utils.types.Tuple2;
+
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -81,8 +81,8 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
-import static com.alibaba.fluss.utils.concurrent.LockUtils.inReadLock;
-import static com.alibaba.fluss.utils.concurrent.LockUtils.inWriteLock;
+import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
+import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
 /** A kv tablet which presents a unified view of kv storage. */
 @ThreadSafe
