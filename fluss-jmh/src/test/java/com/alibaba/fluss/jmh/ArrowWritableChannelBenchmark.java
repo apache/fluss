@@ -15,11 +15,33 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-jmh/src/test/java/com/alibaba/fluss/jmh/ArrowWritableChannelBenchmark.java
 package com.alibaba.fluss.jmh;
 
 import com.alibaba.fluss.memory.MemorySegment;
 import com.alibaba.fluss.utils.MemorySegmentWritableChannel;
 
+========
+package org.apache.fluss.benchmark;
+
+import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.utils.MemorySegmentWritableChannel;
+
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.IntVector;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.LargeVarBinaryVector;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.IpcOption;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Field;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.FieldType;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-benchmark/src/test/java/org/apache/fluss/benchmark/ArrowWritableChannelBenchmark.java
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;

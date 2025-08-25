@@ -1,0 +1,86 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *    http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package org.apache.fluss.server.zk.data;
+
+import org.apache.fluss.cluster.Endpoint;
+
+import javax.annotation.Nullable;
+
+import java.util.List;
+import java.util.Objects;
+
+/**
+ * The register information of tablet server stored in {@link ZkData.ServerIdZNode}.
+ *
+ * @see TabletServerRegistrationJsonSerde for json serialization and deserialization.
+ */
+public class TabletServerRegistration {
+    private final @Nullable String rack;
+    private final List<Endpoint> endpoints;
+    private final long registerTimestamp;
+
+    public TabletServerRegistration(
+            @Nullable String rack, List<Endpoint> endpoints, long registerTimestamp) {
+        this.rack = rack;
+        this.endpoints = endpoints;
+        this.registerTimestamp = registerTimestamp;
+    }
+
+    public List<Endpoint> getEndpoints() {
+        return endpoints;
+    }
+
+    public long getRegisterTimestamp() {
+        return registerTimestamp;
+    }
+
+    public @Nullable String getRack() {
+        return rack;
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        if (this == o) {
+            return true;
+        }
+        if (o == null || getClass() != o.getClass()) {
+            return false;
+        }
+        TabletServerRegistration that = (TabletServerRegistration) o;
+        return registerTimestamp == that.registerTimestamp
+                && Objects.equals(endpoints, that.endpoints)
+                && Objects.equals(rack, that.rack);
+    }
+
+    @Override
+    public int hashCode() {
+        return Objects.hash(endpoints, registerTimestamp, rack);
+    }
+
+    @Override
+    public String toString() {
+        return "TabletServerRegistration{"
+                + "endpoints="
+                + endpoints
+                + ", registerTimestamp="
+                + registerTimestamp
+                + ", rack='"
+                + rack
+                + '}';
+    }
+}

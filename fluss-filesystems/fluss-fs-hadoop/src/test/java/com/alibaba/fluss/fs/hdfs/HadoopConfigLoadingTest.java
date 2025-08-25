@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.fs.hdfs;
+package org.apache.fluss.fs.hdfs;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.fs.hdfs.utils.HadoopUtils;
-import com.alibaba.fluss.testutils.common.CommonTestUtils;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.hdfs.utils.HadoopUtils;
+import org.apache.fluss.testutils.common.CommonTestUtils;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;

@@ -15,10 +15,34 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-jmh/src/test/java/com/alibaba/fluss/jmh/ArrowReadableChannelBenchmark.java
 package com.alibaba.fluss.jmh;
 
 import com.alibaba.fluss.utils.ByteBufferReadableChannel;
 
+========
+package org.apache.fluss.benchmark;
+
+import org.apache.fluss.utils.ByteBufferReadableChannel;
+
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.IntVector;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.LargeVarBinaryVector;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorLoader;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.VectorUnloader;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.ReadChannel;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.ArrowRecordBatch;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.IpcOption;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.MessageSerializer;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Field;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.FieldType;
+import com.alibaba.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema;
+import com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.server.ByteBufferInputStream;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-benchmark/src/test/java/org/apache/fluss/benchmark/ArrowReadableChannelBenchmark.java
 import org.apache.commons.lang3.RandomUtils;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
@@ -62,8 +86,8 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
 
-import static com.alibaba.fluss.utils.Preconditions.checkState;
 import static java.util.Arrays.asList;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * Benchmark for different Arrow input {@link ReadableByteChannel}s.

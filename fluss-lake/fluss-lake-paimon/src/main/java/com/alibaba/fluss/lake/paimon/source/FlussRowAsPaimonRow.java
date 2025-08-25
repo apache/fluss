@@ -16,10 +16,19 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-lake/fluss-lake-paimon/src/main/java/com/alibaba/fluss/lake/paimon/source/FlussRowAsPaimonRow.java
 package com.alibaba.fluss.lake.paimon.source;
 
 import com.alibaba.fluss.row.TimestampLtz;
 import com.alibaba.fluss.row.TimestampNtz;
+========
+package org.apache.fluss.flink.lakehouse.paimon.reader;
+
+import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/paimon/reader/ScanRecordWrapper.java
 
 import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.Decimal;
@@ -35,8 +44,14 @@ import org.apache.paimon.types.RowType;
 /** Adapter class for converting Fluss row to Paimon row. */
 public class FlussRowAsPaimonRow implements InternalRow {
 
+<<<<<<<< HEAD:fluss-lake/fluss-lake-paimon/src/main/java/com/alibaba/fluss/lake/paimon/source/FlussRowAsPaimonRow.java
     protected com.alibaba.fluss.row.InternalRow internalRow;
     protected final RowType tableRowType;
+========
+    private final ChangeType changeType;
+    private final org.apache.fluss.row.InternalRow flussRow;
+    private final RowType rowType;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/paimon/reader/ScanRecordWrapper.java
 
     public FlussRowAsPaimonRow(RowType tableTowType) {
         this.tableRowType = tableTowType;

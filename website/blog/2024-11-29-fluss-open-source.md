@@ -9,7 +9,7 @@ Fluss is a **streaming storage system** designed to power real-time analytics. I
 Its cutting-edge design enables businesses to achieve **sub-second latency**, **high throughput**, and **cost efficiency** for data analytics, making it the ideal solution for modern data-driven applications.
 
 We have historically invested a lot of effort into advancing the data streaming ecosystem, being major contributors to [Apache Flink®](https://flink.apache.org/), [Apache Flink CDC](https://www.ververica.com/blog/ververica-donates-flink-cdc-empowering-real-time-data-integration-for-the-community), and [Apache Paimon](https://paimon.apache.org/).
-As part of our commitment, Fluss is now open source under the Apache 2.0 license and is available on [GitHub](https://github.com/alibaba/fluss), inviting users to create the next generation of real-time architectures.
+As part of our commitment, Fluss is now open source under the Apache 2.0 license and is available on [GitHub](https://github.com/apache/fluss), inviting users to create the next generation of real-time architectures.
 
 
 ![FF Announcement](assets/fluss_announcement/ff_os.png)
@@ -36,10 +36,10 @@ Open-sourcing Fluss is just the beginning and it will be donated to the Apache S
 ### Join the Journey
 We invite you to join us and help grow our community around the project. Explore Fluss, contribute to its development, and build the next generation of data pipelines.
 
-Make sure to keep an eye on the project, give it a try and if you like it, don’t forget to give it some ❤️ via ⭐ on [GitHub](https://github.com/alibaba/fluss)
+Make sure to keep an eye on the project, give it a try and if you like it, don’t forget to give it some ❤️ via ⭐ on [GitHub](https://github.com/apache/fluss)
 
 ### Getting Started
-- Visit the [GitHub repository](https://github.com/alibaba/fluss).
+- Visit the [GitHub repository](https://github.com/apache/fluss).
 - Check out the [quickstart guide](https://alibaba.github.io/fluss-docs/docs/quickstart/flink/).
 
 ### Additional Resources

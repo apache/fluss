@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/lake/LakeSplitStateInitializer.java
 package com.alibaba.fluss.flink.lake;
 
 import com.alibaba.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
@@ -23,6 +24,16 @@ import com.alibaba.fluss.flink.lake.state.LakeSnapshotAndFlussLogSplitState;
 import com.alibaba.fluss.flink.lake.state.LakeSnapshotSplitState;
 import com.alibaba.fluss.flink.source.split.SourceSplitBase;
 import com.alibaba.fluss.flink.source.split.SourceSplitState;
+========
+package org.apache.fluss.flink.lakehouse;
+
+import org.apache.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
+import org.apache.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplitState;
+import org.apache.fluss.flink.lakehouse.paimon.split.PaimonSnapshotSplit;
+import org.apache.fluss.flink.lakehouse.paimon.split.PaimonSnapshotSplitState;
+import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.flink.source.split.SourceSplitState;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/LakeSplitStateInitializer.java
 
 /** The state initializer for lake split. */
 public class LakeSplitStateInitializer {

@@ -15,6 +15,7 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/lake/LakeSplitGenerator.java
 package com.alibaba.fluss.flink.lake;
 
 import com.alibaba.fluss.client.admin.Admin;
@@ -29,6 +30,20 @@ import com.alibaba.fluss.lake.source.LakeSplit;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableInfo;
+========
+package org.apache.fluss.flink.lakehouse;
+
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.flink.lakehouse.paimon.split.PaimonSnapshotAndFlussLogSplit;
+import org.apache.fluss.flink.lakehouse.paimon.split.PaimonSnapshotSplit;
+import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.fluss.flink.source.split.LogSplit;
+import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/LakeSplitGenerator.java
 
 import javax.annotation.Nullable;
 
@@ -43,8 +58,14 @@ import java.util.function.Supplier;
 import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
+<<<<<<<< HEAD:fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/lake/LakeSplitGenerator.java
 import static com.alibaba.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
 import static com.alibaba.fluss.metadata.ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR;
+========
+import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static org.apache.fluss.flink.utils.DataLakeUtils.extractLakeCatalogProperties;
+import static org.apache.fluss.utils.Preconditions.checkState;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/LakeSplitGenerator.java
 
 /** A generator for lake splits. */
 public class LakeSplitGenerator {

@@ -22,7 +22,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <groupId>com.alibaba.fluss</groupId>
+        <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-filesystems</artifactId>
         <version>0.8-SNAPSHOT</version>
     </parent>
@@ -226,30 +226,30 @@
                                 <relocation>
                                     <pattern>com.google.re2j</pattern>
                                     <shadedPattern>
-                                        com.alibaba.fluss.fs.shaded.hadoop3.com.google.re2j
+                                        org.apache.fluss.fs.shaded.hadoop3.com.google.re2j
                                     </shadedPattern>
                                 </relocation>
                                 <relocation>
                                     <pattern>org.apache.htrace</pattern>
                                     <shadedPattern>
-                                        com.alibaba.fluss.fs.shaded.hadoop3.org.apache.htrace
+                                        org.apache.fluss.fs.shaded.hadoop3.org.apache.htrace
                                     </shadedPattern>
                                 </relocation>
                                 <relocation>
                                     <pattern>com.fasterxml</pattern>
                                     <shadedPattern>
-                                        com.alibaba.fluss.fs.shaded.hadoop3.com.fasterxml
+                                        org.apache.fluss.fs.shaded.hadoop3.com.fasterxml
                                     </shadedPattern>
                                 </relocation>
                                 <relocation>
                                     <pattern>org.codehaus</pattern>
                                     <shadedPattern>
-                                        com.alibaba.fluss.fs.shaded.hadoop3.org.codehaus
+                                        org.apache.fluss.fs.shaded.hadoop3.org.codehaus
                                     </shadedPattern>
                                 </relocation>
                                 <relocation>
                                     <pattern>com.ctc</pattern>
-                                    <shadedPattern>com.alibaba.fluss.fs.shaded.hadoop3.com.ctc
+                                    <shadedPattern>org.apache.fluss.fs.shaded.hadoop3.com.ctc
                                     </shadedPattern>
                                 </relocation>
                             </relocations>

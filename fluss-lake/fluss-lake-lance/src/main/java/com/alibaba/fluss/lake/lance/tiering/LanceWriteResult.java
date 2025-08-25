@@ -15,7 +15,11 @@
  * limitations under the License.
  */
 
+<<<<<<<< HEAD:fluss-lake/fluss-lake-lance/src/main/java/com/alibaba/fluss/lake/lance/tiering/LanceWriteResult.java
 package com.alibaba.fluss.lake.lance.tiering;
+========
+package org.apache.fluss.flink.lakehouse.paimon.reader;
+>>>>>>>> c4d07399 ([INFRA] The project package name updated to org.apache.fluss.):fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/lakehouse/paimon/reader/KeyValueRow.java
 
 import com.lancedb.lance.FragmentMetadata;
 

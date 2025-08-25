@@ -15,13 +15,13 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.fs.gs;
+package org.apache.fluss.fs.gs;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.fs.FileSystem;
-import com.alibaba.fluss.fs.FileSystemBehaviorTestSuite;
-import com.alibaba.fluss.fs.FsPath;
-import com.alibaba.fluss.testutils.common.CommonTestUtils;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.FileSystemBehaviorTestSuite;
+import org.apache.fluss.fs.FsPath;
+import org.apache.fluss.testutils.common.CommonTestUtils;
 
 import com.google.cloud.hadoop.gcsio.GoogleCloudStorageFileSystem;
 import com.google.cloud.hadoop.gcsio.GoogleCloudStorageFileSystemOptions;

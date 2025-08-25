@@ -16,4 +16,4 @@
 # limitations under the License.
 #
 
-com.alibaba.fluss.testutils.common.TestLoggerExtension
+org.apache.fluss.testutils.common.TestLoggerExtension
