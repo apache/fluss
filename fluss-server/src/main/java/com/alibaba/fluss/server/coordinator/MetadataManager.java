@@ -19,6 +19,7 @@ package com.alibaba.fluss.server.coordinator;
 
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.config.FlussConfigUtils;
 import com.alibaba.fluss.exception.DatabaseAlreadyExistException;
 import com.alibaba.fluss.exception.DatabaseNotEmptyException;
 import com.alibaba.fluss.exception.DatabaseNotExistException;
@@ -42,6 +43,7 @@ import com.alibaba.fluss.metadata.TablePartition;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.utils.LakeStorageUtils;
 import com.alibaba.fluss.server.zk.ZooKeeperClient;
+import com.alibaba.fluss.server.zk.data.BucketAssignment;
 import com.alibaba.fluss.server.zk.data.DatabaseRegistration;
 import com.alibaba.fluss.server.zk.data.PartitionAssignment;
 import com.alibaba.fluss.server.zk.data.TableAssignment;
@@ -55,12 +57,14 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
 
+import static com.alibaba.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
 import static com.alibaba.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
 
 /** A manager for metadata. */
@@ -300,6 +304,106 @@ public class MetadataManager {
                 "Fail to create table " + tablePath);
     }
 
+    public void alterTable(
+            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfNotExists) {
+        // validate table properties before altering table
+        validateAlterTableProperties(tableDescriptor);
+
+        if (!databaseExists(tablePath.getDatabaseName())) {
+            throw new DatabaseNotExistException(
+                    "Database " + tablePath.getDatabaseName() + " does not exist.");
+        }
+        if (!tableExists(tablePath)) {
+            if (ignoreIfNotExists) {
+                return;
+            } else {
+                throw new TableNotExistException("Table " + tablePath + " does not exists.");
+            }
+        }
+
+        TableRegistration existTableReg = getTableRegistration(tablePath);
+        try {
+            TableRegistration updatedTableRegistration =
+                    getUpdatedTableRegistration(existTableReg, tableDescriptor);
+            zookeeperClient.updateTable(tablePath, updatedTableRegistration);
+        } catch (Exception e) {
+            if (e instanceof KeeperException.NoNodeException) {
+                if (ignoreIfNotExists) {
+                    return;
+                }
+                throw new TableNotExistException("Table " + tablePath + " does not exists.");
+            } else {
+                throw new FlussRuntimeException("Failed to alter table: " + tablePath, e);
+            }
+        }
+    }
+
+    public void alterTableAssignment(
+            long tableId, TableAssignment existingAssignment, TableAssignment newAssignment) {
+        try {
+            Map<Integer, BucketAssignment> combinedAssignment = new HashMap<>();
+            combinedAssignment.putAll(existingAssignment.getBucketAssignments());
+            combinedAssignment.putAll(newAssignment.getBucketAssignments());
+            zookeeperClient.updateTableAssignment(tableId, new TableAssignment(combinedAssignment));
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    "Failed to update table assignment for table id " + tableId, e);
+        }
+    }
+
+    public void alterPartitionAssignment(
+            long tableId,
+            long partitionId,
+            TableAssignment existingAssignment,
+            TableAssignment newAssignment) {
+        try {
+            Map<Integer, BucketAssignment> combinedAssignment = new HashMap<>();
+            combinedAssignment.putAll(existingAssignment.getBucketAssignments());
+            combinedAssignment.putAll(newAssignment.getBucketAssignments());
+            zookeeperClient.updatePartitionAssignment(
+                    partitionId, new PartitionAssignment(tableId, combinedAssignment));
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    "Failed to update partition assignment for table id "
+                            + tableId
+                            + " partition id "
+                            + partitionId,
+                    e);
+        }
+    }
+
+    private TableRegistration getUpdatedTableRegistration(
+            TableRegistration existTableReg, TableDescriptor updateTableDescriptor) {
+        Map<String, String> updateProperties = updateTableDescriptor.getProperties();
+        Map<String, String> updateCustomProperties = updateTableDescriptor.getCustomProperties();
+
+        Map<String, String> newProperties = new HashMap<>(existTableReg.properties);
+        for (Map.Entry<String, String> updateProperty : updateProperties.entrySet()) {
+            // only alterable configs can be updated, other properties keep unchanged.
+            if (FlussConfigUtils.ALTERABLE_CONFIG_OPTIONS.contains(updateProperty.getKey())) {
+                newProperties.put(updateProperty.getKey(), updateProperty.getValue());
+            }
+        }
+
+        Map<String, String> newCustomProperties = new HashMap<>(existTableReg.customProperties);
+        for (Map.Entry<String, String> updateCustomProperty : updateCustomProperties.entrySet()) {
+            if (FlussConfigUtils.ALTERABLE_CONFIG_OPTIONS.contains(updateCustomProperty.getKey())) {
+                newCustomProperties.put(
+                        updateCustomProperty.getKey(), updateCustomProperty.getValue());
+            }
+        }
+
+        return new TableRegistration(
+                existTableReg.tableId,
+                existTableReg.comment,
+                existTableReg.partitionKeys,
+                updateTableDescriptor.getTableDistribution().get(),
+                newProperties,
+                newCustomProperties,
+                existTableReg.createdTime,
+                System.currentTimeMillis());
+    }
+
     public TableInfo getTable(TablePath tablePath) throws TableNotExistException {
         Optional<TableRegistration> optionalTable;
         try {
@@ -327,6 +431,32 @@ public class MetadataManager {
             throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
         }
         return optionalTable.get();
+    }
+
+    public TableAssignment getTableAssignment(long tableId) {
+        Optional<TableAssignment> optionalTableAssignment;
+        try {
+            optionalTableAssignment = zookeeperClient.getTableAssignment(tableId);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        if (!optionalTableAssignment.isPresent()) {
+            throw new TableNotExistException("Table '" + tableId + "' does not exist.");
+        }
+        return optionalTableAssignment.get();
+    }
+
+    public PartitionAssignment getPartitionAssignment(long partitionId) {
+        Optional<PartitionAssignment> optionalPartitionAssignment;
+        try {
+            optionalPartitionAssignment = zookeeperClient.getPartitionAssignment(partitionId);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        if (!optionalPartitionAssignment.isPresent()) {
+            throw new PartitionNotExistException("Partition '" + partitionId + "' does not exist.");
+        }
+        return optionalPartitionAssignment.get();
     }
 
     public SchemaInfo getLatestSchema(TablePath tablePath) throws SchemaNotExistException {

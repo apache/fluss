@@ -93,6 +93,23 @@ public class TableDescriptorValidation {
         checkSystemColumns(schema);
     }
 
+    public static void validateAlterTableProperties(TableDescriptor tableDescriptor) {
+        Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
+        // check properties should only contain table.* options,
+        // and this cluster know it,
+        // and value is valid
+        for (String key : tableConf.keySet()) {
+            if (!TABLE_OPTIONS.containsKey(key)) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "'%s' is not a Fluss table property. Please use '.customProperty(..)' to set custom properties.",
+                                key));
+            }
+            ConfigOption<?> option = TABLE_OPTIONS.get(key);
+            validateOptionValue(tableConf, option);
+        }
+    }
+
     private static void checkSystemColumns(RowType schema) {
         List<String> fieldNames = schema.getFieldNames();
         List<String> unsupportedColumns =

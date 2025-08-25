@@ -60,6 +60,7 @@ import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.KvSnapshotHandle;
+import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -195,6 +196,117 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         // assert created time
         assertThat(tableInfo.getCreatedTime())
                 .isBetween(timestampBeforeCreate, timestampAfterCreate);
+    }
+
+    @Test
+    void testAlterTableBucket() throws Exception {
+        // create table
+        TablePath tablePath = TablePath.of("test_db", "alter_table_bucket");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+
+        TableAssignment tableAssignment =
+                FLUSS_CLUSTER_EXTENSION
+                        .getZooKeeperClient()
+                        .getTableAssignment(tableInfo.getTableId())
+                        .get();
+        System.out.println(tableAssignment);
+
+        TableDescriptor existingTableDescriptor = tableInfo.toTableDescriptor();
+
+        TableDescriptor newTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(existingTableDescriptor.getSchema())
+                        .comment(existingTableDescriptor.getComment().orElse("test table"))
+                        .partitionedBy(existingTableDescriptor.getPartitionKeys())
+                        .distributedBy(
+                                existingTableDescriptor
+                                                .getTableDistribution()
+                                                .get()
+                                                .getBucketCount()
+                                                .get()
+                                        + 1,
+                                existingTableDescriptor.getBucketKeys())
+                        .properties(existingTableDescriptor.getProperties())
+                        .customProperties(existingTableDescriptor.getCustomProperties())
+                        .build();
+        // alter table
+        admin.alterTable(tablePath, newTableDescriptor, false).get();
+
+        TableInfo alteredTableInfo = admin.getTableInfo(tablePath).get();
+        TableDescriptor alteredTableDescriptor = alteredTableInfo.toTableDescriptor();
+        // assertThat(alteredTableDescriptor).isEqualTo(newTableDescriptor);
+
+        TableAssignment tableAssignment1 =
+                FLUSS_CLUSTER_EXTENSION
+                        .getZooKeeperClient()
+                        .getTableAssignment(tableInfo.getTableId())
+                        .get();
+        System.out.println(tableAssignment1);
+    }
+
+    @Test
+    void testAlterTable() throws Exception {
+        // create table
+        TablePath tablePath = TablePath.of("test_db", "alter_table_1");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+
+        TableDescriptor existingTableDescriptor = tableInfo.toTableDescriptor();
+        Map<String, String> updateProperties =
+                new HashMap<>(existingTableDescriptor.getProperties());
+        Map<String, String> updateCustomProperties =
+                new HashMap<>(existingTableDescriptor.getCustomProperties());
+        updateProperties.put("table.datalake.enabled", "true");
+        updateCustomProperties.put("table.datalake.enabled", "true");
+
+        TableDescriptor newTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(existingTableDescriptor.getSchema())
+                        .comment(existingTableDescriptor.getComment().orElse("test table"))
+                        .partitionedBy(existingTableDescriptor.getPartitionKeys())
+                        .distributedBy(
+                                existingTableDescriptor
+                                        .getTableDistribution()
+                                        .get()
+                                        .getBucketCount()
+                                        .orElse(3),
+                                existingTableDescriptor.getBucketKeys())
+                        .properties(updateProperties)
+                        .customProperties(updateCustomProperties)
+                        .build();
+        // alter table
+        admin.alterTable(tablePath, newTableDescriptor, false).get();
+
+        TableInfo alteredTableInfo = admin.getTableInfo(tablePath).get();
+        TableDescriptor alteredTableDescriptor = alteredTableInfo.toTableDescriptor();
+        assertThat(alteredTableDescriptor).isEqualTo(newTableDescriptor);
+
+        // throw exception if table not exist
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                TablePath.of("test_db", "alter_table_not_exist"),
+                                                newTableDescriptor,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(TableNotExistException.class);
+
+        // throw exception if database not exist
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                TablePath.of(
+                                                        "test_db_not_exist",
+                                                        "alter_table_not_exist"),
+                                                newTableDescriptor,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(DatabaseNotExistException.class);
     }
 
     @Test

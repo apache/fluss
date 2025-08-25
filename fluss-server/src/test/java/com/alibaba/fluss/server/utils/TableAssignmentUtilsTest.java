@@ -94,6 +94,7 @@ class TableAssignmentUtilsTest {
                         1,
                         toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1, 2, 3)),
                         0,
+                        0,
                         0);
         TableAssignment expectedAssignment =
                 TableAssignment.builder()
@@ -110,6 +111,7 @@ class TableAssignmentUtilsTest {
                         3,
                         toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1, 2, 3)),
                         1,
+                        0,
                         0);
         expectedAssignment =
                 TableAssignment.builder()
@@ -125,6 +127,7 @@ class TableAssignmentUtilsTest {
                         10,
                         3,
                         toTabletServerInfo(Collections.emptyMap(), Arrays.asList(0, 1, 2, 3, 4)),
+                        0,
                         0,
                         0);
         expectedAssignment =
@@ -164,7 +167,7 @@ class TableAssignmentUtilsTest {
 
         TableAssignment tableAssignment =
                 generateAssignment(
-                        7, 3, toTabletServerInfo(rackMap, Collections.emptyList()), 0, 0);
+                        7, 3, toTabletServerInfo(rackMap, Collections.emptyList()), 0, 0, 0);
         TableAssignment expectedAssignment =
                 TableAssignment.builder()
                         .add(0, BucketAssignment.of(0, 3, 1))
@@ -196,6 +199,7 @@ class TableAssignmentUtilsTest {
                         replicationFactor,
                         toTabletServerInfo(rackMap, Collections.emptyList()),
                         2,
+                        0,
                         0);
         checkTableAssignment(tableAssignment, rackMap, 6, nBuckets, replicationFactor);
     }
@@ -237,6 +241,7 @@ class TableAssignmentUtilsTest {
                         nBuckets,
                         replicationFactor,
                         toTabletServerInfo(rackMap, Collections.emptyList()),
+                        0,
                         0,
                         0);
         checkTableAssignment(
@@ -302,7 +307,8 @@ class TableAssignmentUtilsTest {
                         replicationFactor,
                         toTabletServerInfo(rackMap, Collections.emptyList()),
                         0,
-                        12);
+                        12,
+                        0);
         checkTableAssignment(tableAssignment, rackMap, 6, nBuckets, replicationFactor);
     }
 
@@ -462,6 +468,7 @@ class TableAssignmentUtilsTest {
                         replicationFactor,
                         toTabletServerInfo(rackMap, Collections.emptyList()),
                         2,
+                        0,
                         0);
         checkTableAssignment(
                 tableAssignment, rackMap, 12, nBuckets, replicationFactor, false, false, false);
@@ -483,6 +490,38 @@ class TableAssignmentUtilsTest {
                 .isInstanceOf(InvalidServerRackInfoException.class)
                 .hasMessageContaining(
                         "Not all tabletServers have rack information for replica rack aware assignment.");
+    }
+
+    @Test
+    void testIncrementAssignment() {
+        // Test servers without rack
+        List<Integer> servers = Arrays.asList(0, 1, 2, 3, 4, 5);
+        TableAssignment fullAssignmentWithoutRack =
+                generateAssignment(
+                        12, 3, toTabletServerInfo(Collections.emptyMap(), servers), 0, 1, 0);
+        TableAssignment incrementAssignmentWithoutRack =
+                generateAssignment(
+                        6, 3, toTabletServerInfo(Collections.emptyMap(), servers), 0, 1, 6);
+        assertThat(fullAssignmentWithoutRack.getBucketAssignments())
+                .containsAllEntriesOf(incrementAssignmentWithoutRack.getBucketAssignments());
+
+        // Test servers with rack
+        Map<Integer, String> rackMap = new HashMap<>();
+        rackMap.put(0, "rack1");
+        rackMap.put(1, "rack2");
+        rackMap.put(2, "rack2");
+        rackMap.put(3, "rack3");
+        rackMap.put(4, "rack3");
+        rackMap.put(5, "rack1");
+
+        TableAssignment fullAssignment =
+                generateAssignment(
+                        12, 3, toTabletServerInfo(rackMap, Collections.emptyList()), 0, 1, 0);
+        TableAssignment incrementAssignment =
+                generateAssignment(
+                        6, 3, toTabletServerInfo(rackMap, Collections.emptyList()), 0, 1, 6);
+        assertThat(fullAssignment.getBucketAssignments())
+                .containsAllEntriesOf(incrementAssignment.getBucketAssignments());
     }
 
     private static void checkTableAssignment(
