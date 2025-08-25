@@ -28,8 +28,8 @@
             <outputDirectory>/</outputDirectory>
             <!-- the service impl -->
             <includes>
-                <include>com/alibaba/fluss/plugin/jar/pluginb/TestServiceB.class</include>
-                <include>com/alibaba/fluss/plugin/jar/pluginb/OtherTestServiceB.class</include>
+                <include>org/apache/fluss/plugin/jar/pluginb/TestServiceB.class</include>
+                <include>org/apache/fluss/plugin/jar/pluginb/OtherTestServiceB.class</include>
             </includes>
         </fileSet>
         <fileSet>

@@ -22,7 +22,7 @@
          xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
     <modelVersion>4.0.0</modelVersion>
     <parent>
-        <groupId>com.alibaba.fluss</groupId>
+        <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
         <version>0.8-SNAPSHOT</version>
     </parent>
@@ -36,6 +36,7 @@
         <module>fluss-flink-1.20</module>
         <module>fluss-flink-1.19</module>
         <module>fluss-flink-1.18</module>
+        <module>fluss-flink-2.1</module>
         <module>fluss-flink-tiering</module>
     </modules>
 

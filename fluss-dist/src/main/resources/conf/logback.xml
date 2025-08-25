@@ -33,7 +33,7 @@
     </root>
 
     <!-- Uncomment this if you want to only change Fluss's logging -->
-    <!--<logger name="com.alibaba.fluss" level="INFO">-->
+    <!--<logger name="org.apache.fluss" level="INFO">-->
     <!--<appender-ref ref="file"/>-->
     <!--</logger>-->
 

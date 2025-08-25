@@ -14,8 +14,8 @@ Please read this document carefully before starting to work on a code contributi
 ## Looking for what to contribute
 
 - If you have a good idea for the contribution, you can proceed to [the code contribution process](#code-contribution-process).
-- If you are looking for what you could contribute, you can browse [open issues](https://github.com/alibaba/fluss/issues), which are not assigned, and then follow [the code contribution process](#code-contribution-process).
-- If you are very new to the Fluss project and ready to tackle some open issues, we've collected some [good first issues](https://github.com/alibaba/fluss/contribute) for you.
+- If you are looking for what you could contribute, you can browse [open issues](https://github.com/apache/fluss/issues), which are not assigned, and then follow [the code contribution process](#code-contribution-process).
+- If you are very new to the Fluss project and ready to tackle some open issues, we've collected some [good first issues](https://github.com/apache/fluss/contribute) for you.
 
 
 ## Code Contribution Process
@@ -47,7 +47,7 @@ A committer of Fluss checks if the contribution fulfills the requirements and me
 
 Considerations before opening a pull request:
 
-- Make sure that the pull request corresponds to a [GitHub issue](https://github.com/alibaba/fluss/issues). Exceptions are made for typos in JavaDoc or documentation files, which need no issue.
+- Make sure that the pull request corresponds to a [GitHub issue](https://github.com/apache/fluss/issues). Exceptions are made for typos in JavaDoc or documentation files, which need no issue.
 
 - Name the pull request in the format "[component] Title of the pull request", where *[component]* should be replaced by the name of the component being changed. Typically, this corresponds to the component label assigned to the issue (e.g., [kv], [log], [client], [flink]). Skip *[component]* if you are unsure about which is the best component. **Hotfixes** should be named for example `[hotfix][docs] Expand JavaDoc for PunctuatedWatermarkGenerator`.
 
@@ -60,7 +60,7 @@ Considerations before opening a pull request:
 
 There is a separate guide on [how to review a pull request](how-to-contribute/review-pull-requests.md), including our pull request review process. As a code author, you should prepare your pull request to meet all requirements.
 
-You need to make sure that all GitHub Actions CI checks must pass for a pull request. If there are any failures, it is essential to investigate the exception stack by in the CI logs. Additionally, GitHub Actions automatically collects and uploads Maven logs (logs printed by log4j in the code) to GitHub Artifacts (see the "Artifacts" section in this [build](https://github.com/alibaba/fluss/actions/runs/13761957739)). These logs are particularly valuable for debugging issues that are difficult to reproduce in a local environment.
+You need to make sure that all GitHub Actions CI checks must pass for a pull request. If there are any failures, it is essential to investigate the exception stack by in the CI logs. Additionally, GitHub Actions automatically collects and uploads Maven logs (logs printed by log4j in the code) to GitHub Artifacts (see the "Artifacts" section in this [build](https://github.com/apache/fluss/actions/runs/13761957739)). These logs are particularly valuable for debugging issues that are difficult to reproduce in a local environment.
 
 
 
