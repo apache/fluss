@@ -17,8 +17,12 @@
 
 package com.alibaba.fluss.client.table;
 
+import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.ClientToServerITCaseBase;
 import com.alibaba.fluss.client.lookup.Lookuper;
+import com.alibaba.fluss.client.table.scanner.ScanRecord;
+import com.alibaba.fluss.client.table.scanner.log.LogScanner;
+import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
 import com.alibaba.fluss.client.table.writer.AppendWriter;
 import com.alibaba.fluss.client.table.writer.UpsertWriter;
 import com.alibaba.fluss.config.ConfigOptions;
@@ -27,13 +31,17 @@ import com.alibaba.fluss.exception.TooManyPartitionsException;
 import com.alibaba.fluss.metadata.PartitionInfo;
 import com.alibaba.fluss.metadata.PhysicalTablePath;
 import com.alibaba.fluss.metadata.Schema;
+import com.alibaba.fluss.metadata.TableBucket;
 import com.alibaba.fluss.metadata.TableDescriptor;
+import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.row.GenericRow;
 import com.alibaba.fluss.row.InternalRow;
 import com.alibaba.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.Test;
+
+import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -143,6 +151,86 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
     }
 
     @Test
+    void testAlterPartitionTableBucket() throws Exception {
+        TablePath tablePath = TablePath.of("test_db_1", "test_static_partitioned_log_table_1");
+        Schema schema = createPartitionedTable(tablePath, false, 1);
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+
+        List<PartitionInfo> partitionInfos = admin.listPartitionInfos(tablePath).get();
+        assertThat(partitionInfos.isEmpty()).isTrue();
+
+        // add three partitions.
+        for (int i = 0; i < 1; i++) {
+            admin.createPartition(tablePath, newPartitionSpec("c", "c" + i), false).get();
+        }
+        partitionInfos = admin.listPartitionInfos(tablePath).get();
+        assertThat(partitionInfos.size()).isEqualTo(1);
+
+        Table table = conn.getTable(tablePath);
+        AppendWriter appendWriter = table.newAppend().createWriter();
+        int recordsPerPartition = 5;
+        Map<Long, List<InternalRow>> expectPartitionAppendRows = new HashMap<>();
+        for (PartitionInfo partitionInfo : partitionInfos) {
+            String partitionName = partitionInfo.getPartitionName();
+            long partitionId = partitionInfo.getPartitionId();
+            for (int j = 0; j < recordsPerPartition; j++) {
+                InternalRow row = row(j, "a" + j, partitionName);
+                appendWriter.append(row);
+                expectPartitionAppendRows
+                        .computeIfAbsent(partitionId, k -> new ArrayList<>())
+                        .add(row);
+            }
+        }
+        appendWriter.flush();
+
+        // then, let's verify the logs
+        verifyPartitionLogs(table, schema.getRowType(), expectPartitionAppendRows);
+
+        TableDescriptor partitionTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(2)
+                        .partitionedBy("c")
+                        .build();
+        admin.alterTable(tablePath, partitionTableDescriptor, false);
+
+        for (PartitionInfo partitionInfo : partitionInfos) {
+            waitAllReplicasReady(tableInfo.getTableId(), partitionInfo.getPartitionId(), 2);
+        }
+
+        conn = ConnectionFactory.createConnection(clientConf);
+        table = conn.getTable(tablePath);
+        appendWriter = table.newAppend().createWriter();
+        for (PartitionInfo partitionInfo : partitionInfos) {
+            String partitionName = partitionInfo.getPartitionName();
+            long partitionId = partitionInfo.getPartitionId();
+            for (int j = 0; j < recordsPerPartition; j++) {
+                InternalRow row = row(j, "a" + j, partitionName);
+                appendWriter.append(row);
+                expectPartitionAppendRows
+                        .computeIfAbsent(partitionId, k -> new ArrayList<>())
+                        .add(row);
+            }
+        }
+        appendWriter.flush();
+
+        try (LogScanner logScanner = table.newScan().createLogScanner()) {
+            for (PartitionInfo partitionInfo : partitionInfos) {
+                logScanner.subscribeFromBeginning(partitionInfo.getPartitionId(), 0);
+                logScanner.subscribeFromBeginning(partitionInfo.getPartitionId(), 1);
+            }
+
+            ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            for (TableBucket scanBucket : scanRecords.buckets()) {
+                List<ScanRecord> records = scanRecords.records(scanBucket);
+                for (ScanRecord scanRecord : records) {
+                    System.out.println("Bucket: " + scanBucket + ", Record: " + scanRecord);
+                }
+            }
+        }
+    }
+
+    @Test
     void testWriteToNonExistsPartitionWhenDisabledDynamicPartition() throws Exception {
         clientConf.set(ConfigOptions.CLIENT_WRITER_DYNAMIC_CREATE_PARTITION_ENABLED, false);
         createPartitionedTable(DATA1_TABLE_PATH_PK, true);
@@ -234,6 +322,12 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
 
     private Schema createPartitionedTable(TablePath tablePath, boolean isPrimaryTable)
             throws Exception {
+        return createPartitionedTable(tablePath, isPrimaryTable, null);
+    }
+
+    private Schema createPartitionedTable(
+            TablePath tablePath, boolean isPrimaryTable, @Nullable Integer bucketCount)
+            throws Exception {
         Schema.Builder schemaBuilder =
                 Schema.newBuilder()
                         .column("a", DataTypes.INT())
@@ -250,7 +344,11 @@ class PartitionedTableITCase extends ClientToServerITCaseBase {
         Schema schema = schemaBuilder.build();
 
         TableDescriptor partitionTableDescriptor =
-                TableDescriptor.builder().schema(schema).partitionedBy("c").build();
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(bucketCount)
+                        .partitionedBy("c")
+                        .build();
         createTable(tablePath, partitionTableDescriptor, false);
         return schema;
     }

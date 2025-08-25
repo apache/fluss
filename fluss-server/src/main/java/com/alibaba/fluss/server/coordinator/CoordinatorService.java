@@ -21,6 +21,7 @@ import com.alibaba.fluss.cluster.ServerType;
 import com.alibaba.fluss.cluster.TabletServerInfo;
 import com.alibaba.fluss.config.ConfigOptions;
 import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.exception.InvalidBucketsException;
 import com.alibaba.fluss.exception.InvalidCoordinatorException;
 import com.alibaba.fluss.exception.InvalidDatabaseException;
 import com.alibaba.fluss.exception.InvalidTableException;
@@ -109,6 +110,7 @@ import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -293,10 +295,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             authorizer.authorize(currentSession(), OperationType.ALTER, Resource.table(tablePath));
         }
 
-        AlterTableResponse alterTableResponse = new AlterTableResponse();
-
         TableDescriptor tableDescriptor;
-
         try {
             tableDescriptor = TableDescriptor.fromJsonBytes(request.getTableJson());
         } catch (Exception e) {
@@ -308,8 +307,94 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 throw new InvalidTableException(e.getMessage());
             }
         }
+
+        TableInfo table = metadataManager.getTable(tablePath);
+
+        // Alter table bucket
+        alterTableBucket(table, tableDescriptor);
+
+        // Alter table registration
         metadataManager.alterTable(tablePath, tableDescriptor, request.isIgnoreIfNotExists());
-        return CompletableFuture.completedFuture(alterTableResponse);
+
+        return CompletableFuture.completedFuture(new AlterTableResponse());
+    }
+
+    private void alterTableBucket(TableInfo table, TableDescriptor tableDescriptor) {
+        // TODO: We should prevent adding buckets while table reassignment is in progress.
+
+        int newNumBuckets =
+                tableDescriptor
+                        .getTableDistribution()
+                        .flatMap(TableDescriptor.TableDistribution::getBucketCount)
+                        .orElse(0);
+        if (newNumBuckets == 0) {
+            return;
+        }
+
+        if (!table.getPrimaryKeys().isEmpty()) {
+            throw new UnsupportedOperationException(
+                    "Alter table bucket is not supported for primary key table now.");
+        }
+
+        if (table.isPartitioned()) {
+            // Currently, for partitioned table we only support alter bucket number for all
+            // partition
+            // together.
+            // We may support alter bucket number for each partition separately in the future.
+
+            Collection<Long> partitionIds =
+                    metadataManager.listPartitions(table.getTablePath()).values();
+            for (Long partitionId : partitionIds) {
+                PartitionAssignment existingAssignment =
+                        metadataManager.getPartitionAssignment(partitionId);
+                Optional<TableAssignment> newBucketsAssignmentOp =
+                        generateNewTableAssignment(table, newNumBuckets, existingAssignment);
+                newBucketsAssignmentOp.ifPresent(
+                        tableAssignment ->
+                                metadataManager.alterPartitionAssignment(
+                                        table.getTableId(),
+                                        partitionId,
+                                        existingAssignment,
+                                        tableAssignment));
+            }
+        } else {
+            // Alter table bucket
+            TableAssignment existingAssignment =
+                    metadataManager.getTableAssignment(table.getTableId());
+            Optional<TableAssignment> newBucketsAssignmentOp =
+                    generateNewTableAssignment(table, newNumBuckets, existingAssignment);
+            newBucketsAssignmentOp.ifPresent(
+                    tableAssignment ->
+                            metadataManager.alterTableAssignment(
+                                    table.getTableId(), existingAssignment, tableAssignment));
+        }
+
+        // TODO: should alter lake table's bucket if lake table enable
+    }
+
+    private Optional<TableAssignment> generateNewTableAssignment(
+            TableInfo table, int newNumBuckets, TableAssignment existingAssignment) {
+        int oldNumBuckets = table.getNumBuckets();
+        int numBucketsIncrement = newNumBuckets - oldNumBuckets;
+
+        // Only support bucket expansion
+        if (numBucketsIncrement > 0) {
+            int replicaFactor = table.getTableConfig().getReplicationFactor();
+            TabletServerInfo[] servers = metadataCache.getLiveServers();
+            // TODO: revisit this
+            BucketAssignment existingAssignmentBucket0 = existingAssignment.getBucketAssignment(0);
+            int startIndex = Math.max(0, existingAssignmentBucket0.getReplicas().get(0));
+            TableAssignment newBucketsAssignment =
+                    generateAssignment(numBucketsIncrement, replicaFactor, servers, oldNumBuckets);
+            return Optional.of(newBucketsAssignment);
+        } else if (numBucketsIncrement < 0) {
+            throw new InvalidBucketsException(
+                    String.format(
+                            "Table currently has %d buckets, which is higher than the requested %d.",
+                            oldNumBuckets, newNumBuckets));
+        }
+        // Do nothing if bucket num not change
+        return Optional.empty();
     }
 
     private TableDescriptor applySystemDefaults(TableDescriptor tableDescriptor) {

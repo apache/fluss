@@ -60,6 +60,7 @@ import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.server.kv.snapshot.CompletedSnapshot;
 import com.alibaba.fluss.server.kv.snapshot.KvSnapshotHandle;
+import com.alibaba.fluss.server.zk.data.TableAssignment;
 import com.alibaba.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -195,6 +196,54 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         // assert created time
         assertThat(tableInfo.getCreatedTime())
                 .isBetween(timestampBeforeCreate, timestampAfterCreate);
+    }
+
+    @Test
+    void testAlterTableBucket() throws Exception {
+        // create table
+        TablePath tablePath = TablePath.of("test_db", "alter_table_bucket");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+
+        TableAssignment tableAssignment =
+                FLUSS_CLUSTER_EXTENSION
+                        .getZooKeeperClient()
+                        .getTableAssignment(tableInfo.getTableId())
+                        .get();
+        System.out.println(tableAssignment);
+
+        TableDescriptor existingTableDescriptor = tableInfo.toTableDescriptor();
+
+        TableDescriptor newTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(existingTableDescriptor.getSchema())
+                        .comment(existingTableDescriptor.getComment().orElse("test table"))
+                        .partitionedBy(existingTableDescriptor.getPartitionKeys())
+                        .distributedBy(
+                                existingTableDescriptor
+                                                .getTableDistribution()
+                                                .get()
+                                                .getBucketCount()
+                                                .get()
+                                        + 1,
+                                existingTableDescriptor.getBucketKeys())
+                        .properties(existingTableDescriptor.getProperties())
+                        .customProperties(existingTableDescriptor.getCustomProperties())
+                        .build();
+        // alter table
+        admin.alterTable(tablePath, newTableDescriptor, false).get();
+
+        TableInfo alteredTableInfo = admin.getTableInfo(tablePath).get();
+        TableDescriptor alteredTableDescriptor = alteredTableInfo.toTableDescriptor();
+        // assertThat(alteredTableDescriptor).isEqualTo(newTableDescriptor);
+
+        TableAssignment tableAssignment1 =
+                FLUSS_CLUSTER_EXTENSION
+                        .getZooKeeperClient()
+                        .getTableAssignment(tableInfo.getTableId())
+                        .get();
+        System.out.println(tableAssignment1);
     }
 
     @Test
