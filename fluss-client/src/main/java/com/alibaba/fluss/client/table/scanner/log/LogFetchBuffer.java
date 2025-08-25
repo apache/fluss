@@ -30,8 +30,10 @@ import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedList;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -66,7 +68,7 @@ public class LogFetchBuffer implements AutoCloseable {
     private final LinkedList<CompletedFetch> completedFetches;
 
     @GuardedBy("lock")
-    private final LinkedList<PendingFetch> pendingFetches = new LinkedList<>();
+    private final Map<TableBucket, LinkedList<PendingFetch>> pendingFetches = new HashMap<>();
 
     @GuardedBy("lock")
     private @Nullable CompletedFetch nextInLineFetch;
@@ -88,7 +90,9 @@ public class LogFetchBuffer implements AutoCloseable {
         inLock(
                 lock,
                 () -> {
-                    pendingFetches.add(pendingFetch);
+                    pendingFetches
+                            .computeIfAbsent(pendingFetch.tableBucket(), k -> new LinkedList<>())
+                            .add(pendingFetch);
                 });
     }
 
@@ -96,17 +100,18 @@ public class LogFetchBuffer implements AutoCloseable {
      * Tries to complete the pending fetches in order, convert them into completed fetches in the
      * buffer.
      */
-    void tryComplete() {
+    void tryComplete(TableBucket tableBucket) {
         inLock(
                 lock,
                 () -> {
                     boolean hasCompleted = false;
-                    while (!pendingFetches.isEmpty()) {
-                        PendingFetch pendingFetch = pendingFetches.peek();
+                    LinkedList<PendingFetch> pendings = this.pendingFetches.get(tableBucket);
+                    while (pendings != null && !pendings.isEmpty()) {
+                        PendingFetch pendingFetch = pendings.peek();
                         if (pendingFetch.isCompleted()) {
                             CompletedFetch completedFetch = pendingFetch.toCompletedFetch();
                             completedFetches.add(completedFetch);
-                            pendingFetches.poll();
+                            pendings.poll();
                             hasCompleted = true;
                         } else {
                             break;
@@ -114,6 +119,10 @@ public class LogFetchBuffer implements AutoCloseable {
                     }
                     if (hasCompleted) {
                         notEmptyCondition.signalAll();
+                        // clear the bucket entry if there is no pending fetches for the bucket.
+                        if (pendings.isEmpty()) {
+                            this.pendingFetches.remove(tableBucket);
+                        }
                     }
                 });
     }
@@ -122,11 +131,13 @@ public class LogFetchBuffer implements AutoCloseable {
         inLock(
                 lock,
                 () -> {
-                    if (pendingFetches.isEmpty()) {
+                    LinkedList<PendingFetch> pendings =
+                            pendingFetches.get(completedFetch.tableBucket);
+                    if (pendings == null || pendings.isEmpty()) {
                         completedFetches.add(completedFetch);
                         notEmptyCondition.signalAll();
                     } else {
-                        pendingFetches.add(new CompletedPendingFetch(completedFetch));
+                        pendings.add(new CompletedPendingFetch(completedFetch));
                     }
                 });
     }
@@ -135,17 +146,7 @@ public class LogFetchBuffer implements AutoCloseable {
         if (completedFetches == null || completedFetches.isEmpty()) {
             return;
         }
-        inLock(
-                lock,
-                () -> {
-                    if (pendingFetches.isEmpty()) {
-                        this.completedFetches.addAll(completedFetches);
-                        notEmptyCondition.signalAll();
-                    } else {
-                        completedFetches.forEach(
-                                cf -> pendingFetches.add(new CompletedPendingFetch(cf)));
-                    }
-                });
+        inLock(lock, () -> completedFetches.forEach(this::add));
     }
 
     CompletedFetch nextInLineFetch() {
@@ -225,7 +226,8 @@ public class LogFetchBuffer implements AutoCloseable {
                         nextInLineFetch = null;
                     }
 
-                    pendingFetches.removeIf(pf -> !buckets.contains(pf.tableBucket()));
+                    // remove entries that not matches the buckets from pendingFetches
+                    pendingFetches.entrySet().removeIf(entry -> !buckets.contains(entry.getKey()));
                 });
     }
 
@@ -233,12 +235,12 @@ public class LogFetchBuffer implements AutoCloseable {
      * Drains (i.e. <em>removes</em>) the contents of the given {@link CompletedFetch} as its data
      * should not be returned to the user.
      */
-    private boolean maybeDrain(Set<TableBucket> buckets, CompletedFetch completedFetch) {
-        if (completedFetch != null && !buckets.contains(completedFetch.tableBucket)) {
+    private boolean maybeDrain(Set<TableBucket> excludedBuckets, CompletedFetch completedFetch) {
+        if (completedFetch != null && !excludedBuckets.contains(completedFetch.tableBucket)) {
             LOG.debug(
                     "Removing {} from buffered fetch data as it is not in the set of buckets to retain ({})",
                     completedFetch.tableBucket,
-                    buckets);
+                    excludedBuckets);
             completedFetch.drain();
             return true;
         } else {
@@ -256,36 +258,19 @@ public class LogFetchBuffer implements AutoCloseable {
         return inLock(
                 lock,
                 () -> {
-                    // If there are any pending fetches which have not been added to
-                    // completedFetches, we will return null. For example, a possible scenario is
-                    // that the remote log downloader can not download remote log as soon as
-                    // possible. In this case, we can't return any buckets to avoid OOM cause by the
-                    // frequently fetch log request send to server to fetch log back, which the
-                    // fetch data can not consume timely and will be buffered in memory.
-                    // TODO this is a hack logic to avoid OOM, we should fix it later to refactor
-                    // the remote log download logic.
-                    if (!pendingFetches.isEmpty()) {
-                        return null;
-                    }
-
                     final Set<TableBucket> buckets = new HashSet<>();
                     if (nextInLineFetch != null && !nextInLineFetch.isConsumed()) {
                         buckets.add(nextInLineFetch.tableBucket);
                     }
                     completedFetches.forEach(cf -> buckets.add(cf.tableBucket));
+                    buckets.addAll(pendingFetches.keySet());
                     return buckets;
                 });
     }
 
     /** Return the set of {@link TableBucket buckets} for which we have pending fetches. */
     Set<TableBucket> pendedBuckets() {
-        return inLock(
-                lock,
-                () -> {
-                    final Set<TableBucket> buckets = new HashSet<>();
-                    pendingFetches.forEach(pf -> buckets.add(pf.tableBucket()));
-                    return buckets;
-                });
+        return inLock(lock, pendingFetches::keySet);
     }
 
     @Override

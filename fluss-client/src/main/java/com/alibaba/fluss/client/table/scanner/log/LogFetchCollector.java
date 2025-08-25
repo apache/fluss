@@ -177,7 +177,7 @@ public class LogFetchCollector {
             } else {
                 // these records aren't next in line based on the last consumed offset, ignore them
                 // they must be from an obsolete request
-                LOG.debug(
+                LOG.warn(
                         "Ignoring fetched records for {} at offset {} since the current offset is {}",
                         nextInLineFetch.tableBucket,
                         nextInLineFetch.nextFetchOffset(),
@@ -228,7 +228,7 @@ public class LogFetchCollector {
             return null;
         }
         if (offset != fetchOffset) {
-            LOG.debug(
+            LOG.warn(
                     "Discarding stale fetch response for bucket {} since its offset {} does not match the expected offset {}.",
                     tb,
                     fetchOffset,

@@ -142,6 +142,7 @@ public class LogFetcher implements Closeable {
         this.scannerMetricGroup = scannerMetricGroup;
         this.remoteLogDownloader =
                 new RemoteLogDownloader(tablePath, conf, remoteFileDownloader, scannerMetricGroup);
+        remoteLogDownloader.start();
     }
 
     /**
@@ -364,7 +365,7 @@ public class LogFetcher implements Closeable {
             }
             RemoteLogDownloadFuture downloadFuture =
                     remoteLogDownloader.requestRemoteLog(remoteLogTabletDir, segment);
-            PendingFetch pendingFetch =
+            RemotePendingFetch pendingFetch =
                     new RemotePendingFetch(
                             segment,
                             downloadFuture,
@@ -375,7 +376,7 @@ public class LogFetcher implements Closeable {
                             logScannerStatus,
                             isCheckCrcs);
             logFetchBuffer.pend(pendingFetch);
-            downloadFuture.onComplete(logFetchBuffer::tryComplete);
+            downloadFuture.onComplete(() -> logFetchBuffer.tryComplete(segment.tableBucket()));
         }
     }
 

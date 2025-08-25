@@ -27,9 +27,8 @@ import com.alibaba.fluss.fs.FsPath;
 import com.alibaba.fluss.fs.FsPathAndFileName;
 import com.alibaba.fluss.metadata.TablePath;
 import com.alibaba.fluss.remote.RemoteLogSegment;
-import com.alibaba.fluss.utils.CloseableRegistry;
+import com.alibaba.fluss.utils.ExceptionUtils;
 import com.alibaba.fluss.utils.FlussPaths;
-import com.alibaba.fluss.utils.MapUtils;
 import com.alibaba.fluss.utils.concurrent.ShutdownableThread;
 
 import org.slf4j.Logger;
@@ -43,18 +42,16 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Collections;
 import java.util.UUID;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.PriorityBlockingQueue;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 
-import static com.alibaba.fluss.utils.FileUtils.deleteFileOrDirectory;
+import static com.alibaba.fluss.utils.FileUtils.deleteDirectoryQuietly;
 import static com.alibaba.fluss.utils.FlussPaths.LOG_FILE_SUFFIX;
-import static com.alibaba.fluss.utils.FlussPaths.filenamePrefixFromOffset;
 import static com.alibaba.fluss.utils.FlussPaths.remoteLogSegmentDir;
 import static com.alibaba.fluss.utils.FlussPaths.remoteLogSegmentFile;
 
@@ -68,12 +65,14 @@ public class RemoteLogDownloader implements Closeable {
 
     private final Path localLogDir;
 
-    private final BlockingQueue<RemoteLogDownloadRequest> segmentsToFetch;
+    /**
+     * A queue to hold the remote log segment files to be fetched. The queue is ordered by the
+     * max_timestamp of the remote log segment. So we download the remote log segments from the
+     * older to the newer.
+     */
+    private final PriorityBlockingQueue<RemoteLogDownloadRequest> segmentsToFetch;
 
     private final BlockingQueue<RemoteLogSegment> segmentsToRecycle;
-
-    // <log_segment_id -> segment_uuid_path>
-    private final ConcurrentHashMap<String, Path> fetchedFiles;
 
     private final Semaphore prefetchSemaphore;
 
@@ -101,9 +100,8 @@ public class RemoteLogDownloader implements Closeable {
             RemoteFileDownloader remoteFileDownloader,
             ScannerMetricGroup scannerMetricGroup,
             long pollTimeout) {
-        this.segmentsToFetch = new LinkedBlockingQueue<>();
+        this.segmentsToFetch = new PriorityBlockingQueue<>();
         this.segmentsToRecycle = new LinkedBlockingQueue<>();
-        this.fetchedFiles = MapUtils.newConcurrentHashMap();
         this.remoteFileDownloader = remoteFileDownloader;
         this.scannerMetricGroup = scannerMetricGroup;
         this.pollTimeout = pollTimeout;
@@ -116,6 +114,9 @@ public class RemoteLogDownloader implements Closeable {
                         conf.get(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR),
                         "remote-logs-" + UUID.randomUUID());
         this.downloadThread = new DownloadRemoteLogThread(tablePath);
+    }
+
+    public void start() {
         downloadThread.start();
     }
 
@@ -140,39 +141,54 @@ public class RemoteLogDownloader implements Closeable {
      * to fetch.
      */
     void fetchOnce() throws Exception {
+        // blocks until there is capacity (the fetched file is consumed)
+        prefetchSemaphore.acquire();
+
         // wait until there is a remote fetch request
         RemoteLogDownloadRequest request = segmentsToFetch.poll(pollTimeout, TimeUnit.MILLISECONDS);
         if (request == null) {
+            prefetchSemaphore.release();
             return;
         }
-        // blocks until there is capacity (the fetched file is consumed)
-        prefetchSemaphore.acquire();
+
         try {
             // 1. cleanup the finished logs first to free up disk space
             cleanupRemoteLogs();
 
             // 2. do the actual download work
             FsPathAndFileName fsPathAndFileName = request.getFsPathAndFileName();
-            Path segmentPath = localLogDir.resolve(request.segment.remoteLogSegmentId().toString());
             scannerMetricGroup.remoteFetchRequestCount().inc();
-            // download the remote file to local
-            LOG.info(
-                    "Start to download remote log segment file {} to local.",
-                    fsPathAndFileName.getFileName());
+
             long startTime = System.currentTimeMillis();
-            remoteFileDownloader.transferAllToDirectory(
-                    Collections.singletonList(fsPathAndFileName),
-                    segmentPath,
-                    new CloseableRegistry());
-            LOG.info(
-                    "Download remote log segment file {} to local cost {} ms.",
-                    fsPathAndFileName.getFileName(),
-                    System.currentTimeMillis() - startTime);
-            File localFile = new File(segmentPath.toFile(), fsPathAndFileName.getFileName());
-            scannerMetricGroup.remoteFetchBytes().inc(localFile.length());
-            String segmentId = request.segment.remoteLogSegmentId().toString();
-            fetchedFiles.put(segmentId, segmentPath);
-            request.future.complete(localFile);
+            // download the remote file to local
+            remoteFileDownloader
+                    .downloadFileAsync(fsPathAndFileName, localLogDir)
+                    .whenComplete(
+                            (bytes, throwable) -> {
+                                if (throwable != null) {
+                                    LOG.error(
+                                            "Failed to download remote log segment file {}.",
+                                            fsPathAndFileName.getFileName(),
+                                            ExceptionUtils.stripExecutionException(throwable));
+                                    // release the semaphore for the failed request
+                                    prefetchSemaphore.release();
+                                    // add back the request to the queue,
+                                    // so we do not complete the request.future here
+                                    segmentsToFetch.add(request);
+                                    scannerMetricGroup.remoteFetchErrorCount().inc();
+                                } else {
+                                    LOG.info(
+                                            "Successfully downloaded remote log segment file {} to local cost {} ms.",
+                                            fsPathAndFileName.getFileName(),
+                                            System.currentTimeMillis() - startTime);
+                                    File localFile =
+                                            new File(
+                                                    localLogDir.toFile(),
+                                                    fsPathAndFileName.getFileName());
+                                    scannerMetricGroup.remoteFetchBytes().inc(bytes);
+                                    request.future.complete(localFile);
+                                }
+                            });
         } catch (Throwable t) {
             prefetchSemaphore.release();
             // add back the request to the queue
@@ -191,24 +207,15 @@ public class RemoteLogDownloader implements Closeable {
     }
 
     private void cleanupFinishedRemoteLog(RemoteLogSegment segment) {
-        String segmentId = segment.remoteLogSegmentId().toString();
-        Path segmentPath = fetchedFiles.remove(segmentId);
-        if (segmentPath != null) {
-            try {
-                Path logFile =
-                        segmentPath.resolve(
-                                filenamePrefixFromOffset(segment.remoteLogStartOffset())
-                                        + LOG_FILE_SUFFIX);
-                Files.deleteIfExists(logFile);
-                Files.deleteIfExists(segmentPath);
-                LOG.info(
-                        "Consumed and deleted the fetched log segment file {}/{} for bucket {}.",
-                        segmentPath.getFileName(),
-                        logFile.getFileName(),
-                        segment.tableBucket());
-            } catch (IOException e) {
-                LOG.warn("Failed to delete the fetch segment path {}.", segmentPath, e);
-            }
+        try {
+            Path logFile = localLogDir.resolve(getLocalFileNameOfRemoteSegment(segment));
+            Files.deleteIfExists(logFile);
+            LOG.info(
+                    "Consumed and deleted the fetched log segment file {} for bucket {}.",
+                    logFile.getFileName(),
+                    segment.tableBucket());
+        } catch (IOException e) {
+            LOG.warn("Failed to delete the local fetch segment file {}.", localLogDir, e);
         }
     }
 
@@ -219,11 +226,8 @@ public class RemoteLogDownloader implements Closeable {
         } catch (InterruptedException e) {
             // ignore
         }
-        // cleanup all downloaded files
-        for (Path segmentPath : fetchedFiles.values()) {
-            deleteFileOrDirectory(segmentPath.toFile());
-        }
-        fetchedFiles.clear();
+
+        deleteDirectoryQuietly(localLogDir.toFile());
     }
 
     @VisibleForTesting
@@ -236,16 +240,34 @@ public class RemoteLogDownloader implements Closeable {
         return localLogDir;
     }
 
+    @VisibleForTesting
+    int getSizeOfSegmentsToFetch() {
+        return segmentsToFetch.size();
+    }
+
     protected static FsPathAndFileName getFsPathAndFileName(
             FsPath remoteLogTabletDir, RemoteLogSegment segment) {
         FsPath remotePath =
                 remoteLogSegmentFile(
                         remoteLogSegmentDir(remoteLogTabletDir, segment.remoteLogSegmentId()),
                         segment.remoteLogStartOffset());
-        return new FsPathAndFileName(
-                remotePath,
-                FlussPaths.filenamePrefixFromOffset(segment.remoteLogStartOffset())
-                        + LOG_FILE_SUFFIX);
+        return new FsPathAndFileName(remotePath, getLocalFileNameOfRemoteSegment(segment));
+    }
+
+    /**
+     * Get the local file name of the remote log segment.
+     *
+     * <p>The file name is in pattern:
+     *
+     * <pre>
+     *     ${remote_segment_id}_${offset_prefix}.log
+     * </pre>
+     */
+    private static String getLocalFileNameOfRemoteSegment(RemoteLogSegment segment) {
+        return segment.remoteLogSegmentId()
+                + "_"
+                + FlussPaths.filenamePrefixFromOffset(segment.remoteLogStartOffset())
+                + LOG_FILE_SUFFIX;
     }
 
     /**
@@ -265,10 +287,10 @@ public class RemoteLogDownloader implements Closeable {
     }
 
     /** Represents a request to download a remote log segment file to local. */
-    private static class RemoteLogDownloadRequest {
-        private final RemoteLogSegment segment;
-        private final FsPath remoteLogTabletDir;
-        private final CompletableFuture<File> future = new CompletableFuture<>();
+    static class RemoteLogDownloadRequest implements Comparable<RemoteLogDownloadRequest> {
+        final RemoteLogSegment segment;
+        final FsPath remoteLogTabletDir;
+        final CompletableFuture<File> future = new CompletableFuture<>();
 
         public RemoteLogDownloadRequest(RemoteLogSegment segment, FsPath remoteLogTabletDir) {
             this.segment = segment;
@@ -277,6 +299,18 @@ public class RemoteLogDownloader implements Closeable {
 
         public FsPathAndFileName getFsPathAndFileName() {
             return RemoteLogDownloader.getFsPathAndFileName(remoteLogTabletDir, segment);
+        }
+
+        @Override
+        public int compareTo(RemoteLogDownloadRequest o) {
+            if (segment.tableBucket().equals(o.segment.tableBucket())) {
+                // strictly download in the offset order if they belong to the same bucket
+                return Long.compare(
+                        segment.remoteLogStartOffset(), o.segment.remoteLogStartOffset());
+            } else {
+                // download segment from old to new across buckets
+                return Long.compare(segment.maxTimestamp(), o.segment.maxTimestamp());
+            }
         }
     }
 }

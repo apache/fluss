@@ -799,6 +799,7 @@ message PbRemoteLogSegment {
   required int64 remote_log_start_offset = 2;
   required int64 remote_log_end_offset = 3;
   required int32 segment_size_in_bytes = 4;
+  optional int64 max_timestamp = 5;
 }
 
 message PbPartitionInfo {
