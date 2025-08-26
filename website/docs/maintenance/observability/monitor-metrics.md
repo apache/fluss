@@ -384,7 +384,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td>writerIdCount</td>
-      <td>The writer id count</td>
+      <td>The writer id count.</td>
       <td>Gauge</td>
     </tr>
     <tr>
@@ -533,10 +533,10 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="39"><strong>tabletserver</strong></th>
+      <th rowspan="40"><strong>tabletserver</strong></th>
       <td rowspan="20">table</td>
       <td>messagesInPerSecond</td>
-      <td>The number of messages written per second to this table</td>
+      <td>The number of messages written per second to this table.</td>
       <td>Meter</td>
     </tr>
      <tr>
@@ -644,33 +644,33 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>underMinIsr</td>
       <td>If this bucket is under min isr, this value is 1, otherwise 0.</td>
       <td>Gauge</td>
-    </tr>
+     </tr>
      <tr>
       <td>underReplicated</td>
       <td>If this bucket is under replication factor, this value is 1, otherwise 0.</td>
       <td>Gauge</td>
-    </tr>
+     </tr>
      <tr>
       <td>atMinIsr</td>
       <td>If this bucket is at min isr, this value is 1, otherwise 0.</td>
       <td>Gauge</td>
-    </tr>
+     </tr>
      <tr>
       <td>isrExpandsPerSecond</td>
       <td>The number of isr expands per second.</td>
       <td>Meter</td>
-    </tr>
+     </tr>
      <tr>
       <td>isrShrinksPerSecond</td>
       <td>The number of isr shrinks per second.</td>
       <td>Meter</td>
-    </tr>
+     </tr>
      <tr>
       <td>failedIsrUpdatesPerSecond</td>
       <td>The failed isr updates per second.</td>
       <td>Meter</td>
-    </tr>
-     <tr>
+     </tr>
+    <tr>
       <td rowspan="5">table_bucket_log</td>
       <td>numSegments</td>
       <td>The number of segments in local storage for this table bucket.</td>
@@ -680,22 +680,22 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>endOffset</td>
       <td>The end offset in local storage for this table bucket.</td>
       <td>Gauge</td>
-    </tr>
+     </tr>
      <tr>
       <td>size</td>
       <td>The total log sizes in local storage for this table bucket.</td>
       <td>Gauge</td>
-    </tr>
+     </tr>
      <tr>
       <td>flushPerSecond</td>
       <td>The log flush count per second.</td>
       <td>Meter</td>
-    </tr>
+     </tr>
      <tr>
       <td>flushLatencyMs</td>
       <td>The log flush latency in ms.</td>
       <td>Histogram</td>
-    </tr>
+     </tr>
     <tr>
       <td rowspan="3">table_bucket_remoteLog</td>
       <td>numSegments</td>
@@ -706,12 +706,12 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>endOffset</td>
       <td>The end offset in remote storage for this table bucket.</td>
       <td>Gauge</td>
-    </tr>
+     </tr>
      <tr>
       <td>size</td>
       <td>The number of bytes written per second to this table.</td>
       <td>Gauge</td>
-    </tr>
+     </tr>
     <tr>
       <td rowspan="4">table_bucket_kv</td>
       <td>preWriteBufferFlushPerSecond</td>
@@ -722,17 +722,17 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>preWriteBufferFlushLatencyMs</td>
       <td>The kv pre-write buffer latency in ms.</td>
       <td>Histogram</td>
-    </tr>
+     </tr>
      <tr>
       <td>preWriteBufferTruncateAsDuplicatedPerSecond</td>
       <td>The number of kv pre-write buffer truncate due to the batch duplicated per second.</td>
       <td>Meter</td>
-    </tr>
+     </tr>
      <tr>
       <td>preWriteBufferTruncateAsErrorPerSecond</td>
       <td>The number of kv pre-write buffer truncate due to the error happened when writing cdc to log per second.</td>
       <td>Meter</td>
-    </tr>
+     </tr>
     <tr>
       <td rowspan="1">table_bucket_kv_snapshot</td>
       <td>latestSnapshotSize</td>
