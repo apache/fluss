@@ -1499,8 +1499,12 @@ public class ReplicaManager {
         HostedReplica replica = getReplica(tableBucket);
         if (replica instanceof OnlineReplica) {
             return ((OnlineReplica) replica).getReplica();
+        } else if (replica instanceof OfflineReplica) {
+            throw new StorageException(tableBucket + " is offline on server " + serverId);
+        } else if ((replica instanceof NoneReplica) && metadataCache.contains(tableBucket)) {
+            throw new NotLeaderOrFollowerException(
+                    "server " + serverId + " is not leader or follower for " + tableBucket);
         } else {
-            // TODO add metadata cache to judge.
             throw new UnknownTableOrBucketException("Unknown table or bucket: " + tableBucket);
         }
     }
