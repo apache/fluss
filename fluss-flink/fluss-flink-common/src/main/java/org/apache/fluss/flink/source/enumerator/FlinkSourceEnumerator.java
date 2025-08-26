@@ -680,7 +680,7 @@ public class FlinkSourceEnumerator
                         .addAll(pendingAssignmentForReader);
                 remainingLakeSnapshotSplits.addAll(
                         pendingAssignmentForReader.stream()
-                                .filter(SourceSplitBase::isLakeSplit)
+                                .filter(x -> x.isLakeSplit() && x instanceof LakeSnapshotSplit)
                                 .map(x -> (LakeSnapshotSplit) x)
                                 .collect(Collectors.toList()));
 
@@ -709,7 +709,7 @@ public class FlinkSourceEnumerator
                                                 "partition name shouldn't be null for the splits of partitioned table.");
                                 assignedPartitions.put(partitionId, partitionName);
                             }
-                            if (split.isLakeSplit()) {
+                            if (split.isLakeSplit() && split instanceof LakeSnapshotSplit) {
                                 remainingLakeSnapshotSplits.remove((LakeSnapshotSplit) split);
                             }
                         });
