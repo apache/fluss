@@ -91,8 +91,6 @@ public class LakeSplitGenerator {
         Map<String, Map<Integer, List<LakeSplit>>> lakeSplits;
         if (remainingLakeSplits.isEmpty()) {
             if (loadLakeSplits) {
-                lakeSplits = Collections.emptyMap();
-            } else {
                 lakeSplits =
                         groupLakeSplits(
                                 lakeSource
@@ -100,6 +98,8 @@ public class LakeSplitGenerator {
                                                 (LakeSource.PlannerContext)
                                                         lakeSnapshotInfo::getSnapshotId)
                                         .plan());
+            } else {
+                lakeSplits = Collections.emptyMap();
             }
         } else {
             lakeSplits = groupLakeSplits(remainingLakeSplits);
