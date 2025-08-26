@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.iceberg.tiering.writer;
+package org.apache.fluss.lake.iceberg.tiering.writer;
 
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.Schema;

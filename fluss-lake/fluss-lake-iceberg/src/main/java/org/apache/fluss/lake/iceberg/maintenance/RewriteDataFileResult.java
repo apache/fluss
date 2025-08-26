@@ -16,7 +16,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.iceberg.maintenance;
+package org.apache.fluss.lake.iceberg.maintenance;
 
 import org.apache.iceberg.DataFile;
 

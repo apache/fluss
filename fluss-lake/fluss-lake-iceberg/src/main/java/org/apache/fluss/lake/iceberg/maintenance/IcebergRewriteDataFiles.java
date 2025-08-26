@@ -16,10 +16,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.iceberg.maintenance;
+package org.apache.fluss.lake.iceberg.maintenance;
 
-import com.alibaba.fluss.lake.iceberg.tiering.writer.TaskWriterFactory;
-import com.alibaba.fluss.metadata.TableBucket;
+import org.apache.fluss.lake.iceberg.tiering.writer.TaskWriterFactory;
+import org.apache.fluss.metadata.TableBucket;
 
 import org.apache.iceberg.BaseCombinedScanTask;
 import org.apache.iceberg.CombinedScanTask;
@@ -49,9 +49,9 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.stream.Collectors;
 
-import static com.alibaba.fluss.lake.iceberg.utils.IcebergConversions.toFilterExpression;
-import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toFilterExpression;
+import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
  * Concrete implementation for Fluss's Iceberg integration. Handles bin-packing compaction of small

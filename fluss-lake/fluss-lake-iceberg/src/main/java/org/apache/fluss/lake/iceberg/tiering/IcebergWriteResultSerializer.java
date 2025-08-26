@@ -18,10 +18,9 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
+import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.utils.InstantiationUtils;
-import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
-
 
 import org.apache.iceberg.io.WriteResult;
 

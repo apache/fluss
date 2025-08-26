@@ -16,13 +16,13 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.iceberg.maintenance;
+package org.apache.fluss.lake.iceberg.maintenance;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.lake.iceberg.tiering.IcebergCatalogProvider;
-import com.alibaba.fluss.lake.iceberg.tiering.writer.TaskWriterFactory;
-import com.alibaba.fluss.metadata.TableBucket;
-import com.alibaba.fluss.metadata.TablePath;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.iceberg.tiering.IcebergCatalogProvider;
+import org.apache.fluss.lake.iceberg.tiering.writer.TaskWriterFactory;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 
 import org.apache.iceberg.AppendFiles;
 import org.apache.iceberg.DataFile;
@@ -50,11 +50,11 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.List;
 
-import static com.alibaba.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
-import static com.alibaba.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
-import static com.alibaba.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
-import static com.alibaba.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
-import static com.alibaba.fluss.utils.Preconditions.checkState;
+import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
+import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
+import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
+import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
+import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Unit test to verify compaction via {@link IcebergRewriteDataFiles}. */

@@ -17,10 +17,11 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
-import com.alibaba.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
+import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
 
-import edu.umd.cs.findbugs.annotations.Nullable;
 import org.apache.iceberg.io.WriteResult;
+
+import javax.annotation.Nullable;
 
 import java.io.Serializable;
 

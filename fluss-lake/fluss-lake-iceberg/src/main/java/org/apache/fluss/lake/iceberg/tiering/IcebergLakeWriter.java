@@ -15,18 +15,18 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.lake.iceberg.tiering;
+package org.apache.fluss.lake.iceberg.tiering;
 
-import com.alibaba.fluss.lake.iceberg.maintenance.IcebergRewriteDataFiles;
-import com.alibaba.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
-import com.alibaba.fluss.lake.iceberg.tiering.writer.AppendOnlyTaskWriter;
-import com.alibaba.fluss.lake.iceberg.tiering.writer.DeltaTaskWriter;
-import com.alibaba.fluss.lake.iceberg.tiering.writer.TaskWriterFactory;
-import com.alibaba.fluss.lake.writer.LakeWriter;
-import com.alibaba.fluss.lake.writer.WriterInitContext;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.record.LogRecord;
-import com.alibaba.fluss.utils.concurrent.ExecutorThreadFactory;
+import org.apache.fluss.lake.iceberg.maintenance.IcebergRewriteDataFiles;
+import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
+import org.apache.fluss.lake.iceberg.tiering.writer.AppendOnlyTaskWriter;
+import org.apache.fluss.lake.iceberg.tiering.writer.DeltaTaskWriter;
+import org.apache.fluss.lake.iceberg.tiering.writer.TaskWriterFactory;
+import org.apache.fluss.lake.writer.LakeWriter;
+import org.apache.fluss.lake.writer.WriterInitContext;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.apache.iceberg.Table;
 import org.apache.iceberg.TableProperties;
@@ -49,7 +49,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 
-import static com.alibaba.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
+import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 
 /** Implementation of {@link LakeWriter} for Iceberg. */
 public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {

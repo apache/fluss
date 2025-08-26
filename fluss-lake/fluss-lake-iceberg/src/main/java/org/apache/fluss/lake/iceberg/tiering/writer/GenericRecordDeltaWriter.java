@@ -17,8 +17,6 @@
 
 package org.apache.fluss.lake.iceberg.tiering.writer;
 
-import org.apache.fluss.lake.writer.WriterInitContext;
-
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.PartitionKey;
 import org.apache.iceberg.Schema;

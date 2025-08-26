@@ -30,6 +30,8 @@ import org.apache.iceberg.expressions.Expressions;
 
 import javax.annotation.Nullable;
 
+import java.util.List;
+
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR;
 
 /** Utility class for static conversions between Fluss and Iceberg types. */

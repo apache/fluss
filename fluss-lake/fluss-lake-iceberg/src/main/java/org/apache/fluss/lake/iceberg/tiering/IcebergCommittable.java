@@ -17,7 +17,7 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
-import com.alibaba.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
+import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
 
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DeleteFile;
