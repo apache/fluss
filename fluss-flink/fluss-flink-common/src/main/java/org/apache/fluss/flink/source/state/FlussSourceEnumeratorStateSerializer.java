@@ -29,7 +29,12 @@ import org.apache.flink.core.memory.DataOutputSerializer;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
