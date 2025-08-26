@@ -252,7 +252,7 @@ This file is based on the checkstyle file of Apache Beam.
              Require static importing from Preconditions.
         -->
         <module name="RegexpSinglelineJava">
-            <property name="format" value="^import com.alibaba.fluss.utils.Preconditions;$"/>
+            <property name="format" value="^import org.apache.fluss.utils.Preconditions;$"/>
             <property name="message" value="Static import functions from Fluss Preconditions"/>
         </module>
 
@@ -562,7 +562,7 @@ This file is based on the checkstyle file of Apache Beam.
         <module name="IllegalInstantiation">
             <property name="classes" value="java.util.concurrent.ConcurrentHashMap"/>
             <message key="instantiation.avoid"
-                     value="Instantiation of {0} should be avoided. Use Fluss MapUtils.newConcurrentMap() instead. See https://github.com/alibaba/fluss/issues/375"/>
+                     value="Instantiation of {0} should be avoided. Use Fluss MapUtils.newConcurrentMap() instead. See https://github.com/apache/fluss/issues/375"/>
         </module>
     </module>
 </module>

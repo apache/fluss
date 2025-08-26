@@ -17,7 +17,7 @@
 syntax = "proto2";
 
 package fluss;
-option java_package = "com.alibaba.fluss.rpc.messages";
+option java_package = "org.apache.fluss.rpc.messages";
 option optimize_for = LITE_RUNTIME;
 
 /**
@@ -572,7 +572,7 @@ message PbTableMetadata {
   required int64 modified_time = 7;
 
   // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
-  // trace by: https://github.com/alibaba/fluss/issues/981
+  // trace by: https://github.com/apache/fluss/issues/981
 }
 
 message PbPartitionMetadata {
@@ -799,6 +799,7 @@ message PbRemoteLogSegment {
   required int64 remote_log_start_offset = 2;
   required int64 remote_log_end_offset = 3;
   required int32 segment_size_in_bytes = 4;
+  optional int64 max_timestamp = 5;
 }
 
 message PbPartitionInfo {

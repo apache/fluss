@@ -36,7 +36,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        module: [ core, flink ]
+        module: [ core, flink, lake ]
     name: "${{ matrix.module }}"
     steps:
       - name: Checkout code

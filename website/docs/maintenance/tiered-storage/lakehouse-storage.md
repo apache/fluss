@@ -49,14 +49,14 @@ For example, if you require OSS filesystem support, you need to add `paimon-oss-
 Then, you must start the datalake tiering service to tier Fluss's data to the lakehouse storage.
 #### Prerequisites
 - A running Flink cluster (currently only Flink is supported as the tiering backend).
-- Download [fluss-flink-tiering-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-flink-tiering/$FLUSS_VERSION$/fluss-flink-tiering-$FLUSS_VERSION$.jar).
+- Download [fluss-flink-tiering-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/$FLUSS_VERSION$/fluss-flink-tiering-$FLUSS_VERSION$.jar).
 
 #### Prepare required jars
-- Download the Fluss Flink connector jar that matches your Flink version (for example, [fluss-flink-1.20-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)) and place it into `${FLINK_HOME}/lib`.
+- Download the Fluss Flink connector jar that matches your Flink version (for example, [fluss-flink-1.20-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)) and place it into `${FLINK_HOME}/lib`.
 - If you are using [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss), or [HDFS (Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](maintenance/tiered-storage/remote-storage.md), you need to ensure compatibility with these storage backends.
   Download the corresponding [Fluss filesystem jar](/downloads#filesystem-jars) for your storage type and place it into `${FLINK_HOME}/lib`.
-- Put [fluss-lake-paimon jar](https://repo1.maven.org/maven2/com/alibaba/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib`. Note: At this time, only Paimon is supported as a lakehouse storage format, so only the `fluss-lake-paimon` jar is available; support for other formats will be added in the future.
-- [Download](https://repo1.maven.org/maven2/org/apache/flink/flink-shaded-hadoop-2-uber/) pre-bundled Hadoop jar `flink-shaded-hadoop-2-uber-${VERSION}.jar` and put into `${FLINK_HOME}/lib`.
+- Put [fluss-lake-paimon jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib`. Note: At this time, only Paimon is supported as a lakehouse storage format, so only the `fluss-lake-paimon` jar is available; support for other formats will be added in the future.
+- [Download](https://flink.apache.org/downloads/) pre-bundled Hadoop jar `flink-shaded-hadoop-2-uber-${VERSION}.jar` and put into `${FLINK_HOME}/lib`.
 - Download and put the required Paimon filesystem jar(s) from the [Paimon project download page](https://paimon.apache.org/docs/1.1/project/download/) into `${FLINK_HOME}/lib`. 
   For example, if you use S3 to store Paimon data, add `paimon-s3-<paimon_version>.jar` to `${FLINK_HOME}/lib`. Replace `<paimon_version>` with your actual Paimon version.
 - Add any additional jars required by Paimon. For example, if you use `HiveCatalog`, ensure the related Hive jars are present in `${FLINK_HOME}/lib`.

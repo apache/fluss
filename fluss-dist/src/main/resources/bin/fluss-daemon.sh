@@ -31,15 +31,15 @@ bin=`cd "$bin"; pwd`
 
 case $DAEMON in
     (coordinator-server)
-        CLASS_TO_RUN=com.alibaba.fluss.server.coordinator.CoordinatorServer
+        CLASS_TO_RUN=org.apache.fluss.server.coordinator.CoordinatorServer
     ;;
 
     (tablet-server)
-        CLASS_TO_RUN=com.alibaba.fluss.server.tablet.TabletServer
+        CLASS_TO_RUN=org.apache.fluss.server.tablet.TabletServer
     ;;
 
     (zookeeper)
-        CLASS_TO_RUN=com.alibaba.fluss.shaded.zookeeper3.org.apache.zookeeper.server.quorum.QuorumPeerMain
+        CLASS_TO_RUN=org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.server.quorum.QuorumPeerMain
     ;;
 
     (*)

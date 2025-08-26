@@ -19,11 +19,17 @@
 
 STAGE_CORE="core"
 STAGE_FLINK="flink"
+STAGE_LAKE="lake"
 
 MODULES_FLINK="\
 fluss-flink,\
 fluss-flink/fluss-flink-common,\
+fluss-flink/fluss-flink-2.1,\
 fluss-flink/fluss-flink-1.20,\
+"
+
+# we move Flink legacy version tests to "lake" module for balancing testing time
+MODULES_LAKE="\
 fluss-flink/fluss-flink-1.19,\
 fluss-flink/fluss-flink-1.18,\
 fluss-lake,\
@@ -36,7 +42,10 @@ function get_test_modules_for_stage() {
     local stage=$1
 
     local modules_flink=$MODULES_FLINK
-    local modules_core=\!${MODULES_FLINK//,/,\!}
+    local modules_lake=$MODULES_LAKE
+    local negated_flink=\!${MODULES_FLINK//,/,\!}
+    local negated_lake=\!${MODULES_LAKE//,/,\!}
+    local modules_core="$negated_flink,$negated_lake"
 
     case ${stage} in
         (${STAGE_CORE})
@@ -44,6 +53,9 @@ function get_test_modules_for_stage() {
         ;;
         (${STAGE_FLINK})
             echo "-pl fluss-test-coverage,$modules_flink"
+        ;;
+        (${STAGE_LAKE})
+            echo "-pl fluss-test-coverage,$modules_lake"
         ;;
     esac
 }
