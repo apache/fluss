@@ -23,6 +23,7 @@ import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.MetadataManager;
@@ -242,6 +243,62 @@ public class TabletServerMetadataCacheTest {
                 partitionId2,
                 partitionName2,
                 initialBucketMetadata);
+    }
+
+    @Test
+    void testContainsTableBucket() {
+        tableMetadataList =
+                Collections.singletonList(
+                        new TableMetadata(DATA1_TABLE_INFO, initialBucketMetadata));
+        partitionMetadataList =
+                Collections.singletonList(
+                        new PartitionMetadata(
+                                partitionTableId,
+                                partitionName1,
+                                partitionId1,
+                                initialBucketMetadata));
+        serverMetadataCache.updateClusterMetadata(
+                new ClusterMetadata(
+                        coordinatorServer,
+                        aliveTableServers,
+                        tableMetadataList,
+                        partitionMetadataList));
+
+        assertThat(
+                        serverMetadataCache.contains(
+                                new TableBucket(
+                                        DATA1_TABLE_INFO.getTableId(),
+                                        initialBucketMetadata.get(0).getBucketId())))
+                .isTrue();
+        assertThat(
+                        serverMetadataCache.contains(
+                                new TableBucket(
+                                        DATA1_TABLE_INFO.getTableId(),
+                                        1L,
+                                        initialBucketMetadata.get(0).getBucketId())))
+                .isFalse();
+        assertThat(
+                        serverMetadataCache.contains(
+                                new TableBucket(DATA1_TABLE_INFO.getTableId(), Integer.MAX_VALUE)))
+                .isFalse();
+
+        assertThat(
+                        serverMetadataCache.contains(
+                                new TableBucket(
+                                        partitionTableId,
+                                        partitionId1,
+                                        initialBucketMetadata.get(0).getBucketId())))
+                .isTrue();
+        assertThat(
+                        serverMetadataCache.contains(
+                                new TableBucket(
+                                        partitionTableId,
+                                        initialBucketMetadata.get(0).getBucketId())))
+                .isFalse();
+        assertThat(
+                        serverMetadataCache.contains(
+                                new TableBucket(partitionTableId, partitionId1, Integer.MAX_VALUE)))
+                .isFalse();
     }
 
     private void assertTableMetadataEquals(

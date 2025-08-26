@@ -22,8 +22,10 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
+import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -58,6 +60,7 @@ import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
+import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ClusterMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.ServerInfo;
@@ -1635,6 +1638,78 @@ class ReplicaManagerTest extends ReplicaTestBase {
                 .hasMessageContaining(
                         "invalid coordinator epoch 1 in updateMetadataCache request, "
                                 + "The latest known coordinator epoch is 2");
+    }
+
+    @Test
+    void testGetReplicaOrException() {
+        // 1. Test online replica
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        makeLogTableAsLeader(tb.getBucket());
+        assertThat(replicaManager.getReplicaOrException(tb).getTableBucket()).isEqualTo(tb);
+
+        // 2. Test offline replica
+        // TODO: Add test for offline replica
+
+        // 3. Test not leader or follower replica
+        Set<ServerInfo> tsServerInfoList =
+                new HashSet<>(
+                        Arrays.asList(
+                                new ServerInfo(
+                                        TABLET_SERVER_ID,
+                                        "rack0",
+                                        Endpoint.fromListenersString("CLIENT://localhost:90"),
+                                        ServerType.TABLET_SERVER),
+                                new ServerInfo(
+                                        2,
+                                        "rack1",
+                                        Endpoint.fromListenersString("CLIENT://localhost:91"),
+                                        ServerType.TABLET_SERVER),
+                                new ServerInfo(
+                                        3,
+                                        "rack2",
+                                        Endpoint.fromListenersString("CLIENT://localhost:92"),
+                                        ServerType.TABLET_SERVER)));
+        TablePath tablePath = TablePath.of("test_db_1", "test_get_replica_or_exception");
+        long tableId = 150004L;
+        TableInfo tableInfo =
+                TableInfo.of(
+                        tablePath,
+                        tableId,
+                        1,
+                        DATA1_TABLE_DESCRIPTOR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis());
+        TableBucket tableBucket1 = new TableBucket(tableId, 1);
+        TableMetadata tableMetadata1 =
+                new TableMetadata(
+                        tableInfo,
+                        Collections.singletonList(
+                                new BucketMetadata(
+                                        tableBucket1.getBucket(),
+                                        null,
+                                        null,
+                                        Arrays.asList(1, 2, 3))));
+        replicaManager.maybeUpdateMetadataCache(
+                0,
+                buildClusterMetadata(
+                        null,
+                        tsServerInfoList,
+                        Collections.singletonList(tableMetadata1),
+                        Collections.emptyList()));
+        assertThatThrownBy(() -> replicaManager.getReplicaOrException(tableBucket1))
+                .isInstanceOf(NotLeaderOrFollowerException.class);
+        // Online the replica
+        makeLogTableAsLeader(tableBucket1, false);
+        // Now it should return an online replica
+        assertThat(replicaManager.getReplicaOrException(tableBucket1).getTableBucket())
+                .isEqualTo(tableBucket1);
+
+        // 4. Test really non-exist replica
+        assertThatThrownBy(
+                        () ->
+                                replicaManager.getReplicaOrException(
+                                        new TableBucket(DATA1_TABLE_ID, Integer.MAX_VALUE)))
+                .isInstanceOf(UnknownTableOrBucketException.class);
     }
 
     private void assertReplicaEpochEquals(
