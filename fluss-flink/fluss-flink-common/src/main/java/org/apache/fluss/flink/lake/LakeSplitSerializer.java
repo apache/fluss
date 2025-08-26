@@ -48,8 +48,9 @@ public class LakeSplitSerializer {
 
     public void serialize(DataOutputSerializer out, SourceSplitBase split) throws IOException {
         if (split instanceof LakeSnapshotSplit) {
-            byte[] serializeBytes =
-                    sourceSplitSerializer.serialize(((LakeSnapshotSplit) split).getLakeSplit());
+            LakeSnapshotSplit lakeSplit = (LakeSnapshotSplit) split;
+            out.writeInt(lakeSplit.getSplitIndex());
+            byte[] serializeBytes = sourceSplitSerializer.serialize(lakeSplit.getLakeSplit());
             out.writeInt(serializeBytes.length);
             out.write(serializeBytes);
         } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
@@ -89,12 +90,13 @@ public class LakeSplitSerializer {
             DataInputDeserializer input)
             throws IOException {
         if (splitKind == LAKE_SNAPSHOT_SPLIT_KIND) {
+            int splitIndex = input.readInt();
             byte[] serializeBytes = new byte[input.readInt()];
             input.read(serializeBytes);
-            LakeSplit fileStoreSourceSplit =
+            LakeSplit lakeSplit =
                     sourceSplitSerializer.deserialize(
                             sourceSplitSerializer.getVersion(), serializeBytes);
-            return new LakeSnapshotSplit(tableBucket, partition, fileStoreSourceSplit);
+            return new LakeSnapshotSplit(tableBucket, partition, lakeSplit, splitIndex);
         } else if (splitKind == LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND) {
             List<LakeSplit> lakeSplits = null;
             if (input.readBoolean()) {

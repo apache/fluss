@@ -17,7 +17,8 @@
 
 package org.apache.fluss.flink.source.state;
 
-import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
+import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.flink.source.split.SourceSplitSerializer;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TableBucket;
@@ -35,8 +36,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
-
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** A serializer for {@link SourceEnumeratorState}. */
 public class FlussSourceEnumeratorStateSerializer
@@ -84,39 +83,9 @@ public class FlussSourceEnumeratorStateSerializer
             out.writeLong(entry.getKey());
             out.writeUTF(entry.getValue());
         }
-        // write remain lake snapshot splits
-        out.writeInt(state.getRemainingLakeSnapshotSplits().size());
-        for (LakeSnapshotSplit split : state.getRemainingLakeSnapshotSplits()) {
-            byte[] serializeBytes =
-                    checkNotNull(lakeSource).getSplitSerializer().serialize(split.getLakeSplit());
-            out.writeInt(serializeBytes.length);
-            out.write(serializeBytes);
-            out.writeUTF(split.getPartitionName());
-            // write partition
-            // if partition is not null
-            if (split.getTableBucket().getPartitionId() != null) {
-                out.writeBoolean(true);
-                out.writeLong(split.getTableBucket().getPartitionId());
-            } else {
-                out.writeBoolean(false);
-            }
-            out.writeLong(split.getTableBucket().getTableId());
-            out.writeInt(split.getTableBucket().getBucket());
-        }
-        // write table buckets offset
-        out.writeInt(state.getTableBucketsOffset().size());
-        for (Map.Entry<TableBucket, Long> entry : state.getTableBucketsOffset().entrySet()) {
-            out.writeLong(entry.getKey().getTableId());
-            // write partition
-            // if partition is not null
-            if (entry.getKey().getPartitionId() != null) {
-                out.writeBoolean(true);
-                out.writeLong(entry.getKey().getPartitionId());
-            } else {
-                out.writeBoolean(false);
-            }
-            out.writeInt(entry.getKey().getBucket());
-            out.writeLong(entry.getValue());
+
+        if (lakeSource != null) {
+            serializeRemainingHybridLakeFlussSplits(out, state);
         }
 
         final byte[] result = out.getCopyOfBuffer();
@@ -154,43 +123,55 @@ public class FlussSourceEnumeratorStateSerializer
             assignedPartitions.put(partitionId, partition);
         }
 
-        // deserialize remain lake snapshot splits
-        int remainLakeSnapshotSplitsSize = in.readInt();
-        List<LakeSnapshotSplit> remainLakeSnapshotSplits =
-                new ArrayList<>(remainLakeSnapshotSplitsSize);
-        for (int i = 0; i < remainLakeSnapshotSplitsSize; i++) {
-            int splitSize = in.readInt();
-            byte[] splitBytes = new byte[splitSize];
-            in.readFully(splitBytes);
-            LakeSplit split =
-                    checkNotNull(lakeSource).getSplitSerializer().deserialize(0, splitBytes);
-            String partitionName = in.readUTF();
-            Long partition = null;
-            if (in.readBoolean()) {
-                partition = in.readLong();
-            }
-            long tableId = in.readLong();
-            int bucket = in.readInt();
-            remainLakeSnapshotSplits.add(
-                    new LakeSnapshotSplit(
-                            new TableBucket(tableId, partition, bucket), partitionName, split));
-        }
-
-        // deserialize table buckets offset
-        int tableBucketsOffsetSize = in.readInt();
-        Map<TableBucket, Long> tableBucketsOffset = new HashMap<>(tableBucketsOffsetSize);
-        for (int i = 0; i < tableBucketsOffsetSize; i++) {
-            long tableId = in.readLong();
-            Long partition = null;
-            if (in.readBoolean()) {
-                partition = in.readLong();
-            }
-            int bucket = in.readInt();
-            long offset = in.readLong();
-            tableBucketsOffset.put(new TableBucket(tableId, partition, bucket), offset);
+        List<SourceSplitBase> remainingHybridLakeFlussSplits = null;
+        if (lakeSource != null) {
+            // todo: add a ut for serialize remaining hybrid lake fluss splits
+            remainingHybridLakeFlussSplits = deserializeRemainingHybridLakeFlussSplits(in);
         }
 
         return new SourceEnumeratorState(
-                assignedBuckets, assignedPartitions, remainLakeSnapshotSplits, tableBucketsOffset);
+                assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits);
+    }
+
+    private void serializeRemainingHybridLakeFlussSplits(
+            final DataOutputSerializer out, SourceEnumeratorState state) throws IOException {
+        List<SourceSplitBase> remainingHybridLakeFlussSplits =
+                state.getRemainingHybridLakeFlussSplits();
+        if (remainingHybridLakeFlussSplits != null) {
+            // write that hybrid lake fluss splits is not null
+            out.writeBoolean(true);
+            out.writeInt(remainingHybridLakeFlussSplits.size());
+            SourceSplitSerializer sourceSplitSerializer = new SourceSplitSerializer(lakeSource);
+            for (SourceSplitBase split : remainingHybridLakeFlussSplits) {
+                byte[] serializeBytes = sourceSplitSerializer.serialize(split);
+                out.writeInt(serializeBytes.length);
+                out.write(serializeBytes);
+            }
+
+        } else {
+            // write that hybrid lake fluss splits is null
+            out.writeBoolean(false);
+        }
+    }
+
+    @Nullable
+    private List<SourceSplitBase> deserializeRemainingHybridLakeFlussSplits(
+            final DataInputDeserializer in) throws IOException {
+        if (in.readBoolean()) {
+            int numSplits = in.readInt();
+            List<SourceSplitBase> splits = new ArrayList<>(numSplits);
+            SourceSplitSerializer sourceSplitSerializer = new SourceSplitSerializer(lakeSource);
+            for (int i = 0; i < numSplits; i++) {
+                int splitSizeInBytes = in.readInt();
+                byte[] splitBytes = new byte[splitSizeInBytes];
+                in.readFully(splitBytes);
+                splits.add(
+                        sourceSplitSerializer.deserialize(
+                                sourceSplitSerializer.getVersion(), splitBytes));
+            }
+            return splits;
+        } else {
+            return null;
+        }
     }
 }

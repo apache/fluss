@@ -104,6 +104,8 @@ public class TieringSourceEnumerator
     private TieringSplitGenerator splitGenerator;
     private int flussCoordinatorEpoch;
 
+    private volatile boolean closed = false;
+
     public TieringSourceEnumerator(
             Configuration flussConf,
             SplitEnumeratorContext<TieringSplit> context,
@@ -254,6 +256,9 @@ public class TieringSourceEnumerator
     }
 
     private @Nullable Tuple3<Long, Long, TablePath> requestTieringTableSplitsViaHeartBeat() {
+        if (closed) {
+            return null;
+        }
         Map<Long, Long> currentFinishedTableEpochs = new HashMap<>(this.finishedTableEpochs);
         Map<Long, Long> currentFailedTableEpochs = new HashMap<>(this.failedTableEpochs);
         LakeTieringHeartbeatRequest tieringHeartbeatRequest =
@@ -342,6 +347,7 @@ public class TieringSourceEnumerator
 
     @Override
     public void close() throws IOException {
+        closed = true;
         if (rpcClient != null) {
             failedTableEpochs.putAll(tieringTableEpochs);
             tieringTableEpochs.clear();

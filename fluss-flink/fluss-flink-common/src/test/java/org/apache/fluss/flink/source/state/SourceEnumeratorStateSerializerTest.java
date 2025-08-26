@@ -48,10 +48,7 @@ class SourceEnumeratorStateSerializerTest {
 
         SourceEnumeratorState sourceEnumeratorState =
                 new SourceEnumeratorState(
-                        assignedBuckets,
-                        assignedPartitions,
-                        Collections.emptyList(),
-                        Collections.emptyMap());
+                        assignedBuckets, assignedPartitions, Collections.emptyList());
 
         // serialize assigned buckets
         byte[] serialized = serializer.serialize(sourceEnumeratorState);

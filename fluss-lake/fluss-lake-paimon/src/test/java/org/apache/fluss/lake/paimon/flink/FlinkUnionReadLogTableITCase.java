@@ -28,7 +28,6 @@ import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.BeforeAll;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -142,7 +141,6 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
 
         // now, start to read the log table, which will read paimon
         // may read fluss or not, depends on the log offset of paimon snapshot
-
         CloseableIterator<Row> actual =
                 streamTEnv.executeSql("select * from " + tableName).collect();
         assertResultsIgnoreOrder(
@@ -156,31 +154,17 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
 
         // query the log table again and check the data
         // it should read both paimon snapshot and fluss log
-        actual = streamTEnv.executeSql("select * from " + tableName).collect();
-        assertResultsIgnoreOrder(
-                actual, writtenRows.stream().map(Row::toString).collect(Collectors.toList()), true);
-    }
-
-    @Test
-    void testReadLogTableInStreamDiscoveryPartitionedMode() throws Exception {
-        // first of all, start tiering
-        JobClient jobClient = buildTieringJob(execEnv);
-
-        String tableName = "stream_logTable_discovery_partitioned";
-
-        TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
-        List<Row> writtenRows = new LinkedList<>();
-        long tableId = prepareLogTable(t1, DEFAULT_BUCKET_NUM, true, writtenRows);
-        // wait until records has been synced
-        waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, true);
-
-        CloseableIterator<Row> actual =
-                streamTEnv.executeSql("select * from " + tableName).collect();
-        assertResultsIgnoreOrder(
-                actual, writtenRows.stream().map(Row::toString).collect(Collectors.toList()), true);
-
-        writtenRows.addAll(writeFullTypeRows(t1, 10, "2027"));
-        actual = streamTEnv.executeSql("select * from " + tableName).collect();
+        actual =
+                streamTEnv
+                        .executeSql(
+                                "select * from "
+                                        + tableName
+                                        + " /*+ OPTIONS('scan.partition.discovery.interval'='100ms') */")
+                        .collect();
+        if (isPartitioned) {
+            // we write to a new partition to verify partition discovery
+            writtenRows.addAll(writeFullTypeRows(t1, 10, "3027"));
+        }
         assertResultsIgnoreOrder(
                 actual, writtenRows.stream().map(Row::toString).collect(Collectors.toList()), true);
     }

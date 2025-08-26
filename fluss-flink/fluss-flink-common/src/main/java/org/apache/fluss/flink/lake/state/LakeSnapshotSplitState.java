@@ -43,6 +43,7 @@ public class LakeSnapshotSplitState extends SourceSplitState {
                 split.getTableBucket(),
                 split.getPartitionName(),
                 split.getLakeSplit(),
+                split.getSplitIndex(),
                 recordsToSplit);
     }
 }

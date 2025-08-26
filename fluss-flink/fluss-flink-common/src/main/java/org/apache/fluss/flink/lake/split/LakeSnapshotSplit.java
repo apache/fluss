@@ -32,18 +32,25 @@ public class LakeSnapshotSplit extends SourceSplitBase {
 
     private final long recordsToSplit;
 
+    private final int splitIndex;
+
     public LakeSnapshotSplit(
-            TableBucket tableBucket, @Nullable String partitionName, LakeSplit lakeSplit) {
-        this(tableBucket, partitionName, lakeSplit, 0);
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            LakeSplit lakeSplit,
+            int splitIndex) {
+        this(tableBucket, partitionName, lakeSplit, splitIndex, 0);
     }
 
     public LakeSnapshotSplit(
             TableBucket tableBucket,
             @Nullable String partitionName,
             LakeSplit lakeSplit,
+            int splitIndex,
             long recordsToSplit) {
         super(tableBucket, partitionName);
         this.lakeSplit = lakeSplit;
+        this.splitIndex = splitIndex;
         this.recordsToSplit = recordsToSplit;
     }
 
@@ -55,14 +62,20 @@ public class LakeSnapshotSplit extends SourceSplitBase {
         return recordsToSplit;
     }
 
+    public int getSplitIndex() {
+        return splitIndex;
+    }
+
     @Override
     public String splitId() {
         return toSplitId(
-                "lake-snapshot-",
-                new TableBucket(
-                        tableBucket.getTableId(),
-                        tableBucket.getPartitionId(),
-                        lakeSplit.bucket()));
+                        "lake-snapshot-",
+                        new TableBucket(
+                                tableBucket.getTableId(),
+                                tableBucket.getPartitionId(),
+                                lakeSplit.bucket()))
+                + "-"
+                + splitIndex;
     }
 
     @Override
@@ -73,5 +86,22 @@ public class LakeSnapshotSplit extends SourceSplitBase {
     @Override
     public byte splitKind() {
         return LAKE_SNAPSHOT_SPLIT_KIND;
+    }
+
+    @Override
+    public String toString() {
+        return "LakeSnapshotSplit{"
+                + "lakeSplit="
+                + lakeSplit
+                + ", recordsToSplit="
+                + recordsToSplit
+                + ", splitIndex="
+                + splitIndex
+                + ", tableBucket="
+                + tableBucket
+                + ", partitionName='"
+                + partitionName
+                + '\''
+                + '}';
     }
 }
