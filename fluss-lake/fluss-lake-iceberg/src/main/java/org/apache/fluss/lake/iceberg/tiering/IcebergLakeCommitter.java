@@ -176,9 +176,15 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
 
         // Check if there's a gap between Fluss and Iceberg snapshots
         if (latestLakeSnapshotIdOfFluss != null) {
+            Snapshot latestLakeSnapshotOfFluss = icebergTable.snapshot(latestLakeSnapshotIdOfFluss);
+            if (latestLakeSnapshotOfFluss == null) {
+                throw new IllegalStateException(
+                        "Referenced Fluss snapshot "
+                                + latestLakeSnapshotIdOfFluss
+                                + " not found in Iceberg table");
+            }
             // note: we need to use sequence number to compare,
             // we can't use snapshot id as the snapshot id is not ordered
-            Snapshot latestLakeSnapshotOfFluss = icebergTable.snapshot(latestLakeSnapshotIdOfFluss);
             if (latestLakeSnapshot.sequenceNumber() <= latestLakeSnapshotOfFluss.sequenceNumber()) {
                 return null;
             }
@@ -244,6 +250,8 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
 
         // Find the latest snapshot committed by Fluss
         List<Snapshot> snapshots = (List<Snapshot>) icebergTable.snapshots();
+        // snapshots() returns snapshots in chronological order (oldest to newest), Reverse to find
+        // most recent snapshot committed by Fluss
         Collections.reverse(snapshots);
         for (Snapshot snapshot : snapshots) {
             Map<String, String> summary = snapshot.summary();
