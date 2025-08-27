@@ -33,7 +33,6 @@ import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.MapUtils;
 import org.apache.fluss.utils.clock.Clock;
-import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.slf4j.Logger;
@@ -81,7 +80,10 @@ public class RemoteLogManager implements Closeable {
     private final Map<TableBucket, RemoteLogTablet> remoteLogs = MapUtils.newConcurrentHashMap();
 
     public RemoteLogManager(
-            Configuration conf, ZooKeeperClient zkClient, CoordinatorGateway coordinatorGateway)
+            Configuration conf,
+            ZooKeeperClient zkClient,
+            CoordinatorGateway coordinatorGateway,
+            Clock clock)
             throws IOException {
         this(
                 conf,
@@ -91,7 +93,7 @@ public class RemoteLogManager implements Closeable {
                 Executors.newScheduledThreadPool(
                         conf.getInt(ConfigOptions.REMOTE_LOG_MANAGER_THREAD_POOL_SIZE),
                         new ExecutorThreadFactory(RLM_SCHEDULED_THREAD_PREFIX)),
-                SystemClock.getInstance());
+                clock);
     }
 
     @VisibleForTesting

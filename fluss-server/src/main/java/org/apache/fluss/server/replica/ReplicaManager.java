@@ -211,7 +211,7 @@ public class ReplicaManager {
                 completedKvSnapshotCommitter,
                 fatalErrorHandler,
                 serverMetricGroup,
-                new RemoteLogManager(conf, zkClient, coordinatorGateway),
+                new RemoteLogManager(conf, zkClient, coordinatorGateway, clock),
                 clock);
     }
 

@@ -32,8 +32,12 @@ import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.GreaterOrEqual;
+import org.apache.fluss.predicate.LeafPredicate;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.annotation.VisibleForTesting;
@@ -86,7 +90,9 @@ import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
 import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLUSS_INTERNAL_VALUE;
 import static org.apache.fluss.flink.utils.PushdownUtils.extractFieldEquals;
+import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
+import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** Flink table source to scan Fluss data. */
 public class FlinkTableSource
@@ -258,12 +264,15 @@ public class FlinkTableSource
             flussRowType = flussRowType.project(projectedFields);
         }
         OffsetsInitializer offsetsInitializer;
+        boolean enableLakeSource = lakeSource != null;
         switch (startupOptions.startupMode) {
             case EARLIEST:
                 offsetsInitializer = OffsetsInitializer.earliest();
                 break;
             case LATEST:
                 offsetsInitializer = OffsetsInitializer.latest();
+                // since it's scan from latest, don't consider lake data
+                enableLakeSource = false;
                 break;
             case FULL:
                 offsetsInitializer = OffsetsInitializer.full();
@@ -271,6 +280,18 @@ public class FlinkTableSource
             case TIMESTAMP:
                 offsetsInitializer =
                         OffsetsInitializer.timestamp(startupOptions.startupTimestampMs);
+                if (hasPrimaryKey()) {
+                    // Currently, for primary key tables, we do not consider lake data
+                    // when reading from a given timestamp. This is because we will need
+                    // to read the change log of primary key table.
+                    // TODO: consider support it using paimon change log data?
+                    enableLakeSource = false;
+                } else {
+                    if (enableLakeSource) {
+                        enableLakeSource =
+                                pushTimeStampFilterToLakeSource(lakeSource, flussRowType);
+                    }
+                }
                 break;
             default:
                 throw new IllegalArgumentException(
@@ -290,7 +311,7 @@ public class FlinkTableSource
                         new RowDataDeserializationSchema(),
                         streaming,
                         partitionFilters,
-                        lakeSource);
+                        enableLakeSource ? lakeSource : null);
 
         if (!streaming) {
             // return a bounded source provide to make planner happy,
@@ -319,6 +340,36 @@ public class FlinkTableSource
         } else {
             return SourceProvider.of(source);
         }
+    }
+
+    private boolean pushTimeStampFilterToLakeSource(
+            LakeSource<?> lakeSource, RowType flussRowType) {
+        // will push timestamp to lake
+        // we will have three additional system columns, __bucket, __offset, __timestamp
+        // in lake, get the  __timestamp index in lake table
+        final int timestampFieldIndex = flussRowType.getFieldCount() + 2;
+        Predicate timestampFilter =
+                new LeafPredicate(
+                        GreaterOrEqual.INSTANCE,
+                        DataTypes.TIMESTAMP_LTZ(),
+                        timestampFieldIndex,
+                        TIMESTAMP_COLUMN_NAME,
+                        Collections.singletonList(
+                                TimestampLtz.fromEpochMillis(startupOptions.startupTimestampMs)));
+        List<Predicate> acceptedPredicates =
+                lakeSource
+                        .withFilters(Collections.singletonList(timestampFilter))
+                        .acceptedPredicates();
+        if (acceptedPredicates.isEmpty()) {
+            LOG.warn(
+                    "The lake source doesn't accept the filter {}, won't read data from lake.",
+                    timestampFilter);
+            return false;
+        }
+        checkState(
+                acceptedPredicates.size() == 1
+                        && acceptedPredicates.get(0).equals(timestampFilter));
+        return true;
     }
 
     @Override

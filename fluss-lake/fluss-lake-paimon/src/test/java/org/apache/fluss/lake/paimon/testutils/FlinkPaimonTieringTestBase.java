@@ -53,9 +53,7 @@ import org.apache.paimon.reader.RecordReader;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.utils.CloseableIterator;
 import org.junit.jupiter.api.AfterAll;
-import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
-import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.nio.file.Files;
 import java.time.Duration;
@@ -75,15 +73,8 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test base for sync to paimon by Flink. */
-public class FlinkPaimonTieringTestBase {
+public abstract class FlinkPaimonTieringTestBase {
     protected static final String DEFAULT_DB = "fluss";
-
-    @RegisterExtension
-    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder()
-                    .setClusterConf(initConfig())
-                    .setNumOfTabletServers(3)
-                    .build();
 
     protected static final String CATALOG_NAME = "testcatalog";
     protected StreamExecutionEnvironment execEnv;
@@ -94,7 +85,7 @@ public class FlinkPaimonTieringTestBase {
     protected static String warehousePath;
     protected static Catalog paimonCatalog;
 
-    private static Configuration initConfig() {
+    protected static Configuration initConfig() {
         Configuration conf = new Configuration();
         conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofSeconds(1))
                 // not to clean snapshots for test purpose
@@ -113,9 +104,8 @@ public class FlinkPaimonTieringTestBase {
         return conf;
     }
 
-    @BeforeAll
-    protected static void beforeAll() {
-        clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
+    public static void beforeAll(Configuration conf) {
+        clientConf = conf;
         conn = ConnectionFactory.createConnection(clientConf);
         admin = conn.getAdmin();
         paimonCatalog = getPaimonCatalog();
@@ -158,6 +148,8 @@ public class FlinkPaimonTieringTestBase {
         }
     }
 
+    protected abstract FlussClusterExtension getFlussClusterExtension();
+
     protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
@@ -167,7 +159,7 @@ public class FlinkPaimonTieringTestBase {
     protected void waitUntilSnapshot(long tableId, int bucketNum, long snapshotId) {
         for (int i = 0; i < bucketNum; i++) {
             TableBucket tableBucket = new TableBucket(tableId, i);
-            FLUSS_CLUSTER_EXTENSION.waitUntilSnapshotFinished(tableBucket, snapshotId);
+            getFlussClusterExtension().waitUntilSnapshotFinished(tableBucket, snapshotId);
         }
     }
 
@@ -224,9 +216,9 @@ public class FlinkPaimonTieringTestBase {
                 ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.defaultValue());
     }
 
-    public static Map<Long, String> waitUntilPartitions(TablePath tablePath) {
+    public Map<Long, String> waitUntilPartitions(TablePath tablePath) {
         return waitUntilPartitions(
-                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
+                getFlussClusterExtension().getZooKeeperClient(),
                 tablePath,
                 ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.defaultValue());
     }
@@ -255,7 +247,7 @@ public class FlinkPaimonTieringTestBase {
     }
 
     protected Replica getLeaderReplica(TableBucket tableBucket) {
-        return FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tableBucket);
+        return getFlussClusterExtension().waitAndGetLeaderReplica(tableBucket);
     }
 
     protected long createLogTable(TablePath tablePath) throws Exception {
@@ -367,7 +359,7 @@ public class FlinkPaimonTieringTestBase {
             Map<TableBucket, Long> expectedLogEndOffset) {
         if (isPartitioned) {
             Map<Long, String> partitionById =
-                    waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath);
+                    waitUntilPartitions(getFlussClusterExtension().getZooKeeperClient(), tablePath);
             for (Long partitionId : partitionById.keySet()) {
                 for (int i = 0; i < bucketCount; i++) {
                     TableBucket tableBucket = new TableBucket(tableId, partitionId, i);
