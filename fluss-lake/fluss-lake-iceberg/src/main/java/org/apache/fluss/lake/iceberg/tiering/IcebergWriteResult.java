@@ -17,7 +17,11 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
+import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
+
 import org.apache.iceberg.io.WriteResult;
+
+import javax.annotation.Nullable;
 
 import java.io.Serializable;
 
@@ -26,14 +30,25 @@ public class IcebergWriteResult implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    // the normal result of tiering writing to iceberg
     private final WriteResult writeResult;
 
-    public IcebergWriteResult(WriteResult writeResult) {
+    // the rewrite result
+    @Nullable private final RewriteDataFileResult rewriteDataFileResult;
+
+    public IcebergWriteResult(
+            WriteResult writeResult, @Nullable RewriteDataFileResult rewriteDataFileResult) {
         this.writeResult = writeResult;
+        this.rewriteDataFileResult = rewriteDataFileResult;
     }
 
     public WriteResult getWriteResult() {
         return writeResult;
+    }
+
+    @Nullable
+    public RewriteDataFileResult rewriteDataFileResult() {
+        return rewriteDataFileResult;
     }
 
     @Override
@@ -43,6 +58,9 @@ public class IcebergWriteResult implements Serializable {
                 + writeResult.dataFiles().length
                 + ", deleteFiles="
                 + writeResult.deleteFiles().length
+                + (rewriteDataFileResult != null
+                        ? (", rewriteDataFiles=" + rewriteDataFileResult)
+                        : "")
                 + '}';
     }
 }

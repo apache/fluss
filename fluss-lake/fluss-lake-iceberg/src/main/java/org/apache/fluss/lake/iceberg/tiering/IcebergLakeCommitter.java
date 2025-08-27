@@ -20,6 +20,7 @@ package org.apache.fluss.lake.iceberg.tiering;
 import org.apache.fluss.lake.committer.BucketOffset;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.LakeCommitter;
+import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
 import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
@@ -29,6 +30,7 @@ import org.apache.iceberg.AppendFiles;
 import org.apache.iceberg.CatalogUtil;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DeleteFile;
+import org.apache.iceberg.RewriteFiles;
 import org.apache.iceberg.RowDelta;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.SnapshotUpdate;
@@ -39,6 +41,8 @@ import org.apache.iceberg.events.CreateSnapshotEvent;
 import org.apache.iceberg.events.Listener;
 import org.apache.iceberg.events.Listeners;
 import org.apache.iceberg.io.WriteResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -56,6 +60,9 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Implementation of {@link LakeCommitter} for Iceberg. */
 public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, IcebergCommittable> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(IcebergLakeCommitter.class);
+
     private static final String COMMITTER_USER = "commit-user";
 
     private final Catalog icebergCatalog;
@@ -87,6 +94,11 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             for (DeleteFile deleteFile : writeResult.deleteFiles()) {
                 builder.addDeleteFile(deleteFile);
             }
+
+            RewriteDataFileResult rewriteDataFileResult = result.rewriteDataFileResult();
+            if (rewriteDataFileResult != null) {
+                builder.addRewriteDataFileResult(rewriteDataFileResult);
+            }
         }
 
         return builder.build();
@@ -99,52 +111,92 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             // Refresh table to get latest metadata
             icebergTable.refresh();
 
+            SnapshotUpdate<?> snapshotUpdate;
             if (committable.getDeleteFiles().isEmpty()) {
                 // Simple append-only case: only data files, no delete files or compaction
                 AppendFiles appendFiles = icebergTable.newAppend();
                 for (DataFile dataFile : committable.getDataFiles()) {
                     appendFiles.appendFile(dataFile);
                 }
-
-                addFlussProperties(appendFiles, snapshotProperties);
-
-                appendFiles.commit();
+                snapshotUpdate = appendFiles;
             } else {
-                /**
-                 * Row delta validations are not needed for streaming changes that write equality
-                 * deletes. Equality deletes are applied to data in all previous sequence numbers,
-                 * so retries may push deletes further in the future, but do not affect correctness.
-                 * Position deletes committed to the table in this path are used only to delete rows
-                 * from data files that are being added in this commit. There is no way for data
-                 * files added along with the delete files to be concurrently removed, so there is
-                 * no need to validate the files referenced by the position delete files that are
-                 * being committed.
-                 */
+                /*
+                 Row delta validations are not needed for streaming changes that write equality
+                 deletes. Equality deletes are applied to data in all previous sequence numbers,
+                 so retries may push deletes further in the future, but do not affect correctness.
+                 Position deletes committed to the table in this path are used only to delete rows
+                 from data files that are being added in this commit. There is no way for data
+                 files added along with the delete files to be concurrently removed, so there is
+                 no need to validate the files referenced by the position delete files that are
+                 being committed.
+                */
                 RowDelta rowDelta = icebergTable.newRowDelta();
                 Arrays.stream(committable.getDataFiles().stream().toArray(DataFile[]::new))
                         .forEach(rowDelta::addRows);
                 Arrays.stream(committable.getDeleteFiles().stream().toArray(DeleteFile[]::new))
                         .forEach(rowDelta::addDeletes);
-                snapshotProperties.forEach(rowDelta::set);
-                rowDelta.commit();
+                snapshotUpdate = rowDelta;
             }
 
-            Long commitSnapshotId = currentCommitSnapshotId.get();
-            currentCommitSnapshotId.remove();
+            // commit written files
+            long snapshotId = commit(snapshotUpdate, snapshotProperties);
 
-            return checkNotNull(
-                    commitSnapshotId, "Iceberg committed snapshot id must be non-null.");
+            // There exists rewrite files, commit rewrite files
+            List<RewriteDataFileResult> rewriteDataFileResults =
+                    committable.rewriteDataFileResults();
+            if (!rewriteDataFileResults.isEmpty()) {
+                Long rewriteCommitSnapshotId =
+                        commitRewrite(rewriteDataFileResults, snapshotProperties);
+                if (rewriteCommitSnapshotId != null) {
+                    snapshotId = rewriteCommitSnapshotId;
+                }
+            }
+            return checkNotNull(snapshotId, "Iceberg committed snapshot id must be non-null.");
         } catch (Exception e) {
             throw new IOException("Failed to commit to Iceberg table.", e);
         }
     }
 
-    private void addFlussProperties(
-            SnapshotUpdate<?> operation, Map<String, String> snapshotProperties) {
-        operation.set(COMMITTER_USER, FLUSS_LAKE_TIERING_COMMIT_USER);
-        for (Map.Entry<String, String> entry : snapshotProperties.entrySet()) {
-            operation.set(entry.getKey(), entry.getValue());
+    private Long commitRewrite(
+            List<RewriteDataFileResult> rewriteDataFileResults,
+            Map<String, String> snapshotProperties) {
+        icebergTable.refresh();
+        RewriteFiles rewriteFiles = icebergTable.newRewrite();
+        for (RewriteDataFileResult rewriteDataFileResult : rewriteDataFileResults) {
+            rewriteDataFileResult.addedDataFiles().forEach(rewriteFiles::addFile);
+            rewriteDataFileResult.deletedDataFiles().forEach(rewriteFiles::deleteFile);
         }
+        try {
+            return commit(rewriteFiles, snapshotProperties);
+        } catch (Exception e) {
+            List<String> rewriteAddedDataFiles =
+                    rewriteDataFileResults.stream()
+                            .flatMap(
+                                    rewriteDataFileResult ->
+                                            rewriteDataFileResult.addedDataFiles().stream())
+                            .map(dataFile -> dataFile.path().toString())
+                            .collect(Collectors.toList());
+            LOG.error(
+                    "Failed to commit rewrite files to iceberg, delete rewrite added files {}.",
+                    rewriteAddedDataFiles,
+                    e);
+            // we need to abort new rewrite files
+            CatalogUtil.deleteFiles(icebergTable.io(), rewriteAddedDataFiles, "data file", true);
+            return null;
+        }
+    }
+
+    private long commit(SnapshotUpdate<?> snapshotUpdate, Map<String, String> snapshotProperties) {
+        // add snapshot properties
+        snapshotUpdate.set(COMMITTER_USER, FLUSS_LAKE_TIERING_COMMIT_USER);
+        for (Map.Entry<String, String> entry : snapshotProperties.entrySet()) {
+            snapshotUpdate.set(entry.getKey(), entry.getValue());
+        }
+        // do commit
+        snapshotUpdate.commit();
+        Long commitSnapshotId = currentCommitSnapshotId.get();
+        currentCommitSnapshotId.remove();
+        return commitSnapshotId;
     }
 
     @Override

@@ -31,7 +31,6 @@
     <name>Fluss : Lake : Iceberg</name>
 
     <packaging>jar</packaging>
-
     <dependencies>
         <dependency>
             <groupId>org.apache.iceberg</groupId>

@@ -19,13 +19,18 @@ package org.apache.fluss.lake.iceberg.utils;
 
 import org.apache.fluss.metadata.TablePath;
 
+import org.apache.iceberg.PartitionField;
 import org.apache.iceberg.PartitionKey;
 import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Schema;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.expressions.Expression;
+import org.apache.iceberg.expressions.Expressions;
 
 import javax.annotation.Nullable;
+
+import java.util.List;
 
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR;
 
@@ -51,5 +56,27 @@ public class IcebergConversions {
         }
         partitionKey.set(pos, bucket);
         return partitionKey;
+    }
+
+    public static Expression toFilterExpression(
+            Table table, @Nullable String partitionName, int bucket) {
+        List<PartitionField> partitionFields = table.spec().fields();
+        Expression expression = Expressions.alwaysTrue();
+        int partitionIndex = 0;
+        if (partitionName != null) {
+            String[] partitionArr = partitionName.split("\\" + PARTITION_SPEC_SEPARATOR);
+            for (String partition : partitionArr) {
+                expression =
+                        Expressions.and(
+                                expression,
+                                Expressions.equal(
+                                        partitionFields.get(partitionIndex++).name(), partition));
+            }
+        }
+        expression =
+                Expressions.and(
+                        expression,
+                        Expressions.equal(partitionFields.get(partitionIndex).name(), bucket));
+        return expression;
     }
 }
