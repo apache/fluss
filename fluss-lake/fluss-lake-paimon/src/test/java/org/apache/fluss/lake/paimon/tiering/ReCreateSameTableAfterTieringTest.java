@@ -21,11 +21,13 @@ import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.server.testutils.FlussClusterExtension;
 
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.util.Arrays;
 import java.util.List;
@@ -34,13 +36,22 @@ import static org.apache.fluss.testutils.DataTestUtils.row;
 
 /** A Test case for dropping a pktable after tiering and creating one with the same tablePath. */
 class ReCreateSameTableAfterTieringTest extends FlinkPaimonTieringTestBase {
+
+    @RegisterExtension
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
+            FlussClusterExtension.builder()
+                    .setClusterConf(initConfig())
+                    .setNumOfTabletServers(3)
+                    .build();
+
     protected static final String DEFAULT_DB = "fluss";
 
     private static StreamExecutionEnvironment execEnv;
 
     @BeforeAll
     protected static void beforeAll() {
-        FlinkPaimonTieringTestBase.beforeAll();
+        FlinkPaimonTieringTestBase.beforeAll(FLUSS_CLUSTER_EXTENSION.getClientConfig());
+
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         execEnv.setParallelism(2);
         execEnv.enableCheckpointing(1000);
@@ -81,5 +92,10 @@ class ReCreateSameTableAfterTieringTest extends FlinkPaimonTieringTestBase {
 
         // stop the tiering job
         jobClient.cancel().get();
+    }
+
+    @Override
+    protected FlussClusterExtension getFlussClusterExtension() {
+        return FLUSS_CLUSTER_EXTENSION;
     }
 }

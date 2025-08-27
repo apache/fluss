@@ -19,16 +19,25 @@ package org.apache.fluss.lake.paimon.flink;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
+import org.apache.fluss.server.testutils.FlussClusterExtension;
 
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 
 /** Base class for Flink union read test. */
 public class FlinkUnionReadTestBase extends FlinkPaimonTieringTestBase {
+
+    @RegisterExtension
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
+            FlussClusterExtension.builder()
+                    .setClusterConf(initConfig())
+                    .setNumOfTabletServers(3)
+                    .build();
 
     protected static final int DEFAULT_BUCKET_NUM = 1;
     StreamTableEnvironment batchTEnv;
@@ -36,7 +45,7 @@ public class FlinkUnionReadTestBase extends FlinkPaimonTieringTestBase {
 
     @BeforeAll
     protected static void beforeAll() {
-        FlinkPaimonTieringTestBase.beforeAll();
+        FlinkPaimonTieringTestBase.beforeAll(FLUSS_CLUSTER_EXTENSION.getClientConfig());
     }
 
     @BeforeEach
@@ -44,6 +53,11 @@ public class FlinkUnionReadTestBase extends FlinkPaimonTieringTestBase {
         super.beforeEach();
         buildBatchTEnv();
         buildStreamTEnv();
+    }
+
+    @Override
+    protected FlussClusterExtension getFlussClusterExtension() {
+        return FLUSS_CLUSTER_EXTENSION;
     }
 
     private void buildStreamTEnv() {
