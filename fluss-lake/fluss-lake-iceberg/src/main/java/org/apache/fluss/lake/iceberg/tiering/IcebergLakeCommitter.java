@@ -41,6 +41,8 @@ import org.apache.iceberg.events.CreateSnapshotEvent;
 import org.apache.iceberg.events.Listener;
 import org.apache.iceberg.events.Listeners;
 import org.apache.iceberg.io.WriteResult;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
@@ -58,6 +60,9 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Implementation of {@link LakeCommitter} for Iceberg. */
 public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, IcebergCommittable> {
+
+    private static final Logger LOG = LoggerFactory.getLogger(IcebergLakeCommitter.class);
+
     private static final String COMMITTER_USER = "commit-user";
 
     private final Catalog icebergCatalog;
@@ -106,14 +111,14 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             // Refresh table to get latest metadata
             icebergTable.refresh();
 
+            SnapshotUpdate<?> snapshotUpdate;
             if (committable.getDeleteFiles().isEmpty()) {
                 // Simple append-only case: only data files, no delete files or compaction
                 AppendFiles appendFiles = icebergTable.newAppend();
                 for (DataFile dataFile : committable.getDataFiles()) {
                     appendFiles.appendFile(dataFile);
                 }
-                addFlussProperties(appendFiles, snapshotProperties);
-                appendFiles.commit();
+                snapshotUpdate = appendFiles;
             } else {
                 /*
                  Row delta validations are not needed for streaming changes that write equality
@@ -130,27 +135,29 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                         .forEach(rowDelta::addRows);
                 Arrays.stream(committable.getDeleteFiles().stream().toArray(DeleteFile[]::new))
                         .forEach(rowDelta::addDeletes);
-                addFlussProperties(rowDelta, snapshotProperties);
-                rowDelta.commit();
+                snapshotUpdate = rowDelta;
             }
 
-            // when rewrite files, commit rewrite files
+            // commit written files
+            long snapshotId = commit(snapshotUpdate, snapshotProperties);
+
+            // There exists rewrite files, commit rewrite files
             List<RewriteDataFileResult> rewriteDataFileResults =
                     committable.rewriteDataFileResults();
             if (!rewriteDataFileResults.isEmpty()) {
-                commitRewrite(rewriteDataFileResults, snapshotProperties);
+                Long rewriteCommitSnapshotId =
+                        commitRewrite(rewriteDataFileResults, snapshotProperties);
+                if (rewriteCommitSnapshotId != null) {
+                    snapshotId = rewriteCommitSnapshotId;
+                }
             }
-            Long commitSnapshotId = currentCommitSnapshotId.get();
-            currentCommitSnapshotId.remove();
-
-            return checkNotNull(
-                    commitSnapshotId, "Iceberg committed snapshot id must be non-null.");
+            return checkNotNull(snapshotId, "Iceberg committed snapshot id must be non-null.");
         } catch (Exception e) {
             throw new IOException("Failed to commit to Iceberg table.", e);
         }
     }
 
-    private void commitRewrite(
+    private Long commitRewrite(
             List<RewriteDataFileResult> rewriteDataFileResults,
             Map<String, String> snapshotProperties) {
         icebergTable.refresh();
@@ -159,16 +166,37 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             rewriteDataFileResult.addedDataFiles().forEach(rewriteFiles::addFile);
             rewriteDataFileResult.deletedDataFiles().forEach(rewriteFiles::deleteFile);
         }
-        addFlussProperties(rewriteFiles, snapshotProperties);
-        rewriteFiles.commit();
+        try {
+            return commit(rewriteFiles, snapshotProperties);
+        } catch (Exception e) {
+            List<String> rewriteAddedDataFiles =
+                    rewriteDataFileResults.stream()
+                            .flatMap(
+                                    rewriteDataFileResult ->
+                                            rewriteDataFileResult.addedDataFiles().stream())
+                            .map(dataFile -> dataFile.path().toString())
+                            .collect(Collectors.toList());
+            LOG.error(
+                    "Failed to commit rewrite files to iceberg, delete rewrite added files {}.",
+                    rewriteAddedDataFiles,
+                    e);
+            // we need to abort new rewrite files
+            CatalogUtil.deleteFiles(icebergTable.io(), rewriteAddedDataFiles, "data file", true);
+            return null;
+        }
     }
 
-    private void addFlussProperties(
-            SnapshotUpdate<?> operation, Map<String, String> snapshotProperties) {
-        operation.set(COMMITTER_USER, FLUSS_LAKE_TIERING_COMMIT_USER);
+    private long commit(SnapshotUpdate<?> snapshotUpdate, Map<String, String> snapshotProperties) {
+        // add snapshot properties
+        snapshotUpdate.set(COMMITTER_USER, FLUSS_LAKE_TIERING_COMMIT_USER);
         for (Map.Entry<String, String> entry : snapshotProperties.entrySet()) {
-            operation.set(entry.getKey(), entry.getValue());
+            snapshotUpdate.set(entry.getKey(), entry.getValue());
         }
+        // do commit
+        snapshotUpdate.commit();
+        Long commitSnapshotId = currentCommitSnapshotId.get();
+        currentCommitSnapshotId.remove();
+        return commitSnapshotId;
     }
 
     @Override

@@ -85,7 +85,7 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
                     Executors.newSingleThreadExecutor(
                             new ExecutorThreadFactory(
                                     "iceberg-compact-" + writerInitContext.tableBucket()));
-            scheduleCompactionIfNeeded(writerInitContext);
+            scheduleCompaction(writerInitContext);
         } else {
             this.compactionExecutor = null;
         }
@@ -161,7 +161,7 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
         }
     }
 
-    private void scheduleCompactionIfNeeded(WriterInitContext writerInitContext) {
+    private void scheduleCompaction(WriterInitContext writerInitContext) {
         compactionFuture =
                 CompletableFuture.supplyAsync(
                         () -> {

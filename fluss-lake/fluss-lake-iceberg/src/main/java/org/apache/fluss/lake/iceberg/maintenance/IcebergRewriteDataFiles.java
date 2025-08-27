@@ -93,12 +93,12 @@ public class IcebergRewriteDataFiles {
                         .filter(fileScanTask -> fileScanTask.length() < targetSizeInBytes)
                         .count()
                 < MIN_FILES_TO_COMPACT) {
-            // do nothing, since only one file to scan
+            // return empty file group
             return Collections.emptyList();
         }
 
-        // then, pack the fileScanTasks into compaction units which will contain,
-        // after compaction, we want to it still keep order by __offset column,
+        // then, pack the fileScanTasks into compaction units which contains compactable
+        // fileScanTasks, after compaction, we want to it still keep order by __offset column,
         // so, let's first sort by __offset column
         int offsetFieldId = table.schema().findField(OFFSET_COLUMN_NAME).fieldId();
         fileScanTasks.sort(sortFileScanTask(offsetFieldId));
@@ -115,20 +115,18 @@ public class IcebergRewriteDataFiles {
     private Comparator<FileScanTask> sortFileScanTask(int sortFiledId) {
         return (f1, f2) -> {
             ByteBuffer buffer1 =
-                    (ByteBuffer)
-                            f1.file()
-                                    .lowerBounds()
-                                    .get(sortFiledId)
-                                    .order(ByteOrder.LITTLE_ENDIAN)
-                                    .rewind();
+                    f1.file()
+                            .lowerBounds()
+                            .get(sortFiledId)
+                            .order(ByteOrder.LITTLE_ENDIAN)
+                            .rewind();
             long offset1 = buffer1.getLong();
             ByteBuffer buffer2 =
-                    (ByteBuffer)
-                            f2.file()
-                                    .lowerBounds()
-                                    .get(sortFiledId)
-                                    .order(ByteOrder.LITTLE_ENDIAN)
-                                    .rewind();
+                    f2.file()
+                            .lowerBounds()
+                            .get(sortFiledId)
+                            .order(ByteOrder.LITTLE_ENDIAN)
+                            .rewind();
             long offset2 = buffer2.getLong();
             return Long.compare(offset1, offset2);
         };
@@ -137,7 +135,7 @@ public class IcebergRewriteDataFiles {
     @Nullable
     public RewriteDataFileResult execute() {
         try {
-            // Scan files matching the filter
+            // plan the file groups to be rewrite
             List<CombinedScanTask> tasksToRewrite = planRewriteFileGroups();
             if (tasksToRewrite.isEmpty()) {
                 return null;
