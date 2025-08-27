@@ -20,7 +20,6 @@ package org.apache.fluss.server.metadata;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -415,16 +414,10 @@ class MetadataUpdateITCase {
                                                     serverMetadataCache.getPhysicalTablePath(
                                                             partitionId))
                                             .isNotPresent();
-                                    assertThatThrownBy(
-                                                    () ->
-                                                            serverMetadataCache
-                                                                    .getPartitionMetadata(
-                                                                            physicalTablePath))
-                                            .isInstanceOf(PartitionNotExistException.class)
-                                            .hasMessageContaining(
-                                                    "Table partition '"
-                                                            + physicalTablePath
-                                                            + "' does not exist.");
+                                    assertThat(
+                                                    serverMetadataCache.getPartitionMetadata(
+                                                            physicalTablePath))
+                                            .isNull();
                                 }
                             });
                 });

@@ -23,7 +23,6 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
-import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -1875,10 +1874,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                         assertPartitionMetadata(serverMetadataCache.getPartitionMetadata(k))
                                 .isEqualTo(v);
                     } else {
-                        assertThatThrownBy(() -> serverMetadataCache.getPartitionMetadata(k))
-                                .isInstanceOf(PartitionNotExistException.class)
-                                .hasMessageContaining(
-                                        "Table partition '" + k + "' does not exist.");
+                        assertThat(serverMetadataCache.getPartitionMetadata(k)).isNull();
                     }
                 });
     }
