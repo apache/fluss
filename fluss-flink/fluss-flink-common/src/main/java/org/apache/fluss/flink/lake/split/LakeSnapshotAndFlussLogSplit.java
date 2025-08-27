@@ -107,4 +107,23 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
     public List<LakeSplit> getLakeSplits() {
         return lakeSnapshotSplits;
     }
+
+    @Override
+    public String toString() {
+        return "LakeSnapshotAndFlussLogSplit{"
+                + "lakeSnapshotSplits="
+                + lakeSnapshotSplits
+                + ", recordOffset="
+                + recordOffset
+                + ", startingOffset="
+                + startingOffset
+                + ", stoppingOffset="
+                + stoppingOffset
+                + ", tableBucket="
+                + tableBucket
+                + ", partitionName='"
+                + partitionName
+                + '\''
+                + '}';
+    }
 }

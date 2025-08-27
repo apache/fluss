@@ -353,6 +353,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             context,
                             assignedBuckets,
                             Collections.emptyMap(),
+                            Collections.emptyList(),
                             OffsetsInitializer.earliest(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,

@@ -32,6 +32,7 @@ public class FlinkUnionReadTestBase extends FlinkPaimonTieringTestBase {
 
     protected static final int DEFAULT_BUCKET_NUM = 1;
     StreamTableEnvironment batchTEnv;
+    StreamTableEnvironment streamTEnv;
 
     @BeforeAll
     protected static void beforeAll() {
@@ -41,6 +42,24 @@ public class FlinkUnionReadTestBase extends FlinkPaimonTieringTestBase {
     @BeforeEach
     public void beforeEach() {
         super.beforeEach();
+        buildBatchTEnv();
+        buildStreamTEnv();
+    }
+
+    private void buildStreamTEnv() {
+        String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
+        // create table environment
+        streamTEnv = StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
+        // crate catalog using sql
+        streamTEnv.executeSql(
+                String.format(
+                        "create catalog %s with ('type' = 'fluss', '%s' = '%s')",
+                        CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
+        streamTEnv.executeSql("use catalog " + CATALOG_NAME);
+        streamTEnv.executeSql("use " + DEFAULT_DB);
+    }
+
+    public void buildBatchTEnv() {
         String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
         // create table environment
         batchTEnv = StreamTableEnvironment.create(execEnv, EnvironmentSettings.inBatchMode());

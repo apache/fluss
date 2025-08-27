@@ -17,15 +17,23 @@
 
 package org.apache.fluss.flink.source.state;
 
+import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.flink.source.split.SourceSplitSerializer;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TableBucket;
 
 import org.apache.flink.core.io.SimpleVersionedSerializer;
 import org.apache.flink.core.memory.DataInputDeserializer;
 import org.apache.flink.core.memory.DataOutputSerializer;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
@@ -33,14 +41,17 @@ import java.util.Set;
 public class FlussSourceEnumeratorStateSerializer
         implements SimpleVersionedSerializer<SourceEnumeratorState> {
 
-    public static final FlussSourceEnumeratorStateSerializer INSTANCE =
-            new FlussSourceEnumeratorStateSerializer();
+    @Nullable private final LakeSource<LakeSplit> lakeSource;
 
     private static final int VERSION_0 = 0;
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
     private static final int CURRENT_VERSION = VERSION_0;
+
+    public FlussSourceEnumeratorStateSerializer(LakeSource<LakeSplit> lakeSource) {
+        this.lakeSource = lakeSource;
+    }
 
     @Override
     public int getVersion() {
@@ -71,6 +82,10 @@ public class FlussSourceEnumeratorStateSerializer
         for (Map.Entry<Long, String> entry : state.getAssignedPartitions().entrySet()) {
             out.writeLong(entry.getKey());
             out.writeUTF(entry.getValue());
+        }
+
+        if (lakeSource != null) {
+            serializeRemainingHybridLakeFlussSplits(out, state);
         }
 
         final byte[] result = out.getCopyOfBuffer();
@@ -107,6 +122,56 @@ public class FlussSourceEnumeratorStateSerializer
             String partition = in.readUTF();
             assignedPartitions.put(partitionId, partition);
         }
-        return new SourceEnumeratorState(assignedBuckets, assignedPartitions);
+
+        List<SourceSplitBase> remainingHybridLakeFlussSplits = null;
+        if (lakeSource != null) {
+            // todo: add a ut for serialize remaining hybrid lake fluss splits
+            remainingHybridLakeFlussSplits = deserializeRemainingHybridLakeFlussSplits(in);
+        }
+
+        return new SourceEnumeratorState(
+                assignedBuckets, assignedPartitions, remainingHybridLakeFlussSplits);
+    }
+
+    private void serializeRemainingHybridLakeFlussSplits(
+            final DataOutputSerializer out, SourceEnumeratorState state) throws IOException {
+        List<SourceSplitBase> remainingHybridLakeFlussSplits =
+                state.getRemainingHybridLakeFlussSplits();
+        if (remainingHybridLakeFlussSplits != null) {
+            // write that hybrid lake fluss splits is not null
+            out.writeBoolean(true);
+            out.writeInt(remainingHybridLakeFlussSplits.size());
+            SourceSplitSerializer sourceSplitSerializer = new SourceSplitSerializer(lakeSource);
+            for (SourceSplitBase split : remainingHybridLakeFlussSplits) {
+                byte[] serializeBytes = sourceSplitSerializer.serialize(split);
+                out.writeInt(serializeBytes.length);
+                out.write(serializeBytes);
+            }
+
+        } else {
+            // write that hybrid lake fluss splits is null
+            out.writeBoolean(false);
+        }
+    }
+
+    @Nullable
+    private List<SourceSplitBase> deserializeRemainingHybridLakeFlussSplits(
+            final DataInputDeserializer in) throws IOException {
+        if (in.readBoolean()) {
+            int numSplits = in.readInt();
+            List<SourceSplitBase> splits = new ArrayList<>(numSplits);
+            SourceSplitSerializer sourceSplitSerializer = new SourceSplitSerializer(lakeSource);
+            for (int i = 0; i < numSplits; i++) {
+                int splitSizeInBytes = in.readInt();
+                byte[] splitBytes = new byte[splitSizeInBytes];
+                in.readFully(splitBytes);
+                splits.add(
+                        sourceSplitSerializer.deserialize(
+                                sourceSplitSerializer.getVersion(), splitBytes));
+            }
+            return splits;
+        } else {
+            return null;
+        }
     }
 }

@@ -31,6 +31,7 @@ import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
+import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -383,6 +384,7 @@ public interface Admin extends AutoCloseable {
      *
      * <ul>
      *   <li>{@link TableNotExistException} if the table does not exist.
+     *   <li>{@link LakeTableSnapshotNotExistException} if no any lake snapshot exist.
      * </ul>
      *
      * @param tablePath the table path of the table.
