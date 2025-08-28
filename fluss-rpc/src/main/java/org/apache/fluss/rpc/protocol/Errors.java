@@ -214,7 +214,8 @@ public enum Errors {
     INVALID_SERVER_RACK_INFO_EXCEPTION(
             52, "The server rack info is invalid.", InvalidServerRackInfoException::new),
     LAKE_SNAPSHOT_NOT_EXIST(
-            53, "The lake snapshot is not exist.", LakeTableSnapshotNotExistException::new);
+            53, "The lake snapshot is not exist.", LakeTableSnapshotNotExistException::new),
+    ;
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 
