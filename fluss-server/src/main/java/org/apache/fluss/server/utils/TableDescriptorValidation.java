@@ -221,9 +221,13 @@ public class TableDescriptorValidation {
     private static void checkLogFormat(Configuration tableConf, boolean hasPrimaryKey) {
         KvFormat kvFormat = tableConf.get(ConfigOptions.TABLE_KV_FORMAT);
         LogFormat logFormat = tableConf.get(ConfigOptions.TABLE_LOG_FORMAT);
-        if (hasPrimaryKey && kvFormat == KvFormat.COMPACTED && logFormat != LogFormat.ARROW) {
+
+        // Allow COMPACTED and ARROW log formats when KV format is COMPACTED for primary key tables
+        if (hasPrimaryKey
+                && kvFormat == KvFormat.COMPACTED
+                && !(logFormat == LogFormat.ARROW || logFormat == LogFormat.COMPACTED)) {
             throw new InvalidConfigException(
-                    "Currently, Primary Key Table only supports ARROW log format if kv format is COMPACTED.");
+                    "Currently, Primary Key Table supports ARROW or COMPACTED log format when kv format is COMPACTED.");
         }
     }
 

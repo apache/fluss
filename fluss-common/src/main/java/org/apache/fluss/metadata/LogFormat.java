@@ -18,10 +18,15 @@
 package org.apache.fluss.metadata;
 
 import org.apache.fluss.record.MemoryLogRecordsArrowBuilder;
+import org.apache.fluss.record.MemoryLogRecordsCompactedBuilder;
 import org.apache.fluss.record.MemoryLogRecordsIndexedBuilder;
+import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.indexed.IndexedRow;
 
-/** The format of the log records in log store. The supported formats are 'arrow' and 'indexed'. */
+/**
+ * The format of the log records in log store. The supported formats are 'arrow', 'indexed' and
+ * 'compacted'.
+ */
 public enum LogFormat {
 
     /**
@@ -41,11 +46,20 @@ public enum LogFormat {
      *
      * @see MemoryLogRecordsIndexedBuilder
      */
-    INDEXED;
+    INDEXED,
 
     /**
-     * Creates a {@link LogFormat} from the given string. The string must be either 'arrow' or
-     * 'indexed'.
+     * The log record batches are stored in {@link CompactedRow} format which is a compact
+     * row-oriented format optimized for primary key tables to reduce storage while trading CPU for
+     * reads.
+     *
+     * @see MemoryLogRecordsCompactedBuilder
+     */
+    COMPACTED;
+
+    /**
+     * Creates a {@link LogFormat} from the given string. The string must be either 'arrow',
+     * 'indexed' or 'compacted'.
      */
     public static LogFormat fromString(String format) {
         switch (format.toUpperCase()) {
@@ -53,6 +67,8 @@ public enum LogFormat {
                 return ARROW;
             case "INDEXED":
                 return INDEXED;
+            case "COMPACTED":
+                return COMPACTED;
             default:
                 throw new IllegalArgumentException("Unsupported log format: " + format);
         }

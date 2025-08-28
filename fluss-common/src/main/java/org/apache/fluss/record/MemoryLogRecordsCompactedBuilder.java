@@ -19,19 +19,21 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.memory.AbstractPagedOutputView;
-import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.row.compacted.CompactedRow;
 
 import java.io.IOException;
 
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 
 /**
- * Default builder for {@link MemoryLogRecords} of log records in {@link
- * org.apache.fluss.metadata.LogFormat#INDEXED} format.
+ * Default builder for {@link MemoryLogRecords} of log records in {@link LogFormat#COMPACTED}
+ * format.
  */
-public class MemoryLogRecordsIndexedBuilder extends AbstractRowMemoryLogRecordsBuilder<IndexedRow> {
+public class MemoryLogRecordsCompactedBuilder
+        extends AbstractRowMemoryLogRecordsBuilder<CompactedRow> {
 
-    private MemoryLogRecordsIndexedBuilder(
+    private MemoryLogRecordsCompactedBuilder(
             long baseLogOffset,
             int schemaId,
             int writeLimit,
@@ -41,9 +43,9 @@ public class MemoryLogRecordsIndexedBuilder extends AbstractRowMemoryLogRecordsB
         super(baseLogOffset, schemaId, writeLimit, magic, pagedOutputView, appendOnly);
     }
 
-    public static MemoryLogRecordsIndexedBuilder builder(
+    public static MemoryLogRecordsCompactedBuilder builder(
             int schemaId, int writeLimit, AbstractPagedOutputView outputView, boolean appendOnly) {
-        return new MemoryLogRecordsIndexedBuilder(
+        return new MemoryLogRecordsCompactedBuilder(
                 BUILDER_DEFAULT_OFFSET,
                 schemaId,
                 writeLimit,
@@ -53,24 +55,24 @@ public class MemoryLogRecordsIndexedBuilder extends AbstractRowMemoryLogRecordsB
     }
 
     @VisibleForTesting
-    public static MemoryLogRecordsIndexedBuilder builder(
+    public static MemoryLogRecordsCompactedBuilder builder(
             long baseLogOffset,
             int schemaId,
             int writeLimit,
             byte magic,
             AbstractPagedOutputView outputView)
             throws IOException {
-        return new MemoryLogRecordsIndexedBuilder(
+        return new MemoryLogRecordsCompactedBuilder(
                 baseLogOffset, schemaId, writeLimit, magic, outputView, false);
     }
 
     @Override
-    protected int sizeOf(IndexedRow row) {
-        return IndexedLogRecord.sizeOf(row);
+    protected int sizeOf(CompactedRow row) {
+        return CompactedLogRecord.sizeOf(row);
     }
 
     @Override
-    protected int writeRecord(ChangeType changeType, IndexedRow row) throws IOException {
-        return IndexedLogRecord.writeTo(pagedOutputView, changeType, row);
+    protected int writeRecord(ChangeType changeType, CompactedRow row) throws IOException {
+        return CompactedLogRecord.writeTo(pagedOutputView, changeType, row);
     }
 }

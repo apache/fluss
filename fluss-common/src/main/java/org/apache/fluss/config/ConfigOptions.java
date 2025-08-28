@@ -1230,7 +1230,7 @@ public class ConfigOptions {
                     .defaultValue(LogFormat.ARROW)
                     .withDescription(
                             "The format of the log records in log store. The default value is `arrow`. "
-                                    + "The supported formats are `arrow` and `indexed`.");
+                                    + "The supported formats are `arrow`, `indexed` and `compacted`.");
 
     public static final ConfigOption<ArrowCompressionType> TABLE_LOG_ARROW_COMPRESSION_TYPE =
             key("table.log.arrow.compression.type")
