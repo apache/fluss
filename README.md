@@ -26,7 +26,7 @@ Apache Spark, and StarRocks are coming soon.
 
 **Fluss (German: river, pronounced `/flus/`)** enables streaming data continuously converging, distributing and flowing into lakes, like a river 🌊
 
-# Features
+## Features
 
 - **Sub-Second Latency**: Low-latency streaming reads/writes optimized for real-time applications with Apache Flink.
 - **Columnar Stream**: 10x improvement in streaming read performance with efficient pushdown projections.
