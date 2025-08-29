@@ -1656,31 +1656,12 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ConfigOptions for OpenTelemetry reporter
     // ------------------------------------------------------------------------
-    /** OpenTelemetry protocol. */
-    public enum OpenTelemetryExporter {
-        GRPC,
-        HTTP
-    }
-
     public static final ConfigOption<String> METRICS_REPORTER_OPENTELEMETRY_ENDPOINT =
             key("metrics.reporter.opentelemetry.endpoint")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
                             "Target to which the OpenTelemetry metric reporter is going to send metrics to.");
-
-    public static final ConfigOption<OpenTelemetryExporter>
-            METRICS_REPORTER_OPENTELEMETRY_EXPORTER =
-                    key("metrics.reporter.opentelemetry.exporter")
-                            .enumType(OpenTelemetryExporter.class)
-                            .defaultValue(OpenTelemetryExporter.GRPC)
-                            .withDescription(
-                                    "The type of exporter that is used by the OpenTelemetry metric exporter to send metrics to the configured endpoint. "
-                                            + "The endpoint must accept connections for the given exporter type. Supported exporters: "
-                                            + OpenTelemetryExporter.GRPC.name()
-                                            + ", "
-                                            + OpenTelemetryExporter.HTTP.name()
-                                            + ".");
 
     public static final ConfigOption<Duration> METRICS_REPORTER_OPENTELEMETRY_EXPORT_INTERVAL =
             key("metrics.reporter.opentelemetry.export-interval")

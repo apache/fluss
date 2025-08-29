@@ -17,7 +17,6 @@
 
 package org.apache.fluss.metrics.opentelemetry;
 
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Histogram;
@@ -30,8 +29,6 @@ import org.apache.fluss.metrics.util.TestMeter;
 import io.opentelemetry.semconv.ServiceAttributes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Duration;
 import java.util.AbstractMap;
@@ -64,14 +61,12 @@ public class OpenTelemetryReporterTest {
         metricGroup = TestUtils.createTestMetricGroup(LOGICAL_SCOPE, labels);
     }
 
-    @ParameterizedTest
-    @EnumSource(ConfigOptions.OpenTelemetryExporter.class)
-    void testInvalidEndpoint(ConfigOptions.OpenTelemetryExporter exporterType) {
+    @Test
+    void testInvalidEndpoint() {
         assertThatThrownBy(
                         () ->
                                 new OpenTelemetryReporter(
                                         "endpoint-with-missing-protocol",
-                                        exporterType,
                                         Duration.ofSeconds(5),
                                         Duration.ofSeconds(5),
                                         null,
@@ -82,7 +77,6 @@ public class OpenTelemetryReporterTest {
                         () ->
                                 new OpenTelemetryReporter(
                                         "invalid://protocol",
-                                        exporterType,
                                         Duration.ofSeconds(5),
                                         Duration.ofSeconds(5),
                                         null,
@@ -90,14 +84,11 @@ public class OpenTelemetryReporterTest {
                 .isInstanceOf(IllegalArgumentException.class);
     }
 
-    @ParameterizedTest
-    @EnumSource(ConfigOptions.OpenTelemetryExporter.class)
-    void testOpenTelemetryResourceIsConstructedCorrectly(
-            ConfigOptions.OpenTelemetryExporter exporterType) {
+    @Test
+    void testOpenTelemetryResourceIsConstructedCorrectly() {
         OpenTelemetryReporter reporter =
                 new OpenTelemetryReporter(
                         "http://opentelemetry-collector:4317",
-                        exporterType,
                         Duration.ofSeconds(5),
                         Duration.ofSeconds(5),
                         "fluss",
@@ -162,7 +153,6 @@ public class OpenTelemetryReporterTest {
     private OpenTelemetryReporter createReporter() {
         return new OpenTelemetryReporter(
                 "http://endpoint-must-not-be-called-in-unit-tests",
-                ConfigOptions.OpenTelemetryExporter.GRPC,
                 Duration.ofSeconds(5),
                 Duration.ofSeconds(5),
                 null,

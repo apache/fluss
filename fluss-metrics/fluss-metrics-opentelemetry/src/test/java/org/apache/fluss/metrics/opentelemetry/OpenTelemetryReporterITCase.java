@@ -17,7 +17,6 @@
 
 package org.apache.fluss.metrics.opentelemetry;
 
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.MeterView;
@@ -29,9 +28,8 @@ import org.apache.fluss.testutils.common.TestLoggerExtension;
 
 import org.assertj.core.data.Percentage;
 import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
 
 import java.time.Duration;
 import java.util.HashMap;
@@ -58,10 +56,9 @@ public class OpenTelemetryReporterITCase extends OpenTelemetryReporterITCaseBase
         group = TestUtils.createTestMetricGroup(LOGICAL_SCOPE, new HashMap<>());
     }
 
-    @ParameterizedTest
-    @EnumSource(ConfigOptions.OpenTelemetryExporter.class)
-    public void testReport(ConfigOptions.OpenTelemetryExporter exporterType) throws Exception {
-        OpenTelemetryReporter reporter = createReporter(exporterType);
+    @Test
+    public void testReport() throws Exception {
+        OpenTelemetryReporter reporter = createReporter();
 
         SimpleCounter counter = new SimpleCounter();
         reporter.notifyOfAddedMetric(counter, "foo.counter", group);
@@ -117,11 +114,9 @@ public class OpenTelemetryReporterITCase extends OpenTelemetryReporterITCaseBase
         }
     }
 
-    @ParameterizedTest
-    @EnumSource(ConfigOptions.OpenTelemetryExporter.class)
-    public void testReportAfterUnregister(ConfigOptions.OpenTelemetryExporter exporterType)
-            throws Exception {
-        OpenTelemetryReporter reporter = createReporter(exporterType);
+    @Test
+    public void testReportAfterUnregister() throws Exception {
+        OpenTelemetryReporter reporter = createReporter();
 
         SimpleCounter counter1 = new SimpleCounter();
         SimpleCounter counter2 = new SimpleCounter();
@@ -145,11 +140,9 @@ public class OpenTelemetryReporterITCase extends OpenTelemetryReporterITCaseBase
                 });
     }
 
-    @ParameterizedTest
-    @EnumSource(ConfigOptions.OpenTelemetryExporter.class)
-    public void testCounterDelta(ConfigOptions.OpenTelemetryExporter exporterType)
-            throws Exception {
-        OpenTelemetryReporter reporter = createReporter(exporterType);
+    @Test
+    public void testCounterDelta() throws Exception {
+        OpenTelemetryReporter reporter = createReporter();
 
         SimpleCounter counter = new SimpleCounter();
         reporter.notifyOfAddedMetric(counter, "foo.counter", group);
@@ -199,13 +192,11 @@ public class OpenTelemetryReporterITCase extends OpenTelemetryReporterITCaseBase
                 });
     }
 
-    @ParameterizedTest
-    @EnumSource(ConfigOptions.OpenTelemetryExporter.class)
-    public void testOpenTelemetryAttributes(ConfigOptions.OpenTelemetryExporter exporterType)
-            throws Exception {
+    @Test
+    public void testOpenTelemetryAttributes() throws Exception {
         String serviceName = "flink-bar";
         String serviceVersion = "v42";
-        OpenTelemetryReporter reporter = createReporter(exporterType, serviceName, serviceVersion);
+        OpenTelemetryReporter reporter = createReporter(serviceName, serviceVersion);
 
         SimpleCounter counter = new SimpleCounter();
         reporter.notifyOfAddedMetric(counter, "foo.counter", group);
@@ -246,39 +237,19 @@ public class OpenTelemetryReporterITCase extends OpenTelemetryReporterITCaseBase
                 });
     }
 
-    private static OpenTelemetryReporter createReporter(
-            ConfigOptions.OpenTelemetryExporter exporterType,
-            String serviceName,
-            String serviceVersion) {
-        String endpoint;
-        switch (exporterType) {
-            case GRPC:
-                endpoint =
-                        OpenTelemetryReporterITCaseBase.getOpenTelemetryContainer()
-                                .getGrpcEndpoint();
-                break;
-            case HTTP:
-                endpoint =
-                        OpenTelemetryReporterITCaseBase.getOpenTelemetryContainer()
-                                .getHttpEndpoint();
-                break;
-            default:
-                throw new IllegalStateException("OpenTelemetry exporter type: " + exporterType);
-        }
+    private static OpenTelemetryReporter createReporter(String serviceName, String serviceVersion) {
+        String endpoint =
+                OpenTelemetryReporterITCaseBase.getOpenTelemetryContainer().getGrpcEndpoint();
 
-        OpenTelemetryReporter reporter =
-                new OpenTelemetryReporter(
-                        endpoint,
-                        exporterType,
-                        Duration.ofSeconds(10),
-                        Duration.ofSeconds(10),
-                        serviceName,
-                        serviceVersion);
-        return reporter;
+        return new OpenTelemetryReporter(
+                endpoint,
+                Duration.ofSeconds(10),
+                Duration.ofSeconds(10),
+                serviceName,
+                serviceVersion);
     }
 
-    private static OpenTelemetryReporter createReporter(
-            ConfigOptions.OpenTelemetryExporter exporterType) {
-        return createReporter(exporterType, null, null);
+    private static OpenTelemetryReporter createReporter() {
+        return createReporter(null, null);
     }
 }

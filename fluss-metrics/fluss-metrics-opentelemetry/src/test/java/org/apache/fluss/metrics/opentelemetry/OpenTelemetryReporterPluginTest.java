@@ -21,8 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.IllegalConfigurationException;
 
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.api.Test;
 
 import java.time.Duration;
 
@@ -35,17 +34,13 @@ public class OpenTelemetryReporterPluginTest {
     private final OpenTelemetryReporterPlugin openTelemetryReporterPlugin =
             new OpenTelemetryReporterPlugin();
 
-    @ParameterizedTest
-    @EnumSource(ConfigOptions.OpenTelemetryExporter.class)
-    void testValidConfiguration(ConfigOptions.OpenTelemetryExporter exporterType) {
+    @Test
+    void testValidConfiguration() {
         // mandatory options
         Configuration configuration = new Configuration();
         configuration.setString(
                 ConfigOptions.METRICS_REPORTER_OPENTELEMETRY_ENDPOINT,
                 "http://opentelemetry-metric-collector:4317");
-        configuration.set(ConfigOptions.METRICS_REPORTER_OPENTELEMETRY_EXPORTER, exporterType);
-        assertThatCode(() -> openTelemetryReporterPlugin.createMetricReporter(configuration))
-                .doesNotThrowAnyException();
 
         // optional options
         configuration.set(
@@ -62,11 +57,10 @@ public class OpenTelemetryReporterPluginTest {
                 .doesNotThrowAnyException();
     }
 
-    @ParameterizedTest
-    @EnumSource(ConfigOptions.OpenTelemetryExporter.class)
-    void testInvalidConfiguration(ConfigOptions.OpenTelemetryExporter exporterType) {
+    @Test
+    void testInvalidConfiguration() {
         Configuration configuration = new Configuration();
-        // invalid endpoint and no exporter type
+
         assertThatThrownBy(() -> openTelemetryReporterPlugin.createMetricReporter(configuration))
                 .isInstanceOf(IllegalConfigurationException.class);
 
@@ -75,11 +69,6 @@ public class OpenTelemetryReporterPluginTest {
                 .isInstanceOf(IllegalConfigurationException.class);
 
         configuration.setString(ConfigOptions.METRICS_REPORTER_OPENTELEMETRY_ENDPOINT, "   ");
-        assertThatThrownBy(() -> openTelemetryReporterPlugin.createMetricReporter(configuration))
-                .isInstanceOf(IllegalConfigurationException.class);
-
-        // endpoint is still invalid
-        configuration.set(ConfigOptions.METRICS_REPORTER_OPENTELEMETRY_EXPORTER, exporterType);
         assertThatThrownBy(() -> openTelemetryReporterPlugin.createMetricReporter(configuration))
                 .isInstanceOf(IllegalConfigurationException.class);
     }
