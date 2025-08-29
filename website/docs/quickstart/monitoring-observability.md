@@ -3,24 +3,6 @@ title: Cluster Monitoring and Observability
 sidebar_position: 3
 ---
 
-<!--
- Licensed to the Apache Software Foundation (ASF) under one
- or more contributor license agreements.  See the NOTICE file
- distributed with this work for additional information
- regarding copyright ownership.  The ASF licenses this file
- to you under the Apache License, Version 2.0 (the
- "License"); you may not use this file except in compliance
- with the License.  You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
-
 # Cluster Monitoring and Observability
 
 This guide will show you how to set up a monitoring/observability stack for Fluss. 
@@ -297,7 +279,6 @@ services:
         datalake.paimon.metastore: filesystem
         datalake.paimon.warehouse: /tmp/paimon
         metrics.reporters: opentelemetry
-        metrics.reporter.opentelemetry.exporter: GRPC
         metrics.reporter.opentelemetry.endpoint: http://opentelemetry-collector:4317
         metrics.reporter.opentelemetry.service.name: coordinator-server
         metrics.reporter.opentelemetry.service.version: $FLUSS_DOCKER_VERSION$
@@ -326,7 +307,6 @@ services:
         datalake.paimon.metastore: filesystem
         datalake.paimon.warehouse: /tmp/paimon
         metrics.reporters: opentelemetry
-        metrics.reporter.opentelemetry.exporter: GRPC
         metrics.reporter.opentelemetry.endpoint: http://opentelemetry-collector:4317
         metrics.reporter.opentelemetry.service.name: tablet-server
         metrics.reporter.opentelemetry.service.version: $FLUSS_DOCKER_VERSION$
