@@ -77,6 +77,7 @@ public class LakeSplitSerializer {
                             .getStoppingOffset()
                             .orElse(LogSplit.NO_STOPPING_OFFSET));
             out.writeLong(lakeSnapshotAndFlussLogSplit.getRecordsToSkip());
+            out.writeInt(lakeSnapshotAndFlussLogSplit.getCurrentLakeSplitIndex());
         } else {
             throw new UnsupportedOperationException(
                     "Unsupported split type: " + split.getClass().getName());
@@ -113,13 +114,15 @@ public class LakeSplitSerializer {
             long startingOffset = input.readLong();
             long stoppingOffset = input.readLong();
             long recordsToSkip = input.readLong();
+            int splitIndex = input.readInt();
             return new LakeSnapshotAndFlussLogSplit(
                     tableBucket,
                     partition,
                     lakeSplits,
                     startingOffset,
                     stoppingOffset,
-                    recordsToSkip);
+                    recordsToSkip,
+                    splitIndex);
         } else {
             throw new UnsupportedOperationException("Unsupported split kind: " + splitKind);
         }

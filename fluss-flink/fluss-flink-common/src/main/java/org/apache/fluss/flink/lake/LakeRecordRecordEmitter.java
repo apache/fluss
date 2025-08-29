@@ -44,8 +44,15 @@ public class LakeRecordRecordEmitter<OUT> {
             ((LakeSnapshotSplitState) splitState).setRecordsToSkip(recordAndPos.readRecordsCount());
             sourceOutputFunc.accept(recordAndPos.record(), sourceOutput);
         } else if (splitState instanceof LakeSnapshotAndFlussLogSplitState) {
-            ((LakeSnapshotAndFlussLogSplitState) splitState)
-                    .setRecordsToSkip(recordAndPos.readRecordsCount());
+            LakeSnapshotAndFlussLogSplitState lakeSnapshotAndFlussLogSplitState =
+                    (LakeSnapshotAndFlussLogSplitState) splitState;
+            ScanRecord scanRecord = recordAndPos.record();
+            if (scanRecord.logOffset() < 0) {
+                // record is with an invalid offset, means it's in Lake snapshot phase
+                // TODO
+                lakeSnapshotAndFlussLogSplitState.setCurrentLakeSplitIndex(0);
+            }
+            lakeSnapshotAndFlussLogSplitState.setRecordsToSkip(recordAndPos.readRecordsCount());
             sourceOutputFunc.accept(recordAndPos.record(), sourceOutput);
         } else {
             throw new UnsupportedOperationException(

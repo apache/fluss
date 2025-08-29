@@ -48,11 +48,22 @@ public class LakeSplitReaderGenerator {
         this.lakeSource = lakeSource;
     }
 
-    public void addSplit(SourceSplitBase split, Queue<SourceSplitBase> boundedSplits) {
+    public void addSplit(
+            SourceSplitBase split,
+            Queue<SourceSplitBase> boundedSplits,
+            Queue<LakeSnapshotAndFlussLogSplit> unboundedSplits) {
         if (split instanceof LakeSnapshotSplit) {
             boundedSplits.add(split);
         } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
-            boundedSplits.add(split);
+            LakeSnapshotAndFlussLogSplit lakeSnapshotAndFlussLogSplit =
+                    (LakeSnapshotAndFlussLogSplit) split;
+            if (lakeSnapshotAndFlussLogSplit.getLakeSplits() != null
+                    && !lakeSnapshotAndFlussLogSplit.getLakeSplits().isEmpty()) {
+                boundedSplits.add(split);
+            }
+            if (lakeSnapshotAndFlussLogSplit.getStoppingOffset().equals(Long.MAX_VALUE)) {
+                unboundedSplits.add(lakeSnapshotAndFlussLogSplit);
+            }
         } else {
             throw new UnsupportedOperationException(
                     String.format("The split type of %s is not supported.", split.getClass()));

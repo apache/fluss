@@ -42,12 +42,14 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
     private final long startingOffset;
     private final long stoppingOffset;
 
+    private int currentLakeSplitIndex;
+
     public LakeSnapshotAndFlussLogSplit(
             TableBucket tableBucket,
             @Nullable List<LakeSplit> snapshotSplits,
             long startingOffset,
             long stoppingOffset) {
-        this(tableBucket, null, snapshotSplits, startingOffset, stoppingOffset, 0);
+        this(tableBucket, null, snapshotSplits, startingOffset, stoppingOffset, 0, 0);
     }
 
     public LakeSnapshotAndFlussLogSplit(
@@ -56,7 +58,7 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
             @Nullable List<LakeSplit> snapshotSplits,
             long startingOffset,
             long stoppingOffset) {
-        this(tableBucket, partitionName, snapshotSplits, startingOffset, stoppingOffset, 0);
+        this(tableBucket, partitionName, snapshotSplits, startingOffset, stoppingOffset, 0, 0);
     }
 
     public LakeSnapshotAndFlussLogSplit(
@@ -65,16 +67,23 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
             @Nullable List<LakeSplit> snapshotSplits,
             long startingOffset,
             long stoppingOffset,
-            long recordsToSkip) {
+            long recordsToSkip,
+            int currentLakeSplitIndex) {
         super(tableBucket, partitionName);
         this.lakeSnapshotSplits = snapshotSplits;
         this.startingOffset = startingOffset;
         this.stoppingOffset = stoppingOffset;
         this.recordOffset = recordsToSkip;
+        this.currentLakeSplitIndex = currentLakeSplitIndex;
     }
 
     public LakeSnapshotAndFlussLogSplit updateWithRecordsToSkip(long recordsToSkip) {
         this.recordOffset = recordsToSkip;
+        return this;
+    }
+
+    public LakeSnapshotAndFlussLogSplit updateWithCurrentLakeSplitIndex(int currentLakeSplitIndex) {
+        this.currentLakeSplitIndex = currentLakeSplitIndex;
         return this;
     }
 
@@ -108,6 +117,10 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
         return lakeSnapshotSplits;
     }
 
+    public int getCurrentLakeSplitIndex() {
+        return currentLakeSplitIndex;
+    }
+
     @Override
     public String toString() {
         return "LakeSnapshotAndFlussLogSplit{"
@@ -115,6 +128,8 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
                 + lakeSnapshotSplits
                 + ", recordOffset="
                 + recordOffset
+                + ", currentLakeSplitIndex="
+                + currentLakeSplitIndex
                 + ", startingOffset="
                 + startingOffset
                 + ", stoppingOffset="

@@ -27,19 +27,26 @@ public class LakeSnapshotAndFlussLogSplitState extends SourceSplitState {
 
     private long recordsToSkip;
     private final LakeSnapshotAndFlussLogSplit split;
+    private int currentLakeSplitIndex;
 
     public LakeSnapshotAndFlussLogSplitState(LakeSnapshotAndFlussLogSplit split) {
         super(split);
         this.recordsToSkip = split.getRecordsToSkip();
         this.split = split;
+        this.currentLakeSplitIndex = split.getCurrentLakeSplitIndex();
     }
 
     public void setRecordsToSkip(long recordsToSkip) {
         this.recordsToSkip = recordsToSkip;
     }
 
+    public void setCurrentLakeSplitIndex(int currentLakeSplitIndex) {
+        this.currentLakeSplitIndex = currentLakeSplitIndex;
+    }
+
     @Override
     public SourceSplitBase toSourceSplit() {
-        return split.updateWithRecordsToSkip(recordsToSkip);
+        return split.updateWithRecordsToSkip(recordsToSkip)
+                .updateWithCurrentLakeSplitIndex(currentLakeSplitIndex);
     }
 }

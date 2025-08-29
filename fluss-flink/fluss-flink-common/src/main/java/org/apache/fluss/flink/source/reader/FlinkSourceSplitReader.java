@@ -27,6 +27,7 @@ import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.flink.lake.LakeSplitReaderGenerator;
+import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
@@ -207,7 +208,12 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             } else if (sourceSplitBase.isLogSplit()) {
                 subscribeLog(sourceSplitBase, sourceSplitBase.asLogSplit().getStartingOffset());
             } else if (sourceSplitBase.isLakeSplit()) {
-                getLakeSplitReader().addSplit(sourceSplitBase, boundedSplits);
+                Queue<LakeSnapshotAndFlussLogSplit> unboundedSplits = new ArrayDeque<>();
+                getLakeSplitReader().addSplit(sourceSplitBase, boundedSplits, unboundedSplits);
+                if (!unboundedSplits.isEmpty()) {
+                    LakeSnapshotAndFlussLogSplit nextSplit = unboundedSplits.poll();
+                    subscribeLog(nextSplit, nextSplit.getStartingOffset());
+                }
             } else {
                 throw new UnsupportedOperationException(
                         String.format(
@@ -502,6 +508,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
 
     private FlinkRecordsWithSplitIds finishCurrentBoundedSplit() throws IOException {
         Set<String> finishedSplits =
+                //                currentBoundedSplit.isHybridSplit()
                 currentBoundedSplit instanceof HybridSnapshotLogSplit
                         // is hybrid split, not to finish this split
                         // since it remains log to read
