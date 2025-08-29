@@ -61,10 +61,16 @@ The domain thus identifies a metric class, while the key-property list identifie
 
 Type: push
 
+
+:::info
+
+The OpenTelemetry metric reporter currently supports OTLP/gRPC only.
+
+:::
+
 Parameters:
 
 - `metrics.reporter.opentelemetry.endpoint` - Target to which the OpenTelemetry metric reporter is going to send metrics to.
-- `metrics.reporter.opentelemetry.exporter` - The type of exporter that is used by the OpenTelemetry metric exporter to send metrics to the configured endpoint. The endpoint must accept connections for the given exporter type. Supported exporters: GRPC, HTTP.
 - `metrics.reporter.opentelemetry.export-interval` - (optional) Frequency of metric export by the OpenTelemetry metric reporter to the endpoint. Default: 10s.
 - `metrics.reporter.opentelemetry.export-timeout` - (optional) Maximum time the OpenTelemetry metric reporter will wait for each metric export. Default: 10s.
 
@@ -72,7 +78,6 @@ Example configuration:
 
 ```yaml
 metrics.reporters: opentelemetry
-metrics.reporter.opentelemetry.exporter: GRPC
 metrics.reporter.opentelemetry.endpoint: http://opentelemetry-collector:4317
 ```
 
