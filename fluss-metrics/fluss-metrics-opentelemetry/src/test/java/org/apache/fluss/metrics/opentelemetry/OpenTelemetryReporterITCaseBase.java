@@ -15,15 +15,15 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metrics.opentelemetry;
+package org.apache.fluss.metrics.opentelemetry;
 
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
-import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
-import com.alibaba.fluss.testutils.common.TestContainerExtension;
-import com.alibaba.fluss.testutils.common.TestLoggerExtension;
-import com.alibaba.fluss.utils.function.ThrowingConsumer;
-import com.alibaba.fluss.utils.function.ThrowingRunnable;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
+import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.testutils.common.TestContainerExtension;
+import org.apache.fluss.testutils.common.TestLoggerExtension;
+import org.apache.fluss.utils.function.ThrowingConsumer;
+import org.apache.fluss.utils.function.ThrowingRunnable;
 
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Order;
@@ -128,8 +128,12 @@ public class OpenTelemetryReporterITCaseBase {
     }
 
     public static List<String> extractMetricNames(JsonNode json) {
-        return json.findPath("resourceMetrics").findPath("scopeMetrics").findPath("metrics")
-                .findValues("name").stream()
+        return json
+                .findPath("resourceMetrics")
+                .findPath("scopeMetrics")
+                .findPath("metrics")
+                .findValues("name")
+                .stream()
                 .map(JsonNode::asText)
                 .collect(Collectors.toList());
     }

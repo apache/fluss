@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metrics.opentelemetry;
+package org.apache.fluss.metrics.opentelemetry;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;

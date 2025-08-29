@@ -15,21 +15,21 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metrics.opentelemetry;
+package org.apache.fluss.metrics.opentelemetry;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.metrics.CharacterFilter;
-import com.alibaba.fluss.metrics.Counter;
-import com.alibaba.fluss.metrics.Gauge;
-import com.alibaba.fluss.metrics.Histogram;
-import com.alibaba.fluss.metrics.Meter;
-import com.alibaba.fluss.metrics.Metric;
-import com.alibaba.fluss.metrics.groups.MetricGroup;
-import com.alibaba.fluss.metrics.reporter.MetricReporter;
-import com.alibaba.fluss.metrics.reporter.ScheduledMetricReporter;
+import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.metrics.CharacterFilter;
+import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.Histogram;
+import org.apache.fluss.metrics.Meter;
+import org.apache.fluss.metrics.Metric;
+import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.metrics.reporter.MetricReporter;
+import org.apache.fluss.metrics.reporter.ScheduledMetricReporter;
 
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.exporter.otlp.http.metrics.OtlpHttpMetricExporter;

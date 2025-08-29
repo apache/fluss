@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metrics.opentelemetry;
+package org.apache.fluss.metrics.opentelemetry;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.IllegalConfigurationException;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.IllegalConfigurationException;
 
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;

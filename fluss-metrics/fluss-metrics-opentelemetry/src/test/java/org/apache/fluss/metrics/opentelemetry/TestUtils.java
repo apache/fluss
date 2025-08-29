@@ -15,10 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metrics.opentelemetry;
+package org.apache.fluss.metrics.opentelemetry;
 
-import com.alibaba.fluss.metrics.groups.MetricGroup;
-import com.alibaba.fluss.metrics.util.TestMetricGroup;
+import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.metrics.util.TestMetricGroup;
 
 import java.util.Map;
 

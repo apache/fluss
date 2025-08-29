@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metrics.opentelemetry;
+package org.apache.fluss.metrics.opentelemetry;
 
 import com.github.dockerjava.api.command.InspectContainerResponse;
 import org.testcontainers.containers.GenericContainer;

@@ -15,17 +15,17 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metrics.opentelemetry;
+package org.apache.fluss.metrics.opentelemetry;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.metrics.Counter;
-import com.alibaba.fluss.metrics.Gauge;
-import com.alibaba.fluss.metrics.Histogram;
-import com.alibaba.fluss.metrics.Meter;
-import com.alibaba.fluss.metrics.SimpleCounter;
-import com.alibaba.fluss.metrics.groups.MetricGroup;
-import com.alibaba.fluss.metrics.util.TestHistogram;
-import com.alibaba.fluss.metrics.util.TestMeter;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.Histogram;
+import org.apache.fluss.metrics.Meter;
+import org.apache.fluss.metrics.SimpleCounter;
+import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.metrics.util.TestHistogram;
+import org.apache.fluss.metrics.util.TestMeter;
 
 import io.opentelemetry.semconv.ServiceAttributes;
 import org.junit.jupiter.api.BeforeEach;

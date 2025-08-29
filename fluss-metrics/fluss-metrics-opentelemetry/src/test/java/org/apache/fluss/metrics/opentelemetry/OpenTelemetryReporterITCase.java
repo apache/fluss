@@ -15,17 +15,17 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metrics.opentelemetry;
+package org.apache.fluss.metrics.opentelemetry;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.metrics.Gauge;
-import com.alibaba.fluss.metrics.Histogram;
-import com.alibaba.fluss.metrics.MeterView;
-import com.alibaba.fluss.metrics.SimpleCounter;
-import com.alibaba.fluss.metrics.groups.MetricGroup;
-import com.alibaba.fluss.metrics.util.TestHistogram;
-import com.alibaba.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
-import com.alibaba.fluss.testutils.common.TestLoggerExtension;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.Histogram;
+import org.apache.fluss.metrics.MeterView;
+import org.apache.fluss.metrics.SimpleCounter;
+import org.apache.fluss.metrics.groups.MetricGroup;
+import org.apache.fluss.metrics.util.TestHistogram;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.JsonNode;
+import org.apache.fluss.testutils.common.TestLoggerExtension;
 
 import org.assertj.core.data.Percentage;
 import org.junit.jupiter.api.BeforeEach;
@@ -84,7 +84,7 @@ public class OpenTelemetryReporterITCase extends OpenTelemetryReporterITCaseBase
                     JsonNode scopeMetrics =
                             json.findPath("resourceMetrics").findPath("scopeMetrics");
                     assertThat(scopeMetrics.findPath("scope").findPath("name").asText())
-                            .isEqualTo("com.alibaba.fluss.metrics");
+                            .isEqualTo("org.apache.fluss.metrics");
                     JsonNode metrics = scopeMetrics.findPath("metrics");
 
                     List<String> metricNames = extractMetricNames(json);

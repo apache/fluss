@@ -15,11 +15,11 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metrics.opentelemetry;
+package org.apache.fluss.metrics.opentelemetry;
 
-import com.alibaba.fluss.metrics.Gauge;
-import com.alibaba.fluss.metrics.Histogram;
-import com.alibaba.fluss.metrics.Meter;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.Histogram;
+import org.apache.fluss.metrics.Meter;
 
 import io.opentelemetry.api.common.Attributes;
 import io.opentelemetry.api.common.AttributesBuilder;
@@ -58,7 +58,7 @@ class OpenTelemetryAdapter {
     static final double[] HISTOGRAM_QUANTILES = {0.5, 0.75, 0.95, 0.99};
 
     static final InstrumentationScopeInfo INSTRUMENTATION_SCOPE_INFO =
-            InstrumentationScopeInfo.create("com.alibaba.fluss.metrics");
+            InstrumentationScopeInfo.create("org.apache.fluss.metrics");
 
     public static Optional<MetricData> convertCounter(
             CollectionMetadata collectionMetadata,
