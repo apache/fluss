@@ -15,17 +15,17 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metrics.opentelemetry;
+package org.apache.fluss.metrics.opentelemetry;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
 
-import com.alibaba.fluss.metrics.Counter;
-import com.alibaba.fluss.metrics.MeterView;
-import com.alibaba.fluss.metrics.SimpleCounter;
-import com.alibaba.fluss.metrics.util.TestHistogram;
-import com.alibaba.fluss.shaded.guava32.com.google.common.collect.ImmutableMap;
+import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.MeterView;
+import org.apache.fluss.metrics.SimpleCounter;
+import org.apache.fluss.metrics.util.TestHistogram;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.ImmutableMap;
 
 import io.opentelemetry.api.common.AttributeKey;
 import io.opentelemetry.api.common.Attributes;

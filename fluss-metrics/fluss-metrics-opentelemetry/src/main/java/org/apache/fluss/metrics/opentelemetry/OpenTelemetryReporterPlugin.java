@@ -15,17 +15,17 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metrics.opentelemetry;
+package org.apache.fluss.metrics.opentelemetry;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.IllegalConfigurationException;
-import com.alibaba.fluss.metrics.reporter.MetricReporter;
-import com.alibaba.fluss.metrics.reporter.MetricReporterPlugin;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.IllegalConfigurationException;
+import org.apache.fluss.metrics.reporter.MetricReporter;
+import org.apache.fluss.metrics.reporter.MetricReporterPlugin;
 
 import java.time.Duration;
 

@@ -15,12 +15,10 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.testutils.common;
+package org.apache.fluss.testutils.common;
 
 import org.junit.jupiter.api.extension.ExtensionContext;
 import org.testcontainers.containers.GenericContainer;
-
-import javax.annotation.Nullable;
 
 import java.util.function.Supplier;
 
@@ -35,7 +33,8 @@ import java.util.function.Supplier;
  * @param <T> The {@link GenericContainer} that shall be managed.
  */
 public class TestContainerExtension<T extends GenericContainer<T>> implements CustomExtension {
-    @Nullable private T testContainer;
+
+    private T testContainer;
 
     private final Supplier<T> testContainerCreator;
 

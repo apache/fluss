@@ -15,9 +15,9 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.metrics.opentelemetry;
+package org.apache.fluss.metrics.opentelemetry;
 
-import com.alibaba.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.annotation.VisibleForTesting;
 
 import java.util.Map;
 

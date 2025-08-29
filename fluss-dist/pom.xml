@@ -77,9 +77,9 @@
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-metrics-opentelemetry</artifactId>
-            <version>${project.version}</version>
+            <version>0.8-SNAPSHOT</version>
             <scope>provided</scope>
         </dependency>
 
