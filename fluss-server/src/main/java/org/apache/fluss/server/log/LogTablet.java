@@ -1138,7 +1138,10 @@ public final class LogTablet {
         } else {
             offsetsToSnapshot.add(Optional.of(lastOffset));
         }
-        LOG.info("Loading writer state till offset {}", lastOffset);
+        LOG.info(
+                "Loading writer state for bucket {} till offset {}",
+                segments.getTableBucket(),
+                lastOffset);
         // We want to avoid unnecessary scanning of the log to build the writer state when the
         // tablet server is being upgraded. The basic idea is to use the absence of writer
         // snapshot files to detect the upgrade case, but we have to be careful not to assume too
@@ -1164,7 +1167,8 @@ public final class LogTablet {
             }
         } else {
             LOG.info(
-                    "Reloading from writer snapshot and rebuilding writer state from offset {}",
+                    "Reloading from writer snapshot and rebuilding writer state for bucket {} from offset {}",
+                    segments.getTableBucket(),
                     lastOffset);
             boolean isEmptyBeforeTruncation =
                     writerStateManager.isEmpty() && writerStateManager.mapEndOffset() >= lastOffset;
@@ -1218,9 +1222,10 @@ public final class LogTablet {
             writerStateManager.updateMapEndOffset(lastOffset);
             writerStateManager.takeSnapshot();
             LOG.info(
-                    "Writer state recovery took {} ms for snapshot load and {} ms for segment recovery from offset {}",
+                    "Writer state recovery took {} ms for snapshot load and {} ms for segment recovery for bucket {} from offset {}",
                     segmentRecoveryStart - writerStateLoadStart,
                     System.currentTimeMillis() - segmentRecoveryStart,
+                    segments.getTableBucket(),
                     lastOffset);
         }
     }
