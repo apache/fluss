@@ -240,4 +240,29 @@ public class NumbersTest {
 
         verify(lpn, pbn.build());
     }
+
+    @Test
+    public void testToString() {
+        Numbers lpn = new Numbers();
+
+        lpn.setEnum1(Enum1.X1_1);
+        lpn.setEnum2(Numbers.Enum2.X2_1);
+        lpn.setXBool(true);
+        lpn.setXDouble(1.0);
+        lpn.setXFixed32(2);
+        lpn.setXFixed64(12345L);
+        lpn.setXSfixed32(-2);
+        lpn.setXSfixed64(-12345L);
+        lpn.setXFloat(1.2f);
+        lpn.setXInt32(4);
+        lpn.setXInt64(126L);
+        lpn.setXUint32(40);
+        lpn.setXUint64(1260L);
+        lpn.setXSint32(-11);
+        lpn.setXSint64(-12L);
+
+        assertThat(lpn.toString())
+                .isEqualTo(
+                        "Numbers{xInt32=4, xInt64=126, xUint32=40, xUint64=1260, xSint32=-11, xSint64=-12, xFixed32=2, xFixed64=12345, xSfixed32=-2, xSfixed64=-12345, xFloat=1.2, xDouble=1.0, xBool=true, enum1=X1_1, enum2=X2_1}");
+    }
 }

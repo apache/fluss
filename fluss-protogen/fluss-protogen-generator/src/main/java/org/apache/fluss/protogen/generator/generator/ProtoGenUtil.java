@@ -30,6 +30,7 @@ import org.apache.fluss.shaded.netty4.io.netty.buffer.Unpooled;
 import org.apache.fluss.utils.ProtoCodecUtils;
 
 import java.io.PrintWriter;
+import java.util.Arrays;
 
 import static org.apache.fluss.shaded.guava32.com.google.common.base.CaseFormat.LOWER_CAMEL;
 import static org.apache.fluss.shaded.guava32.com.google.common.base.CaseFormat.LOWER_UNDERSCORE;
@@ -72,7 +73,9 @@ public class ProtoGenUtil {
                 WritableOutput.class,
                 // netty dependencies
                 ByteBuf.class,
-                Unpooled.class
+                Unpooled.class,
+                // util dependencies
+                Arrays.class
             };
 
     public static void printHeader(PrintWriter pw) {

@@ -306,6 +306,8 @@ public class RepeatedNumbersTest {
         assertThat(parsed.getXSint32At(1)).isEqualTo(-12);
         assertThat(parsed.getXSint64At(0)).isEqualTo(-12L);
         assertThat(parsed.getXSint64At(1)).isEqualTo(-13L);
+
+        System.out.println(lpn);
     }
 
     @Test
