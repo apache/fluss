@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.LakeCommitter;
@@ -24,6 +25,8 @@ import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.GenericRecord;
@@ -118,6 +121,18 @@ class PaimonTieringTest {
                                 isPartitioned ? "partitioned" : "non_partitioned"));
         createTable(
                 tablePath, isPrimaryKeyTable, isPartitioned, isPrimaryKeyTable ? bucketNum : null);
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", org.apache.fluss.types.DataTypes.INT())
+                                        .column("c2", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("c3", org.apache.fluss.types.DataTypes.STRING())
+                                        .build())
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .build();
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
 
         List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
         SimpleVersionedSerializer<PaimonWriteResult> writeResultSerializer =
@@ -148,7 +163,7 @@ class PaimonTieringTest {
             for (Map.Entry<Long, String> entry : partitionIdAndName.entrySet()) {
                 String partition = entry.getValue();
                 try (LakeWriter<PaimonWriteResult> lakeWriter =
-                        createLakeWriter(tablePath, bucket, partition, entry.getKey())) {
+                        createLakeWriter(tablePath, bucket, partition, entry.getKey(), tableInfo)) {
                     Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
                     Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
                             isPrimaryKeyTable
@@ -233,6 +248,20 @@ class PaimonTieringTest {
         // Test multiple partitions: region + year
         TablePath tablePath = TablePath.of("paimon", "test_multi_partition");
         createMultiPartitionTable(tablePath);
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", org.apache.fluss.types.DataTypes.INT())
+                                        .column("c2", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("region", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("year", org.apache.fluss.types.DataTypes.STRING())
+                                        .build())
+                        .partitionedBy("region", "year")
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .build();
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
 
         Map<String, List<LogRecord>> recordsByPartition = new HashMap<>();
         List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
@@ -253,7 +282,7 @@ class PaimonTieringTest {
         for (Map.Entry<Long, String> entry : partitionIdAndName.entrySet()) {
             String partition = entry.getValue();
             try (LakeWriter<PaimonWriteResult> lakeWriter =
-                    createLakeWriter(tablePath, bucket, partition, entry.getKey())) {
+                    createLakeWriter(tablePath, bucket, partition, entry.getKey(), tableInfo)) {
                 List<LogRecord> logRecords =
                         genLogTableRecordsForMultiPartition(partition, bucket, 3);
                 recordsByPartition.put(partition, logRecords);
@@ -295,7 +324,21 @@ class PaimonTieringTest {
         // Test three partitions: region + year + month
         TablePath tablePath = TablePath.of("paimon", "test_three_partition");
         createThreePartitionTable(tablePath);
-
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", org.apache.fluss.types.DataTypes.INT())
+                                        .column("c2", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("region", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("year", org.apache.fluss.types.DataTypes.STRING())
+                                        .column("month", org.apache.fluss.types.DataTypes.STRING())
+                                        .build())
+                        .partitionedBy("region", "year", "month")
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .build();
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
         Map<String, List<LogRecord>> recordsByPartition = new HashMap<>();
         List<PaimonWriteResult> paimonWriteResults = new ArrayList<>();
         Map<TableBucket, Long> tableBucketOffsets = new HashMap<>();
@@ -313,7 +356,7 @@ class PaimonTieringTest {
         for (Map.Entry<Long, String> entry : partitionIdAndName.entrySet()) {
             String partition = entry.getValue();
             try (LakeWriter<PaimonWriteResult> lakeWriter =
-                    createLakeWriter(tablePath, bucket, partition, entry.getKey())) {
+                    createLakeWriter(tablePath, bucket, partition, entry.getKey(), tableInfo)) {
                 List<LogRecord> logRecords =
                         genLogTableRecordsForMultiPartition(
                                 partition, bucket, 2); // Use same method
@@ -639,7 +682,11 @@ class PaimonTieringTest {
     }
 
     private LakeWriter<PaimonWriteResult> createLakeWriter(
-            TablePath tablePath, int bucket, @Nullable String partition, @Nullable Long partitionId)
+            TablePath tablePath,
+            int bucket,
+            @Nullable String partition,
+            @Nullable Long partitionId,
+            TableInfo tableInfo)
             throws IOException {
         return paimonLakeTieringFactory.createLakeWriter(
                 new WriterInitContext() {
@@ -661,15 +708,8 @@ class PaimonTieringTest {
                     }
 
                     @Override
-                    public Map<String, String> customProperties() {
-                        // don't care about table custom properties for Paimon lake writer
-                        return new HashMap<>();
-                    }
-
-                    @Override
-                    public org.apache.fluss.metadata.Schema schema() {
-                        throw new UnsupportedOperationException(
-                                "The lake writer in Paimon currently uses paimonCatalog to determine the schema.");
+                    public TableInfo tableInfo() {
+                        return tableInfo;
                     }
                 });
     }

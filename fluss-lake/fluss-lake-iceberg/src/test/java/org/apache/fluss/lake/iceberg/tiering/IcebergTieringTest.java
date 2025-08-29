@@ -17,12 +17,15 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.LakeCommitter;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.GenericRecord;
@@ -119,6 +122,19 @@ class IcebergTieringTest {
                                 isPartitionedTable ? "partitioned" : "unpartitioned"));
         createTable(tablePath, isPrimaryKeyTable, isPartitionedTable);
 
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                org.apache.fluss.metadata.Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .column("c3", DataTypes.STRING())
+                                        .build())
+                        .distributedBy(BUCKET_NUM)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .build();
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+
         Table icebergTable = icebergCatalog.loadTable(toIceberg(tablePath));
 
         Map<Tuple2<String, Integer>, List<LogRecord>> recordsByBucket = new HashMap<>();
@@ -144,7 +160,7 @@ class IcebergTieringTest {
             for (Map.Entry<Long, String> entry : partitionIdAndName.entrySet()) {
                 String partition = entry.getValue();
                 try (LakeWriter<IcebergWriteResult> writer =
-                        createLakeWriter(tablePath, bucket, partition, entry.getKey())) {
+                        createLakeWriter(tablePath, bucket, partition, entry.getKey(), tableInfo)) {
                     Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
                     Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
                             isPrimaryKeyTable
@@ -198,7 +214,11 @@ class IcebergTieringTest {
     }
 
     private LakeWriter<IcebergWriteResult> createLakeWriter(
-            TablePath tablePath, int bucket, @Nullable String partition, @Nullable Long partitionId)
+            TablePath tablePath,
+            int bucket,
+            @Nullable String partition,
+            @Nullable Long partitionId,
+            TableInfo tableInfo)
             throws IOException {
         return icebergLakeTieringFactory.createLakeWriter(
                 new WriterInitContext() {
@@ -219,17 +239,8 @@ class IcebergTieringTest {
                     }
 
                     @Override
-                    public Map<String, String> customProperties() {
-                        return Collections.emptyMap();
-                    }
-
-                    @Override
-                    public org.apache.fluss.metadata.Schema schema() {
-                        return org.apache.fluss.metadata.Schema.newBuilder()
-                                .column("c1", DataTypes.INT())
-                                .column("c2", DataTypes.STRING())
-                                .column("c3", DataTypes.STRING())
-                                .build();
+                    public TableInfo tableInfo() {
+                        return tableInfo;
                     }
                 });
     }

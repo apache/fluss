@@ -35,7 +35,7 @@ public class DeltaTaskWriter extends RecordWriter {
         super(
                 taskWriter,
                 icebergTable.schema(),
-                writerInitContext.schema().getRowType(),
+                writerInitContext.tableInfo().getRowType(),
                 writerInitContext.tableBucket());
     }
 

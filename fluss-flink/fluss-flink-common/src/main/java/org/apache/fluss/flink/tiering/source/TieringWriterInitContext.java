@@ -18,34 +18,29 @@
 package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.lake.writer.WriterInitContext;
-import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
-
-import java.util.Map;
 
 /** The implementation of {@link WriterInitContext}. */
 public class TieringWriterInitContext implements WriterInitContext {
 
     private final TablePath tablePath;
     private final TableBucket tableBucket;
-    private final Schema schema;
     @Nullable private final String partition;
-    private final Map<String, String> customProperties;
+    private final TableInfo tableInfo;
 
     public TieringWriterInitContext(
             TablePath tablePath,
             TableBucket tableBucket,
             @Nullable String partition,
-            Schema schema,
-            Map<String, String> customProperties) {
+            TableInfo tableInfo) {
         this.tablePath = tablePath;
         this.tableBucket = tableBucket;
         this.partition = partition;
-        this.schema = schema;
-        this.customProperties = customProperties;
+        this.tableInfo = tableInfo;
     }
 
     @Override
@@ -65,12 +60,7 @@ public class TieringWriterInitContext implements WriterInitContext {
     }
 
     @Override
-    public Schema schema() {
-        return schema;
-    }
-
-    @Override
-    public Map<String, String> customProperties() {
-        return customProperties;
+    public TableInfo tableInfo() {
+        return tableInfo;
     }
 }

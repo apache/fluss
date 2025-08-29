@@ -35,7 +35,7 @@ public class AppendOnlyTaskWriter extends RecordWriter {
         super(
                 taskWriter,
                 icebergTable.schema(),
-                writerInitContext.schema().getRowType(),
+                writerInitContext.tableInfo().getRowType(),
                 writerInitContext.tableBucket());
     }
 

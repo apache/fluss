@@ -1290,6 +1290,13 @@ public class ConfigOptions {
                                     + "Based on this target freshness, the Fluss service automatically moves data from the Fluss table and updates to the datalake table, so that the data in the datalake table is kept up to date within this target. "
                                     + "If the data does not need to be as fresh, you can specify a longer target freshness time to reduce costs.");
 
+    public static final ConfigOption<Boolean> TABLE_DATALAKE_AUTO_COMPACTION =
+            key("table.datalake.auto-compaction")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "If true, compaction will be triggered automatically when tiering service writes to the datalake. It is disabled by default.");
+
     public static final ConfigOption<MergeEngineType> TABLE_MERGE_ENGINE =
             key("table.merge-engine")
                     .enumType(MergeEngineType.class)
