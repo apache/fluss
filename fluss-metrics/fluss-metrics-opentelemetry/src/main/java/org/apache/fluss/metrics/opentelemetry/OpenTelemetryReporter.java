@@ -18,9 +18,7 @@
 package org.apache.fluss.metrics.opentelemetry;
 
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Gauge;
@@ -32,8 +30,6 @@ import org.apache.fluss.metrics.reporter.MetricReporter;
 import org.apache.fluss.metrics.reporter.ScheduledMetricReporter;
 
 import io.opentelemetry.api.common.Attributes;
-import io.opentelemetry.exporter.otlp.http.metrics.OtlpHttpMetricExporter;
-import io.opentelemetry.exporter.otlp.http.metrics.OtlpHttpMetricExporterBuilder;
 import io.opentelemetry.exporter.otlp.metrics.OtlpGrpcMetricExporter;
 import io.opentelemetry.exporter.otlp.metrics.OtlpGrpcMetricExporterBuilder;
 import io.opentelemetry.sdk.common.CompletableResultCode;
@@ -87,36 +83,21 @@ public class OpenTelemetryReporter implements MetricReporter, ScheduledMetricRep
 
     OpenTelemetryReporter(
             String endpoint,
-            ConfigOptions.OpenTelemetryExporter exporterType,
             Duration interval,
             Duration timeout,
             String serviceName,
             String serviceVersion) {
-        this.exporter = buildMetricExporter(exporterType, endpoint, timeout);
+        this.exporter = buildMetricExporter(endpoint, timeout);
         this.resource = buildResource(serviceName, serviceVersion);
         this.interval = interval;
         this.clock = Clock.systemUTC();
     }
 
-    private static MetricExporter buildMetricExporter(
-            ConfigOptions.OpenTelemetryExporter exporterType, String endpoint, Duration timeout) {
-        switch (exporterType) {
-            case GRPC:
-                OtlpGrpcMetricExporterBuilder grpcExporterBuilder =
-                        OtlpGrpcMetricExporter.builder();
-                grpcExporterBuilder.setEndpoint(endpoint);
-                grpcExporterBuilder.setTimeout(timeout);
-                return grpcExporterBuilder.build();
-            case HTTP:
-                OtlpHttpMetricExporterBuilder httpExporterBuilder =
-                        OtlpHttpMetricExporter.builder();
-                httpExporterBuilder.setEndpoint(endpoint);
-                httpExporterBuilder.setTimeout(timeout);
-                return httpExporterBuilder.build();
-            default:
-                LOG.error("Unsupported OpenTelemetry exporter type: {}", exporterType);
-                throw new FlussRuntimeException("OpenTelemetry exporter type: " + exporterType);
-        }
+    private static MetricExporter buildMetricExporter(String endpoint, Duration timeout) {
+        OtlpGrpcMetricExporterBuilder grpcExporterBuilder = OtlpGrpcMetricExporter.builder();
+        grpcExporterBuilder.setEndpoint(endpoint);
+        grpcExporterBuilder.setTimeout(timeout);
+        return grpcExporterBuilder.build();
     }
 
     private static Resource buildResource(String serviceName, String serviceVersion) {

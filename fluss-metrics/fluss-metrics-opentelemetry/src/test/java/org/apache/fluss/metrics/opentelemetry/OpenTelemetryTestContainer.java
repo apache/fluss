@@ -38,7 +38,6 @@ public class OpenTelemetryTestContainer extends GenericContainer<OpenTelemetryTe
     private static final String ALPINE_DOCKER_IMAGE_TAG = "3.22.0";
     private static final String OPENTELEMETRY_COLLECTOR_DOCKER_IMAGE_TAG = "0.128.0";
 
-    private static final int DEFAULT_HTTP_PORT = 4318;
     private static final int DEFAULT_GRPC_PORT = 4317;
 
     // must be kept in sync with opentelemetry-config.yaml
@@ -55,7 +54,6 @@ public class OpenTelemetryTestContainer extends GenericContainer<OpenTelemetryTe
                         .withDockerfileFromBuilder(
                                 OpenTelemetryTestContainer::buildOpenTelemetryCollectorImage));
         withNetworkAliases(randomString("opentelemetry-collector", 6));
-        addExposedPort(DEFAULT_HTTP_PORT);
         addExposedPort(DEFAULT_GRPC_PORT);
         withCopyFileToContainer(
                 MountableFile.forHostPath(CONFIG_PATH.toString()), "opentelemetry-config.yaml");
@@ -91,10 +89,6 @@ public class OpenTelemetryTestContainer extends GenericContainer<OpenTelemetryTe
 
     private static String randomString(String prefix, int length) {
         return String.format("%s-%s", prefix, Base58.randomString(length).toLowerCase(Locale.ROOT));
-    }
-
-    public String getHttpEndpoint() {
-        return String.format("http://%s:%s", getHost(), getMappedPort(DEFAULT_HTTP_PORT));
     }
 
     public String getGrpcEndpoint() {

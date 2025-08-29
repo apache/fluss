@@ -42,12 +42,6 @@ public class OpenTelemetryReporterPlugin implements MetricReporterPlugin {
             throw new IllegalConfigurationException(
                     ConfigOptions.METRICS_REPORTER_OPENTELEMETRY_ENDPOINT.key() + " must be set.");
         }
-        ConfigOptions.OpenTelemetryExporter exporterType =
-                configuration.get(ConfigOptions.METRICS_REPORTER_OPENTELEMETRY_EXPORTER);
-        if (exporterType == null) {
-            throw new IllegalConfigurationException(
-                    ConfigOptions.METRICS_REPORTER_OPENTELEMETRY_EXPORTER.key() + " must be set.");
-        }
         Duration interval =
                 configuration.get(ConfigOptions.METRICS_REPORTER_OPENTELEMETRY_EXPORT_INTERVAL);
         Duration timeout =
@@ -56,8 +50,7 @@ public class OpenTelemetryReporterPlugin implements MetricReporterPlugin {
                 configuration.get(ConfigOptions.METRICS_REPORTER_OPENTELEMETRY_SERVICE_NAME);
         String serviceVersion =
                 configuration.get(ConfigOptions.METRICS_REPORTER_OPENTELEMETRY_SERVICE_VERSION);
-        return new OpenTelemetryReporter(
-                endpoint, exporterType, interval, timeout, serviceName, serviceVersion);
+        return new OpenTelemetryReporter(endpoint, interval, timeout, serviceName, serviceVersion);
     }
 
     @Override
