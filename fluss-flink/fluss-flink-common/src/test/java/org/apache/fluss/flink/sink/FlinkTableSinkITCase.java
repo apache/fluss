@@ -66,6 +66,7 @@ import java.util.stream.Stream;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -210,11 +211,7 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         List<String> expectedRows =
                 expectedGroups.stream().flatMap(List::stream).collect(Collectors.toList());
 
-        List<String> actual = new ArrayList<>(expectedRows.size());
-        for (int i = 0; i < expectedRows.size(); i++) {
-            actual.add(rowIter.next().toString());
-        }
-        rowIter.close();
+        List<String> actual = collectRowsWithTimeout(rowIter, expectedRows.size());
         assertThat(actual).containsExactlyInAnyOrderElementsOf(expectedRows);
 
         // check data with the same bucket key should be read in sequence.

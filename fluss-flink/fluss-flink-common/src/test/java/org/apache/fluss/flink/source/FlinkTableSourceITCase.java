@@ -70,7 +70,9 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertQueryResultExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.flink.utils.FlinkTestBase.waitUntilPartitions;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRows;
 import static org.apache.fluss.flink.utils.FlinkTestBase.writeRowsToPartition;
@@ -205,16 +207,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         writeRows(conn, tablePath, rows, true);
 
         List<String> expected = Arrays.asList("+I[1, v1]", "+I[2, v2]", "+I[3, v3]");
-        try (org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql("select * from non_pk_table_test").collect()) {
-            int expectRecords = expected.size();
-            List<String> actual = new ArrayList<>(expectRecords);
-            for (int i = 0; i < expectRecords; i++) {
-                String row = rowIter.next().toString();
-                actual.add(row);
-            }
-            assertThat(actual).containsExactlyElementsOf(expected);
-        }
+        assertQueryResultExactOrder(tEnv, "select * from non_pk_table_test", expected);
     }
 
     @ParameterizedTest
@@ -262,17 +255,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         "+I[v8, 8000, 800]",
                         "+I[v9, 9000, 900]",
                         "+I[v10, 10000, 1000]");
-        try (org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql(query).collect()) {
-            int expectRecords = expected.size();
-            List<String> actual = new ArrayList<>(expectRecords);
-            for (int i = 0; i < expectRecords; i++) {
-                Row r = rowIter.next();
-                String row = r.toString();
-                actual.add(row);
-            }
-            assertThat(actual).containsExactlyElementsOf(expected);
-        }
+        assertQueryResultExactOrder(tEnv, query, expected);
     }
 
     @ParameterizedTest
@@ -331,22 +314,15 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         "+I[v8, 8, 800]",
                         "+I[v9, 9, 900]",
                         "+I[v10, 10, 1000]");
-        try (org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql(query).collect()) {
-            int expectRecords = expected.size();
-            List<String> actual = new ArrayList<>(expectRecords);
-            if (testPkLog) {
-                // delay the write after collect job start,
-                // to make sure reading from log instead of snapshot
-                writeRows(conn, tablePath, rows, false);
-            }
-            for (int i = 0; i < expectRecords; i++) {
-                Row r = rowIter.next();
-                String row = r.toString();
-                actual.add(row);
-            }
-            assertThat(actual).containsExactlyElementsOf(expected);
+        org.apache.flink.util.CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
+        if (testPkLog) {
+            // delay the write after collect job start,
+            // to make sure reading from log instead of snapshot
+            writeRows(conn, tablePath, rows, false);
         }
+        int expectRecords = expected.size();
+        List<String> actual = collectRowsWithTimeout(rowIter, expectRecords);
+        assertThat(actual).containsExactlyElementsOf(expected);
     }
 
     @Test
@@ -451,12 +427,12 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         "+I[8, v8, 800, 8000]",
                         "+I[9, v9, 900, 9000]",
                         "+I[10, v10, 1000, 10000]");
-        assertQueryResult(query, expected);
+        assertQueryResultExactOrder(tEnv, query, expected);
 
         // 2. read kv table with scan.startup.mode='earliest'
         options = " /*+ OPTIONS('scan.startup.mode' = 'earliest') */";
         query = "select a, b, c, d from " + tableName + options;
-        assertQueryResult(query, expected);
+        assertQueryResultExactOrder(tEnv, query, expected);
 
         // 3. read log table with scan.startup.mode='timestamp'
         expected =
@@ -471,7 +447,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         " /*+ OPTIONS('scan.startup.mode' = 'timestamp', 'scan.startup.timestamp' ='%d') */",
                         timestamp);
         query = "select a, b, c, d from " + tableName + options;
-        assertQueryResult(query, expected);
+        assertQueryResultExactOrder(tEnv, query, expected);
     }
 
     @Test
@@ -501,20 +477,13 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         "-U[2, v2]",
                         "+U[2, v22]",
                         "+I[4, v4]");
-        try (org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql(query).collect()) {
-            int expectRecords = 8;
-            List<String> actual = new ArrayList<>(expectRecords);
-            // delay to write after collect job start, to make sure reading from log instead of
-            // snapshot
-            writeRows(conn, tablePath, rows2, false);
-            for (int i = 0; i < expectRecords; i++) {
-                Row r = rowIter.next();
-                String row = r.toString();
-                actual.add(row);
-            }
-            assertThat(actual).containsExactlyElementsOf(expected);
-        }
+        org.apache.flink.util.CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
+        int expectRecords = 8;
+        // delay to write after collect job start, to make sure reading from log instead of
+        // snapshot
+        writeRows(conn, tablePath, rows2, false);
+        List<String> actual = collectRowsWithTimeout(rowIter, expectRecords);
+        assertThat(actual).containsExactlyElementsOf(expected);
     }
 
     private static Stream<Arguments> readKvTableScanStartupModeArgs() {
@@ -595,17 +564,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         "-U[2, v2]",
                         "+U[2, v22]",
                         "+I[4, v4]");
-        try (org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql(query).collect()) {
-            int expectRecords = 10;
-            List<String> actual = new ArrayList<>(expectRecords);
-            for (int i = 0; i < expectRecords; i++) {
-                Row r = rowIter.next();
-                String row = r.toString();
-                actual.add(row);
-            }
-            assertThat(actual).containsExactlyElementsOf(expected);
-        }
+        assertQueryResultExactOrder(tEnv, query, expected);
     }
 
     @ParameterizedTest
@@ -687,25 +646,20 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                                 "the fetch timestamp %s is larger than the current timestamp",
                                 currentTimeMillis + Duration.ofMinutes(5).toMillis()));
 
-        try (org.apache.flink.util.CloseableIterator<Row> rowIter =
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
                 tEnv.executeSql(
                                 String.format(
                                         "select * from timestamp_table /*+ OPTIONS('scan.startup.mode' = 'timestamp', 'scan.startup.timestamp' = '%s') */ ",
                                         currentTimeMillis))
-                        .collect()) {
-            CLOCK.advanceTime(Duration.ofMillis(100L));
-            // write second batch record.
-            rows = Arrays.asList(row(4, "v4"), row(5, "v5"), row(6, "v6"));
-            writeRows(conn, tablePath, rows, true);
-            List<String> expected = Arrays.asList("+I[4, v4]", "+I[5, v5]", "+I[6, v6]");
-            int expectRecords = expected.size();
-            List<String> actual = new ArrayList<>(expectRecords);
-            for (int i = 0; i < expectRecords; i++) {
-                String row = rowIter.next().toString();
-                actual.add(row);
-            }
-            assertThat(actual).containsExactlyElementsOf(expected);
-        }
+                        .collect();
+        CLOCK.advanceTime(Duration.ofMillis(100L));
+        // write second batch record.
+        rows = Arrays.asList(row(4, "v4"), row(5, "v5"), row(6, "v6"));
+        writeRows(conn, tablePath, rows, true);
+        List<String> expected = Arrays.asList("+I[4, v4]", "+I[5, v5]", "+I[6, v6]");
+        int expectRecords = expected.size();
+        List<String> actual = collectRowsWithTimeout(rowIter, expectRecords);
+        assertThat(actual).containsExactlyElementsOf(expected);
     }
 
     // -------------------------------------------------------------------------------------
@@ -1317,20 +1271,6 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 },
                 Duration.ofMinutes(1),
                 "Fail to wait until all bucket finish snapshot");
-    }
-
-    private void assertQueryResult(String query, List<String> expected) throws Exception {
-        try (org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql(query).collect()) {
-            int expectRecords = expected.size();
-            List<String> actual = new ArrayList<>(expectRecords);
-            for (int i = 0; i < expectRecords; i++) {
-                Row r = rowIter.next();
-                String row = r.toString();
-                actual.add(row);
-            }
-            assertThat(actual).containsExactlyElementsOf(expected);
-        }
     }
 
     private GenericRow rowWithPartition(Object[] values, @Nullable String partition) {

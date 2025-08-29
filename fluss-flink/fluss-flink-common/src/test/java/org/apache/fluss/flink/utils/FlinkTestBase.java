@@ -43,7 +43,6 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.test.util.AbstractTestBase;
-import org.apache.flink.types.Row;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -61,7 +60,6 @@ import java.util.Set;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
-import static org.assertj.core.api.Assertions.assertThat;
 
 /** A base class for testing with Fluss cluster prepared. */
 public class FlinkTestBase extends AbstractTestBase {
@@ -180,18 +178,6 @@ public class FlinkTestBase extends AbstractTestBase {
             throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
         return admin.getTableInfo(tablePath).get().getTableId();
-    }
-
-    public static List<String> assertAndCollectRecords(
-            org.apache.flink.util.CloseableIterator<Row> iterator, int expectedNum)
-            throws Exception {
-        List<String> actual = new ArrayList<>(expectedNum);
-        for (int i = 0; i < expectedNum; i++) {
-            actual.add(iterator.next().toString());
-        }
-        assertThat(iterator.hasNext()).isFalse();
-        iterator.close();
-        return actual;
     }
 
     protected void waitUntilSnapshot(long tableId, long snapshotId) {
