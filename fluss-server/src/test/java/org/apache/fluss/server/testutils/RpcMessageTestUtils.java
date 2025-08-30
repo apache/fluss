@@ -27,6 +27,7 @@ import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.bytesview.MemorySegmentBytesView;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
@@ -49,6 +50,7 @@ import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
+import org.apache.fluss.rpc.messages.PbFlussTableChange;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbLookupReqForBucket;
 import org.apache.fluss.rpc.messages.PbPrefixLookupReqForBucket;
@@ -140,11 +142,13 @@ public class RpcMessageTestUtils {
     }
 
     public static AlterTableRequest newAlterTableRequest(
-            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists) {
+            TablePath tablePath,
+            List<PbFlussTableChange> pbFlussTableChanges,
+            boolean ignoreIfExists) {
         AlterTableRequest alterTableRequest = new AlterTableRequest();
         alterTableRequest
+                .addAllTableChanges(pbFlussTableChanges)
                 .setIgnoreIfNotExists(ignoreIfExists)
-                .setTableJson(tableDescriptor.toJsonBytes())
                 .setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());

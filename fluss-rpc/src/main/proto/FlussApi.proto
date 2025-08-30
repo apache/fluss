@@ -111,11 +111,30 @@ message CreateTableResponse {
 // alter table request and response
 message AlterTableRequest {
   required PbTablePath table_path = 1;
-  required bytes table_json = 2;
-  required bool ignore_if_not_exists = 3;
+  required bool ignore_if_not_exists = 2;
+  repeated PbFlussTableChange table_changes = 3;
 }
 
 message AlterTableResponse {
+}
+
+message PbFlussTableChange {
+  enum ChangeType {
+    SET_OPTION = 1;
+    RESET_OPTION = 2;
+  }
+  required ChangeType change_type = 1;
+  optional PbSetOption set_option = 2;
+  optional PbResetOption reset_option = 3;
+}
+
+message PbSetOption {
+  required string key = 1;
+  required string value = 2;
+}
+
+message PbResetOption {
+  required string key = 1;
 }
 
 // get table request and response

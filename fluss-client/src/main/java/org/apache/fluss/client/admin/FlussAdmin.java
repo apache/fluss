@@ -22,11 +22,13 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
+import org.apache.fluss.client.utils.FlussTableChangeProtoConverter;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
+import org.apache.fluss.metadata.FlussTableChange;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -41,6 +43,7 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
@@ -62,6 +65,7 @@ import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
+import org.apache.fluss.rpc.messages.PbFlussTableChange;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
@@ -81,6 +85,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
@@ -237,10 +242,16 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<Void> alterTable(
-            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfNotExists) {
+            TablePath tablePath, List<FlussTableChange> tableChanges, boolean ignoreIfNotExists) {
         tablePath.validate();
         AlterTableRequest request = new AlterTableRequest();
-        request.setTableJson(tableDescriptor.toJsonBytes())
+
+        List<PbFlussTableChange> pbFlussTableChanges =
+                tableChanges.stream()
+                        .map(FlussTableChangeProtoConverter::toProto)
+                        .collect(Collectors.toList());
+
+        request.addAllTableChanges(pbFlussTableChanges)
                 .setIgnoreIfNotExists(ignoreIfNotExists)
                 .setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())

@@ -39,6 +39,7 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -93,8 +94,8 @@ public class TableDescriptorValidation {
         checkSystemColumns(schema);
     }
 
-    public static void validateAlterTableProperties(TableDescriptor tableDescriptor) {
-        Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
+    public static void validateAlterTableProperties(Map<String, String> properties) {
+        Configuration tableConf = Configuration.fromMap(properties);
         // check properties should only contain table.* options,
         // and this cluster know it,
         // and value is valid

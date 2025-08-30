@@ -29,7 +29,9 @@ import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
 import org.apache.fluss.flink.utils.DataLakeUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
+import org.apache.fluss.flink.utils.FlinkTableChangeToFlussTableChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.FlussTableChange;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -50,6 +52,7 @@ import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.CatalogView;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
+import org.apache.flink.table.catalog.TableChange;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.table.catalog.exceptions.DatabaseAlreadyExistException;
 import org.apache.flink.table.catalog.exceptions.DatabaseNotEmptyException;
@@ -78,7 +81,9 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
@@ -391,13 +396,20 @@ public class FlinkCatalog extends AbstractCatalog {
 
     @Override
     public void alterTable(
-            ObjectPath objectPath, CatalogBaseTable newTable, boolean ignoreIfNotExist)
+            ObjectPath objectPath,
+            CatalogBaseTable newTable,
+            List<TableChange> tableChanges,
+            boolean ignoreIfNotExists)
             throws TableNotExistException, CatalogException {
         TablePath tablePath = toTablePath(objectPath);
-        TableDescriptor tableDescriptor =
-                FlinkConversions.toFlussTable((ResolvedCatalogTable) newTable);
+
+        List<FlussTableChange> flussTableChanges =
+                tableChanges.stream()
+                        .filter(Objects::nonNull)
+                        .map(FlinkTableChangeToFlussTableChange::toFlussTableChange)
+                        .collect(Collectors.toList());
         try {
-            admin.alterTable(tablePath, tableDescriptor, ignoreIfNotExist).get();
+            admin.alterTable(tablePath, flussTableChanges, ignoreIfNotExists).get();
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (CatalogExceptionUtils.isTableNotExist(t)) {
@@ -410,6 +422,11 @@ public class FlinkCatalog extends AbstractCatalog {
             }
         }
     }
+
+    @Override
+    public void alterTable(
+            ObjectPath objectPath, CatalogBaseTable newTable, boolean ignoreIfNotExist)
+            throws TableNotExistException, CatalogException {}
 
     @SuppressWarnings("checkstyle:WhitespaceAround")
     @Override

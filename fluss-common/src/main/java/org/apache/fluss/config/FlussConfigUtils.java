@@ -35,12 +35,14 @@ public class FlussConfigUtils {
     public static final String CLIENT_PREFIX = "client.";
     public static final String CLIENT_SECURITY_PREFIX = "client.security.";
 
-    public static final List<String> ALTERABLE_CONFIG_OPTIONS;
+    public static final List<String> ALTERABLE_TABLE_CONFIG;
+    public static final List<String> ALTERABLE_CLIENT_OPTIONS;
 
     static {
         TABLE_OPTIONS = extractConfigOptions("table.");
         CLIENT_OPTIONS = extractConfigOptions("client.");
-        ALTERABLE_CONFIG_OPTIONS =
+        ALTERABLE_TABLE_CONFIG = Collections.emptyList();
+        ALTERABLE_CLIENT_OPTIONS =
                 Collections.singletonList(ConfigOptions.CLIENT_CONNECT_TIMEOUT.key());
     }
 

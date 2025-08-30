@@ -49,8 +49,11 @@ import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
+import org.apache.fluss.rpc.messages.PbFlussTableChange;
 import org.apache.fluss.rpc.messages.PbPartitionMetadata;
+import org.apache.fluss.rpc.messages.PbResetOption;
 import org.apache.fluss.rpc.messages.PbServerNode;
+import org.apache.fluss.rpc.messages.PbSetOption;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
@@ -86,6 +89,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.ConfigOptions.DEFAULT_LISTENER_NAME;
+import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newAlterTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newCreateDatabaseRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newCreateTableRequest;
 import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDatabaseExistsRequest;
@@ -285,16 +289,27 @@ class TableManagerITCase {
         assertThat(gottenTable).isEqualTo(tableDescriptor.withReplicationFactor(1));
 
         // alter table
-        TableDescriptor updateTableDescriptor = alterTable(gottenTable);
+        Map<String, String> setProperties = new HashMap<>();
+        setProperties.put("client.connect-timeout", "240s");
+
+        List<String> resetProperties = new ArrayList<>();
+
         adminGateway
-                .alterTable(newAlterTableRequest(tablePath, updateTableDescriptor, false))
+                .alterTable(
+                        newAlterTableRequest(
+                                tablePath,
+                                alterTableProperties(setProperties, resetProperties),
+                                false))
                 .get();
         // get the table and check it
         GetTableInfoResponse responseAfterAlter =
                 gateway.getTableInfo(newGetTableInfoRequest(tablePath)).get();
         TableDescriptor gottenTableAfterAlter =
                 TableDescriptor.fromJsonBytes(responseAfterAlter.getTableJson());
-        assertThat(gottenTableAfterAlter).isEqualTo(updateTableDescriptor.withReplicationFactor(1));
+
+        String valueAfterAlter =
+                gottenTableAfterAlter.getCustomProperties().get("client.connect-timeout");
+        assertThat(valueAfterAlter).isEqualTo("240s");
 
         // check assignment, just check replica numbers, don't care about actual assignment
         checkAssignmentWithReplicaFactor(
@@ -769,28 +784,32 @@ class TableManagerITCase {
                 .build();
     }
 
-    private static TableDescriptor alterTable(TableDescriptor existTableDescriptor) {
-        Map<String, String> existingProperties = existTableDescriptor.getProperties();
-        Map<String, String> existingCustomProperties = existTableDescriptor.getCustomProperties();
+    private static List<PbFlussTableChange> alterTableProperties(
+            Map<String, String> setProperties, List<String> resetProperties) {
+        List<PbFlussTableChange> res = new ArrayList<>();
 
-        Map<String, String> newProperties = new HashMap<>(existingProperties);
+        for (Map.Entry<String, String> entry : setProperties.entrySet()) {
+            PbSetOption pbSetOption = new PbSetOption();
+            pbSetOption.setKey(entry.getKey());
+            pbSetOption.setValue(entry.getValue());
 
-        Map<String, String> newCustomProperties = new HashMap<>(existingCustomProperties);
-        newCustomProperties.put("client.connect-timeout", "240s");
+            PbFlussTableChange pbFlussTableChange = new PbFlussTableChange();
+            pbFlussTableChange.setChangeType(PbFlussTableChange.ChangeType.SET_OPTION);
+            pbFlussTableChange.setSetOption(pbSetOption);
+            res.add(pbFlussTableChange);
+        }
 
-        return TableDescriptor.builder()
-                .schema(existTableDescriptor.getSchema())
-                .comment(existTableDescriptor.getComment().orElse(""))
-                .distributedBy(
-                        existTableDescriptor
-                                .getTableDistribution()
-                                .get()
-                                .getBucketCount()
-                                .orElse(3),
-                        existTableDescriptor.getBucketKeys())
-                .properties(newProperties)
-                .customProperties(newCustomProperties)
-                .build();
+        for (String resetProperty : resetProperties) {
+            PbResetOption pbresetOption = new PbResetOption();
+            pbresetOption.setKey(resetProperty);
+
+            PbFlussTableChange pbFlussTableChange = new PbFlussTableChange();
+            pbFlussTableChange.setChangeType(PbFlussTableChange.ChangeType.RESET_OPTION);
+            pbFlussTableChange.setResetOption(pbresetOption);
+            res.add(pbFlussTableChange);
+        }
+
+        return res;
     }
 
     private static Schema newSchema() {

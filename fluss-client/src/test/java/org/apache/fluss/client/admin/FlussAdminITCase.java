@@ -48,6 +48,7 @@ import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
+import org.apache.fluss.metadata.FlussTableChange;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -227,8 +228,12 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         .properties(updateProperties)
                         .customProperties(updateCustomProperties)
                         .build();
+
+        List<FlussTableChange> tableChanges = new ArrayList<>();
+        FlussTableChange tableChange = FlussTableChange.set("client.connect-timeout", "240s");
+        tableChanges.add(tableChange);
         // alter table
-        admin.alterTable(tablePath, newTableDescriptor, false).get();
+        admin.alterTable(tablePath, tableChanges, false).get();
 
         TableInfo alteredTableInfo = admin.getTableInfo(tablePath).get();
         TableDescriptor alteredTableDescriptor = alteredTableInfo.toTableDescriptor();
@@ -239,7 +244,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                         () ->
                                 admin.alterTable(
                                                 TablePath.of("test_db", "alter_table_not_exist"),
-                                                newTableDescriptor,
+                                                tableChanges,
                                                 false)
                                         .get())
                 .cause()
@@ -252,7 +257,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                                 TablePath.of(
                                                         "test_db_not_exist",
                                                         "alter_table_not_exist"),
-                                                newTableDescriptor,
+                                                tableChanges,
                                                 false)
                                         .get())
                 .cause()
