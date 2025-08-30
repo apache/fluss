@@ -45,7 +45,12 @@ public class MemoryLogRecordsIndexedBuilder extends AbstractRowMemoryLogRecordsB
     public static MemoryLogRecordsIndexedBuilder builder(
             int schemaId, int writeLimit, AbstractPagedOutputView outputView, boolean appendOnly) {
         return new MemoryLogRecordsIndexedBuilder(
-                LOG_MAGIC_VALUE_V0, schemaId, writeLimit, CURRENT_LOG_MAGIC_VALUE, outputView, appendOnly);
+                LOG_MAGIC_VALUE_V0,
+                schemaId,
+                writeLimit,
+                CURRENT_LOG_MAGIC_VALUE,
+                outputView,
+                appendOnly);
     }
 
     @VisibleForTesting

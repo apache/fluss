@@ -58,7 +58,12 @@ public class MemoryLogRecordsCompactedBuilder
     public static MemoryLogRecordsCompactedBuilder builder(
             int schemaId, int writeLimit, AbstractPagedOutputView outputView, boolean appendOnly) {
         return new MemoryLogRecordsCompactedBuilder(
-                LOG_MAGIC_VALUE_V0, schemaId, writeLimit, CURRENT_LOG_MAGIC_VALUE, outputView, appendOnly);
+                LOG_MAGIC_VALUE_V0,
+                schemaId,
+                writeLimit,
+                CURRENT_LOG_MAGIC_VALUE,
+                outputView,
+                appendOnly);
     }
 
     @VisibleForTesting
