@@ -25,7 +25,8 @@
     "prism-react-renderer": "^2.3.0",
     "react": "^18.0.0",
     "react-dom": "^18.0.0",
-    "unist-util-visit": "^5.0.0"
+    "unist-util-visit": "^5.0.0",
+    "@docusaurus/theme-mermaid": "^3.8.0"
   },
   "devDependencies": {
     "@docusaurus/module-type-aliases": "^3.8.0",
