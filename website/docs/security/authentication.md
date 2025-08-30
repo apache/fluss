@@ -26,12 +26,12 @@ No additional configuration is required for this mode.
 ## SASL
 This mechanism is based on SASL (Simple Authentication and Security Layer) authentication. Currently, only SASL/PLAIN is supported, which involves authentication using a username and password. It is recommended for production environments.
 
-### SASL Client-Side Configuration
+### SASL Server-Side Configuration
 | Option                                                         | Type   | Default Value | Description                                                                                                                           |
 |----------------------------------------------------------------|--------|---------------|---------------------------------------------------------------------------------------------------------------------------------------|
-| security.sasl.enabled.mechanisms                               | List   | PLAIN         | Comma-separated list of enabled SASL mechanisms. Only support PLAIN(which involves authentication using a username and password) now. |
-| `security.sasl.listener.name.{listenerName}.plain.jaas.config` | String | (none)        | JAAS configuration for a specific listener and PLAIN mechanism.                                                                       |
-| `security.sasl.plain.jaas.config`                              | String | (none)        | Global JAAS configuration for all listeners using the PLAIN mechanism.                                                                |
+| security.sasl.enabled.mechanisms                               | List   | PLAIN         | Comma-separated list of enabled SASL mechanisms. Only PLAIN is supported (which involves authentication using a username and password). |
+| `security.sasl.listener.name.{listenerName}.plain.jaas.config` | String | (None)        | JAAS configuration for a specific listener and PLAIN mechanism.                                                                       |
+| `security.sasl.plain.jaas.config`                              | String | (None)        | Global JAAS configuration for all listeners using the PLAIN mechanism.                                                                |
 
 
 ⚠️ The system tries to load JAAS configurations in the following order:
@@ -59,9 +59,9 @@ Clients must specify the appropriate security protocol and authentication mechan
 |----------------------------------|--------|---------------|-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | client.security.protocol         | String | PLAINTEXT     | The security protocol used to communicate with brokers. Currently, only `PLAINTEXT` and `SASL` are supported, the configuration value is case insensitive.                                                                                                                                |
 | client.security.sasl.mechanism   | String | PLAIN         | The SASL mechanism used for authentication. Only support PLAIN now, but will support more mechanisms in the future.                                                                                                                                                                       |
-| client.security.sasl.username    | String | (none)        | The password to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
-| client.security.sasl.password    | String | (none)        | The password to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
-| client.security.sasl.jaas.config | String | (none)        | JAAS configuration for SASL. If not set, fallback to system property `-Djava.security.auth.login.config`.                                                                                                                                                                                 |
+| client.security.sasl.username    | String | (None)        | The username to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the username will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
+| client.security.sasl.password    | String | (None)        | The password to use for client-side SASL JAAS authentication. This is used when the client connects to the Fluss cluster with SASL authentication enabled. If not provided, the password will be read from the JAAS configuration string specified by `client.security.sasl.jaas.config`. |
+| client.security.sasl.jaas.config | String | (None)        | JAAS configuration for SASL. If not set, fallback to system property `-Djava.security.auth.login.config`.                                                                                                                                                                                 |
 
 
 
@@ -91,5 +91,5 @@ Build the plugin as a standalone JAR and copy it to the Fluss server’s plugin 
 3.  **Client-Side Plugin Packaging**  :
 To enable plugin functionality on the client side, include the plugin JAR in your application’s classpath. This allows the Fluss client to auto-discover the plugin during runtime.
 4. **Configure the Desired Protocol**:
-  * `security.protocol.map` – for server-side listener authentication and use the `org.apache.fluss.security.auth.AuthenticationPlugin#authProtocol()` as protocol identifier.
-  * `client.security.protocol` – for client-side authentication and use the `org.apache.fluss.security.auth.AuthenticationPlugin#authProtocol()` as protocol identifier
+  * `security.protocol.map` – for server-side listener authentication; use the protocol identifier returned by your plugin's implementation of the `org.apache.fluss.security.auth.AuthenticationPlugin#authProtocol()` method.
+  * `client.security.protocol` – for client-side authentication; use the protocol identifier returned by your plugin's implementation of the `org.apache.fluss.security.auth.AuthenticationPlugin#authProtocol()` method.
