@@ -33,15 +33,13 @@ import java.io.IOException;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_LENGTH;
 /**
- * An immutable log record for {@link CompactedRow} which can be directly persisted. The on-wire
- * schema is identical to IndexedLogRecord but the row payload uses the CompactedRow binary format:
  * An immutable log record for @CompactedRow which can be directly persisted. The on-wire schema is
  * identical to IndexedLogRecord but the row payload uses the CompactedRow binary format:
  *
  * <ul>
- *   <li>Length => int32 (total number of bytes following this length field)
- *   <li>Attributes => int8 (low 4 bits encode {@link ChangeType})
- *   <li>Value => {@link CompactedRow} (bytes in compacted row format)
+ *   <li>Length => int32 (total number of bytes following this length field)</li>
+ *   <li>Attributes => int8 (low 4 bits encode {@link ChangeType})</li>
+ *   <li>Value => {@link CompactedRow} (bytes in compacted row format)</li>
  * </ul>
  *
  * <p>Differences vs {@link IndexedLogRecord}: - Uses CompactedRow encoding which is space-optimized
@@ -64,6 +62,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_LENGTH;
  */
 @PublicEvolving
 public class CompactedLogRecord implements LogRecord {
+
     private static final int ATTRIBUTES_LENGTH = 1;
 
     private final long logOffset;
