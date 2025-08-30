@@ -62,7 +62,7 @@ class LakeSplitSerializerTest {
     void testSerializeAndDeserializeLakeSnapshotSplit() throws IOException {
         // Prepare test data
         LakeSnapshotSplit originalSplit =
-                new LakeSnapshotSplit(tableBucket, "2025-08-18", LAKE_SPLIT);
+                new LakeSnapshotSplit(tableBucket, "2025-08-18", LAKE_SPLIT, 1);
 
         DataOutputSerializer output = new DataOutputSerializer(STOPPING_OFFSET);
         serializer.serialize(output, originalSplit);

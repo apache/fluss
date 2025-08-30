@@ -20,8 +20,8 @@ package org.apache.fluss.flink.source.enumerator.initializer;
 import javax.annotation.Nullable;
 
 import java.util.Collection;
-import java.util.Collections;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * An implementation of {@link OffsetsInitializer} which does not initialize anything.
@@ -37,6 +37,6 @@ public class NoStoppingOffsetsInitializer implements OffsetsInitializer {
             @Nullable String partitionName,
             Collection<Integer> buckets,
             OffsetsInitializer.BucketOffsetsRetriever bucketOffsetsRetriever) {
-        return Collections.emptyMap();
+        return buckets.stream().collect(Collectors.toMap(x -> x, x -> Long.MAX_VALUE));
     }
 }

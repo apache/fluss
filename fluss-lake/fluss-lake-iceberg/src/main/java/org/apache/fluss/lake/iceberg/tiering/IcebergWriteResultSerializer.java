@@ -18,11 +18,16 @@
 
 package org.apache.fluss.lake.iceberg.tiering;
 
+import org.apache.fluss.lake.iceberg.maintenance.RewriteDataFileResult;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.utils.InstantiationUtils;
 
 import org.apache.iceberg.io.WriteResult;
 
+import java.io.ByteArrayInputStream;
+import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
 import java.io.IOException;
 
 /** Serializer for {@link IcebergWriteResult}. */
@@ -37,18 +42,64 @@ public class IcebergWriteResultSerializer implements SimpleVersionedSerializer<I
 
     @Override
     public byte[] serialize(IcebergWriteResult icebergWriteResult) throws IOException {
-        return InstantiationUtils.serializeObject(icebergWriteResult.getWriteResult());
+        byte[] writeResultBytes =
+                InstantiationUtils.serializeObject(icebergWriteResult.getWriteResult());
+
+        RewriteDataFileResult rewriteDataFileResult = icebergWriteResult.rewriteDataFileResult();
+        byte[] rewriteResultBytes =
+                rewriteDataFileResult == null
+                        ? null
+                        : InstantiationUtils.serializeObject(rewriteDataFileResult);
+
+        try (ByteArrayOutputStream baos = new ByteArrayOutputStream(writeResultBytes.length);
+                DataOutputStream dos = new DataOutputStream(baos)) {
+            // Frame WriteResult
+            dos.writeInt(writeResultBytes.length);
+            dos.write(writeResultBytes);
+
+            // optional, rewrite
+            boolean hasRewrite = rewriteResultBytes != null;
+            dos.writeBoolean(hasRewrite);
+            if (hasRewrite) {
+                dos.writeInt(rewriteResultBytes.length);
+                dos.write(rewriteResultBytes);
+            }
+            return baos.toByteArray();
+        }
     }
 
     @Override
     public IcebergWriteResult deserialize(int version, byte[] serialized) throws IOException {
         WriteResult writeResult;
-        try {
+        RewriteDataFileResult rewriteDataFileResult;
+        try (DataInputStream dis = new DataInputStream(new ByteArrayInputStream(serialized))) {
+            int wrLen = dis.readInt();
+            if (wrLen < 0 || wrLen > serialized.length) {
+                throw new IOException(
+                        "Corrupted serialization: invalid WriteResult length " + wrLen);
+            }
+            byte[] wrBytes = new byte[wrLen];
+            dis.readFully(wrBytes);
             writeResult =
-                    InstantiationUtils.deserializeObject(serialized, getClass().getClassLoader());
+                    InstantiationUtils.deserializeObject(wrBytes, getClass().getClassLoader());
+
+            boolean hasCompaction = dis.readBoolean();
+            if (hasCompaction) {
+                int crLen = dis.readInt();
+                if (crLen < 0 || crLen > serialized.length) {
+                    throw new IOException(
+                            "Corrupted serialization: invalid compactionResult length " + crLen);
+                }
+                byte[] crBytes = new byte[crLen];
+                dis.readFully(crBytes);
+                rewriteDataFileResult =
+                        InstantiationUtils.deserializeObject(crBytes, getClass().getClassLoader());
+            } else {
+                rewriteDataFileResult = null;
+            }
         } catch (ClassNotFoundException e) {
             throw new IOException(e);
         }
-        return new IcebergWriteResult(writeResult);
+        return new IcebergWriteResult(writeResult, rewriteDataFileResult);
     }
 }

@@ -24,12 +24,15 @@ import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecord;
 
+import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.CommitMessage;
 
 import java.io.IOException;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 
@@ -43,7 +46,10 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
             PaimonCatalogProvider paimonCatalogProvider, WriterInitContext writerInitContext)
             throws IOException {
         this.paimonCatalog = paimonCatalogProvider.get();
-        FileStoreTable fileStoreTable = getTable(writerInitContext.tablePath());
+        FileStoreTable fileStoreTable =
+                getTable(
+                        writerInitContext.tablePath(),
+                        writerInitContext.tableInfo().getTableConfig().isDataLakeAutoCompaction());
 
         List<String> partitionKeys = fileStoreTable.partitionKeys();
 
@@ -95,9 +101,15 @@ public class PaimonLakeWriter implements LakeWriter<PaimonWriteResult> {
         }
     }
 
-    private FileStoreTable getTable(TablePath tablePath) throws IOException {
+    private FileStoreTable getTable(TablePath tablePath, boolean isAutoCompaction)
+            throws IOException {
         try {
-            return (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+            FileStoreTable table = (FileStoreTable) paimonCatalog.getTable(toPaimon(tablePath));
+            Map<String, String> compactionOptions =
+                    Collections.singletonMap(
+                            CoreOptions.WRITE_ONLY.key(),
+                            isAutoCompaction ? Boolean.FALSE.toString() : Boolean.TRUE.toString());
+            return table.copy(compactionOptions);
         } catch (Exception e) {
             throw new IOException("Failed to get table " + tablePath + " in Paimon.", e);
         }

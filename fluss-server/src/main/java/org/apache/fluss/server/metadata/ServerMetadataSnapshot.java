@@ -22,6 +22,7 @@ import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 
 import javax.annotation.Nullable;
@@ -178,5 +179,19 @@ public class ServerMetadataSnapshot {
     @VisibleForTesting
     public Map<Integer, ServerInfo> getAliveTabletServers() {
         return aliveTabletServers;
+    }
+
+    public boolean contains(TableBucket tableBucket) {
+        if (tableBucket.getPartitionId() == null) {
+            return bucketMetadataMapForTables.containsKey(tableBucket.getTableId())
+                    && bucketMetadataMapForTables
+                            .get(tableBucket.getTableId())
+                            .containsKey(tableBucket.getBucket());
+        } else {
+            return bucketMetadataMapForPartitions.containsKey(tableBucket.getPartitionId())
+                    && bucketMetadataMapForPartitions
+                            .get(tableBucket.getPartitionId())
+                            .containsKey(tableBucket.getBucket());
+        }
     }
 }

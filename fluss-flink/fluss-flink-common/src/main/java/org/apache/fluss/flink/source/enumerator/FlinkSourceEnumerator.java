@@ -111,6 +111,8 @@ public class FlinkSourceEnumerator
     /** buckets that have been assigned to readers. */
     private final Set<TableBucket> assignedTableBuckets;
 
+    @Nullable private List<SourceSplitBase> pendingHybridLakeFlussSplits;
+
     private final long scanPartitionDiscoveryIntervalMs;
 
     private final boolean streaming;
@@ -168,7 +170,7 @@ public class FlinkSourceEnumerator
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
             List<FieldEqual> partitionFilters,
-            LakeSource<LakeSplit> lakeSource) {
+            @Nullable LakeSource<LakeSplit> lakeSource) {
         this(
                 tablePath,
                 flussConf,
@@ -177,6 +179,7 @@ public class FlinkSourceEnumerator
                 context,
                 Collections.emptySet(),
                 Collections.emptyMap(),
+                null,
                 startingOffsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 streaming,
@@ -192,6 +195,7 @@ public class FlinkSourceEnumerator
             SplitEnumeratorContext<SourceSplitBase> context,
             Set<TableBucket> assignedTableBuckets,
             Map<Long, String> assignedPartitions,
+            List<SourceSplitBase> pendingHybridLakeFlussSplits,
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
@@ -206,6 +210,10 @@ public class FlinkSourceEnumerator
         this.assignedTableBuckets = new HashSet<>(assignedTableBuckets);
         this.startingOffsetsInitializer = startingOffsetsInitializer;
         this.assignedPartitions = new HashMap<>(assignedPartitions);
+        this.pendingHybridLakeFlussSplits =
+                pendingHybridLakeFlussSplits == null
+                        ? null
+                        : new LinkedList<>(pendingHybridLakeFlussSplits);
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.streaming = streaming;
         this.partitionFilters = checkNotNull(partitionFilters);
@@ -230,22 +238,29 @@ public class FlinkSourceEnumerator
         }
 
         if (isPartitioned) {
-            if (streaming && scanPartitionDiscoveryIntervalMs > 0) {
-                // should do partition discovery
-                LOG.info(
-                        "Starting the FlussSourceEnumerator for table {} "
-                                + "with new partition discovery interval of {} ms.",
-                        tablePath,
-                        scanPartitionDiscoveryIntervalMs);
-                // discover new partitions and handle new partitions
-                context.callAsync(
-                        this::listPartitions,
-                        this::checkPartitionChanges,
-                        0,
-                        scanPartitionDiscoveryIntervalMs);
-            } else {
-                if (!streaming) {
-                    startInBatchMode();
+            if (streaming) {
+                if (lakeSource != null) {
+                    // we'll need to consider lake splits
+                    List<SourceSplitBase> hybridLakeFlussSplits = generateHybridLakeFlussSplits();
+                    if (hybridLakeFlussSplits != null) {
+                        // handle hybrid lake fluss splits firstly
+                        handleSplitsAdd(hybridLakeFlussSplits, null);
+                    }
+                }
+
+                if (scanPartitionDiscoveryIntervalMs > 0) {
+                    // should do partition discovery
+                    LOG.info(
+                            "Starting the FlussSourceEnumerator for table {} "
+                                    + "with new partition discovery interval of {} ms.",
+                            tablePath,
+                            scanPartitionDiscoveryIntervalMs);
+                    // discover new partitions and handle new partitions
+                    context.callAsync(
+                            this::listPartitions,
+                            this::checkPartitionChanges,
+                            0,
+                            scanPartitionDiscoveryIntervalMs);
                 } else {
                     // just call once
                     LOG.info(
@@ -253,26 +268,55 @@ public class FlinkSourceEnumerator
                             tablePath);
                     context.callAsync(this::listPartitions, this::checkPartitionChanges);
                 }
-            }
-
-        } else {
-            if (!streaming) {
-                startInBatchMode();
             } else {
-                // init bucket splits and assign
-                context.callAsync(this::initNonPartitionedSplits, this::handleSplitsAdd);
+                startInBatchMode();
+            }
+        } else {
+            if (streaming) {
+                startInStreamModeForNonPartitionedTable();
+            } else {
+                startInBatchMode();
             }
         }
     }
 
     private void startInBatchMode() {
         if (lakeEnabled) {
-            context.callAsync(this::getLakeSplit, this::handleSplitsAdd);
+            context.callAsync(
+                    () -> {
+                        List<SourceSplitBase> splits = generateHybridLakeFlussSplits();
+                        if (splits == null) {
+                            throw new UnsupportedOperationException(
+                                    "Currently, Batch mode can only be supported if one lake snapshot exists for the table.");
+                        }
+                        return splits;
+                    },
+                    this::handleSplitsAdd);
         } else {
             throw new UnsupportedOperationException(
                     String.format(
                             "Batch only supports when table option '%s' is set to true.",
                             ConfigOptions.TABLE_DATALAKE_ENABLED));
+        }
+    }
+
+    private void startInStreamModeForNonPartitionedTable() {
+        if (lakeSource != null) {
+            context.callAsync(
+                    () -> {
+                        // firstly, try to generate hybrid lake splits,
+                        List<SourceSplitBase> splits = generateHybridLakeFlussSplits();
+                        // splits is null,
+                        // we'll fall back to normal fluss splits generation logic
+                        if (splits == null) {
+                            splits = this.initNonPartitionedSplits();
+                        }
+                        return splits;
+                    },
+                    this::handleSplitsAdd);
+        } else {
+            // init bucket splits and assign
+            context.callAsync(this::initNonPartitionedSplits, this::handleSplitsAdd);
         }
     }
 
@@ -294,6 +338,9 @@ public class FlinkSourceEnumerator
     }
 
     private Set<PartitionInfo> listPartitions() {
+        if (closed) {
+            return Collections.emptySet();
+        }
         try {
             List<PartitionInfo> partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
             partitionInfos = applyPartitionFilter(partitionInfos);
@@ -512,17 +559,30 @@ public class FlinkSourceEnumerator
         return splits;
     }
 
-    private List<SourceSplitBase> getLakeSplit() throws Exception {
-        LakeSplitGenerator lakeSplitGenerator =
-                new LakeSplitGenerator(
-                        tableInfo,
-                        flussAdmin,
-                        lakeSource,
-                        bucketOffsetsRetriever,
-                        stoppingOffsetsInitializer,
-                        tableInfo.getNumBuckets(),
-                        this::listPartitions);
-        return lakeSplitGenerator.generateHybridLakeSplits();
+    @Nullable
+    private List<SourceSplitBase> generateHybridLakeFlussSplits() {
+        // still have pending lake fluss splits,
+        // should be restored from checkpoint, shouldn't
+        // list splits again
+        if (pendingHybridLakeFlussSplits != null) {
+            return pendingHybridLakeFlussSplits;
+        }
+        try {
+            LakeSplitGenerator lakeSplitGenerator =
+                    new LakeSplitGenerator(
+                            tableInfo,
+                            flussAdmin,
+                            lakeSource,
+                            bucketOffsetsRetriever,
+                            stoppingOffsetsInitializer,
+                            tableInfo.getNumBuckets(),
+                            this::listPartitions);
+            pendingHybridLakeFlussSplits = lakeSplitGenerator.generateHybridLakeFlussSplits();
+            return pendingHybridLakeFlussSplits;
+        } catch (Exception e) {
+            LOG.error("Failed to get hybrid lake fluss splits, won't take splits in lake.", e);
+        }
+        return null;
     }
 
     private boolean ignoreTableBucket(TableBucket tableBucket) {
@@ -618,6 +678,16 @@ public class FlinkSourceEnumerator
                         split -> {
                             TableBucket tableBucket = split.getTableBucket();
                             assignedTableBuckets.add(tableBucket);
+
+                            if (pendingHybridLakeFlussSplits != null) {
+                                // removed from the pendingHybridLakeFlussSplits
+                                // since this split already be assigned
+                                pendingHybridLakeFlussSplits.removeIf(
+                                        hybridLakeFlussSplit ->
+                                                hybridLakeFlussSplit
+                                                        .splitId()
+                                                        .equals(split.splitId()));
+                            }
 
                             if (isPartitioned) {
                                 long partitionId =
@@ -755,7 +825,8 @@ public class FlinkSourceEnumerator
     @Override
     public SourceEnumeratorState snapshotState(long checkpointId) {
         final SourceEnumeratorState enumeratorState =
-                new SourceEnumeratorState(assignedTableBuckets, assignedPartitions);
+                new SourceEnumeratorState(
+                        assignedTableBuckets, assignedPartitions, pendingHybridLakeFlussSplits);
         LOG.debug("Source Checkpoint is {}", enumeratorState);
         return enumeratorState;
     }

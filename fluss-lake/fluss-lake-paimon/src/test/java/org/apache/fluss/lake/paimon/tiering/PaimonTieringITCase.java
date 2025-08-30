@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -37,6 +38,7 @@ import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.utils.CloseableIterator;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -54,6 +56,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 /** IT case for tiering tables to paimon. */
 class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
 
+    @RegisterExtension
+    public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
+            FlussClusterExtension.builder()
+                    .setClusterConf(initConfig())
+                    .setNumOfTabletServers(3)
+                    .build();
+
     protected static final String DEFAULT_DB = "fluss";
 
     private static StreamExecutionEnvironment execEnv;
@@ -61,7 +70,8 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
 
     @BeforeAll
     protected static void beforeAll() {
-        FlinkPaimonTieringTestBase.beforeAll();
+        FlinkPaimonTieringTestBase.beforeAll(FLUSS_CLUSTER_EXTENSION.getClientConfig());
+
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         execEnv.setParallelism(2);
         execEnv.enableCheckpointing(1000);
@@ -251,5 +261,10 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
                                         .newScan()
                                         .plan());
         return reader.toCloseableIterator();
+    }
+
+    @Override
+    protected FlussClusterExtension getFlussClusterExtension() {
+        return FLUSS_CLUSTER_EXTENSION;
     }
 }

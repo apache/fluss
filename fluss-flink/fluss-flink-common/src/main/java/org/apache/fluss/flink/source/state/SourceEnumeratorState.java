@@ -17,8 +17,12 @@
 
 package org.apache.fluss.flink.source.state;
 
+import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.metadata.TableBucket;
 
+import javax.annotation.Nullable;
+
+import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
@@ -33,10 +37,17 @@ public class SourceEnumeratorState {
     // mapping from partition id to partition name
     private final Map<Long, String> assignedPartitions;
 
+    // the unassigned lake splits of a lake snapshot and the fluss splits base on the
+    // lake snapshot
+    @Nullable private final List<SourceSplitBase> remainingHybridLakeFlussSplits;
+
     public SourceEnumeratorState(
-            Set<TableBucket> assignedBuckets, Map<Long, String> assignedPartitions) {
+            Set<TableBucket> assignedBuckets,
+            Map<Long, String> assignedPartitions,
+            @Nullable List<SourceSplitBase> remainingHybridLakeFlussSplits) {
         this.assignedBuckets = assignedBuckets;
         this.assignedPartitions = assignedPartitions;
+        this.remainingHybridLakeFlussSplits = remainingHybridLakeFlussSplits;
     }
 
     public Set<TableBucket> getAssignedBuckets() {
@@ -45,6 +56,11 @@ public class SourceEnumeratorState {
 
     public Map<Long, String> getAssignedPartitions() {
         return assignedPartitions;
+    }
+
+    @Nullable
+    public List<SourceSplitBase> getRemainingHybridLakeFlussSplits() {
+        return remainingHybridLakeFlussSplits;
     }
 
     @Override

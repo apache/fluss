@@ -23,6 +23,7 @@ import org.apache.flink.util.CloseableIterator;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -30,6 +31,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class FlinkRowAssertionsUtils {
 
     private FlinkRowAssertionsUtils() {}
+
+    public static void assertRowResultsIgnoreOrder(
+            CloseableIterator<Row> actual, List<Row> expectedRows, boolean closeIterator) {
+        assertResultsIgnoreOrder(
+                actual,
+                expectedRows.stream().map(Row::toString).collect(Collectors.toList()),
+                closeIterator);
+    }
 
     public static void assertResultsIgnoreOrder(
             CloseableIterator<Row> iterator, List<String> expected, boolean closeIterator) {

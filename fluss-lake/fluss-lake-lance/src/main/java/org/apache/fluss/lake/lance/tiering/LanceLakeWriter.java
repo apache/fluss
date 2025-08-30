@@ -45,7 +45,7 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
         LanceConfig config =
                 LanceConfig.from(
                         options.toMap(),
-                        writerInitContext.customProperties(),
+                        writerInitContext.tableInfo().getCustomProperties().toMap(),
                         writerInitContext.tablePath().getDatabaseName(),
                         writerInitContext.tablePath().getTableName());
         int batchSize = LanceConfig.getBatchSize(config);
@@ -56,7 +56,7 @@ public class LanceLakeWriter implements LakeWriter<LanceWriteResult> {
 
         this.arrowWriter =
                 LanceDatasetAdapter.getArrowWriter(
-                        schema.get(), batchSize, writerInitContext.schema().getRowType());
+                        schema.get(), batchSize, writerInitContext.tableInfo().getRowType());
 
         WriteParams params = LanceConfig.genWriteParamsFromConfig(config);
         Callable<List<FragmentMetadata>> fragmentCreator =

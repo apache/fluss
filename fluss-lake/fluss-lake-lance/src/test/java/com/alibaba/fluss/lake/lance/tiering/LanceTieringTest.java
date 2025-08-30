@@ -17,6 +17,7 @@
 
 package org.apache.fluss.lake.lance.tiering;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
 import org.apache.fluss.lake.committer.LakeCommitter;
@@ -28,6 +29,8 @@ import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.lake.writer.WriterInitContext;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.GenericRecord;
@@ -96,6 +99,15 @@ class LanceTieringTest {
                         tablePath.getTableName());
         Schema schema = createTable(config);
 
+        TableDescriptor descriptor =
+                TableDescriptor.builder()
+                        .schema(schema)
+                        .distributedBy(bucketNum)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .customProperties(customProperties)
+                        .build();
+        TableInfo tableInfo = TableInfo.of(tablePath, 0, 1, descriptor, 1L, 1L);
+
         List<LanceWriteResult> lanceWriteResults = new ArrayList<>();
         SimpleVersionedSerializer<LanceWriteResult> writeResultSerializer =
                 lanceLakeTieringFactory.getWriteResultSerializer();
@@ -126,7 +138,7 @@ class LanceTieringTest {
             for (Map.Entry<Long, String> entry : partitionIdAndName.entrySet()) {
                 String partition = entry.getValue();
                 try (LakeWriter<LanceWriteResult> lakeWriter =
-                        createLakeWriter(tablePath, bucket, partition, schema, customProperties)) {
+                        createLakeWriter(tablePath, bucket, partition, tableInfo)) {
                     Tuple2<String, Integer> partitionBucket = Tuple2.of(partition, bucket);
                     Tuple2<List<LogRecord>, List<LogRecord>> writeAndExpectRecords =
                             genLogTableRecords(partition, bucket, 10);
@@ -239,11 +251,7 @@ class LanceTieringTest {
     }
 
     private LakeWriter<LanceWriteResult> createLakeWriter(
-            TablePath tablePath,
-            int bucket,
-            @Nullable String partition,
-            Schema schema,
-            Map<String, String> customProperties)
+            TablePath tablePath, int bucket, @Nullable String partition, TableInfo tableInfo)
             throws IOException {
         return lanceLakeTieringFactory.createLakeWriter(
                 new WriterInitContext() {
@@ -265,13 +273,8 @@ class LanceTieringTest {
                     }
 
                     @Override
-                    public org.apache.fluss.metadata.Schema schema() {
-                        return schema;
-                    }
-
-                    @Override
-                    public Map<String, String> customProperties() {
-                        return customProperties;
+                    public TableInfo tableInfo() {
+                        return tableInfo;
                     }
                 });
     }

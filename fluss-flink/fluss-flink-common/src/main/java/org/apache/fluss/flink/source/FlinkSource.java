@@ -161,6 +161,7 @@ public class FlinkSource<OUT>
                 splitEnumeratorContext,
                 sourceEnumeratorState.getAssignedBuckets(),
                 sourceEnumeratorState.getAssignedPartitions(),
+                sourceEnumeratorState.getRemainingHybridLakeFlussSplits(),
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 streaming,
@@ -175,7 +176,7 @@ public class FlinkSource<OUT>
 
     @Override
     public SimpleVersionedSerializer<SourceEnumeratorState> getEnumeratorCheckpointSerializer() {
-        return FlussSourceEnumeratorStateSerializer.INSTANCE;
+        return new FlussSourceEnumeratorStateSerializer(lakeSource);
     }
 
     @Override

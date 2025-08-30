@@ -26,6 +26,11 @@ import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TablePath;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
+import javax.annotation.Nullable;
+
 import java.util.Map;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -33,7 +38,14 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 /** Utils for create lake source. */
 public class LakeSourceUtils {
 
+    public static final Logger LOG = LoggerFactory.getLogger(LakeSourceUtils.class);
+
+    /**
+     * Return the lake source of the given table. Return null when the lake storage doesn't support
+     * create lake source.
+     */
     @SuppressWarnings("unchecked")
+    @Nullable
     public static LakeSource<LakeSplit> createLakeSource(
             TablePath tablePath, Map<String, String> properties) {
         Map<String, String> catalogProperties =
@@ -47,6 +59,13 @@ public class LakeSourceUtils {
         LakeStoragePlugin lakeStoragePlugin =
                 LakeStoragePluginSetUp.fromDataLakeFormat(dataLake, null);
         LakeStorage lakeStorage = checkNotNull(lakeStoragePlugin).createLakeStorage(lakeConfig);
-        return (LakeSource<LakeSplit>) lakeStorage.createLakeSource(tablePath);
+        try {
+            return (LakeSource<LakeSplit>) lakeStorage.createLakeSource(tablePath);
+        } catch (UnsupportedOperationException e) {
+            LOG.info(
+                    "method createLakeSource throw UnsupportedOperationException for datalake format {}, return null as lakeSource to disable reading from lake source.",
+                    dataLake);
+            return null;
+        }
     }
 }

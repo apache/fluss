@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.MetadataManager;
@@ -158,6 +159,10 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
             // https://github.com/apache/fluss/issues/483
             return getPartitionMetadataFromZk(partitionPath, zkClient);
         }
+    }
+
+    public boolean contains(TableBucket tableBucket) {
+        return serverMetadataSnapshot.contains(tableBucket);
     }
 
     public void updateClusterMetadata(ClusterMetadata clusterMetadata) {

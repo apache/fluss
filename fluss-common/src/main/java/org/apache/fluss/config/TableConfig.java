@@ -94,6 +94,11 @@ public class TableConfig {
         return config.get(ConfigOptions.TABLE_DATALAKE_FRESHNESS);
     }
 
+    /** Whether auto compaction is enabled. */
+    public boolean isDataLakeAutoCompaction() {
+        return config.get(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION);
+    }
+
     /** Gets the optional merge engine type of the table. */
     public Optional<MergeEngineType> getMergeEngineType() {
         return config.getOptional(ConfigOptions.TABLE_MERGE_ENGINE);

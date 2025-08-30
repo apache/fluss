@@ -18,8 +18,6 @@
 
 package org.apache.fluss.lake.iceberg.tiering.writer;
 
-import org.apache.fluss.lake.writer.WriterInitContext;
-
 import org.apache.iceberg.FileFormat;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.data.Record;
@@ -27,6 +25,8 @@ import org.apache.iceberg.io.BaseTaskWriter;
 import org.apache.iceberg.io.FileAppenderFactory;
 import org.apache.iceberg.io.FileIO;
 import org.apache.iceberg.io.OutputFileFactory;
+
+import javax.annotation.Nullable;
 
 import java.io.IOException;
 
@@ -44,14 +44,10 @@ public class GenericRecordAppendOnlyWriter extends BaseTaskWriter<Record> {
             OutputFileFactory fileFactory,
             FileIO io,
             long targetFileSize,
-            WriterInitContext writerInitContext) {
+            @Nullable String partitionName,
+            int bucket) {
         super(icebergTable.spec(), format, appenderFactory, fileFactory, io, targetFileSize);
-        currentWriter =
-                new RollingFileWriter(
-                        toPartition(
-                                icebergTable,
-                                writerInitContext.partition(),
-                                writerInitContext.tableBucket().getBucket()));
+        currentWriter = new RollingFileWriter(toPartition(icebergTable, partitionName, bucket));
     }
 
     @Override

@@ -386,6 +386,8 @@
                                         <exclude>org.apache.fluss.lake.lance.*</exclude>
                                         <!-- temporarily exclude iceberg -->
                                         <exclude>org.apache.fluss.lake.iceberg.*</exclude>
+                                        <exclude>org.apache.fluss.row.encode.iceberg.*</exclude>
+                                        <exclude>org.apache.fluss.bucketing.IcebergBucketingFunction</exclude>
                                         <!-- start exclude for flink tiering service -->
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringSourceOptions</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringSource.Builder</exclude>
