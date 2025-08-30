@@ -59,8 +59,6 @@ import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_LENGTH;
  *
  * <p>The offset computes the difference relative to the base offset of the batch containing this
  * record.
- * The offset computes the difference relative to the base offset of the batch containing this
- * record.
  *
  * @since 0.8
  */
