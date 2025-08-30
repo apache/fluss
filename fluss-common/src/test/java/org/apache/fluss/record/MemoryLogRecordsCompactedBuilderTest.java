@@ -39,7 +39,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link MemoryLogRecordsCompactedBuilder}. */
-class MemoryLogRecordsCompactedBuilderTest {
+public class MemoryLogRecordsCompactedBuilderTest {
 
     @Test
     void testAppendAndBuild() throws Exception {
@@ -113,43 +113,37 @@ class MemoryLogRecordsCompactedBuilderTest {
     @Test
     void testNoRecordAppendAndBaseOffset() throws Exception {
         // base offset 0
-        try (MemoryLogRecordsCompactedBuilder builder = createBuilder(0, 1, 1024)) {
-            MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
-            assertThat(records.sizeInBytes())
-                    .isEqualTo(
-                            LogRecordBatchFormat.recordBatchHeaderSize(
-                                    DEFAULT_MAGIC)); // only batch header
-            LogRecordBatch batch = records.batches().iterator().next();
-            batch.ensureValid();
-            assertThat(batch.getRecordCount()).isEqualTo(0);
-            assertThat(batch.baseLogOffset()).isEqualTo(0);
-            assertThat(batch.lastLogOffset()).isEqualTo(0);
-            assertThat(batch.nextLogOffset()).isEqualTo(1);
-            try (LogRecordReadContext ctx =
-                            LogRecordReadContext.createCompactedRowReadContext(
-                                    DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
-                    CloseableIterator<LogRecord> it = batch.records(ctx)) {
-                assertThat(it.hasNext()).isFalse();
-            }
+        MemoryLogRecordsCompactedBuilder builder = createBuilder(0, 1, 1024);
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
+        assertThat(records.sizeInBytes()).isEqualTo(48); // only batch header
+        LogRecordBatch batch = records.batches().iterator().next();
+        batch.ensureValid();
+        assertThat(batch.getRecordCount()).isEqualTo(0);
+        assertThat(batch.baseLogOffset()).isEqualTo(0);
+        assertThat(batch.lastLogOffset()).isEqualTo(0);
+        assertThat(batch.nextLogOffset()).isEqualTo(1);
+        try (LogRecordReadContext ctx =
+                        LogRecordReadContext.createCompactedRowReadContext(
+                                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
+                CloseableIterator<LogRecord> it = batch.records(ctx)) {
+            assertThat(it.hasNext()).isFalse();
         }
 
         // base offset 100
-        try (MemoryLogRecordsCompactedBuilder builder = createBuilder(100, 1, 1024)) {
-            MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
-            assertThat(records.sizeInBytes())
-                    .isEqualTo(LogRecordBatchFormat.recordBatchHeaderSize(DEFAULT_MAGIC));
-            LogRecordBatch batch = records.batches().iterator().next();
-            batch.ensureValid();
-            assertThat(batch.getRecordCount()).isEqualTo(0);
-            assertThat(batch.baseLogOffset()).isEqualTo(100);
-            assertThat(batch.lastLogOffset()).isEqualTo(100);
-            assertThat(batch.nextLogOffset()).isEqualTo(101);
-            try (LogRecordReadContext ctx =
-                            LogRecordReadContext.createCompactedRowReadContext(
-                                    DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
-                    CloseableIterator<LogRecord> it = batch.records(ctx)) {
-                assertThat(it.hasNext()).isFalse();
-            }
+        builder = createBuilder(100, 1, 1024);
+        records = MemoryLogRecords.pointToBytesView(builder.build());
+        assertThat(records.sizeInBytes()).isEqualTo(48);
+        batch = records.batches().iterator().next();
+        batch.ensureValid();
+        assertThat(batch.getRecordCount()).isEqualTo(0);
+        assertThat(batch.baseLogOffset()).isEqualTo(100);
+        assertThat(batch.lastLogOffset()).isEqualTo(100);
+        assertThat(batch.nextLogOffset()).isEqualTo(101);
+        try (LogRecordReadContext ctx =
+                        LogRecordReadContext.createCompactedRowReadContext(
+                                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID);
+                CloseableIterator<LogRecord> it = batch.records(ctx)) {
+            assertThat(it.hasNext()).isFalse();
         }
     }
 
