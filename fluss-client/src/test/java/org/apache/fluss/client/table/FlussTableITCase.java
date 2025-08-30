@@ -1568,25 +1568,10 @@ class FlussTableITCase extends ClientToServerITCaseBase {
             }
             upsert.flush();
 
-            LogScanner scanner = createLogScanner(table, new int[] {0, 2});
-            subscribeFromBeginning(scanner, table);
-            int cnt = 0;
-            while (cnt < 10) {
-                ScanRecords recs = scanner.poll(Duration.ofSeconds(1));
-                for (ScanRecord r : recs) {
-                    assertThat(r.getChangeType()).isEqualTo(ChangeType.INSERT);
-                    InternalRow out = r.getRow();
-                    assertThat(out.getFieldCount()).isEqualTo(2);
-                    assertThat(out.getInt(0)).isEqualTo(cnt);
-                    if (cnt % 2 == 0) {
-                        assertThat(out.getString(1).toString()).isEqualTo("v" + cnt);
-                    } else {
-                        assertThat(out.isNullAt(1)).isTrue();
-                    }
-                    cnt++;
-                }
-            }
-            scanner.close();
+            // Creating a projected log scanner for COMPACTED should fail
+            assertThatThrownBy(() -> createLogScanner(table, new int[] {0, 2}))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("Projection is not supported for COMPACTED log format");
         }
     }
 
