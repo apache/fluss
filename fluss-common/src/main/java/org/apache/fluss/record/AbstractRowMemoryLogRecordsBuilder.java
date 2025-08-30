@@ -26,16 +26,15 @@ import org.apache.fluss.utils.crc.Crc32C;
 
 import java.io.IOException;
 
-import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_LENGTH;
-import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_LENGTH;
-import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
-import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
-import static org.apache.fluss.record.LogRecordBatchFormat.NO_LEADER_EPOCH;
-import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
-import static org.apache.fluss.record.LogRecordBatchFormat.crcOffset;
-import static org.apache.fluss.record.LogRecordBatchFormat.lastOffsetDeltaOffset;
-import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
-import static org.apache.fluss.record.LogRecordBatchFormat.schemaIdOffset;
+import static org.apache.fluss.record.DefaultLogRecordBatch.BASE_OFFSET_LENGTH;
+import static org.apache.fluss.record.DefaultLogRecordBatch.CRC_OFFSET;
+import static org.apache.fluss.record.DefaultLogRecordBatch.LAST_OFFSET_DELTA_OFFSET;
+import static org.apache.fluss.record.DefaultLogRecordBatch.LENGTH_LENGTH;
+import static org.apache.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+import static org.apache.fluss.record.DefaultLogRecordBatch.SCHEMA_ID_OFFSET;
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
+import static org.apache.fluss.record.LogRecordBatch.NO_WRITER_ID;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** Abstract base builder for row-based MemoryLogRecords builders sharing common logic. */
@@ -85,6 +84,17 @@ abstract class AbstractRowMemoryLogRecordsBuilder<T> implements AutoCloseable {
         int headerSize = recordBatchHeaderSize(magic);
         this.pagedOutputView.setPosition(headerSize);
         this.sizeInBytes = headerSize;
+    }
+
+    protected AbstractRowMemoryLogRecordsBuilder(
+            int schemaId, int writeLimit, AbstractPagedOutputView outputView, boolean appendOnly) {
+        this(
+                BUILDER_DEFAULT_OFFSET,
+                schemaId,
+                writeLimit,
+                CURRENT_LOG_MAGIC_VALUE,
+                outputView,
+                appendOnly);
     }
 
     /** Implement to return size of the record (including length field). */

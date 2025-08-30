@@ -24,6 +24,7 @@ import org.apache.fluss.row.indexed.IndexedRow;
 import java.io.IOException;
 
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatch.LOG_MAGIC_VALUE_V0;
 
 /**
  * Default builder for {@link MemoryLogRecords} of log records in {@link
@@ -44,12 +45,7 @@ public class MemoryLogRecordsIndexedBuilder extends AbstractRowMemoryLogRecordsB
     public static MemoryLogRecordsIndexedBuilder builder(
             int schemaId, int writeLimit, AbstractPagedOutputView outputView, boolean appendOnly) {
         return new MemoryLogRecordsIndexedBuilder(
-                BUILDER_DEFAULT_OFFSET,
-                schemaId,
-                writeLimit,
-                CURRENT_LOG_MAGIC_VALUE,
-                outputView,
-                appendOnly);
+                LOG_MAGIC_VALUE_V0, schemaId, writeLimit, CURRENT_LOG_MAGIC_VALUE, outputView, appendOnly);
     }
 
     @VisibleForTesting

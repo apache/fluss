@@ -18,7 +18,6 @@
 package org.apache.fluss.client.write;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -34,7 +33,6 @@ import java.io.IOException;
 import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * A batch of log records managed in COMPACTED format that is or will be sent to server by {@link
@@ -44,9 +42,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 @NotThreadSafe
 @Internal
-public final class CompactedLogWriteBatch extends WriteBatch {
+public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<CompactedRow> {
     private final AbstractPagedOutputView outputView;
-    private final MemoryLogRecordsCompactedBuilder recordsBuilder;
 
     public CompactedLogWriteBatch(
             int bucketId,
@@ -55,87 +52,84 @@ public final class CompactedLogWriteBatch extends WriteBatch {
             int writeLimit,
             AbstractPagedOutputView outputView,
             long createdMs) {
-        super(bucketId, physicalTablePath, createdMs);
+        super(
+                bucketId,
+                physicalTablePath,
+                createdMs,
+                outputView,
+                new RecordsBuilderAdapter<CompactedRow>() {
+                    private final MemoryLogRecordsCompactedBuilder delegate =
+                            MemoryLogRecordsCompactedBuilder.builder(
+                                    schemaId, writeLimit, outputView, true);
+
+                    @Override
+                    public boolean hasRoomFor(CompactedRow row) {
+                        return delegate.hasRoomFor(row);
+                    }
+
+                    @Override
+                    public void append(ChangeType changeType, CompactedRow row) throws Exception {
+                        delegate.append(changeType, row);
+                    }
+
+                    @Override
+                    public BytesView build() throws IOException {
+                        return delegate.build();
+                    }
+
+                    @Override
+                    public boolean isClosed() {
+                        return delegate.isClosed();
+                    }
+
+                    @Override
+                    public void close() throws Exception {
+                        delegate.close();
+                    }
+
+                    @Override
+                    public void setWriterState(long writerId, int batchSequence) {
+                        delegate.setWriterState(writerId, batchSequence);
+                    }
+
+                    @Override
+                    public long writerId() {
+                        return delegate.writerId();
+                    }
+
+                    @Override
+                    public int batchSequence() {
+                        return delegate.batchSequence();
+                    }
+
+                    @Override
+                    public void abort() {
+                        delegate.abort();
+                    }
+
+                    @Override
+                    public void resetWriterState(long writerId, int batchSequence) {
+                        delegate.resetWriterState(writerId, batchSequence);
+                    }
+
+                    @Override
+                    public int getSizeInBytes() {
+                        return delegate.getSizeInBytes();
+                    }
+                },
+                "Failed to build compacted log record batch.");
         this.outputView = outputView;
-        this.recordsBuilder =
-                MemoryLogRecordsCompactedBuilder.builder(schemaId, writeLimit, outputView, true);
     }
 
     @Override
-    public boolean tryAppend(WriteRecord writeRecord, WriteCallback callback) throws Exception {
-        checkNotNull(callback, "write callback must be not null");
-        checkNotNull(writeRecord.getRow(), "row must not be null for log record");
-        checkArgument(writeRecord.getKey() == null, "key must be null for log record");
+    protected CompactedRow requireAndCastRow(org.apache.fluss.row.InternalRow row) {
         checkArgument(
-                writeRecord.getTargetColumns() == null,
-                "target columns must be null for log record");
-        checkArgument(
-                writeRecord.getRow() instanceof CompactedRow,
-                "row must be CompactedRow for compacted log table");
-        CompactedRow row = (CompactedRow) writeRecord.getRow();
-        if (!recordsBuilder.hasRoomFor(row) || isClosed()) {
-            return false;
-        } else {
-            recordsBuilder.append(ChangeType.APPEND_ONLY, row);
-            recordCount++;
-            callbacks.add(callback);
-            return true;
-        }
-    }
-
-    @Override
-    public BytesView build() {
-        try {
-            return recordsBuilder.build();
-        } catch (IOException e) {
-            throw new FlussRuntimeException("Failed to build compacted log record batch.", e);
-        }
-    }
-
-    @Override
-    public boolean isClosed() {
-        return recordsBuilder.isClosed();
-    }
-
-    @Override
-    public void close() throws Exception {
-        recordsBuilder.close();
-        reopened = false;
+                row instanceof CompactedRow, "row must be CompactedRow for compacted log table");
+        return (CompactedRow) row;
     }
 
     @Override
     public List<MemorySegment> pooledMemorySegments() {
         return outputView.allocatedPooledSegments();
-    }
-
-    @Override
-    public void setWriterState(long writerId, int batchSequence) {
-        recordsBuilder.setWriterState(writerId, batchSequence);
-    }
-
-    @Override
-    public long writerId() {
-        return recordsBuilder.writerId();
-    }
-
-    @Override
-    public int batchSequence() {
-        return recordsBuilder.batchSequence();
-    }
-
-    @Override
-    public void abortRecordAppends() {
-        recordsBuilder.abort();
-    }
-
-    @Override
-    public void resetWriterState(long writerId, int batchSequence) {
-        super.resetWriterState(writerId, batchSequence);
-        recordsBuilder.resetWriterState(writerId, batchSequence);
-    }
-
-    @Override
-    public int estimatedSizeInBytes() {
-        return recordsBuilder.getSizeInBytes();
     }
 }

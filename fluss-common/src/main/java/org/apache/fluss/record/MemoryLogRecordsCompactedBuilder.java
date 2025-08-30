@@ -32,24 +32,15 @@ import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.row.compacted.CompactedRow;
-import org.apache.fluss.utils.crc.Crc32C;
 
 import java.io.IOException;
 
-import static org.apache.fluss.record.DefaultLogRecordBatch.BASE_OFFSET_LENGTH;
-import static org.apache.fluss.record.DefaultLogRecordBatch.CRC_OFFSET;
-import static org.apache.fluss.record.DefaultLogRecordBatch.LAST_OFFSET_DELTA_OFFSET;
-import static org.apache.fluss.record.DefaultLogRecordBatch.LENGTH_LENGTH;
-import static org.apache.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
-import static org.apache.fluss.record.DefaultLogRecordBatch.SCHEMA_ID_OFFSET;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
-import static org.apache.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
-import static org.apache.fluss.record.LogRecordBatch.NO_WRITER_ID;
-import static org.apache.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.record.LogRecordBatch.LOG_MAGIC_VALUE_V0;
 
 /**
- * Default builder for {@link MemoryLogRecords} of log records in {@link LogFormat#COMPACTED}
- * format.
+ * Default builder for {@link MemoryLogRecords} of log records in {@link
+ * org.apache.fluss.metadata.LogFormat#COMPACTED} format.
  */
 public class MemoryLogRecordsCompactedBuilder
         extends AbstractRowMemoryLogRecordsBuilder<CompactedRow> {
@@ -67,12 +58,7 @@ public class MemoryLogRecordsCompactedBuilder
     public static MemoryLogRecordsCompactedBuilder builder(
             int schemaId, int writeLimit, AbstractPagedOutputView outputView, boolean appendOnly) {
         return new MemoryLogRecordsCompactedBuilder(
-                BUILDER_DEFAULT_OFFSET,
-                schemaId,
-                writeLimit,
-                CURRENT_LOG_MAGIC_VALUE,
-                outputView,
-                appendOnly);
+                LOG_MAGIC_VALUE_V0, schemaId, writeLimit, CURRENT_LOG_MAGIC_VALUE, outputView, appendOnly);
     }
 
     @VisibleForTesting
@@ -85,155 +71,6 @@ public class MemoryLogRecordsCompactedBuilder
             throws IOException {
         return new MemoryLogRecordsCompactedBuilder(
                 baseLogOffset, schemaId, writeLimit, magic, outputView, false);
-    }
-
-public class MemoryLogRecordsCompactedBuilder implements AutoCloseable {
-    private static final int BUILDER_DEFAULT_OFFSET = 0;
-
-    private final long baseLogOffset;
-    private final int schemaId;
-    // The max bytes can be appended.
-    private final int writeLimit;
-    private final byte magic;
-    private final AbstractPagedOutputView pagedOutputView;
-    private final MemorySegment firstSegment;
-    private final boolean appendOnly;
-
-    private BytesView builtBuffer = null;
-    private long writerId;
-    private int batchSequence;
-    private int currentRecordNumber;
-    private int sizeInBytes;
-    private volatile boolean isClosed;
-    private boolean aborted = false;
-
-    private MemoryLogRecordsCompactedBuilder(
-            long baseLogOffset,
-            int schemaId,
-            int writeLimit,
-            byte magic,
-            AbstractPagedOutputView pagedOutputView,
-            boolean appendOnly) {
-        this.appendOnly = appendOnly;
-        checkArgument(
-                schemaId <= Short.MAX_VALUE,
-                "schemaId shouldn't be greater than the max value of short: " + Short.MAX_VALUE);
-        this.baseLogOffset = baseLogOffset;
-        this.schemaId = schemaId;
-        this.writeLimit = writeLimit;
-        this.magic = magic;
-        this.pagedOutputView = pagedOutputView;
-        this.firstSegment = pagedOutputView.getCurrentSegment();
-        this.writerId = NO_WRITER_ID;
-        this.batchSequence = NO_BATCH_SEQUENCE;
-        this.currentRecordNumber = 0;
-        this.isClosed = false;
-
-        // We don't need to write header information while the builder creating,
-        // we'll skip it first.
-        this.pagedOutputView.setPosition(RECORD_BATCH_HEADER_SIZE);
-        this.sizeInBytes = RECORD_BATCH_HEADER_SIZE;
-    }
-
-    public static MemoryLogRecordsCompactedBuilder builder(
-            int schemaId, int writeLimit, AbstractPagedOutputView outputView, boolean appendOnly) {
-        return new MemoryLogRecordsCompactedBuilder(
-                BUILDER_DEFAULT_OFFSET,
-                schemaId,
-                writeLimit,
-                CURRENT_LOG_MAGIC_VALUE,
-                outputView,
-                appendOnly);
-    }
-
-    @VisibleForTesting
-    public static MemoryLogRecordsCompactedBuilder builder(
-            long baseLogOffset,
-            int schemaId,
-            int writeLimit,
-            byte magic,
-            AbstractPagedOutputView outputView)
-            throws IOException {
-        return new MemoryLogRecordsCompactedBuilder(
-                baseLogOffset, schemaId, writeLimit, magic, outputView, false);
-    }
-
-    /**
-     * Check if we have room for a new record containing the given row. If no records have been
-     * appended, then this returns true.
-     */
-    public boolean hasRoomFor(CompactedRow row) {
-        return sizeInBytes + CompactedLogRecord.sizeOf(row) <= writeLimit;
-    }
-
-    public void append(ChangeType changeType, CompactedRow row) throws Exception {
-        appendRecord(changeType, row);
-    }
-
-    private void appendRecord(ChangeType changeType, CompactedRow row) throws IOException {
-        if (aborted) {
-            throw new IllegalStateException(
-                    "Tried to append a record, but MemoryLogRecordsCompactedBuilder has already been aborted");
-        }
-
-        if (isClosed) {
-            throw new IllegalStateException(
-                    "Tried to append a record, but MemoryLogRecordsBuilder is closed for record appends");
-        }
-        if (appendOnly && changeType != ChangeType.APPEND_ONLY) {
-            throw new IllegalArgumentException(
-                    "Only append-only change type is allowed for append-only arrow log builder, but got "
-                            + changeType);
-        }
-
-        int recordByteSizes = CompactedLogRecord.writeTo(pagedOutputView, changeType, row);
-        currentRecordNumber++;
-        sizeInBytes += recordByteSizes;
-    }
-
-    public BytesView build() throws IOException {
-        if (aborted) {
-            throw new IllegalStateException("Attempting to build an aborted record batch");
-        }
-
-        if (builtBuffer != null) {
-            return builtBuffer;
-        }
-
-        writeBatchHeader();
-        builtBuffer =
-                MultiBytesView.builder()
-                        .addMemorySegmentByteViewList(pagedOutputView.getWrittenSegments())
-                        .build();
-        return builtBuffer;
-    }
-
-    public void setWriterState(long writerId, int batchBaseSequence) {
-        this.writerId = writerId;
-        this.batchSequence = batchBaseSequence;
-    }
-
-    public void resetWriterState(long writerId, int batchSequence) {
-        // trigger to rewrite batch header
-        this.builtBuffer = null;
-        this.writerId = writerId;
-        this.batchSequence = batchSequence;
-    }
-
-    public long writerId() {
-        return writerId;
-    }
-
-    public int batchSequence() {
-        return batchSequence;
-    }
-
-    public boolean isClosed() {
-        return isClosed;
-    }
-
-    public void abort() {
-        aborted = true;
     }
 
     @Override
@@ -244,55 +81,5 @@ public class MemoryLogRecordsCompactedBuilder implements AutoCloseable {
     @Override
     protected int writeRecord(ChangeType changeType, CompactedRow row) throws IOException {
         return CompactedLogRecord.writeTo(pagedOutputView, changeType, row);
-    }
-    public void close() throws IOException {
-        if (aborted) {
-            throw new IllegalStateException(
-                    "Cannot close MemoryLogRecordsCompactedBuilder as it has already been aborted");
-        }
-
-        isClosed = true;
-    }
-
-    public int getSizeInBytes() {
-        return sizeInBytes;
-    }
-
-    // ----------------------- internal methods -------------------------------
-    private void writeBatchHeader() throws IOException {
-        // pagedOutputView doesn't support seek to previous segment,
-        // so we create a new output view on the first segment
-        MemorySegmentOutputView outputView = new MemorySegmentOutputView(firstSegment);
-        outputView.setPosition(0);
-        // update header.
-        outputView.writeLong(baseLogOffset);
-        outputView.writeInt(sizeInBytes - BASE_OFFSET_LENGTH - LENGTH_LENGTH);
-        outputView.writeByte(magic);
-
-        // write empty timestamp which will be overridden on server side
-        outputView.writeLong(0);
-        // write empty crc first.
-        outputView.writeUnsignedInt(0);
-
-        outputView.writeShort((short) schemaId);
-        // write attributes (currently only appendOnly flag)
-        outputView.writeBoolean(appendOnly);
-        // skip write attribute byte for now.
-        outputView.setPosition(LAST_OFFSET_DELTA_OFFSET);
-        if (currentRecordNumber > 0) {
-            outputView.writeInt(currentRecordNumber - 1);
-        } else {
-            // If there is no record, we write 0 for filed lastOffsetDelta, see the comments about
-            // the field 'lastOffsetDelta' in DefaultLogRecordBatch.
-            outputView.writeInt(0);
-        }
-        outputView.writeLong(writerId);
-        outputView.writeInt(batchSequence);
-        outputView.writeInt(currentRecordNumber);
-
-        // Update crc.
-        long crc = Crc32C.compute(pagedOutputView.getWrittenSegments(), SCHEMA_ID_OFFSET);
-        outputView.setPosition(CRC_OFFSET);
-        outputView.writeUnsignedInt(crc);
     }
 }

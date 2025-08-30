@@ -18,7 +18,6 @@
 package org.apache.fluss.client.write;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -34,7 +33,6 @@ import java.io.IOException;
 import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * A batch of log records managed in INDEXED format that is or will be sent to server by {@link
@@ -44,9 +42,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 @NotThreadSafe
 @Internal
-public final class IndexedLogWriteBatch extends WriteBatch {
+public final class IndexedLogWriteBatch extends AbstractRowLogWriteBatch<IndexedRow> {
     private final AbstractPagedOutputView outputView;
-    private final MemoryLogRecordsIndexedBuilder recordsBuilder;
 
     public IndexedLogWriteBatch(
             int bucketId,
@@ -55,11 +52,15 @@ public final class IndexedLogWriteBatch extends WriteBatch {
             int writeLimit,
             AbstractPagedOutputView outputView,
             long createdMs) {
-        super(bucketId, physicalTablePath, createdMs);
-        this.outputView = outputView;
-        this.recordsBuilder =
-                MemoryLogRecordsIndexedBuilder.builder(schemaId, writeLimit, outputView, true);
-    }
+        super(
+                bucketId,
+                physicalTablePath,
+                createdMs,
+                outputView,
+                new RecordsBuilderAdapter<IndexedRow>() {
+                    private final MemoryLogRecordsIndexedBuilder delegate =
+                            MemoryLogRecordsIndexedBuilder.builder(
+                                    schemaId, writeLimit, outputView, true);
 
     @Override
     public boolean isLogBatch() {
@@ -87,59 +88,73 @@ public final class IndexedLogWriteBatch extends WriteBatch {
             return true;
         }
     }
+                    @Override
+                    public boolean hasRoomFor(IndexedRow row) {
+                        return delegate.hasRoomFor(row);
+                    }
 
-    @Override
-    public BytesView build() {
-        try {
-            return recordsBuilder.build();
-        } catch (IOException e) {
-            throw new FlussRuntimeException("Failed to build indexed log record batch.", e);
-        }
+                    @Override
+                    public void append(ChangeType changeType, IndexedRow row) throws Exception {
+                        delegate.append(changeType, row);
+                    }
+
+                    @Override
+                    public BytesView build() throws IOException {
+                        return delegate.build();
+                    }
+
+                    @Override
+                    public boolean isClosed() {
+                        return delegate.isClosed();
+                    }
+
+                    @Override
+                    public void close() throws Exception {
+                        delegate.close();
+                    }
+
+                    @Override
+                    public void setWriterState(long writerId, int batchSequence) {
+                        delegate.setWriterState(writerId, batchSequence);
+                    }
+
+                    @Override
+                    public long writerId() {
+                        return delegate.writerId();
+                    }
+
+                    @Override
+                    public int batchSequence() {
+                        return delegate.batchSequence();
+                    }
+
+                    @Override
+                    public void abort() {
+                        delegate.abort();
+                    }
+
+                    @Override
+                    public void resetWriterState(long writerId, int batchSequence) {
+                        delegate.resetWriterState(writerId, batchSequence);
+                    }
+
+                    @Override
+                    public int getSizeInBytes() {
+                        return delegate.getSizeInBytes();
+                    }
+                },
+                "Failed to build indexed log record batch.");
+        this.outputView = outputView;
     }
 
     @Override
-    public boolean isClosed() {
-        return recordsBuilder.isClosed();
-    }
-
-    @Override
-    public void close() throws Exception {
-        recordsBuilder.close();
-        reopened = false;
+    protected IndexedRow requireAndCastRow(org.apache.fluss.row.InternalRow row) {
+        checkArgument(row instanceof IndexedRow, "row must be IndexRow for indexed log table");
+        return (IndexedRow) row;
     }
 
     @Override
     public List<MemorySegment> pooledMemorySegments() {
         return outputView.allocatedPooledSegments();
-    }
-
-    @Override
-    public void setWriterState(long writerId, int batchSequence) {
-        recordsBuilder.setWriterState(writerId, batchSequence);
-    }
-
-    @Override
-    public long writerId() {
-        return recordsBuilder.writerId();
-    }
-
-    @Override
-    public int batchSequence() {
-        return recordsBuilder.batchSequence();
-    }
-
-    @Override
-    public void abortRecordAppends() {
-        recordsBuilder.abort();
-    }
-
-    public void resetWriterState(long writerId, int batchSequence) {
-        super.resetWriterState(writerId, batchSequence);
-        recordsBuilder.resetWriterState(writerId, batchSequence);
-    }
-
-    @Override
-    public int estimatedSizeInBytes() {
-        return recordsBuilder.getSizeInBytes();
     }
 }
