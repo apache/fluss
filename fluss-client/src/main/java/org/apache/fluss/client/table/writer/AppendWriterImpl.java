@@ -62,11 +62,8 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
             this.bucketKeyEncoder = KeyEncoder.of(rowType, bucketKeys, lakeFormat);
         }
 
-        DataType[] fieldDataTypes = tableInfo
-                .getSchema()
-                .getRowType()
-                .getChildren()
-                .toArray(new DataType[0]);
+        DataType[] fieldDataTypes =
+                tableInfo.getSchema().getRowType().getChildren().toArray(new DataType[0]);
 
         this.logFormat = tableInfo.getTableConfig().getLogFormat();
         this.indexedRowEncoder = new IndexedRowEncoder(tableInfo.getRowType());
@@ -91,7 +88,7 @@ class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
         if (logFormat == LogFormat.INDEXED) {
             IndexedRow indexedRow = encodeIndexedRow(row);
             record = WriteRecord.forIndexedAppend(tableInfo, physicalPath, indexedRow, bucketKey);
-        } else if (logFormat == LogFormat.COMPACTED)  {
+        } else if (logFormat == LogFormat.COMPACTED) {
             CompactedRow compactedRow = encodeCompactedRow(row);
             record = WriteRecord.forCompactedAppend(tableInfo, physicalPath, compactedRow, bucketKey);
         } else {
