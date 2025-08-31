@@ -122,6 +122,24 @@ public class ConfigOptions {
                             "The interval of auto partition check. "
                                     + "The default value is 10 minutes.");
 
+    public static final ConfigOption<Boolean> LOG_TABLE_ALLOW_CREATION =
+            key("allow.create.log.tables")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether to allow creation of log tables. When set to false, "
+                                    + "attempts to create log tables (tables without primary key) will be rejected. "
+                                    + "The default value is true.");
+
+    public static final ConfigOption<Boolean> KV_TABLE_ALLOW_CREATION =
+            key("allow.create.kv.tables")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether to allow creation of kv tables (primary key tables). When set to false, "
+                                    + "attempts to create kv tables (tables with primary key) will be rejected. "
+                                    + "The default value is true.");
+
     public static final ConfigOption<Integer> MAX_PARTITION_NUM =
             key("max.partition.num")
                     .intType()
