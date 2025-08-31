@@ -115,6 +115,7 @@ public abstract class ServerBase implements AutoCloseableAsync, FatalErrorHandle
     public void start() throws Exception {
         try {
             addShutDownHook();
+
             // at first, we need to initialize the file system
             pluginManager = PluginUtils.createPluginManagerFromRootFolder(conf);
             FileSystem.initialize(conf, pluginManager);
