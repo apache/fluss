@@ -305,7 +305,6 @@ public class IndexedRowReader {
                 fieldReader = (reader, pos) -> reader.readArray();
                 break;
             case MAP:
-
                 fieldReader = (reader, pos) -> reader.readMap();
                 break;
             case ROW:

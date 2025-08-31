@@ -27,15 +27,14 @@ import org.apache.flink.table.data.ArrayData;
 import org.apache.flink.table.data.GenericMapData;
 import org.apache.flink.table.data.MapData;
 
-import static org.apache.fluss.types.DataTypeChecks.getPrecision;
-import static org.apache.fluss.types.DataTypeChecks.getScale;
-import static org.apache.fluss.types.DataTypeChecks.getLength;
-import static org.apache.fluss.types.DataTypeChecks.getFieldCount;
-
 import java.util.HashMap;
 import java.util.Map;
 
 import static org.apache.fluss.flink.utils.FlussRowToFlinkRowConverter.createInternalConverter;
+import static org.apache.fluss.types.DataTypeChecks.getFieldCount;
+import static org.apache.fluss.types.DataTypeChecks.getLength;
+import static org.apache.fluss.types.DataTypeChecks.getPrecision;
+import static org.apache.fluss.types.DataTypeChecks.getScale;
 
 /** MapData Converter. */
 public class FlinkMapConverter implements MapData {

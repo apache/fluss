@@ -35,7 +35,9 @@ public final class VarLengthIntUtils {
     public static final int MAX_VAR_LONG_SIZE = 9;
     public static final int MAX_VAR_INT_SIZE = 5;
 
-    /** @return bytes length. */
+    /**
+     * @return bytes length.
+     */
     public static int encodeLong(DataOutput os, long value) throws IOException {
 
         if (value < 0) {
@@ -52,7 +54,9 @@ public final class VarLengthIntUtils {
         return i;
     }
 
-    /** @return bytes length. */
+    /**
+     * @return bytes length.
+     */
     public static int encodeLong(OutputView os, long value) throws IOException {
 
         if (value < 0) {
@@ -69,7 +73,9 @@ public final class VarLengthIntUtils {
         return i;
     }
 
-    /** @return bytes length. */
+    /**
+     * @return bytes length.
+     */
     public static int encodeLong(byte[] bytes, long value) {
 
         if (value < 0) {
@@ -124,7 +130,9 @@ public final class VarLengthIntUtils {
         throw new Error("Malformed long.");
     }
 
-    /** @return bytes length. */
+    /**
+     * @return bytes length.
+     */
     public static int encodeInt(byte[] bytes, int offset, int value) {
 
         if (value < 0) {
@@ -141,7 +149,9 @@ public final class VarLengthIntUtils {
         return i;
     }
 
-    /** @return bytes length. */
+    /**
+     * @return bytes length.
+     */
     public static int encodeInt(DataOutput os, int value) throws IOException {
 
         if (value < 0) {
@@ -159,7 +169,9 @@ public final class VarLengthIntUtils {
         return i;
     }
 
-    /** @return bytes length. */
+    /**
+     * @return bytes length.
+     */
     public static int encodeInt(OutputView os, int value) throws IOException {
 
         if (value < 0) {

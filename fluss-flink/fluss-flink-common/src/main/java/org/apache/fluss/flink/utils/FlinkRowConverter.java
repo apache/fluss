@@ -33,10 +33,10 @@ import org.apache.flink.table.data.TimestampData;
 import org.apache.flink.types.RowKind;
 
 import static org.apache.fluss.flink.utils.FlussRowToFlinkRowConverter.createInternalConverter;
+import static org.apache.fluss.types.DataTypeChecks.getFieldCount;
+import static org.apache.fluss.types.DataTypeChecks.getLength;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 import static org.apache.fluss.types.DataTypeChecks.getScale;
-import static org.apache.fluss.types.DataTypeChecks.getLength;
-import static org.apache.fluss.types.DataTypeChecks.getFieldCount;
 
 /** FlinkRowConverter. */
 public class FlinkRowConverter implements RowData {

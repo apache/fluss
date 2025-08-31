@@ -21,7 +21,6 @@ package org.apache.fluss.row;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.types.MapType;
 
-
 /**
  * Base interface of an internal data structure representing data of {@link MapType}.
  *

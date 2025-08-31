@@ -38,7 +38,6 @@ import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.StringType;
-
 import org.apache.fluss.utils.MurmurHashUtils;
 
 import java.util.Arrays;

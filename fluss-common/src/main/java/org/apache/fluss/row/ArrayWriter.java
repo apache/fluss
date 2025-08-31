@@ -22,7 +22,6 @@ import org.apache.fluss.row.serializer.InternalArraySerializer;
 import org.apache.fluss.row.serializer.InternalMapSerializer;
 import org.apache.fluss.row.serializer.InternalRowSerializer;
 import org.apache.fluss.row.serializer.Serializer;
-
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.LocalZonedTimestampType;
@@ -136,7 +135,6 @@ public interface ArrayWriter {
                 writer.writeDecimal(pos, (Decimal) o, decimalType.getPrecision());
                 break;
             case BINARY:
-
                 int length = getLength(type);
                 writer.writeBinary(pos, (byte[]) o, length);
                 break;
@@ -176,7 +174,6 @@ public interface ArrayWriter {
             case BOOLEAN:
                 return (writer, pos, value) -> writer.writeBoolean(pos, (boolean) value);
             case BINARY:
-
                 final int binaryLength = getLength(elementType);
                 return (writer, pos, value) ->
                         writer.writeBinary(pos, (byte[]) value, binaryLength);

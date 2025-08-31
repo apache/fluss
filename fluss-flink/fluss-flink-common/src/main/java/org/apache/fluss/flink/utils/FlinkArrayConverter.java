@@ -18,9 +18,9 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.DataType;
-import org.apache.fluss.row.InternalArray;
 
 import org.apache.flink.table.data.ArrayData;
 import org.apache.flink.table.data.DecimalData;

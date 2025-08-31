@@ -67,7 +67,6 @@ public class InternalArrayAssert extends AbstractAssert<InternalArrayAssert, Int
                 }
                 break;
             case BINARY:
-
                 for (int i = 0; i < actual.size(); i++) {
                     assertThat(actual.getBinary(i)).isEqualTo(expected.getBinary(i));
                 }

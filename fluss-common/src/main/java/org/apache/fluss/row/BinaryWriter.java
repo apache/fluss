@@ -27,7 +27,6 @@ import org.apache.fluss.row.serializer.InternalMapSerializer;
 import org.apache.fluss.row.serializer.InternalRowSerializer;
 import org.apache.fluss.row.serializer.InternalSerializers;
 import org.apache.fluss.row.serializer.Serializer;
-
 import org.apache.fluss.types.DataType;
 
 import java.io.Closeable;

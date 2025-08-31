@@ -19,8 +19,8 @@
 package org.apache.fluss.row.serializer;
 
 /**
- * Temporary stub interface for PagedTypeSerializer to maintain compilation compatibility.
- * TODO: Remove this interface as we don't have paged MemorySegments.
+ * Temporary stub interface for PagedTypeSerializer to maintain compilation compatibility. TODO:
+ * Remove this interface as we don't have paged MemorySegments.
  */
 public interface PagedTypeSerializer<T> {
     // Empty interface for stub

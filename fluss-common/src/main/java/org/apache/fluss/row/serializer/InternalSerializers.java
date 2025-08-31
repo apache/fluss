@@ -21,14 +21,15 @@ package org.apache.fluss.row.serializer;
 import org.apache.fluss.types.DataType;
 
 /**
- * Temporary stub class for InternalSerializers to maintain compilation compatibility.
- * TODO: Remove this class and all references to it as per PR feedback.
- * Different writers should handle their own serialization formats.
+ * Temporary stub class for InternalSerializers to maintain compilation compatibility. TODO: Remove
+ * this class and all references to it as per PR feedback. Different writers should handle their own
+ * serialization formats.
  */
 public class InternalSerializers {
 
     /**
      * Temporary method to create serializers. This should be removed.
+     *
      * @param dataType the data type
      * @return a serializer
      */
