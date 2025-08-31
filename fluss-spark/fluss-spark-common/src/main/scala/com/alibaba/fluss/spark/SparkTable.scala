@@ -47,9 +47,16 @@ case class SparkTable(catalog: SparkCatalog, flussConfig: Configuration, table: 
     SparkTypeUtils.fromFlussRowType(table.getRowType)
   }
 
-  override def capabilities(): ju.Set[TableCapability] = ???
+  override def capabilities(): ju.Set[TableCapability] = {
+    Set(
+      TableCapability.MICRO_BATCH_READ,
+      TableCapability.BATCH_READ,
+      TableCapability.BATCH_WRITE).asJava
+  }
 
-  override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = ???
+  override def newScanBuilder(options: CaseInsensitiveStringMap): ScanBuilder = {
+    new SparkScanBuilder(table, flussConfig, options)
+  }
 
   override def newWriteBuilder(info: LogicalWriteInfo): WriteBuilder = ???
 

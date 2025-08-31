@@ -23,7 +23,10 @@ import javax.annotation.Nullable;
 import java.io.Serializable;
 import java.util.Objects;
 
-/** Table bucket info. */
+/**
+ * The table bucket info can be used to first read the snapshot file (snapshotId exists) and then
+ * switch to read the cdc log from a specified offset with {Map[TableBucketInfo, Long]}.
+ */
 public class TableBucketInfo implements Serializable {
     private final TableBucket tableBucket;
     private final String partitionName;

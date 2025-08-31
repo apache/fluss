@@ -62,6 +62,10 @@ public class TableBucket implements Serializable {
         this.bucket = bucket;
     }
 
+    public TableBucket() {
+        this(0L, null, 0);
+    }
+
     public int getBucket() {
         return bucket;
     }

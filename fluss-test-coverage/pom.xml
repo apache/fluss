@@ -347,6 +347,8 @@
                                         <exclude>com.alibaba.fluss.flink.tiering.committer.LakeTieringCommitOperatorFactory</exclude>
                                         <exclude>com.alibaba.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <!-- end exclude for flink tiering service -->
+                                        <exclude>com.alibaba.fluss.spark.*</exclude>
+                                        <exclude>org.apache.spark.sql.*</exclude>
                                     </excludes>
                                 </rule>
                             </rules>
