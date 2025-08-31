@@ -67,6 +67,28 @@ public class SparkConnectorOptions {
                     .withDescription(
                             "The minimum number of rows returned in a single batch, which used to create MinRowsReadLimit with max.trigger.delay together.");
 
+    public static final String MOCK_SYSTEM_TIME = "_mockSystemTime";
+
+    public static final ConfigOption<Duration> MAX_TRIGGER_DELAY =
+            key("max.trigger.delay")
+                    .durationType()
+                    .defaultValue(Duration.ofMinutes(15))
+                    .withDescription(
+                            "The maximum delay between two adjacent batches, which used to create MinRowsReadLimit with min.offset.per.trigger together.Note:Kv table not support it.");
+
+    public static final ConfigOption<Long> MAX_OFFSET_PER_TRIGGER =
+            key("max.offset.per.trigger")
+                    .longType()
+                    .noDefaultValue()
+                    .withDescription("The maximum number of rows returned in a single batch.");
+
+    public static final ConfigOption<Long> MIN_OFFSET_PER_TRIGGER =
+            key("min.offset.per.trigger")
+                    .longType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The minimum number of rows returned in a single batch, which used to create MinRowsReadLimit with max.trigger.delay together.");
+
     public static final ConfigOption<Integer> BUCKET_NUMBER =
             key("bucket.num")
                     .intType()

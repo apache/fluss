@@ -1,23 +1,7 @@
 ---
-sidebar_label: Flink
+title: Real-Time Analytics with Flink
 sidebar_position: 1
 ---
-
-<!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
 
 # Real-Time Analytics With Flink
 
@@ -55,7 +39,7 @@ cd fluss-quickstart-flink
 services:
   #begin Fluss cluster
   coordinator-server:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -63,13 +47,15 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        coordinator.host: coordinator-server
+        bind.listeners: FLUSS://coordinator-server:9123
         remote.data.dir: /tmp/fluss/remote-data
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
         datalake.paimon.warehouse: /tmp/paimon
+    volumes:
+      - shared-tmpfs:/tmp/paimon
   tablet-server:
-    image: fluss/fluss:$FLUSS_VERSION$
+    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -77,20 +63,22 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        tablet-server.host: tablet-server
+        bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
         remote.data.dir: /tmp/fluss/remote-data
         kv.snapshot.interval: 0s
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
         datalake.paimon.warehouse: /tmp/paimon
+    volumes:
+      - shared-tmpfs:/tmp/paimon
   zookeeper:
     restart: always
     image: zookeeper:3.9.2
   #end
   #begin Flink cluster
   jobmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
+    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     ports:
       - "8083:8081"
     command: jobmanager
@@ -101,7 +89,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/paimon
   taskmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
+    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     depends_on:
       - jobmanager
     command: taskmanager
@@ -140,7 +128,7 @@ This command automatically starts all the containers defined in the Docker Compo
 
 Run 
 ```shell
-docker ps
+docker container ls -a
 ```
 to check whether all containers are running properly.
 
@@ -363,9 +351,15 @@ SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 To integrate with [Apache Paimon](https://paimon.apache.org/), you need to start the `Lakehouse Tiering Service`. 
 Open a new terminal, navigate to the `fluss-quickstart-flink` directory, and execute the following command within this directory to start the service:
 ```shell
-docker compose exec coordinator-server ./bin/lakehouse.sh -Dflink.rest.address=jobmanager -Dflink.rest.port=8081 -Dflink.execution.checkpointing.interval=30s
+docker compose exec jobmanager \
+    /opt/flink/bin/flink run \
+    /opt/flink/opt/fluss-flink-tiering-$FLUSS_VERSION$.jar \
+    --fluss.bootstrap.servers coordinator-server:9123 \
+    --datalake.format paimon \
+    --datalake.paimon.metastore filesystem \
+    --datalake.paimon.warehouse /tmp/paimon
 ```
-You should see a Flink Job named `fluss-paimon-tiering-service` running in the [Flink Web UI](http://localhost:8083/).
+You should see a Flink Job to tier data from Fluss to Paimon running in the [Flink Web UI](http://localhost:8083/).
 
 ### Streaming into Fluss datalake-enabled tables
 
@@ -387,7 +381,10 @@ CREATE TABLE datalake_enriched_orders (
     `cust_mktsegment` STRING,
     `nation_name` STRING,
     PRIMARY KEY (`order_key`) NOT ENFORCED
-) WITH ('table.datalake.enabled' = 'true');
+) WITH (
+    'table.datalake.enabled' = 'true',
+    'table.datalake.freshness' = '30s'
+);
 ```
 
 Next, perform streaming data writing into the **datalake-enabled** table, `datalake_enriched_orders`:
@@ -511,4 +508,4 @@ docker compose down -v
 to stop all containers.
 
 ## Learn more
-Now that you're up an running with Fluss and Flink, check out the [Apache Flink Engine](engine-flink/getting-started.md) docs to learn more features with Flink or [this guide](/maintenance/observability/quickstart.md) to learn how to set up an observability stack for Fluss and Flink.
+Now that you're up and running with Fluss and Flink, check out the [Apache Flink Engine](engine-flink/getting-started.md) docs to learn more features with Flink or [this guide](/maintenance/observability/quickstart.md) to learn how to set up an observability stack for Fluss and Flink.

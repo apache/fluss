@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -25,43 +26,60 @@ import Heading from '@theme/Heading';
 import styles from './index.module.css';
 
 function HomepageHeader() {
-  const {siteConfig} = useDocusaurusContext();
-  return (
-    <header className={clsx('hero hero--primary', styles.heroBanner)}>
-      <div className="container">
-        <Heading as="h1" className="hero__title">
-          {siteConfig.title}
-        </Heading>
-        <p className="hero__subtitle">{siteConfig.tagline}</p>
-        <div className={styles.buttons}>
-          <Link
-            className="hero_button button button--primary button--lg"
-            to="/docs/quickstart/flink">
-            Quick Start
-          </Link>
+    const {siteConfig} = useDocusaurusContext();
+    return (
+        <header className={clsx('hero hero--primary', styles.heroBanner)}>
+            <div className="container">
+                <Heading as="h1" className="hero__title">
+                    {siteConfig.title}
+                </Heading>
+                <p className="hero__subtitle">{siteConfig.tagline}</p>
+                <div className={styles.buttons}>
+                    <Link
+                        className={clsx("hero_button button button--primary button--lg", styles.buttonWidth)}
+                        to="/docs/quickstart/flink">
+                        Quick Start
+                    </Link>
 
-          <Link
-            className="source_code_button button button--secondary button--lg"
-            to="https://github.com/alibaba/fluss">
-            GitHub
-          </Link>
-        </div>
-      </div>
-    </header>
-  );
+                    <Link
+                        className={clsx("button button--secondary button--lg", styles.buttonWithIcon, styles.buttonWidth)}
+                        to="https://github.com/apache/fluss">
+                        <img
+                            src="img/github_icon.svg"
+                            alt="GitHub"
+                            className={styles.buttonIcon}
+                        />
+                        GitHub
+                    </Link>
+
+                    <Link
+                        className={clsx("button button--secondary button--lg", styles.buttonWithIcon, styles.buttonWidth)}
+                        to="https://join.slack.com/t/apache-fluss/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw">
+                        <img
+                            src="img/slack_icon.svg"
+                            alt="Slack"
+                            className={styles.buttonIcon}
+                        />
+                        Slack
+                    </Link>
+                </div>
+            </div>
+        </header>
+    );
 }
 
 export default function Home(): JSX.Element {
-  const {siteConfig} = useDocusaurusContext();
-  return (
-    <Layout
-      title="Fluss"
-      description="Streaming Storage for Real-Time Analytics">
-      <HomepageHeader />
-      <main>
-        <HomepageIntroduce />
-        <HomepageFeatures />
-      </main>
-    </Layout>
-  );
+    const {siteConfig} = useDocusaurusContext();
+    return (
+        <Layout
+            // leave empty to just display "Apache Fluss (Incubating)" in tab on landing page
+            title=""
+            description="Streaming Storage for Real-Time Analytics">
+            <HomepageHeader/>
+            <main>
+                <HomepageIntroduce/>
+                <HomepageFeatures/>
+            </main>
+        </Layout>
+    );
 }

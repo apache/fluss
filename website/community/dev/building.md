@@ -1,36 +1,32 @@
 ---
 sidebar_position: 1
-sidebar_label: Building Fluss
+title: Building Fluss
 ---
-
-<!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
 
 # Building Fluss from Source
 
-This page covers how to build Fluss 0.6.0-SNAPSHOT from sources.
+This page covers how to build Fluss from sources.
 
-In order to build Fluss you need to get the source code by [clone the git repository](https://github.com/alibaba/fluss).
+In order to build Fluss you need to get the source code by [cloning the git repository](https://github.com/apache/fluss).
 
-In addition, you need **Maven 3.8.6** and a **JDK** (Java Development Kit). Fluss requires **Java 8 or Java 11** to build.
+In addition, you need **Maven 3.8.6** and a **JDK** (Java Development Kit). Fluss requires **Java 11** to build.
 
 To clone from git, enter:
 
 ```bash
-git clone git@github.com:alibaba/fluss.git
+git clone git@github.com:apache/fluss.git
+```
+
+If you want to build a specific release or release candidate, have a look at the existing tags using
+
+```bash
+git tag -n
+```
+
+and checkout the corresponding branch using
+
+```bash
+git checkout <tag>
 ```
 
 The simplest way of building Fluss is by running:

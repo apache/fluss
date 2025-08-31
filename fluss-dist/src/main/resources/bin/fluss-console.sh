@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 #
-# Copyright (c) 2025 Alibaba Group Holding Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -30,11 +32,11 @@ bin=`cd "$bin"; pwd`
 
 case $SERVICE in
     (coordinator-server)
-        CLASS_TO_RUN=com.alibaba.fluss.server.coordinator.CoordinatorServer
+        CLASS_TO_RUN=org.apache.fluss.server.coordinator.CoordinatorServer
     ;;
 
     (tablet-server)
-        CLASS_TO_RUN=com.alibaba.fluss.server.tablet.TabletServer
+        CLASS_TO_RUN=org.apache.fluss.server.tablet.TabletServer
     ;;
 
     (zookeeper)

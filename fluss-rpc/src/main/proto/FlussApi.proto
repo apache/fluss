@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,7 +17,7 @@
 syntax = "proto2";
 
 package fluss;
-option java_package = "com.alibaba.fluss.rpc.messages";
+option java_package = "org.apache.fluss.rpc.messages";
 option optimize_for = LITE_RUNTIME;
 
 /**
@@ -170,6 +171,8 @@ message UpdateMetadataRequest {
   optional PbServerNode coordinator_server = 1;
   repeated PbServerNode tablet_servers = 2;
   repeated PbTableMetadata table_metadata = 3;
+  repeated PbPartitionMetadata partition_metadata = 4;
+  optional int32 coordinator_epoch = 5;
 }
 
 message UpdateMetadataResponse {
@@ -367,6 +370,7 @@ message GetFileSystemSecurityTokenResponse {
 
 // init writer request and response
 message InitWriterRequest {
+  repeated PbTablePath table_path = 1;
 }
 
 message InitWriterResponse {
@@ -375,6 +379,7 @@ message InitWriterResponse {
 
 message ListPartitionInfosRequest {
   required PbTablePath table_path = 1;
+  optional PbPartitionSpec partial_partition_spec = 2;
 }
 
 message ListPartitionInfosResponse {
@@ -443,6 +448,7 @@ message PbLakeTableOffsetForBucket {
   required int32 bucket_id = 2;
   optional int64 log_start_offset = 3;
   optional int64 log_end_offset = 4;
+  optional string partition_name = 5;
 }
 
 message CommitLakeTableSnapshotResponse {
@@ -481,6 +487,50 @@ message AuthenticateResponse {
   optional bytes challenge = 1;
 }
 
+// acl related requests and responses
+message ListAclsRequest{
+  required PbAclFilter acl_filter = 1;
+}
+
+message ListAclsResponse{
+  repeated PbAclInfo acl = 1;
+}
+
+message CreateAclsRequest{
+  repeated PbAclInfo acl = 1;
+}
+
+message CreateAclsResponse{
+  repeated PbCreateAclRespInfo aclRes = 1;
+}
+
+message DropAclsRequest{
+  repeated PbAclFilter acl_filter = 1;
+}
+
+message DropAclsResponse{
+  repeated PbDropAclsFilterResult filter_results = 1;
+}
+
+message LakeTieringHeartbeatRequest {
+  repeated PbHeartbeatReqForTable tiering_tables = 1;
+  repeated PbHeartbeatReqForTable finished_tables = 2;
+  repeated PbHeartbeatReqForTable failed_tables = 3;
+  // whether to request a table
+  optional bool request_table = 4;
+}
+
+message LakeTieringHeartbeatResponse {
+  // coordinator epoch
+  required int32 coordinator_epoch = 1;
+  // the returned table to tier, empty when no table is needed by the lake tiering service
+  optional PbLakeTieringTableInfo tiering_table = 2;
+  repeated PbHeartbeatRespForTable tiering_table_resp = 3;
+  repeated PbHeartbeatRespForTable finished_table_resp = 4;
+  repeated PbHeartbeatRespForTable failed_table_resp = 5;
+}
+
+
 // --------------- Inner classes ----------------
 message PbApiVersion {
   required int32 api_key = 1;
@@ -503,11 +553,13 @@ message PbPhysicalTablePath {
 // For UpdateMetadataRequest,
 //   * versions <= 0.6: host and port are used.
 //   * versions >= 0.7: listeners is used to replace host and port.
+// For MetadataResponse and UpdateMetadataRequest: Fluss versions >= 0.7: we add rack for each tabletServer
 message PbServerNode {
   required int32 node_id = 1;
   required string host = 2;
   required int32 port = 3;
   optional string listeners = 4;
+  optional string rack = 5;
 }
 
 message PbTableMetadata {
@@ -518,6 +570,9 @@ message PbTableMetadata {
   repeated PbBucketMetadata bucket_metadata = 5;
   required int64 created_time = 6;
   required int64 modified_time = 7;
+
+  // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
+  // trace by: https://github.com/apache/fluss/issues/981
 }
 
 message PbPartitionMetadata {
@@ -534,6 +589,7 @@ message PbBucketMetadata {
   optional int32 leader_id = 2;
   repeated int32 replica_id = 3 [packed = true];
   // TODO: Add isr here.
+  optional int32 leader_epoch = 4;
 }
 
 message PbProduceLogReqForBucket {
@@ -718,6 +774,7 @@ message PbLakeSnapshotForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   optional int64 log_offset = 3;
+  optional string partition_name = 4;
 }
 
 message PbRemotePathAndLocalFile {
@@ -742,6 +799,7 @@ message PbRemoteLogSegment {
   required int64 remote_log_start_offset = 2;
   required int64 remote_log_end_offset = 3;
   required int32 segment_size_in_bytes = 4;
+  optional int64 max_timestamp = 5;
 }
 
 message PbPartitionInfo {
@@ -753,5 +811,60 @@ message PbPartitionSpec {
   repeated PbKeyValue partition_key_values = 1;
 }
 
+message PbCreateAclRespInfo {
+  required PbAclInfo acl = 1;
+  optional int32 error_code = 2;
+  optional string error_message = 3;
+}
 
+message PbAclInfo {
+  required string resource_name = 1;
+  required int32 resource_type = 2;
+  required string principal_name = 3;
+  required string principal_type = 4;
+  required string host = 5;
+  required int32 operation_type = 6;
+  required int32 permission_type = 7;
+}
 
+message PbAclFilter {
+  optional string resource_name = 1;
+  required int32 resource_type = 2;
+  optional string principal_name = 3;
+  optional string principal_type = 4;
+  optional string host = 5;
+  required int32 operation_type = 6;
+  required int32 permission_type = 7;
+}
+
+message PbDropAclsFilterResult {
+  repeated PbDropAclsMatchingAcl matching_acls = 1;
+  optional int32 error_code = 2;
+  optional string error_message = 3;
+
+}
+
+message PbDropAclsMatchingAcl {
+  required PbAclInfo acl = 1;
+  optional int32 error_code = 2;
+  optional string error_message = 3;
+}
+
+message PbLakeTieringTableInfo {
+  required int64 table_id = 1;
+  required PbTablePath table_path = 2;
+  required int64 tiering_epoch = 3;
+}
+
+message PbHeartbeatReqForTable {
+  required int64 table_id = 1;
+  // the coordinator epoch when the table is assigned to be tiering service
+  required int32 coordinator_epoch = 2;
+  // the tiering epoch when the table is assigned to be tiering service
+  required int64 tiering_epoch = 3;
+}
+
+message PbHeartbeatRespForTable {
+  required int64 table_id = 1;
+  optional ErrorResponse error = 2;
+}

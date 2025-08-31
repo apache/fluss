@@ -1,23 +1,7 @@
 ---
 sidebar_position: 2
-sidebar_label: IDE Setup
+title: IDE Setup
 ---
-
-<!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
 
 # IDE Setup
 
@@ -37,11 +21,11 @@ Using the included [Maven Wrapper](https://maven.apache.org/wrapper/) by replaci
 ## Preparation: Fork and Clone the Fluss Repository
 
 Fluss uses [git](http://git-scm.com/) for version control.
-The Git repository is mirrored to [GitHub](https://github.com/alibaba/fluss/).
+The Git repository is mirrored to [GitHub](https://github.com/apache/fluss/).
 
 The common way to merge code changes on GitHub is to fork the repository (creating a copy of the repository to your personal GitHub account so you can modify the source code) and issue a pull request.
 
-1. To fork the Fluss repository, log in with your GitHub account. If you do not have one yet, [sign up for free](https://github.com/signup). Then, click the `[Fork]` button on the upper right of the [Fluss repository](https://github.com/alibaba/fluss/).
+1. To fork the Fluss repository, log in with your GitHub account. If you do not have one yet, [sign up for free](https://github.com/signup). Then, click the `[Fork]` button on the upper right of the [Fluss repository](https://github.com/apache/fluss/).
 2. Clone the _forked_ version of the repository over HTTPs or SSH. SSH is recommended but needs to be [explicitly configured](https://docs.github.com/en/authentication/connecting-to-github-with-ssh).
 
 ```bash
@@ -77,19 +61,21 @@ The following guide has been written for [IntelliJ IDEA](https://www.jetbrains.c
 
 ### Copyright Profile
 
-Every file needs to include the Alibaba license as a header. This can be automated in IntelliJ by
+Every file needs to include the Apache license as a header. This can be automated in IntelliJ by
 adding a Copyright profile:
 
 1. Go to "Settings" → "Editor" → "Copyright" → "Copyright Profiles".
-2. Add a new profile and name it "Alibaba".
+2. Add a new profile and name it "Apache".
 3. Add the following text as the license text:
 
 ```text
-Copyright (c) 2025 Alibaba Group Holding Ltd.
-
-Licensed under the Apache License, Version 2.0 (the "License");
-you may not use this file except in compliance with the License.
-You may obtain a copy of the License at
+Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements.  See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership.  The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License.  You may obtain a copy of the License at
 
     http://www.apache.org/licenses/LICENSE-2.0
 
@@ -99,7 +85,7 @@ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 See the License for the specific language governing permissions and
 limitations under the License.
 ```
-4. Go to "Editor" → "Copyright" and choose the "Alibaba" profile as the default profile for this
+4. Go to "Editor" → "Copyright" and choose the "Apache" profile as the default profile for this
    project.
 5. Click "Apply".
 

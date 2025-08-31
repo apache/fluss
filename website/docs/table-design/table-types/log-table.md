@@ -1,23 +1,7 @@
 ---
-sidebar_label: "Log Table"
+title: "Log Table"
 sidebar_position: 1
 ---
-
-<!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
 
 # Log Table
 
@@ -32,7 +16,8 @@ CREATE TABLE log_table (
   order_id BIGINT,
   item_id BIGINT,
   amount INT,
-  address STRING
+  address STRING,
+  dt DATE
 )
 WITH ('bucket.num' = '3');
 ```
@@ -59,7 +44,7 @@ Log Tables in Fluss allow real-time data consumption, preserving the order of da
 ## Column Pruning
 
 Column pruning is a technique used to reduce the amount of data that needs to be read from storage by eliminating unnecessary columns from the query.
-Fluss supports column pruning for Log Tables and the changelog of PrimaryKey Tables, which can significantly improve query performance by reducing the amount of data that needs to be read from storage and lowering networking costs.
+Fluss supports column pruning for Log Tables and the changelog of Primary Key Tables, which can significantly improve query performance by reducing the amount of data that needs to be read from storage and lowering networking costs.
 
 What sets Fluss apart is its ability to apply **column pruning during streaming reads**, a capability that is both unique and industry-leading. This ensures that even in real-time streaming scenarios, only the required columns are processed, minimizing resource usage and maximizing efficiency.
 
@@ -73,10 +58,10 @@ During query execution, query engines like Flink analyzes the query to identify 
 For example the following streaming query:
 
 ```sql
-SELECT id, name FROM log_table WHERE timestamp > '2023-01-01';
+SELECT order_id, item_id FROM log_table WHERE dt > '2023-01-01';
 ```
 
-In this query, only the `id`, `name`, and `timestamp` columns are accessed. Other columns (e.g., `address`, `status`) are pruned and not read from storage.
+In this query, only the `order_id`, `item_id`, and `dt` columns are accessed. Other columns (e.g., `address`, `amount`) are pruned and not read from storage.
 
 
 ## Log Compression
@@ -87,7 +72,7 @@ Additionally, compression is applied to each column independently, preserving th
 
 When compression is enabled:
 - For **Log Tables**, data is compressed by the writer on the client side, written in a compressed format, and decompressed by the log scanner on the client side.
-- For **PrimaryKey Table changelogs**, compression is performed server-side since the changelog is generated on the server.
+- For **Primary Key Table changelogs**, compression is performed server-side since the changelog is generated on the server.
 
 Log compression significantly reduces networking and storage costs. Benchmark results demonstrate that using the ZSTD compression with level 3 achieves a compression ratio of approximately **5x** (e.g., reducing 5GB of data to 1GB).
 Furthermore, read/write throughput improves substantially due to reduced networking overhead.

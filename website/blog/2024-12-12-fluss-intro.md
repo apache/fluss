@@ -1,24 +1,9 @@
 ---
 slug: fluss-intro
 title: "Introducing Fluss: Streaming Storage for Real-Time Analytics"
+sidebar_label: "Introducing Fluss"
 authors: [jark]
 ---
-
-<!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
 
 We have discussed the challenges of using Kafka for real-time analytics in our previous [blog post](/blog/why-fluss/).
 Today, we are excited to introduce Fluss, a cutting-edge streaming storage system designed to power real-time analytics.
@@ -60,7 +45,7 @@ One of Fluss's standout features is the unification of stream and Lakehouse. In 
 
 At its core, Fluss incorporates a `compaction service` that ensures seamless integration between stream and lake storage. This service automatically and continuously converts Fluss data into the data lake format.
 A key feature here is called "Shared Data". The Lakehouse storage serves as the historical data layer for the streaming storage, which is optimized for storing long-term data with minute-level latencies. On the other hand, streaming storage serves as the real-time data layer for Lakehouse storage, which is optimized for storing short-term data with millisecond-level latencies.
-The data is shared with each other, and is exposed as a singe table.
+The data is shared with each other, and is exposed as a single table.
 For streaming queries on the table, it firstly uses the Lakehouse storage as historical data to have efficient catch-up read performance, and then seamlessly transitions to the streaming storage for real-time data, ensuring no duplicate data is read.
 For batch queries on the table, streaming storage supplements real-time data for Lakehouse storage, enabling second-level freshness for Lakehouse analytics.
 This capability, termed **Union Read**, allows both layers to work in tandem for highly efficient and accurate data access.

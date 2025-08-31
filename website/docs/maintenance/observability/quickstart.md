@@ -1,23 +1,8 @@
 ---
 sidebar_label: Quickstart Guides
+title: Observability Quickstart Guides
 sidebar_position: 1
 ---
-
-<!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
 
 # Observability Quickstart Guides
 
@@ -27,7 +12,7 @@ On this page, you can find the following guides to set up an observability stack
 
 ## Observability with Prometheus, Loki and Grafana
 
-We provide a minimal quickstart configuration for application observability with Prometheus (metric aggregation system), Loki (log aggregation sytem) and Grafana (dashboard system). 
+We provide a minimal quickstart configuration for application observability with Prometheus (metric aggregation system), Loki (log aggregation system) and Grafana (dashboard system). 
 
 The quickstart configuration comes with 2 metric dashboards.
 
@@ -63,7 +48,7 @@ The container manifest below configures Fluss to use Logback and Loki4j. Save it
 ```dockerfile
 ARG FLUSS_VERSION
 
-FROM fluss/fluss:$FLUSS_VERSION$
+FROM fluss/fluss:$FLUSS_DOCKER_VERSION$
 
 # remove default logging backend from classpath and add logback to classpath
 RUN rm -rf ${FLUSS_HOME}/lib/log4j-slf4j-impl-*.jar && \
@@ -84,7 +69,7 @@ Detailed configuration instructions for Fluss and Logback can be found [here](lo
 3. Additionally, you need to adapt the `docker-compose.yml` and 
 
 - add containers for Prometheus, Loki and Grafana and mount the corresponding configuration directories.
-- build and use the new Fluss image manifest (`fluss-sfl4j-logback.Dockerfile`).
+- build and use the new Fluss image manifest (`fluss-slf4j-logback.Dockerfile`).
 - configure Fluss to expose metrics via Prometheus.
 - add the desired application name that should be used when displaying logs in Grafana as environment variable (`APP_NAME`).
 - configure Flink to expose metrics via Prometheus.
@@ -95,7 +80,7 @@ To do this, you can simply copy the manifest below into your `docker-compose.yml
 services:
   #begin Fluss cluster
   coordinator-server:
-    image: fluss-slf4j-logback:$FLUSS_VERSION$
+    image: fluss-slf4j-logback:$FLUSS_DOCKER_VERSION$
     build:
       args:
         FLUSS_VERSION: $FLUSS_VERSION$
@@ -107,7 +92,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        coordinator.host: coordinator-server
+        bind.listeners: FLUSS://coordinator-server:9123
         remote.data.dir: /tmp/fluss/remote-data
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
@@ -117,7 +102,7 @@ services:
         logback.configurationFile: logback-loki-console.xml
       - APP_NAME=coordinator-server
   tablet-server:
-    image: fluss-slf4j-logback:$FLUSS_VERSION$
+    image: fluss-slf4j-logback:$FLUSS_DOCKER_VERSION$
     build:
       args:
         FLUSS_VERSION: $FLUSS_VERSION$
@@ -129,7 +114,7 @@ services:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
-        tablet-server.host: tablet-server
+        bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
         remote.data.dir: /tmp/fluss/remote-data
         kv.snapshot.interval: 0s
@@ -146,7 +131,7 @@ services:
   #end
   #begin Flink cluster
   jobmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
+    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     ports:
       - "8083:8081"
     command: jobmanager
@@ -159,7 +144,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/paimon
   taskmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_VERSION_SHORT$
+    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     depends_on:
       - jobmanager
     command: taskmanager
@@ -222,7 +207,7 @@ This recreates `shared-tmpfs` and all data is lost (created tables, running jobs
 Make sure that the modified and added containers are up and running using
 
 ```shell
-docker ps
+docker container ls -a
 ```
 
 4. Now you are all set! You can visit

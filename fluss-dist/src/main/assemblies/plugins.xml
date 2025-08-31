@@ -1,9 +1,11 @@
 <!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
 
       http://www.apache.org/licenses/LICENSE-2.0
 
@@ -25,9 +27,37 @@
     <includeBaseDirectory>true</includeBaseDirectory>
     <baseDirectory>fluss-${project.version}</baseDirectory>
 
+    <dependencySets>
+        <dependencySet>
+            <outputDirectory>plugins/paimon</outputDirectory>
+            <unpack>false</unpack>
+            <useProjectArtifact>false</useProjectArtifact>
+            <useProjectAttachments>false</useProjectAttachments>
+            <useTransitiveDependencies>true</useTransitiveDependencies>
+            <useTransitiveFiltering>true</useTransitiveFiltering>
+            <includes>
+                <include>org.apache.flink:flink-shaded-hadoop-2-uber</include>
+            </includes>
+        </dependencySet>
+
+    </dependencySets>
+
     <files>
         <!-- filesystem -->
         <!-- output directory should correspond to the file system *schema* name, i.e., plugins/<schema>/  -->
+        <file>
+            <source>../fluss-filesystems/fluss-fs-obs/target/fluss-fs-obs-${project.version}.jar</source>
+            <outputDirectory>plugins/obs/</outputDirectory>
+            <destName>fluss-fs-obs-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+        <file>
+            <source>../fluss-filesystems/fluss-fs-gs/target/fluss-fs-gs-${project.version}.jar</source>
+            <outputDirectory>plugins/gs/</outputDirectory>
+            <destName>fluss-fs-gs-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+
         <file>
             <source>../fluss-filesystems/fluss-fs-hadoop/target/fluss-fs-hadoop-${project.version}-with-dependencies.jar</source>
             <outputDirectory>plugins/hdfs/</outputDirectory>
@@ -63,6 +93,25 @@
             <destName>fluss-metrics-jmx-${project.version}.jar</destName>
             <fileMode>0644</fileMode>
         </file>
-    </files>
+
+        <!-- lake formats -->
+        <file>
+            <source>../fluss-lake/fluss-lake-paimon/target/fluss-lake-paimon-${project.version}.jar</source>
+            <outputDirectory>plugins/paimon/</outputDirectory>
+            <destName>fluss-lake-paimon-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+        <file>
+            <source>../fluss-lake/fluss-lake-iceberg/target/fluss-lake-iceberg-${project.version}.jar</source>
+            <outputDirectory>plugins/iceberg/</outputDirectory>
+            <destName>fluss-lake-iceberg-${project.version}.jar</destName>
+            <fileMode>0644</fileMode>
+        </file>
+        <file>
+            <source>../fluss-lake/fluss-lake-lance/target/fluss-lake-lance-${project.version}.jar</source>
+            <outputDirectory>plugins/lance/</outputDirectory>
+            <destName>fluss-lake-lance-${project.version}.jar</destName>
+        </file>
+  </files>
 
 </assembly>

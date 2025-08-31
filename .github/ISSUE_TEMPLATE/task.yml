@@ -1,9 +1,11 @@
 ################################################################################
-# Copyright (c) 2025 Alibaba Group Holding Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -15,7 +17,7 @@
 ################################################################################
 
 name: Task 📌
-description: A specific piece of work
+description: Specific work item - either part of a larger feature or independent project maintenance
 type: "task"
 body:
   - type: markdown
@@ -26,10 +28,10 @@ body:
     attributes:
       label: Search before asking
       description: >
-        Please search [issues](https://github.com/alibaba/fluss/issues) to check if your issue has already been reported.
+        Please search [issues](https://github.com/apache/fluss/issues) to check if your issue has already been reported.
       options:
         - label: >
-            I searched in the [issues](https://github.com/alibaba/fluss/issues) and found nothing similar.
+            I searched in the [issues](https://github.com/apache/fluss/issues) and found nothing similar.
           required: true
   - type: textarea
     attributes:

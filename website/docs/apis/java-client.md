@@ -1,23 +1,7 @@
 ---
-sidebar_label: "Java Client"
+title: "Java Client"
 sidebar_position: 1
 ---
-
-<!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
 
 # Fluss Java Client
 ## Overview
@@ -33,11 +17,11 @@ Fluss `Table` API allows you to interact with Fluss tables for reading and writi
 In order to use the client, you need to add the following dependency to your `pom.xml` file.
 
 ```xml
-<!-- https://mvnrepository.com/artifact/com.alibaba.fluss/fluss-client -->
+<!-- https://mvnrepository.com/artifact/org.apache.fluss/fluss-client -->
 <dependency>
-    <groupId>com.alibaba.fluss</groupId>
+    <groupId>org.apache.fluss</groupId>
     <artifactId>fluss-client</artifactId>
-    <version>0.6.0</version>
+    <version>$FLUSS_VERSION$</version>
 </dependency>
 ```
 
@@ -52,21 +36,45 @@ single `Connection` instance per application and use it to create multiple `Admi
 `Table` and `Admin` instances, on the other hand, are not thread-safe and should be created for each thread that needs to access them.
  Caching or pooling of `Table` and `Admin` is not recommended.
 
-Create a new `Admin` instance:
+Create a new `Admin` instance :
 ```java
 // creating Connection object to connect with Fluss cluster
 Configuration conf = new Configuration(); 
 conf.setString("bootstrap.servers", "localhost:9123");
 Connection connection = ConnectionFactory.createConnection(conf);
 
+
 // obtain Admin instance from the Connection
 Admin admin = connection.getAdmin();
 admin.listDatabases().get().forEach(System.out::println);
 
 // obtain Table instance from the Connection
-Table table = connection.getTable(TablePath.of("my_db", "my_table");
+Table table = connection.getTable(TablePath.of("my_db", "my_table"));
 System.out.println(table.getTableInfo());
 ```
+
+if you are using SASL authentication, you need to set the following properties:
+```java
+// creating Connection object to connect with Fluss cluster
+Configuration conf = new Configuration(); 
+conf.setString("bootstrap.servers", "localhost:9123");
+conf.setString("client.security.protocol", "sasl");
+conf.setString("client.security.sasl.mechanism", "PLAIN");
+conf.setString("client.security.sasl.username", "alice");
+conf.setString("client.security.sasl.password", "alice-secret");
+Connection connection = ConnectionFactory.createConnection(conf);
+
+
+// obtain Admin instance from the Connection
+Admin admin = connection.getAdmin();
+admin.listDatabases().get().forEach(System.out::println);
+
+// obtain Table instance from the Connection
+Table table = connection.getTable(TablePath.of("my_db", "my_table"));
+System.out.println(table.getTableInfo());
+```
+
+
 
 ## Working Operations
 All methods in `FlussAdmin` return `CompletableFuture` objects. You can handle these in two ways:
@@ -223,7 +231,17 @@ while (true) {
 ```
 
 ### Lookup
-You can also use the Fluss API to perform lookups on a table. This is useful for querying specific records based on their primary key.
+You can also use the Fluss API to perform lookups on a table. This is useful for querying specific records based on their primary key or prefix key.
 ```java
-LookupResult lookup = table.newLookup().createLookuper().lookup(rowKey).get();
+// Lookup by primary key
+LookupResult lookup = table.newLookup()
+                .createLookuper()
+                .lookup(rowKey)
+                .get();
+// Lookup by prefix key
+LookupResult prefixLookup = table.newLookup()
+        .lookupBy(prefixKeys)
+        .createLookuper()
+        .lookup(rowKey)
+        .get();
 ```

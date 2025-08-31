@@ -1,5 +1,5 @@
 /*
- *  Copyright (c) 2025 Alibaba Group Holding Ltd.
+ *  Copyright (c) 2024 Alibaba Group Holding Ltd.
  *
  *  Licensed under the Apache License, Version 2.0 (the "License");
  *  you may not use this file except in compliance with the License.
@@ -20,8 +20,8 @@ import com.alibaba.fluss.client.Connection;
 import com.alibaba.fluss.client.ConnectionFactory;
 import com.alibaba.fluss.client.admin.Admin;
 import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.flink.sink.FlinkTableSink;
-import com.alibaba.fluss.flink.utils.FlinkConversions;
+import com.alibaba.fluss.connector.flink.sink.FlinkTableSink;
+import com.alibaba.fluss.connector.flink.utils.FlinkConversions;
 import com.alibaba.fluss.lakehouse.paimon.record.MultiplexCdcRecord;
 import com.alibaba.fluss.metadata.TableInfo;
 import com.alibaba.fluss.metadata.TablePath;
@@ -122,14 +122,9 @@ public class TestingDatabaseSyncSink implements Sink<MultiplexCdcRecord> {
                                 flussConfig,
                                 FlinkConversions.toFlinkRowType(tableInfo.getRowType()),
                                 tableInfo.getSchema().getPrimaryKeyIndexes(),
-                                tableInfo.getPartitionKeys(),
                                 true,
                                 null,
-                                tableInfo.getTableConfig().getDataLakeFormat().orElse(null),
-                                false,
-                                tableInfo.getNumBuckets(),
-                                tableInfo.getBucketKeys(),
-                                true);
+                                false);
 
                 Sink<RowData> sink =
                         ((SinkV2Provider)

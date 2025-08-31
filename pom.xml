@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
 
       http://www.apache.org/licenses/LICENSE-2.0
 
@@ -27,7 +29,7 @@
 
     <groupId>com.alibaba.fluss</groupId>
     <artifactId>fluss</artifactId>
-    <version>0.7-SNAPSHOT</version>
+    <version>0.8-SNAPSHOT</version>
 
     <name>Fluss :</name>
     <packaging>pom</packaging>
@@ -71,10 +73,8 @@
         <module>fluss-server</module>
         <module>fluss-flink</module>
         <module>fluss-protogen</module>
-        <module>fluss-benchmark</module>
+        <module>fluss-jmh</module>
         <module>fluss-lake</module>
-        <!-- fluss-lakehouse module is deprecated, will be removed once fluss-lake ready -->
-        <module>fluss-lakehouse</module>
         <module>fluss-kafka</module>
         <module>fluss-spark</module>
     </modules>
@@ -82,23 +82,25 @@
     <properties>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <project.reporting.outputEncoding>UTF-8</project.reporting.outputEncoding>
-        <target.java.version>1.8</target.java.version>
+        <target.java.version>11</target.java.version>
         <maven.compiler.source>${target.java.version}</maven.compiler.source>
         <maven.compiler.target>${target.java.version}</maven.compiler.target>
         <test.unit.pattern>**/*Test.*</test.unit.pattern>
         <test.skip.coverage>true</test.skip.coverage>
         <fluss.forkCount>2</fluss.forkCount>
         <fluss.reuseForks>true</fluss.reuseForks>
+        <skip.on.java8>false</skip.on.java8>
 
         <!-- library versions in fluss-shaded -->
-        <fluss.shaded.version>2.2</fluss.shaded.version>
+        <fluss.shaded.version>1.0-incubating</fluss.shaded.version>
         <guava.version>32.1.3-jre</guava.version>
         <jackson.version>2.15.3</jackson.version>
         <zookeeper.version>3.8.3</zookeeper.version>
         <curator.version>5.4.0</curator.version>
-        <netty.version>4.1.104</netty.version>
+        <netty.version>4.1.104.Final</netty.version>
         <arrow.version>15.0.0</arrow.version>
-        <paimon.version>1.0.1</paimon.version>
+        <paimon.version>1.2.0</paimon.version>
+        <iceberg.version>1.9.1</iceberg.version>
 
         <fluss.hadoop.version>2.10.2</fluss.hadoop.version>
         <frocksdb.version>6.20.3-ververica-2.0</frocksdb.version>
@@ -120,13 +122,14 @@
         <spotless.delimiter>package</spotless.delimiter>
         <spotless.license.header>
             /*
-            * Copyright (c) 2025 Alibaba Group Holding Ltd.
+            * Licensed to the Apache Software Foundation (ASF) under one or more
+            * contributor license agreements.  See the NOTICE file distributed with
+            * this work for additional information regarding copyright ownership.
+            * The ASF licenses this file to You under the Apache License, Version 2.0
+            * (the "License"); you may not use this file except in compliance with
+            * the License.  You may obtain a copy of the License at
             *
-            * Licensed under the Apache License, Version 2.0 (the "License");
-            * you may not use this file except in compliance with the License.
-            * You may obtain a copy of the License at
-            *
-            *      http://www.apache.org/licenses/LICENSE-2.0
+            *    http://www.apache.org/licenses/LICENSE-2.0
             *
             * Unless required by applicable law or agreed to in writing, software
             * distributed under the License is distributed on an "AS IS" BASIS,
@@ -140,6 +143,25 @@
           plugin executes before, the property is undefined and makes the tests fail. Thus we define an empty property
           here to make sure it doesn't fail. See also https://issues.apache.org/jira/browse/SUREFIRE-1431 -->
         <argLine/>
+        <extraJavaTestArgs>
+            -XX:+IgnoreUnrecognizedVMOptions
+            --add-opens=java.base/java.lang=ALL-UNNAMED
+            --add-opens=java.base/java.lang.invoke=ALL-UNNAMED
+            --add-opens=java.base/java.lang.reflect=ALL-UNNAMED
+            --add-opens=java.base/java.io=ALL-UNNAMED
+            --add-opens=java.base/java.net=ALL-UNNAMED
+            --add-opens=java.base/java.nio=ALL-UNNAMED
+            --add-opens=java.base/java.util=ALL-UNNAMED
+            --add-opens=java.base/java.util.concurrent=ALL-UNNAMED
+            --add-opens=java.base/java.util.concurrent.atomic=ALL-UNNAMED
+            --add-opens=java.base/jdk.internal.ref=ALL-UNNAMED
+            --add-opens=java.base/sun.nio.ch=ALL-UNNAMED
+            --add-opens=java.base/sun.nio.cs=ALL-UNNAMED
+            --add-opens=java.base/sun.security.action=ALL-UNNAMED
+            --add-opens=java.base/sun.util.calendar=ALL-UNNAMED
+            -Djdk.reflect.useDirectMethodHandle=false
+            -Dio.netty.tryReflectionSetAccessible=true
+        </extraJavaTestArgs>
     </properties>
 
     <dependencies>
@@ -291,19 +313,19 @@
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-guava</artifactId>
                 <version>${guava.version}-${fluss.shaded.version}</version>
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-jackson</artifactId>
                 <version>${jackson.version}-${fluss.shaded.version}</version>
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-zookeeper</artifactId>
                 <version>${zookeeper.version}-${fluss.shaded.version}</version>
             </dependency>
@@ -316,13 +338,13 @@
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-netty</artifactId>
                 <version>${netty.version}-${fluss.shaded.version}</version>
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-arrow</artifactId>
                 <version>${arrow.version}-${fluss.shaded.version}</version>
             </dependency>
@@ -401,7 +423,7 @@
             <dependency>
                 <groupId>org.apache.commons</groupId>
                 <artifactId>commons-lang3</artifactId>
-                <version>3.12.0</version>
+                <version>3.18.0</version>
             </dependency>
 
             <dependency>
@@ -422,6 +444,31 @@
     </dependencyManagement>
 
     <profiles>
+        <profile>
+            <id>java8</id>
+            <properties>
+                <target.java.version>1.8</target.java.version>
+                <skip.on.java8>true</skip.on.java8>
+            </properties>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-compiler-plugin</artifactId>
+                        <configuration>
+                            <source>${target.java.version}</source>
+                            <target>${target.java.version}</target>
+                            <useIncrementalCompilation>false</useIncrementalCompilation>
+                            <compilerArgs >
+                                <!-- Prevents recompilation due to missing package-info.class, see MCOMPILER-205 -->
+                                <arg>-Xpkginfo:always</arg>
+                            </compilerArgs>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+
         <profile>
             <id>test-coverage</id>
             <properties>
@@ -507,6 +554,22 @@
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.8.0</version>
+                <configuration>
+                    <source>${target.java.version}</source>
+                    <target>${target.java.version}</target>
+                    <!-- The semantics of this option are reversed, see MCOMPILER-209. -->
+                    <useIncrementalCompilation>false</useIncrementalCompilation>
+                    <compilerArgs >
+                        <arg>--add-exports=java.base/sun.net.util=ALL-UNNAMED</arg>
+                        <arg>--add-exports=java.management/sun.management=ALL-UNNAMED</arg>
+                        <arg>--add-exports=java.rmi/sun.rmi.registry=ALL-UNNAMED</arg>
+                        <arg>--add-exports=java.security.jgss/sun.security.krb5=ALL-UNNAMED</arg>
+                        <arg>--add-exports=java.base/sun.nio.ch=ALL-UNNAMED</arg>
+                        <!-- Prevents recompilation due to missing package-info.class, see MCOMPILER-205 -->
+                        <arg>-Xpkginfo:always</arg>
+                    </compilerArgs>
+                </configuration>
             </plugin>
 
             <plugin>
@@ -521,7 +584,8 @@
                 <inherited>false</inherited>
                 <executions>
                     <execution>
-                        <phase>verify</phase>
+                        <id>rat-check</id>
+                        <phase>validate</phase>
                         <goals>
                             <goal>check</goal>
                         </goals>
@@ -531,50 +595,59 @@
                     <consoleOutput>true</consoleOutput>
                     <excludeSubProjects>false</excludeSubProjects>
                     <numUnapprovedLicenses>0</numUnapprovedLicenses>
-                    <addDefaultLicenses>false</addDefaultLicenses>
-                    <addDefaultLicenseMatchers>false</addDefaultLicenseMatchers>
-                    <families>
-                        <family>
-                            <id>AC</id>
-                            <name>Alibaba Copyright</name>
-                        </family>
-                    </families>
                     <licenses>
                         <!-- Enforce this license:
-                            Copyright (c) 2025 Alibaba Group Holding Ltd.
-
-                            Licensed under the Apache License, Version 2.0 (the "License");
-                            you may not use this file except in compliance with the License.
-                            You may obtain a copy of the License at
-
-                                 http://www.apache.org/licenses/LICENSE-2.0
-
-                            Unless required by applicable law or agreed to in writing, software
-                            distributed under the License is distributed on an "AS IS" BASIS,
-                            WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
-                            See the License for the specific language governing permissions and
-                            limitations under the License.
+                            Licensed to the Apache Software Foundation (ASF) under one
+                            or more contributor license agreements.  See the NOTICE file
+                            distributed with this work for additional information
+                            regarding copyright ownership.  The ASF licenses this file
+                            to you under the Apache License, Version 2.0 (the
+                            "License"); you may not use this file except in compliance
+                            with the License.  You may obtain a copy of the License at
+                              http://www.apache.org/licenses/LICENSE-2.0
+                            Unless required by applicable law or agreed to in writing,
+                            software distributed under the License is distributed on an
+                            "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+                            KIND, either express or implied.  See the License for the
+                            specific language governing permissions and limitations
+                            under the License.
                         -->
+                        <license implementation="org.apache.rat.analysis.license.SimplePatternBasedLicense">
+                            <licenseFamilyCategory>AL2</licenseFamilyCategory>
+                            <licenseFamilyName>Apache License 2.0</licenseFamilyName>
+                            <patterns>
+                                <pattern>Licensed to the Apache Software Foundation (ASF) under one</pattern>
+                            </patterns>
+                        </license>
                         <license>
-                            <family>AC</family>
-                            <all>
-                                <text>Copyright (c) 2025 Alibaba Group Holding Ltd.</text>
-                                <text>Licensed under the Apache License, Version 2.0 (the "License");</text>
-                            </all>
+                            <!-- Explicitly forbid Alibaba license to catch non-compliant headers during our migration from Alibaba to ASF.
+                                We must add this check because an Alibaba license header may contain Apache text and be wrongly marked as approved. -->
+                            <family>BAN</family>
+                            <text>Alibaba Group Holding Ltd</text>
                         </license>
                     </licenses>
+                    <families>
+                        <family>
+                            <id>BAN</id>
+                            <name>The license not allowed in this project.</name>
+                        </family>
+                    </families>
+                    <licenseFamilies>
+                        <licenseFamily implementation="org.apache.rat.license.SimpleLicenseFamily">
+                            <familyName>Apache License 2.0</familyName>
+                        </licenseFamily>
+                    </licenseFamilies>
                     <approvedLicenses>
-                        <id>AC</id>
+                        <id>AL2</id>
                     </approvedLicenses>
                     <excludes>
                         <!-- Additional files like .gitignore etc.-->
                         <exclude>**/.*/**</exclude>
                         <exclude>**/*.prefs</exclude>
                         <exclude>**/*.log</exclude>
-                        <!-- Administrative files in the main trunk. -->
-                        <exclude>**/README.md</exclude>
-                        <exclude>**/CODE_OF_CONDUCT.md</exclude>
-                        <exclude>.github/**</exclude>
+                        <!-- Documentation files in the main trunk. -->
+                        <exclude>**/*.md</exclude>
+                        <exclude>**/*.mdx</exclude>
                         <!-- IDE files. -->
                         <exclude>**/*.iml</exclude>
                         <exclude>**/.idea/**</exclude>
@@ -642,7 +715,7 @@
                         <junit.jupiter.execution.parallel.config.strategy>dynamic
                         </junit.jupiter.execution.parallel.config.strategy>
                     </systemPropertyVariables>
-                    <argLine>@{argLine} -Xms256m -Xmx2048m -XX:+UseG1GC</argLine>
+                    <argLine>@{argLine} -Xms256m -Xmx2048m -XX:+UseG1GC ${extraJavaTestArgs}</argLine>
                 </configuration>
                 <executions>
                     <!--execute all the unit tests-->
@@ -695,8 +768,8 @@
                         <configuration>
                             <rules>
                                 <requireMavenVersion>
-                                    <!-- enforce at least mvn version 3.1.1 (see FLINK-12447) -->
-                                    <version>[3.1.1,)</version>
+                                    <!-- enforce at least mvn version 3.8.6 -->
+                                    <version>[3.8.6,)</version>
                                 </requireMavenVersion>
                                 <requireJavaVersion>
                                     <version>${target.java.version}</version>
@@ -882,6 +955,7 @@
                     <artifactId>maven-compiler-plugin</artifactId>
                     <version>3.8.0</version>
                     <configuration>
+                        <!-- Make sure that we only use Java 8 compatible APIs -->
                         <source>${target.java.version}</source>
                         <target>${target.java.version}</target>
                         <!-- The semantics of this option are reversed, see MCOMPILER-209. -->
@@ -928,9 +1002,10 @@
                     <artifactId>spotless-maven-plugin</artifactId>
                     <version>${spotless.version}</version>
                     <configuration>
+                        <skip>${skip.on.java8}</skip>
                         <java>
                             <googleJavaFormat>
-                                <version>1.7</version>
+                                <version>1.15.0</version>
                                 <style>AOSP</style>
                             </googleJavaFormat>
 
@@ -997,6 +1072,13 @@
                     <groupId>org.apache.maven.plugins</groupId>
                     <artifactId>maven-enforcer-plugin</artifactId>
                     <version>3.1.0</version>
+                </plugin>
+
+                <!-- Pin the version of the maven surefire plugin -->
+                <plugin>
+                    <groupId>org.apache.maven.plugins</groupId>
+                    <artifactId>maven-surefire-plugin</artifactId>
+                    <version>3.0.0-M5</version>
                 </plugin>
 
                 <!-- Pin the version of the maven shade plugin -->

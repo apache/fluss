@@ -1,9 +1,11 @@
 ################################################################################
-# Copyright (c) 2025 Alibaba Group Holding Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -16,18 +18,34 @@
 
 jark:
   name: Jark Wu
-  title: Creator of Fluss project
+  title: PPMC member of Apache Fluss (Incubating)
   url: https://github.com/wuchong
-  image_url: https://github.com/wuchong.png
+  image_url: /img/avatars/wuchong.png
 
 giannis:
   name: Giannis Polyzos
-  title: Fluss Contributor
+  title: PPMC member of Apache Fluss (Incubating)
   url: https://github.com/polyzos
-  image_url: https://github.com/polyzos.png
+  image_url: /img/avatars/polyzos.png
 
 yuxia:
   name: Luo Yuxia
-  title: Fluss Committer
+  title: PPMC member of Apache Fluss (Incubating)
   url: https://github.com/luoyuxia
-  image_url: https://github.com/luoyuxia.png
+  image_url: /img/avatars/luoyuxia.png
+
+gyang94:
+  name: Yang Guo
+  title: Contributor of Apache Fluss (Incubating)
+  url: https://github.com/gyang94
+  image_url: /img/avatars/gyang94.png
+
+wanglilei:
+  name: Lilei Wang
+  title: Data Development Engineer of Taotian Group
+  image_url: /img/avatars/wanglilei.png
+
+zhangxinyu:
+  name: Xinyu Zhang
+  title: Senior Data Development Engineer of Taotian Group
+  image_url: /img/avatars/zhangxinyu.png

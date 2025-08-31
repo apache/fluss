@@ -1,23 +1,7 @@
 ---
-sidebar_label: "Architecture"
+title: "Architecture"
 sidebar_position: 1
 ---
-
-<!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
 
 # Architecture
 A Fluss cluster consists of two main processes: the **CoordinatorServer** and the **TabletServer**.
@@ -32,12 +16,12 @@ Additionally, it coordinates critical operations such as:
 - Managing data migration and service node switching in the event of node failures.
 - Overseeing table management tasks, including creating or deleting tables and updating bucket counts.
 
-As the **brain** of the cluster, the **Coordinator Server** ensures efficient cluster operation and seamless management of resources.
+As the **brain** of the cluster, the **CoordinatorServer** ensures efficient cluster operation and seamless management of resources.
 
 ## TabletServer
 The **TabletServer** is responsible for data storage, persistence, and providing I/O services directly to users. It comprises two key components: **LogStore** and **KvStore**.
 - For **PrimaryKey Tables** which support updates, both **LogStore** and **KvStore** are activated. The KvStore is used to support updates and point lookup efficiently. LogStore is used to store the changelogs of the table.
-- For **Log Tables** which only supports appends, only the **LogStore** is activated, optimizing performance for write-heavy workloads.
+- For **Log Tables** which only support appends, only the **LogStore** is activated, optimizing performance for write-heavy workloads.
 
 This architecture ensures the **TabletServer** delivers tailored data handling capabilities based on table types.
 
@@ -71,4 +55,4 @@ In upcoming releases, **ZooKeeper will be replaced** by **KvStore** for metadata
 Additionally, **Remote Storage** allows clients to perform bulk read operations on Log and Kv data, enhancing data analysis efficiency and reduce the overhead on Fluss servers. In the future, it will also support bulk write operations, optimizing data import workflows for greater scalability and performance.
 
 ## Client
-Fluss clients/sdks support streaming reads/writes, batch read/writes, DDL and point queries. Currently, the main implementation of client is Flink Connector. Users can use Flink SQL to easily operate Fluss tables and data.
+Fluss clients/SDKs support streaming reads/writes, batch reads/writes, DDL and point queries. Currently, the main implementation of client is Flink Connector. Users can use Flink SQL to easily operate Fluss tables and data.

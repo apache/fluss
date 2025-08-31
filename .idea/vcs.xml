@@ -9,7 +9,7 @@
         </IssueNavigationLink>
         <IssueNavigationLink>
           <option name="issueRegexp" value="#(\d+)" />
-          <option name="linkRegexp" value="https://github.com/alibaba/fluss/pull/$1" />
+          <option name="linkRegexp" value="https://github.com/apache/fluss/pull/$1" />
         </IssueNavigationLink>
       </list>
     </option>

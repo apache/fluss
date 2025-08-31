@@ -1,23 +1,8 @@
 ---
 sidebar_label: Default (LastRow)
+title: Default Merge Engine
 sidebar_position: 2
 ---
-
-<!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
-
-      http://www.apache.org/licenses/LICENSE-2.0
-
- Unless required by applicable law or agreed to in writing, software
- distributed under the License is distributed on an "AS IS" BASIS,
- WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- See the License for the specific language governing permissions and
- limitations under the License.
--->
 
 # Default Merge Engine (LastRow)
 
@@ -51,6 +36,8 @@ SELECT * FROM T WHERE k = 1;
 
 -- Update
 INSERT INTO T(k, v1, v2) VALUES (2, 2.0, 't2');
+-- Switch to batch mode to perform update operation for UPDATE statement is only supported for batch mode currently
+SET execution.runtime-mode = batch;
 UPDATE T SET v1 = 4.0 WHERE k = 2;
 SELECT * FROM T WHERE k = 2;
  -- Output:
@@ -80,12 +67,16 @@ SELECT * FROM T WHERE k = 3;
 +----+-----+----+
  
 -- Delete
-DELETE FROM T WHERE k > 2;
+DELETE FROM T WHERE k = 2;
+-- Switch to streaming mode
+SET execution.runtime-mode = streaming;
 SELECT * FROM T;
 -- Output:
 +----+-----+----+
 | k  | v1  | v2 |
 +----+-----+----+
 | 1  | 1.0 | t2 |
++----+-----+----+
+| 3  | 3.0 | t3 |
 +----+-----+----+
 ```
