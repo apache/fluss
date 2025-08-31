@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -194,6 +195,21 @@ public final class LogManager extends TabletManagerBase {
                                                                     conf,
                                                                     clock);
                                                         } catch (Exception e) {
+                                                            LOG.error(
+                                                                    "Fail to loadLog from {}",
+                                                                    tabletDir,
+                                                                    e);
+                                                            if (e
+                                                                    instanceof
+                                                                    SchemaNotExistException) {
+                                                                LOG.error(
+                                                                        "schema not exist, table for {} has already been dropped, the residual deta will be removed.",
+                                                                        tabletDir,
+                                                                        e);
+                                                                FileUtils.deleteDirectoryQuietly(
+                                                                        tabletDir);
+                                                                return;
+                                                            }
                                                             throw new FlussRuntimeException(e);
                                                         }
                                                     })
