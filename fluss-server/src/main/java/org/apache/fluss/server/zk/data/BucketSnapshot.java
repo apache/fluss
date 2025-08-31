@@ -52,7 +52,7 @@ public class BucketSnapshot {
     }
 
     public CompletedSnapshotHandle toCompletedSnapshotHandle() {
-        return new CompletedSnapshotHandle(new FsPath(metadataPath), logOffset);
+        return new CompletedSnapshotHandle(snapshotId, new FsPath(metadataPath), logOffset);
     }
 
     @Override

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
@@ -37,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executor;
+import java.util.function.Function;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -50,11 +52,12 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 public class CompletedSnapshotStoreManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(CompletedSnapshotStoreManager.class);
-
     private final int maxNumberOfSnapshotsToRetain;
     private final ZooKeeperClient zooKeeperClient;
     private final Map<TableBucket, CompletedSnapshotStore> bucketCompletedSnapshotStores;
     private final Executor ioExecutor;
+    private final Function<ZooKeeperClient, CompletedSnapshotHandleStore>
+            makeZookeeperCompletedSnapshotHandleStore;
 
     public CompletedSnapshotStoreManager(
             int maxNumberOfSnapshotsToRetain,
@@ -66,6 +69,23 @@ public class CompletedSnapshotStoreManager {
         this.zooKeeperClient = zooKeeperClient;
         this.bucketCompletedSnapshotStores = new HashMap<>();
         this.ioExecutor = ioExecutor;
+        this.makeZookeeperCompletedSnapshotHandleStore = ZooKeeperCompletedSnapshotHandleStore::new;
+    }
+
+    @VisibleForTesting
+    CompletedSnapshotStoreManager(
+            int maxNumberOfSnapshotsToRetain,
+            Executor ioExecutor,
+            ZooKeeperClient zooKeeperClient,
+            Function<ZooKeeperClient, CompletedSnapshotHandleStore>
+                    makeZookeeperCompletedSnapshotHandleStore) {
+        checkArgument(
+                maxNumberOfSnapshotsToRetain > 0, "maxNumberOfSnapshotsToRetain must be positive");
+        this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
+        this.zooKeeperClient = zooKeeperClient;
+        this.bucketCompletedSnapshotStores = new HashMap<>();
+        this.ioExecutor = ioExecutor;
+        this.makeZookeeperCompletedSnapshotHandleStore = makeZookeeperCompletedSnapshotHandleStore;
     }
 
     public CompletedSnapshotStore getOrCreateCompletedSnapshotStore(TableBucket tableBucket) {
@@ -101,7 +121,7 @@ public class CompletedSnapshotStoreManager {
     private CompletedSnapshotStore createCompletedSnapshotStore(
             TableBucket tableBucket, Executor ioExecutor) throws Exception {
         final CompletedSnapshotHandleStore completedSnapshotHandleStore =
-                new ZooKeeperCompletedSnapshotHandleStore(zooKeeperClient);
+                this.makeZookeeperCompletedSnapshotHandleStore.apply(zooKeeperClient);
 
         // Get all there is first.
         List<CompletedSnapshotHandle> initialSnapshots =
@@ -120,13 +140,47 @@ public class CompletedSnapshotStoreManager {
         LOG.info("Trying to fetch {} snapshots from storage.", numberOfInitialSnapshots);
 
         for (CompletedSnapshotHandle snapshotStateHandle : initialSnapshots) {
-            retrievedSnapshots.add(checkNotNull(snapshotStateHandle.retrieveCompleteSnapshot()));
+            try {
+                retrievedSnapshots.add(
+                        checkNotNull(snapshotStateHandle.retrieveCompleteSnapshot()));
+            } catch (Exception e) {
+                if (e.getMessage()
+                        .contains(CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE)) {
+                    LOG.error(
+                            "Metadata not found for snapshot {} of table bucket {}, maybe snapshot already removed or broken.",
+                            snapshotStateHandle.getSnapshotId(),
+                            tableBucket,
+                            e);
+                    try {
+                        completedSnapshotHandleStore.remove(
+                                tableBucket, snapshotStateHandle.getSnapshotId());
+                    } catch (Exception t) {
+                        LOG.error(
+                                "Failed to remove snapshotStateHandle {}.", snapshotStateHandle, t);
+                        throw t;
+                    }
+                } else {
+                    LOG.error(
+                            "Failed to retrieveCompleteSnapshot for snapshotStateHandle {}.",
+                            snapshotStateHandle,
+                            e);
+                    throw e;
+                }
+            }
         }
 
         // register all the files to shared kv file registry
         SharedKvFileRegistry sharedKvFileRegistry = new SharedKvFileRegistry(ioExecutor);
         for (CompletedSnapshot completedSnapshot : retrievedSnapshots) {
-            sharedKvFileRegistry.registerAllAfterRestored(completedSnapshot);
+            try {
+                sharedKvFileRegistry.registerAllAfterRestored(completedSnapshot);
+            } catch (Exception e) {
+                LOG.error(
+                        "Failed to registerAllAfterRestored for completedSnapshot {}.",
+                        completedSnapshot,
+                        e);
+                throw e;
+            }
         }
 
         return new CompletedSnapshotStore(

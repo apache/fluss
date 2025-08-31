@@ -19,7 +19,10 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandleStore;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
+import org.apache.fluss.server.kv.snapshot.TestingCompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
 import org.apache.fluss.server.testutils.KvTestUtils;
 import org.apache.fluss.server.zk.NOPErrorHandler;
@@ -36,11 +39,16 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -172,6 +180,41 @@ class CompletedSnapshotStoreManagerTest {
         assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isEmpty();
     }
 
+    @Test
+    void testMetadataInconsistencyWithMetadataNotExistsException() throws Exception {
+        // setup test data with mixed valid and invalid snapshots
+        TableBucket tableBucket = new TableBucket(1, 1);
+        CompletedSnapshot validSnapshot =
+                KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, 1L);
+        TestingCompletedSnapshotHandle validSnapshotHandle =
+                new TestingCompletedSnapshotHandle(validSnapshot);
+
+        CompletedSnapshot invalidSnapshot =
+                KvTestUtils.mockCompletedSnapshot(tempDir, tableBucket, 2L);
+        TestingCompletedSnapshotHandle invalidSnapshotHandle =
+                new TestingCompletedSnapshotHandleWithFileNotFound(invalidSnapshot);
+
+        // create CompletedSnapshotHandleStore with real implementations
+        CompletedSnapshotHandleStore completedSnapshotHandleStore =
+                new InMemoryCompletedSnapshotHandleStore();
+        completedSnapshotHandleStore.add(tableBucket, 1L, validSnapshotHandle);
+        completedSnapshotHandleStore.add(tableBucket, 2L, invalidSnapshotHandle);
+
+        // CompletedSnapshotStoreManager
+        CompletedSnapshotStoreManager completedSnapshotStoreManager =
+                new CompletedSnapshotStoreManager(
+                        10,
+                        ioExecutor,
+                        zookeeperClient,
+                        zooKeeperClient -> completedSnapshotHandleStore);
+
+        // Verify that only the valid snapshot remains
+        CompletedSnapshotStore completedSnapshotStore =
+                completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(tableBucket);
+        assertThat(completedSnapshotStore.getAllSnapshots()).hasSize(1);
+        assertThat(completedSnapshotStore.getAllSnapshots().get(0).getSnapshotID()).isEqualTo(1L);
+    }
+
     private CompletedSnapshotStoreManager createCompletedSnapshotStoreManager(
             int maxNumberOfSnapshotsToRetain) {
         return new CompletedSnapshotStoreManager(
@@ -219,5 +262,65 @@ class CompletedSnapshotStoreManagerTest {
             }
         }
         return tableBuckets;
+    }
+
+    /**
+     * A test-specific implementation of CompletedSnapshotHandle that throws FileNotFoundException
+     * with the specific error message expected by CompletedSnapshotStoreManager.
+     */
+    private static class TestingCompletedSnapshotHandleWithFileNotFound
+            extends TestingCompletedSnapshotHandle {
+
+        public TestingCompletedSnapshotHandleWithFileNotFound(CompletedSnapshot snapshot) {
+            super(snapshot, false);
+        }
+
+        @Override
+        public CompletedSnapshot retrieveCompleteSnapshot() throws IOException {
+            throw new FileNotFoundException(
+                    CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE);
+        }
+    }
+
+    private static class InMemoryCompletedSnapshotHandleStore
+            implements CompletedSnapshotHandleStore {
+        private final Map<TableBucket, Map<Long, CompletedSnapshotHandle>> snapshotHandleMap =
+                new HashMap<>();
+
+        @Override
+        public void add(
+                TableBucket tableBucket,
+                long snapshotId,
+                CompletedSnapshotHandle completedSnapshotHandle)
+                throws Exception {
+            snapshotHandleMap
+                    .computeIfAbsent(tableBucket, k -> new HashMap<>())
+                    .put(snapshotId, completedSnapshotHandle);
+        }
+
+        @Override
+        public void remove(TableBucket tableBucket, long snapshotId) throws Exception {
+            snapshotHandleMap.computeIfAbsent(tableBucket, k -> new HashMap<>()).remove(snapshotId);
+        }
+
+        @Override
+        public Optional<CompletedSnapshotHandle> get(TableBucket tableBucket, long snapshotId)
+                throws Exception {
+            return Optional.ofNullable(snapshotHandleMap.get(tableBucket))
+                    .map(map -> map.get(snapshotId));
+        }
+
+        @Override
+        public List<CompletedSnapshotHandle> getAllCompletedSnapshotHandles(TableBucket tableBucket)
+                throws Exception {
+            return new ArrayList<>(snapshotHandleMap.get(tableBucket).values());
+        }
+
+        @Override
+        public Optional<CompletedSnapshotHandle> getLatestCompletedSnapshotHandle(
+                TableBucket tableBucket) throws Exception {
+            return new ArrayList<>(snapshotHandleMap.get(tableBucket).values())
+                    .stream().max(Comparator.comparingLong(CompletedSnapshotHandle::getSnapshotId));
+        }
     }
 }
