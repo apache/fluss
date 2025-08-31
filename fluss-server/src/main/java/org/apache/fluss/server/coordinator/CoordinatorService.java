@@ -32,12 +32,8 @@ import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
-import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
-import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
@@ -90,28 +86,25 @@ import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
-import org.apache.fluss.server.metadata.BucketMetadata;
-import org.apache.fluss.server.metadata.PartitionMetadata;
-import org.apache.fluss.server.metadata.ServerMetadataCache;
-import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
+import org.apache.fluss.server.metadata.CoordinatorMetadataFunctionProvider;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
-import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
+import org.apache.fluss.utils.ExceptionUtils;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.function.Supplier;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
@@ -136,7 +129,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final int defaultReplicationFactor;
     private final Supplier<EventManager> eventManagerSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
-    private final ServerMetadataCache metadataCache;
+    private final CoordinatorMetadataCache metadataCache;
 
     // null if the cluster hasn't configured datalake format
     private final @Nullable DataLakeFormat dataLakeFormat;
@@ -148,7 +141,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             FileSystem remoteFileSystem,
             ZooKeeperClient zkClient,
             Supplier<CoordinatorEventProcessor> coordinatorEventProcessorSupplier,
-            ServerMetadataCache metadataCache,
+            CoordinatorMetadataCache metadataCache,
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
             @Nullable LakeCatalog lakeCatalog,
@@ -424,17 +417,29 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         AccessContextEvent<MetadataResponse> metadataResponseAccessContextEvent =
                 new AccessContextEvent<>(
-                        ctx ->
-                                makeMetadataResponse(
-                                        request,
-                                        listenerName,
-                                        session,
-                                        authorizer,
-                                        metadataCache,
-                                        (tablePath) -> getTableMetadata(ctx, tablePath),
-                                        ctx::getPhysicalTablePath,
-                                        (physicalTablePath) ->
-                                                getPartitionMetadata(ctx, physicalTablePath)));
+                        ctx -> {
+                            CompletableFuture<MetadataResponse> response =
+                                    new CompletableFuture<>();
+                            processMetadataRequest(
+                                    request,
+                                    listenerName,
+                                    session,
+                                    authorizer,
+                                    metadataCache,
+                                    new CoordinatorMetadataFunctionProvider(
+                                            zkClient, metadataCache, ctx, metadataManager),
+                                    response);
+                            try {
+                                return response.get();
+                            } catch (Exception e) {
+                                Throwable strippedException =
+                                        ExceptionUtils.stripException(e, ExecutionException.class);
+                                if (strippedException instanceof RuntimeException) {
+                                    throw (RuntimeException) strippedException;
+                                }
+                                throw new RuntimeException(strippedException);
+                            }
+                        });
         eventManagerSupplier.get().put(metadataResponseAccessContextEvent);
         return metadataResponseAccessContextEvent.getResultFuture();
     }
@@ -577,77 +582,5 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             currentEpoch,
                             heartbeatReqForTable.getTableId()));
         }
-    }
-
-    private TableMetadata getTableMetadata(CoordinatorContext ctx, TablePath tablePath) {
-        // always get table info from zk.
-        TableInfo tableInfo = metadataManager.getTable(tablePath);
-        long tableId = ctx.getTableIdByPath(tablePath);
-        List<BucketMetadata> bucketMetadataList;
-        if (tableId == TableInfo.UNKNOWN_TABLE_ID) {
-            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
-            // https://github.com/apache/fluss/issues/483
-            // get table assignment from zk.
-            bucketMetadataList =
-                    getTableMetadataFromZk(
-                            zkClient, tablePath, tableInfo.getTableId(), tableInfo.isPartitioned());
-        } else {
-            // get table assignment from coordinatorContext.
-            bucketMetadataList =
-                    getBucketMetadataFromContext(
-                            ctx, tableId, null, ctx.getTableAssignment(tableId));
-        }
-        return new TableMetadata(tableInfo, bucketMetadataList);
-    }
-
-    private PartitionMetadata getPartitionMetadata(
-            CoordinatorContext ctx, PhysicalTablePath partitionPath) {
-        TablePath tablePath =
-                new TablePath(partitionPath.getDatabaseName(), partitionPath.getTableName());
-        String partitionName = partitionPath.getPartitionName();
-        long tableId = ctx.getTableIdByPath(tablePath);
-        if (tableId == TableInfo.UNKNOWN_TABLE_ID) {
-            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
-            // https://github.com/apache/fluss/issues/483
-            return getPartitionMetadataFromZk(partitionPath, zkClient);
-        } else {
-            Optional<Long> partitionIdOpt = ctx.getPartitionId(partitionPath);
-            if (partitionIdOpt.isPresent()) {
-                long partitionId = partitionIdOpt.get();
-                List<BucketMetadata> bucketMetadataList =
-                        getBucketMetadataFromContext(
-                                ctx,
-                                tableId,
-                                partitionId,
-                                ctx.getPartitionAssignment(
-                                        new TablePartition(tableId, partitionId)));
-                return new PartitionMetadata(
-                        tableId, partitionName, partitionId, bucketMetadataList);
-            } else {
-                return getPartitionMetadataFromZk(partitionPath, zkClient);
-            }
-        }
-    }
-
-    private static List<BucketMetadata> getBucketMetadataFromContext(
-            CoordinatorContext ctx,
-            long tableId,
-            @Nullable Long partitionId,
-            Map<Integer, List<Integer>> tableAssigment) {
-        List<BucketMetadata> bucketMetadataList = new ArrayList<>();
-        tableAssigment.forEach(
-                (bucketId, serverIds) -> {
-                    TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
-                    Optional<LeaderAndIsr> optLeaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket);
-                    Integer leader = optLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
-                    BucketMetadata bucketMetadata =
-                            new BucketMetadata(
-                                    bucketId,
-                                    leader,
-                                    ctx.getBucketLeaderEpoch(tableBucket),
-                                    serverIds);
-                    bucketMetadataList.add(bucketMetadata);
-                });
-        return bucketMetadataList;
     }
 }
