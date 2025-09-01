@@ -47,10 +47,8 @@ class CompactedLogRecordTest extends LogTestBase {
         CompactedRow row =
                 CompactedRow.from(fieldTypes, bytes, new CompactedRowDeserializer(fieldTypes));
 
-        // write
         CompactedLogRecord.writeTo(outputView, ChangeType.APPEND_ONLY, row);
 
-        // read
         CompactedLogRecord logRecord =
                 CompactedLogRecord.readFrom(
                         MemorySegment.wrap(outputView.getCopyOfBuffer()),
@@ -73,10 +71,8 @@ class CompactedLogRecordTest extends LogTestBase {
                 TestInternalRowGenerator.createAllRowType().getChildren().toArray(new DataType[0]);
         CompactedRow row = TestInternalRowGenerator.genCompactedRowForAllType();
 
-        // write
         CompactedLogRecord.writeTo(outputView, ChangeType.APPEND_ONLY, row);
 
-        // read
         LogRecord logRecord =
                 CompactedLogRecord.readFrom(
                         MemorySegment.wrap(outputView.getCopyOfBuffer()),

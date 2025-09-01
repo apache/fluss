@@ -19,7 +19,6 @@ package org.apache.fluss.client.write;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.memory.AbstractPagedOutputView;
-import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.MemoryLogRecordsIndexedBuilder;
@@ -30,7 +29,6 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
-import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -43,7 +41,6 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 @NotThreadSafe
 @Internal
 public final class IndexedLogWriteBatch extends AbstractRowLogWriteBatch<IndexedRow> {
-    private final AbstractPagedOutputView outputView;
 
     public IndexedLogWriteBatch(
             int bucketId,
@@ -144,17 +141,11 @@ public final class IndexedLogWriteBatch extends AbstractRowLogWriteBatch<Indexed
                     }
                 },
                 "Failed to build indexed log record batch.");
-        this.outputView = outputView;
     }
 
     @Override
     protected IndexedRow requireAndCastRow(org.apache.fluss.row.InternalRow row) {
         checkArgument(row instanceof IndexedRow, "row must be IndexRow for indexed log table");
         return (IndexedRow) row;
-    }
-
-    @Override
-    public List<MemorySegment> pooledMemorySegments() {
-        return outputView.allocatedPooledSegments();
     }
 }

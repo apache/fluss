@@ -36,7 +36,6 @@ import org.apache.fluss.row.compacted.CompactedRow;
 import java.io.IOException;
 
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
-import static org.apache.fluss.record.LogRecordBatch.LOG_MAGIC_VALUE_V0;
 
 /**
  * Default builder for {@link MemoryLogRecords} of log records in {@link
@@ -58,7 +57,7 @@ public class MemoryLogRecordsCompactedBuilder
     public static MemoryLogRecordsCompactedBuilder builder(
             int schemaId, int writeLimit, AbstractPagedOutputView outputView, boolean appendOnly) {
         return new MemoryLogRecordsCompactedBuilder(
-                LOG_MAGIC_VALUE_V0,
+                BUILDER_DEFAULT_OFFSET,
                 schemaId,
                 writeLimit,
                 CURRENT_LOG_MAGIC_VALUE,

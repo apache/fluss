@@ -755,10 +755,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
 
     @Test
     void testPutAndPollCompacted() throws Exception {
-        String logFormat = "COMPACTED";
-        String kvFormat = "COMPACTED";
-
-        verifyAppendOrPut(false, logFormat, kvFormat);
+        verifyAppendOrPut(false, "COMPACTED", "COMPACTED");
     }
 
     void verifyAppendOrPut(boolean append, String logFormat, @Nullable String kvFormat)
