@@ -19,27 +19,16 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.memory.AbstractPagedOutputView;
-import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.memory.AbstractPagedOutputView;
-import org.apache.fluss.memory.MemorySegment;
-import org.apache.fluss.memory.MemorySegmentOutputView;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.row.compacted.CompactedRow;
-
-import java.io.IOException;
-
-import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
-import org.apache.fluss.record.bytesview.BytesView;
-import org.apache.fluss.record.bytesview.MultiBytesView;
-import org.apache.fluss.row.compacted.CompactedRow;
-import org.apache.fluss.metadata.LogFormat;
 
 import java.io.IOException;
 
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 
 /**
- * Default builder for {@link MemoryLogRecords} of log records in {@link LogFormat#COMPACTED} format.
+ * Default builder for {@link MemoryLogRecords} of log records in {@link LogFormat#COMPACTED}
+ * format.
  */
 public class MemoryLogRecordsCompactedBuilder
         extends AbstractRowMemoryLogRecordsBuilder<CompactedRow> {
