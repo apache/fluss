@@ -104,6 +104,10 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
         return true;
     }
 
+    public boolean isStreaming() {
+        return Long.MAX_VALUE == this.stoppingOffset;
+    }
+
     protected byte splitKind() {
         return LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND;
     }

@@ -507,9 +507,12 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     }
 
     private FlinkRecordsWithSplitIds finishCurrentBoundedSplit() throws IOException {
+        boolean pkInStreamMode =
+                currentBoundedSplit instanceof LakeSnapshotAndFlussLogSplit
+                        && ((LakeSnapshotAndFlussLogSplit) currentBoundedSplit).isStreaming();
+
         Set<String> finishedSplits =
-                //                currentBoundedSplit.isHybridSplit()
-                currentBoundedSplit instanceof HybridSnapshotLogSplit
+                currentBoundedSplit instanceof HybridSnapshotLogSplit || pkInStreamMode
                         // is hybrid split, not to finish this split
                         // since it remains log to read
                         ? Collections.emptySet()

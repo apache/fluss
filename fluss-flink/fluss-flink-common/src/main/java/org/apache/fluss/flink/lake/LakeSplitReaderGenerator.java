@@ -18,7 +18,9 @@
 package org.apache.fluss.flink.lake;
 
 import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.flink.lake.reader.LakeSnapshotAndLogSplitScanner;
+import org.apache.fluss.flink.lake.reader.LakeSnapshotAndLogSplitWithoutMergeScanner;
 import org.apache.fluss.flink.lake.reader.LakeSnapshotScanner;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
@@ -29,6 +31,7 @@ import org.apache.fluss.lake.source.LakeSplit;
 
 import javax.annotation.Nullable;
 
+import java.util.Optional;
 import java.util.Queue;
 
 /** A generator to generate reader for lake split. */
@@ -55,14 +58,10 @@ public class LakeSplitReaderGenerator {
         if (split instanceof LakeSnapshotSplit) {
             boundedSplits.add(split);
         } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
-            LakeSnapshotAndFlussLogSplit lakeSnapshotAndFlussLogSplit =
-                    (LakeSnapshotAndFlussLogSplit) split;
-            if (lakeSnapshotAndFlussLogSplit.getLakeSplits() != null
-                    && !lakeSnapshotAndFlussLogSplit.getLakeSplits().isEmpty()) {
-                boundedSplits.add(split);
-            }
-            if (lakeSnapshotAndFlussLogSplit.getStoppingOffset().equals(Long.MAX_VALUE)) {
-                unboundedSplits.add(lakeSnapshotAndFlussLogSplit);
+            LakeSnapshotAndFlussLogSplit lakeSplit = (LakeSnapshotAndFlussLogSplit) split;
+            boundedSplits.add(lakeSplit);
+            if (lakeSplit.getStoppingOffset().isPresent() && lakeSplit.isStreaming()) {
+                unboundedSplits.add(lakeSplit);
             }
         } else {
             throw new UnsupportedOperationException(
@@ -78,17 +77,27 @@ public class LakeSplitReaderGenerator {
             return new BoundedSplitReader(
                     lakeSnapshotScanner, lakeSnapshotSplit.getRecordsToSplit());
         } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
-            LakeSnapshotAndFlussLogSplit lakeSnapshotAndFlussLogSplit =
-                    (LakeSnapshotAndFlussLogSplit) split;
-            LakeSnapshotAndLogSplitScanner lakeSnapshotAndLogSplitScanner =
-                    new LakeSnapshotAndLogSplitScanner(
-                            table, lakeSource, lakeSnapshotAndFlussLogSplit, projectedFields);
-            return new BoundedSplitReader(
-                    lakeSnapshotAndLogSplitScanner,
-                    lakeSnapshotAndFlussLogSplit.getRecordsToSkip());
+            LakeSnapshotAndFlussLogSplit lakeSplit = (LakeSnapshotAndFlussLogSplit) split;
+            return new BoundedSplitReader(getBatchScanner(lakeSplit), lakeSplit.getRecordsToSkip());
         } else {
             throw new UnsupportedOperationException(
                     String.format("The split type of %s is not supported.", split.getClass()));
         }
+    }
+
+    private BatchScanner getBatchScanner(LakeSnapshotAndFlussLogSplit lakeSplit) {
+        BatchScanner lakeSnapshotAndLogSplitScanner;
+        Optional<Long> stoppingOffset = lakeSplit.getStoppingOffset();
+        if (lakeSplit.isStreaming()) {
+            lakeSnapshotAndLogSplitScanner =
+                    new LakeSnapshotAndLogSplitWithoutMergeScanner(
+                            table, lakeSource, lakeSplit, projectedFields);
+
+        } else {
+            lakeSnapshotAndLogSplitScanner =
+                    new LakeSnapshotAndLogSplitScanner(
+                            table, lakeSource, lakeSplit, projectedFields);
+        }
+        return lakeSnapshotAndLogSplitScanner;
     }
 }

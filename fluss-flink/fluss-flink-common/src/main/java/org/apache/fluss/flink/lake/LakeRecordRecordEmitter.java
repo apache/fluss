@@ -49,7 +49,7 @@ public class LakeRecordRecordEmitter<OUT> {
             ScanRecord scanRecord = recordAndPos.record();
             if (scanRecord.logOffset() < 0) {
                 // record is with an invalid offset, means it's in Lake snapshot phase
-                // TODO
+                // TODO set current lake split index to real value. from recordAndPos get lakesplit
                 lakeSnapshotAndFlussLogSplitState.setCurrentLakeSplitIndex(0);
             }
             lakeSnapshotAndFlussLogSplitState.setRecordsToSkip(recordAndPos.readRecordsCount());
