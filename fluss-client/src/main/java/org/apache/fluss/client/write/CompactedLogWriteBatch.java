@@ -19,18 +19,17 @@ package org.apache.fluss.client.write;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.memory.AbstractPagedOutputView;
-import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.MemoryLogRecordsCompactedBuilder;
 import org.apache.fluss.record.bytesview.BytesView;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
-import java.util.List;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -43,7 +42,6 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 @NotThreadSafe
 @Internal
 public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<CompactedRow> {
-    private final AbstractPagedOutputView outputView;
 
     public CompactedLogWriteBatch(
             int bucketId,
@@ -118,18 +116,12 @@ public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<Compa
                     }
                 },
                 "Failed to build compacted log record batch.");
-        this.outputView = outputView;
     }
 
     @Override
-    protected CompactedRow requireAndCastRow(org.apache.fluss.row.InternalRow row) {
+    protected CompactedRow requireAndCastRow(InternalRow row) {
         checkArgument(
                 row instanceof CompactedRow, "row must be CompactedRow for compacted log table");
         return (CompactedRow) row;
-    }
-
-    @Override
-    public List<MemorySegment> pooledMemorySegments() {
-        return outputView.allocatedPooledSegments();
     }
 }

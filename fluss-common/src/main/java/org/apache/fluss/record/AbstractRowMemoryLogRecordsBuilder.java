@@ -39,7 +39,7 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** Abstract base builder for row-based MemoryLogRecords builders sharing common logic. */
 abstract class AbstractRowMemoryLogRecordsBuilder<T> implements AutoCloseable {
-    private static final int BUILDER_DEFAULT_OFFSET = 0;
+    protected static final int BUILDER_DEFAULT_OFFSET = 0;
 
     protected final long baseLogOffset;
     protected final int schemaId;

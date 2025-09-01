@@ -70,11 +70,10 @@ public class CompactedLogWriteBatchTest {
                         writeLimit,
                         MemorySegment.allocateHeapMemory(writeLimit));
 
-        for (int i = 0;
-                i
-                        < (writeLimit - DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE)
-                                / estimatedSizeInBytes;
-                i++) {
+        int maxRecordsPerBatch =
+                (writeLimit - DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE)
+                        / estimatedSizeInBytes;
+        for (int i = 0; i < maxRecordsPerBatch; i++) {
             boolean appendResult =
                     logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
             assertThat(appendResult).isTrue();
