@@ -32,14 +32,14 @@ import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.row.compacted.CompactedRow;
+import org.apache.fluss.metadata.LogFormat;
 
 import java.io.IOException;
 
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 
 /**
- * Default builder for {@link MemoryLogRecords} of log records in {@link
- * org.apache.fluss.metadata.LogFormat#COMPACTED} format.
+ * Default builder for {@link MemoryLogRecords} of log records in {@link LogFormat#COMPACTED} format.
  */
 public class MemoryLogRecordsCompactedBuilder
         extends AbstractRowMemoryLogRecordsBuilder<CompactedRow> {
