@@ -39,23 +39,34 @@ import java.util.Objects;
 public class RecordAndPos {
 
     public static final long NO_READ_RECORDS_COUNT = -1;
+    public static final int DEFAULT_ITERATOR_INDEX = 0;
 
     protected ScanRecord scanRecord;
 
     // the read records count include this record when read this record
     protected long readRecordsCount;
+    protected int currentIteratorIndex;
 
     public RecordAndPos(ScanRecord scanRecord) {
-        this(scanRecord, NO_READ_RECORDS_COUNT);
+        this(scanRecord, NO_READ_RECORDS_COUNT, DEFAULT_ITERATOR_INDEX);
     }
 
     public RecordAndPos(ScanRecord scanRecord, long readRecordsCount) {
+        this(scanRecord, readRecordsCount, DEFAULT_ITERATOR_INDEX);
+    }
+
+    public RecordAndPos(ScanRecord scanRecord, long readRecordsCount, int currentIteratorIndex) {
         this.scanRecord = scanRecord;
         this.readRecordsCount = readRecordsCount;
+        this.currentIteratorIndex = currentIteratorIndex;
     }
 
     public long readRecordsCount() {
         return readRecordsCount;
+    }
+
+    public int getCurrentIteratorIndex() {
+        return currentIteratorIndex;
     }
 
     public ScanRecord record() {

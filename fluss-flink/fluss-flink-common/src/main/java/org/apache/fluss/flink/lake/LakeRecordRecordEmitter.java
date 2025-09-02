@@ -46,11 +46,9 @@ public class LakeRecordRecordEmitter<OUT> {
         } else if (splitState instanceof LakeSnapshotAndFlussLogSplitState) {
             LakeSnapshotAndFlussLogSplitState lakeSnapshotAndFlussLogSplitState =
                     (LakeSnapshotAndFlussLogSplitState) splitState;
-            ScanRecord scanRecord = recordAndPos.record();
-            if (scanRecord.logOffset() < 0) {
-                // record is with an invalid offset, means it's in Lake snapshot phase
-                // TODO set current lake split index to real value. from recordAndPos get lakesplit
-                lakeSnapshotAndFlussLogSplitState.setCurrentLakeSplitIndex(0);
+            if (recordAndPos.getCurrentIteratorIndex() > 0) {
+                lakeSnapshotAndFlussLogSplitState.setCurrentLakeSplitIndex(
+                        recordAndPos.getCurrentIteratorIndex());
             }
             lakeSnapshotAndFlussLogSplitState.setRecordsToSkip(recordAndPos.readRecordsCount());
             sourceOutputFunc.accept(recordAndPos.record(), sourceOutput);

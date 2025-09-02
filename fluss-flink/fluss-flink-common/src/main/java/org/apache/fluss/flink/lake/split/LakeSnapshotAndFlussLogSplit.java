@@ -31,6 +31,7 @@ import java.util.Optional;
 public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
 
     public static final byte LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND = -2;
+    public static final int DEFAULT_ITERATOR_INDEX = 0;
 
     // may be null when no snapshot data for the bucket
     @Nullable private final List<LakeSplit> lakeSnapshotSplits;
@@ -49,7 +50,14 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
             @Nullable List<LakeSplit> snapshotSplits,
             long startingOffset,
             long stoppingOffset) {
-        this(tableBucket, null, snapshotSplits, startingOffset, stoppingOffset, 0, 0);
+        this(
+                tableBucket,
+                null,
+                snapshotSplits,
+                startingOffset,
+                stoppingOffset,
+                0,
+                DEFAULT_ITERATOR_INDEX);
     }
 
     public LakeSnapshotAndFlussLogSplit(
@@ -58,7 +66,14 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
             @Nullable List<LakeSplit> snapshotSplits,
             long startingOffset,
             long stoppingOffset) {
-        this(tableBucket, partitionName, snapshotSplits, startingOffset, stoppingOffset, 0, 0);
+        this(
+                tableBucket,
+                partitionName,
+                snapshotSplits,
+                startingOffset,
+                stoppingOffset,
+                0,
+                DEFAULT_ITERATOR_INDEX);
     }
 
     public LakeSnapshotAndFlussLogSplit(
@@ -118,7 +133,12 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
     }
 
     public List<LakeSplit> getLakeSplits() {
-        return lakeSnapshotSplits;
+        if (lakeSnapshotSplits == null) {
+            return null;
+        } else {
+
+            return lakeSnapshotSplits.subList(currentLakeSplitIndex, lakeSnapshotSplits.size());
+        }
     }
 
     public int getCurrentLakeSplitIndex() {

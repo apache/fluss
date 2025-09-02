@@ -129,7 +129,8 @@ public class LakeSnapshotAndLogSplitWithoutMergeScanner implements BatchScanner 
         return unionCloseableIterator.hasNext() ? unionCloseableIterator : null;
     }
 
-    private static class UnionCloseableIterator implements CloseableIterator<InternalRow> {
+    /** A closeable iterator to union all the log record iterators. */
+    public static class UnionCloseableIterator implements CloseableIterator<InternalRow> {
         private final List<CloseableIterator<LogRecord>> logRecordIterators;
         private int currentIteratorIndex;
 
@@ -143,6 +144,10 @@ public class LakeSnapshotAndLogSplitWithoutMergeScanner implements BatchScanner 
                     && !logRecordIterators.get(currentIteratorIndex).hasNext()) {
                 currentIteratorIndex++;
             }
+        }
+
+        public int getCurrentIteratorIndex() {
+            return currentIteratorIndex;
         }
 
         @Override

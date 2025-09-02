@@ -19,6 +19,7 @@ package org.apache.fluss.flink.source.reader;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
+import org.apache.fluss.flink.lake.reader.LakeSnapshotAndLogSplitWithoutMergeScanner;
 import org.apache.fluss.flink.source.split.SnapshotSplit;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.utils.CloseableIterator;
@@ -135,9 +136,17 @@ public class BoundedSplitReader implements AutoCloseable {
 
     private static class ScanRecordBatch implements CloseableIterator<ScanRecord> {
         private final CloseableIterator<InternalRow> rowIterator;
+        private int currentIteratorIndex;
 
         public ScanRecordBatch(CloseableIterator<InternalRow> rowIterator) {
             this.rowIterator = rowIterator;
+            if (rowIterator
+                    instanceof LakeSnapshotAndLogSplitWithoutMergeScanner.UnionCloseableIterator) {
+                currentIteratorIndex =
+                        ((LakeSnapshotAndLogSplitWithoutMergeScanner.UnionCloseableIterator)
+                                        rowIterator)
+                                .getCurrentIteratorIndex();
+            }
         }
 
         @Override
@@ -147,12 +156,24 @@ public class BoundedSplitReader implements AutoCloseable {
 
         @Override
         public ScanRecord next() {
-            return new ScanRecord(rowIterator.next());
+            InternalRow next = rowIterator.next();
+            if (rowIterator
+                    instanceof LakeSnapshotAndLogSplitWithoutMergeScanner.UnionCloseableIterator) {
+                currentIteratorIndex =
+                        ((LakeSnapshotAndLogSplitWithoutMergeScanner.UnionCloseableIterator)
+                                        rowIterator)
+                                .getCurrentIteratorIndex();
+            }
+            return new ScanRecord(next);
         }
 
         @Override
         public void close() {
             rowIterator.close();
+        }
+
+        public int getCurrentIteratorIndex() {
+            return currentIteratorIndex;
         }
     }
 
@@ -163,7 +184,13 @@ public class BoundedSplitReader implements AutoCloseable {
 
         RecordAndPosBatch replace(CloseableIterator<ScanRecord> records) {
             this.records = records;
-            recordAndPosition.setRecord(null, NO_READ_RECORDS_COUNT);
+
+            if (records instanceof ScanRecordBatch) {
+                int currentIteratorIndex = ((ScanRecordBatch) records).getCurrentIteratorIndex();
+                recordAndPosition.setRecord(null, NO_READ_RECORDS_COUNT, currentIteratorIndex);
+            } else {
+                recordAndPosition.setRecord(null, NO_READ_RECORDS_COUNT);
+            }
             return this;
         }
 
