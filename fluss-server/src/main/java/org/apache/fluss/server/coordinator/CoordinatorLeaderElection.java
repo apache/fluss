@@ -73,6 +73,7 @@ public class CoordinatorLeaderElection implements AutoCloseable {
                                 coordinatorContext.setCoordinatorEpochAndZkVersion(
                                         optionalEpoch.get(),
                                         coordinatorContext.getCoordinatorEpochZkVersion() + 1);
+                                initLeaderServices.run();
                             } else {
                                 throw new CoordinatorEpochFencedException(
                                         "Fenced to become coordinator leader.");
@@ -99,8 +100,8 @@ public class CoordinatorLeaderElection implements AutoCloseable {
             // todo: Currently, we await the leader latch and do nothing until it becomes leader.
             // Later we can make it as a hot backup server to continuously synchronize metadata from
             // Zookeeper, which save time from initializing context
-            leaderLatch.await();
-            initLeaderServices.run();
+            //            leaderLatch.await();
+            //            initLeaderServices.run();
 
         } catch (Exception e) {
             LOG.error("Failed to start LeaderLatch for server {}", serverId, e);
