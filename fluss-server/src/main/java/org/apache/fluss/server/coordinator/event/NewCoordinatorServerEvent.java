@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.coordinator.event;
+package org.apache.fluss.server.coordinator.event;
 
 import java.util.Objects;
 

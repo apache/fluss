@@ -16,15 +16,15 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.coordinator;
+package org.apache.fluss.server.coordinator;
 
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.server.zk.NOPErrorHandler;
-import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.server.zk.ZooKeeperExtension;
-import com.alibaba.fluss.server.zk.data.CoordinatorAddress;
-import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.server.zk.data.CoordinatorAddress;
+import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
@@ -36,7 +36,7 @@ import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.waitUntil;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
 class CoordinatorServerElectionTest {

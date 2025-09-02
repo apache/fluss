@@ -16,12 +16,12 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.coordinator;
+package org.apache.fluss.server.coordinator;
 
-import com.alibaba.fluss.server.zk.data.ZkData;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderLatch;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderLatchListener;
+import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderLatch;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderLatchListener;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;

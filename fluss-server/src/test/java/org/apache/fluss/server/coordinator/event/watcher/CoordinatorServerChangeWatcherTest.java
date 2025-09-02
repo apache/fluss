@@ -15,16 +15,16 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.coordinator.event.watcher;
+package org.apache.fluss.server.coordinator.event.watcher;
 
-import com.alibaba.fluss.server.coordinator.event.CoordinatorEvent;
-import com.alibaba.fluss.server.coordinator.event.DeadCoordinatorServerEvent;
-import com.alibaba.fluss.server.coordinator.event.NewCoordinatorServerEvent;
-import com.alibaba.fluss.server.coordinator.event.TestingEventManager;
-import com.alibaba.fluss.server.zk.NOPErrorHandler;
-import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.server.zk.ZooKeeperExtension;
-import com.alibaba.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
+import org.apache.fluss.server.coordinator.event.DeadCoordinatorServerEvent;
+import org.apache.fluss.server.coordinator.event.NewCoordinatorServerEvent;
+import org.apache.fluss.server.coordinator.event.TestingEventManager;
+import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
@@ -33,7 +33,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 
-import static com.alibaba.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CoordinatorServerChangeWatcher} . */

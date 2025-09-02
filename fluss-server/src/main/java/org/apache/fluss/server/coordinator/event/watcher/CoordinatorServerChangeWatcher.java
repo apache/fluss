@@ -15,18 +15,18 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.server.coordinator.event.watcher;
+package org.apache.fluss.server.coordinator.event.watcher;
 
-import com.alibaba.fluss.exception.FlussRuntimeException;
-import com.alibaba.fluss.server.coordinator.event.DeadCoordinatorServerEvent;
-import com.alibaba.fluss.server.coordinator.event.EventManager;
-import com.alibaba.fluss.server.coordinator.event.NewCoordinatorServerEvent;
-import com.alibaba.fluss.server.zk.ZooKeeperClient;
-import com.alibaba.fluss.server.zk.data.ZkData;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
-import com.alibaba.fluss.shaded.curator5.org.apache.curator.utils.ZKPaths;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.server.coordinator.event.DeadCoordinatorServerEvent;
+import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.NewCoordinatorServerEvent;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.ZkData;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.ChildData;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCache;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.cache.CuratorCacheListener;
+import org.apache.fluss.shaded.curator5.org.apache.curator.utils.ZKPaths;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
