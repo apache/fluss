@@ -27,6 +27,7 @@ import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.bytesview.MemorySegmentBytesView;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
@@ -137,6 +138,18 @@ public class RpcMessageTestUtils {
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
         return createTableRequest;
+    }
+
+    public static AlterTableRequest newAlterTableRequest(
+            TablePath tablePath, TableDescriptor tableDescriptor, boolean ignoreIfExists) {
+        AlterTableRequest alterTableRequest = new AlterTableRequest();
+        alterTableRequest
+                .setIgnoreIfNotExists(ignoreIfExists)
+                .setTableJson(tableDescriptor.toJsonBytes())
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        return alterTableRequest;
     }
 
     public static MetadataRequest newMetadataRequest(List<TablePath> tablePaths) {
