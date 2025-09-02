@@ -132,6 +132,20 @@ public class TableRegistration {
                 currentMillis);
     }
 
+    public TableRegistration newProperties(
+            Map<String, String> newProperties, Map<String, String> newCustomProperties) {
+        final long currentMillis = System.currentTimeMillis();
+        return new TableRegistration(
+                tableId,
+                comment,
+                partitionKeys,
+                new TableDistribution(bucketCount, bucketKeys),
+                newProperties,
+                newCustomProperties,
+                createdTime,
+                currentMillis);
+    }
+
     @Override
     public boolean equals(Object o) {
         if (this == o) {
