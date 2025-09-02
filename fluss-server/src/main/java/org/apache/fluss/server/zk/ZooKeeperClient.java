@@ -33,6 +33,7 @@ import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.server.authorizer.DefaultAuthorizer.VersionedAcls;
+import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.zk.ZkAsyncRequest.ZkCheckExistsRequest;
@@ -182,6 +183,49 @@ public class ZooKeeperClient implements AutoCloseable {
         LOG.info("Registered Coordinator server {} at path {}.", coordinatorId, path);
     }
 
+    /**
+     * Become coordinator leader. This method is a step after electCoordinatorLeader() and before
+     * registerCoordinatorLeader(). This is to ensure the coordinator get and update the coordinator
+     * epoch and coordinator epoch zk version.
+     */
+    public Optional<Integer> fenceBecomeCoordinatorLeader(int coordinatorId) throws Exception {
+        try {
+            ensureEpochZnodeExists();
+
+            try {
+                Stat currentStat = new Stat();
+                byte[] bytes =
+                        zkClient.getData()
+                                .storingStatIn(currentStat)
+                                .forPath(ZkData.CoordinatorEpochZNode.path());
+                int currentEpoch = ZkData.CoordinatorEpochZNode.decode(bytes);
+                int currentVersion = currentStat.getVersion();
+                int newEpoch = currentEpoch + 1;
+                LOG.info(
+                        "Coordinator leader {} tries to update epoch. Current epoch={}, Zookeeper version={}, new epoch={}",
+                        coordinatorId,
+                        currentEpoch,
+                        currentVersion,
+                        newEpoch);
+
+                // atomically update epoch
+                zkClient.setData()
+                        .withVersion(currentVersion)
+                        .forPath(
+                                ZkData.CoordinatorEpochZNode.path(),
+                                ZkData.CoordinatorEpochZNode.encode(newEpoch));
+
+                return Optional.of(newEpoch);
+            } catch (KeeperException.BadVersionException e) {
+                // Other coordinator leader has updated epoch.
+                // If this happens, it means our fence is in effect.
+                LOG.info("Coordinator leader {} failed to update epoch.", coordinatorId);
+            }
+        } catch (KeeperException.NodeExistsException e) {
+        }
+        return Optional.empty();
+    }
+
     /** Register a coordinator leader to ZK. */
     public void registerCoordinatorLeader(CoordinatorAddress coordinatorAddress) throws Exception {
         String path = ZkData.CoordinatorLeaderZNode.path();
@@ -195,7 +239,6 @@ public class ZooKeeperClient implements AutoCloseable {
     /** Get the leader address registered in ZK. */
     public Optional<CoordinatorAddress> getCoordinatorLeaderAddress() throws Exception {
         Optional<byte[]> bytes = getOrEmpty(ZkData.CoordinatorLeaderZNode.path());
-        //        return bytes.map(CoordinatorZNode::decode);
         return bytes.map(
                 data ->
                         // maybe a empty node when a leader is elected but not registered
@@ -206,6 +249,23 @@ public class ZooKeeperClient implements AutoCloseable {
     public int[] getCoordinatorServerList() throws Exception {
         List<String> coordinatorServers = getChildren(ZkData.CoordinatorIdsZNode.path());
         return coordinatorServers.stream().mapToInt(Integer::parseInt).toArray();
+    }
+
+    /** Ensure epoch znode exists. */
+    public void ensureEpochZnodeExists() throws Exception {
+        String path = ZkData.CoordinatorEpochZNode.path();
+        if (zkClient.checkExists().forPath(path) == null) {
+            try {
+                zkClient.create()
+                        .creatingParentsIfNeeded()
+                        .withMode(CreateMode.PERSISTENT)
+                        .forPath(
+                                path,
+                                ZkData.CoordinatorEpochZNode.encode(
+                                        CoordinatorContext.INITIAL_COORDINATOR_EPOCH));
+            } catch (KeeperException.NodeExistsException e) {
+            }
+        }
     }
 
     // --------------------------------------------------------------------------------------------

@@ -354,6 +354,25 @@ public final class ZkData {
             return JsonSerdeUtils.readValue(json, CoordinatorAddressJsonSerde.INSTANCE);
         }
     }
+
+    /**
+     * The znode for the coordinator epoch. The znode path is:
+     *
+     * <p>/coordinators/epoch
+     */
+    public static final class CoordinatorEpochZNode {
+        public static String path() {
+            return "/coordinators/epoch";
+        }
+
+        public static byte[] encode(int epoch) {
+            return String.valueOf(epoch).getBytes();
+        }
+
+        public static int decode(byte[] bytes) {
+            return Integer.parseInt(new String(bytes));
+        }
+    }
     // ------------------------------------------------------------------------------------------
     // ZNodes under "/tabletservers/"
     // ------------------------------------------------------------------------------------------

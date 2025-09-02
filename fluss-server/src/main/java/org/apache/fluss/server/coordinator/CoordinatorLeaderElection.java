@@ -18,8 +18,9 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.exception.CoordinatorEpochFencedException;
+import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.ZkData;
-import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderLatch;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.leader.LeaderLatchListener;
 
@@ -27,6 +28,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.IOException;
+import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Using by coordinator server. Coordinator servers listen ZK node and elect leadership. */
@@ -34,14 +36,26 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorLeaderElection.class);
 
     private final int serverId;
+    private final ZooKeeperClient zkClient;
+    private final CoordinatorContext coordinatorContext;
     private final LeaderLatch leaderLatch;
+    private final CoordinatorServer server;
     private final AtomicBoolean isLeader = new AtomicBoolean(false);
 
-    public CoordinatorLeaderElection(CuratorFramework zkClient, int serverId) {
+    public CoordinatorLeaderElection(
+            ZooKeeperClient zkClient,
+            int serverId,
+            CoordinatorContext coordinatorContext,
+            CoordinatorServer server) {
         this.serverId = serverId;
+        this.zkClient = zkClient;
+        this.coordinatorContext = coordinatorContext;
+        this.server = server;
         this.leaderLatch =
                 new LeaderLatch(
-                        zkClient, ZkData.CoordinatorElectionZNode.path(), String.valueOf(serverId));
+                        zkClient.getCuratorClient(),
+                        ZkData.CoordinatorElectionZNode.path(),
+                        String.valueOf(serverId));
     }
 
     public void startElectLeader(Runnable initLeaderServices) {
@@ -51,10 +65,28 @@ public class CoordinatorLeaderElection implements AutoCloseable {
                     public void isLeader() {
                         LOG.info("Coordinator server {} has become the leader.", serverId);
                         isLeader.set(true);
+                        try {
+                            // to avoid split-brain
+                            Optional<Integer> optionalEpoch =
+                                    zkClient.fenceBecomeCoordinatorLeader(serverId);
+                            if (optionalEpoch.isPresent()) {
+                                coordinatorContext.setCoordinatorEpochAndZkVersion(
+                                        optionalEpoch.get(),
+                                        coordinatorContext.getCoordinatorEpochZkVersion() + 1);
+                            } else {
+                                throw new CoordinatorEpochFencedException(
+                                        "Fenced to become coordinator leader.");
+                            }
+                        } catch (Exception e) {
+                            relinquishLeadership();
+                            throw new CoordinatorEpochFencedException(
+                                    "Fenced to become coordinator leader.");
+                        }
                     }
 
                     @Override
                     public void notLeader() {
+                        relinquishLeadership();
                         LOG.warn("Coordinator server {} has lost the leadership.", serverId);
                         isLeader.set(false);
                     }
@@ -86,5 +118,17 @@ public class CoordinatorLeaderElection implements AutoCloseable {
 
     public boolean isLeader() {
         return this.isLeader.get();
+    }
+
+    private void relinquishLeadership() {
+        isLeader.set(false);
+        LOG.info("Coordinator server {} has been fenced.", serverId);
+
+        try {
+            leaderLatch.close();
+            server.closeAsync();
+            leaderLatch.start();
+        } catch (Exception e) {
+        }
     }
 }

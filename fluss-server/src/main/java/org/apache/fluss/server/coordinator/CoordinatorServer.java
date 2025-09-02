@@ -159,6 +159,7 @@ public class CoordinatorServer extends ServerBase {
 
     @Override
     protected void startServices() throws Exception {
+        this.coordinatorContext = new CoordinatorContext();
         electCoordinatorLeader();
     }
 
@@ -168,16 +169,13 @@ public class CoordinatorServer extends ServerBase {
         // Coordinator Server supports high availability. If 3 coordinator servers are alive,
         // one of them will be elected as leader and the other two will be standby.
         // When leader fails, one of standby coordinators will be elected as new leader.
-        // All of them register to ZK like tablet servers in path
-        // "/coordinators/ids/1","/coordinators/ids/2","/coordinators/ids/3".
-        // but the leader will be elected in path "/coordinators/leader" additionally.
         registerCoordinatorServer();
         ZooKeeperUtils.registerZookeeperClientReInitSessionListener(
                 zkClient, this::registerCoordinatorServer, this);
 
         // standby
         CoordinatorLeaderElection coordinatorLeaderElection =
-                new CoordinatorLeaderElection(zkClient.getCuratorClient(), serverId);
+                new CoordinatorLeaderElection(zkClient, serverId, coordinatorContext, this);
         coordinatorLeaderElection.startElectLeader(
                 () -> {
                     try {
@@ -211,7 +209,6 @@ public class CoordinatorServer extends ServerBase {
 
             dynamicConfigManager.startup();
 
-            this.coordinatorContext = new CoordinatorContext();
             this.metadataCache = new CoordinatorMetadataCache();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
