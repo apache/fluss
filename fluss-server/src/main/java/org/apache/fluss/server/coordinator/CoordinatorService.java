@@ -19,6 +19,7 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -40,8 +41,12 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.messages.AddServerTagRequest;
+import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.CancelRebalanceRequest;
+import org.apache.fluss.rpc.messages.CancelRebalanceResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -66,10 +71,16 @@ import org.apache.fluss.rpc.messages.DropTableRequest;
 import org.apache.fluss.rpc.messages.DropTableResponse;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
+import org.apache.fluss.rpc.messages.ListRebalanceProcessRequest;
+import org.apache.fluss.rpc.messages.ListRebalanceProcessResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
+import org.apache.fluss.rpc.messages.RebalanceRequest;
+import org.apache.fluss.rpc.messages.RebalanceResponse;
+import org.apache.fluss.rpc.messages.RemoveServerTagRequest;
+import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
@@ -81,11 +92,13 @@ import org.apache.fluss.server.authorizer.AclCreateResult;
 import org.apache.fluss.server.authorizer.AclDeleteResult;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -107,12 +120,14 @@ import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
@@ -565,6 +580,54 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             }
         }
         return CompletableFuture.completedFuture(heartbeatResponse);
+    }
+
+    @Override
+    public CompletableFuture<AddServerTagResponse> addServerTag(AddServerTagRequest request) {
+        CompletableFuture<AddServerTagResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new AddServerTagEvent(
+                                Arrays.stream(request.getServerIds())
+                                        .boxed()
+                                        .collect(Collectors.toList()),
+                                ServerTag.valueOf(request.getServerTag()),
+                                response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<RemoveServerTagResponse> removeServerTag(
+            RemoveServerTagRequest request) {
+        CompletableFuture<RemoveServerTagResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new RemoveServerTagEvent(
+                                Arrays.stream(request.getServerIds())
+                                        .boxed()
+                                        .collect(Collectors.toList()),
+                                ServerTag.valueOf(request.getServerTag()),
+                                response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<RebalanceResponse> rebalance(RebalanceRequest request) {
+        throw new UnsupportedOperationException("Support soon!");
+    }
+
+    @Override
+    public CompletableFuture<ListRebalanceProcessResponse> listRebalanceProcess(
+            ListRebalanceProcessRequest request) {
+        throw new UnsupportedOperationException("Support soon!");
+    }
+
+    @Override
+    public CompletableFuture<CancelRebalanceResponse> cancelRebalance(
+            CancelRebalanceRequest request) {
+        throw new UnsupportedOperationException("Support soon!");
     }
 
     private void validateHeartbeatRequest(
