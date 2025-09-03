@@ -51,7 +51,7 @@ CREATE TABLE site_access(
   'table.auto-partition.time-zone' = 'Asia/Shanghai'
 );
 ```
-In this case, when automatic partitioning occurs (Fluss will periodically operate on all tables in the background), four partitions are pre-created with a partition granularity of YEAR, retaining two historical partitions. The time zone is set to Asia/Shanghai.
+In this case, when automatic partitioning occurs (Fluss will periodically operate on all tables in the background), five partitions are pre-created with a partition granularity of YEAR, retaining two historical partitions. The time zone is set to Asia/Shanghai.
 
 
 ### Table Options

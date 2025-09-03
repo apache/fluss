@@ -17,9 +17,9 @@ Fluss `Table` API allows you to interact with Fluss tables for reading and writi
 In order to use the client, you need to add the following dependency to your `pom.xml` file.
 
 ```xml
-<!-- https://mvnrepository.com/artifact/com.alibaba.fluss/fluss-client -->
+<!-- https://mvnrepository.com/artifact/org.apache.fluss/fluss-client -->
 <dependency>
-    <groupId>com.alibaba.fluss</groupId>
+    <groupId>org.apache.fluss</groupId>
     <artifactId>fluss-client</artifactId>
     <version>$FLUSS_VERSION$</version>
 </dependency>

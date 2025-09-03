@@ -18,7 +18,7 @@ Since open-sourced half a year ago, many community members and friends have aske
 I don't want to interpret the symbolic meaning behind the Logo in a rigid way. Instead, I’d like to share the story behind its design — how we defined the direction and iterated step by step toward the final version. This process involved numerous subjective decisions made by the team. You might prefer one of the discarded versions, or disagree with some of the design choices. However, we want to share the journey with our community, and we hope it can also serve as a reference or inspiration for other open-source projects when designing their logos.
 
 ## Logo symbolism: what do we want to convey?
-[Fluss](https://github.com/alibaba/fluss) is an open-source streaming storage system designed for analytical workloads, with the goal of serving as a real-time data layer for Lakehouse architectures. Therefore, ***fluidity*** is the first key message we want to convey.
+[Fluss](https://github.com/apache/fluss) is an open-source streaming storage system designed for analytical workloads, with the goal of serving as a real-time data layer for Lakehouse architectures. Therefore, ***fluidity*** is the first key message we want to convey.
 
 Secondly, Fluss’s vision is to **"Bring better analytics to data streams, and bring better freshness to data Lakehouses"**. This requires the ability to adapt to multiple data lake formats and support a variety of query engines and compute engines. So, ***adaptability*** is the second core idea we want to convey.
 
@@ -65,7 +65,7 @@ Some of the community feedback I loved very much:
 - "It's soooo cute!"
 
 Give it some ❤️ via ⭐ on GitHub if you like it as well!
-https://github.com/alibaba/fluss
+https://github.com/apache/fluss
 
 ## Community Egg
 

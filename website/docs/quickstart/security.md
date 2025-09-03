@@ -4,11 +4,13 @@ sidebar_position: 2
 ---
 
 <!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
 
       http://www.apache.org/licenses/LICENSE-2.0
 
@@ -71,7 +73,7 @@ services:
         # security properties
         security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT
         security.sasl.enabled.mechanisms: PLAIN
-        security.sasl.plain.jaas.config: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_developer="developer-pass" user_consumer="consumer-pass";
+        security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_developer="developer-pass" user_consumer="consumer-pass";
         authorizer.enabled: true
         super.users: User:admin
   tablet-server:
@@ -92,7 +94,7 @@ services:
         # security properties
         security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT
         security.sasl.enabled.mechanisms: PLAIN
-        security.sasl.plain.jaas.config: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_developer="developer-pass" user_consumer="consumer-pass";
+        security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_developer="developer-pass" user_consumer="consumer-pass";
         authorizer.enabled: true
         super.users: User:admin
     volumes:
@@ -287,7 +289,7 @@ CREATE TABLE fluss_order1(
 
 ```text
 [ERROR] Could not execute SQL statement. Reason:
-com.alibaba.fluss.exception.AuthorizationException: Principal FlussPrincipal{name='developer', type='User'} have no authorization to operate CREATE on resource Resource{type=DATABASE, name='fluss'} 
+org.apache.fluss.exception.AuthorizationException: Principal FlussPrincipal{name='developer', type='User'} have no authorization to operate CREATE on resource Resource{type=DATABASE, name='fluss'} 
 ```
 
 
@@ -308,7 +310,7 @@ CREATE TABLE fluss_order2(
 
 ```text
 [ERROR] Could not execute SQL statement. Reason:
-com.alibaba.fluss.exception.AuthorizationException: Principal FlussPrincipal{name='consumer', type='User'} have no authorization to operate CREATE on resource Resource{type=DATABASE, name='fluss'} 
+org.apache.fluss.exception.AuthorizationException: Principal FlussPrincipal{name='consumer', type='User'} have no authorization to operate CREATE on resource Resource{type=DATABASE, name='fluss'} 
 ```
 
 
@@ -336,7 +338,7 @@ INSERT INTO fluss_order VALUES (1, 1.0);
 **Output:**
 
 ```text
-Caused by: java.util.concurrent.CompletionException: com.alibaba.fluss.exception.AuthorizationException: No WRITE permission among all the tables: [fluss.fluss_order]
+Caused by: java.util.concurrent.CompletionException: org.apache.fluss.exception.AuthorizationException: No WRITE permission among all the tables: [fluss.fluss_order]
 ```
 
 ### Read Data 
@@ -404,7 +406,7 @@ services:
         # security properties
         security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT
         security.sasl.enabled.mechanisms: PLAIN
-        security.sasl.plain.jaas.config: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_marketing="marketing-pass" user_finance="finance-pass";
+        security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_marketing="marketing-pass" user_finance="finance-pass";
         authorizer.enabled: true
         super.users: User:admin
   tablet-server:
@@ -425,7 +427,7 @@ services:
         # security properties
         security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT
         security.sasl.enabled.mechanisms: PLAIN
-        security.sasl.plain.jaas.config: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_marketing="marketing-pass" user_finance="finance-pass";
+        security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule required user_admin="admin-pass" user_marketing="marketing-pass" user_finance="finance-pass";
         authorizer.enabled: true
         super.users: User:admin
     volumes:
@@ -621,7 +623,7 @@ CREATE TABLE `marketing_db`.`order` (
 
 ```text
 [ERROR] Could not execute SQL statement. Reason:
-com.alibaba.fluss.exception.AuthorizationException: Principal FlussPrincipal{name='finance', type='User'} have no authorization to operate CREATE on resource Resource{type=DATABASE, name='marketing_db'} 
+org.apache.fluss.exception.AuthorizationException: Principal FlussPrincipal{name='finance', type='User'} have no authorization to operate CREATE on resource Resource{type=DATABASE, name='marketing_db'} 
 ```
 
 

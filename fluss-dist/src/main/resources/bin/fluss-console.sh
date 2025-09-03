@@ -32,11 +32,11 @@ bin=`cd "$bin"; pwd`
 
 case $SERVICE in
     (coordinator-server)
-        CLASS_TO_RUN=com.alibaba.fluss.server.coordinator.CoordinatorServer
+        CLASS_TO_RUN=org.apache.fluss.server.coordinator.CoordinatorServer
     ;;
 
     (tablet-server)
-        CLASS_TO_RUN=com.alibaba.fluss.server.tablet.TabletServer
+        CLASS_TO_RUN=org.apache.fluss.server.tablet.TabletServer
     ;;
 
     (zookeeper)

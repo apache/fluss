@@ -6,18 +6,18 @@ Fluss will support the Kafka network protocol to enable users to use Fluss as a 
 Fluss will provide deep integration with Apache Flink, enabling users a single engine experience for building real-time analytics applications. The integration will include:
 - Upgrade Flink version to 2.x
 - Support new Delta Join to address the pain-points of Stream-Stream Join.
-- More pushdown optimizations: Filter Pushdown ([#197](https://github.com/alibaba/fluss/issues/197)), Aggregation Pushdown, etc.
+- More pushdown optimizations: Filter Pushdown ([#197](https://github.com/apache/fluss/issues/197)), Aggregation Pushdown, etc.
 - Upgrade the Rule-Based Optimization into Cost-Based Optimization in Flink SQL streaming planner with leveraging statistics in Fluss tables.
 ## Streaming Lakehouse
-- Support for Iceberg ([#452](https://github.com/alibaba/fluss/issues/452)) as Lakehouse Storage. And DeltaLake, Hudi as well.
+- Support for Iceberg ([#452](https://github.com/apache/fluss/issues/452)) as Lakehouse Storage. And DeltaLake, Hudi as well.
 - Support Union Read for Spark, Trino, StarRocks.
-- Support for Lance ([#1155](https://github.com/alibaba/fluss/issues/1155)) as Lakehouse Storage to enable integration with AI/ML workflows for multi-modal data processing.
+- Support for Lance ([#1155](https://github.com/apache/fluss/issues/1155)) as Lakehouse Storage to enable integration with AI/ML workflows for multi-modal data processing.
 ## Spark Integration
-- Support for Spark connector ([#155](https://github.com/alibaba/fluss/issues/155)) to enable seamless data processing and analytics workflows.
+- Support for Spark connector ([#155](https://github.com/apache/fluss/issues/155)) to enable seamless data processing and analytics workflows.
 ## Python Client
 - Support Python SDK to connect with Python ecosystems, including PyArrow, Pandas, Lance, and DuckDB.
 ## Storage Engine
-- Support for complex data types: Array ([#168](https://github.com/alibaba/fluss/issues/168)), Map ([#169](https://github.com/alibaba/fluss/issues/169)), Struct ([#170](https://github.com/alibaba/fluss/issues/170)), Variant/JSON.
+- Support for complex data types: Array ([#168](https://github.com/apache/fluss/issues/168)), Map ([#169](https://github.com/apache/fluss/issues/169)), Struct ([#170](https://github.com/apache/fluss/issues/170)), Variant/JSON.
 - Support for schema evolution.
 ## ZooKeeper Removal
 Fluss currently utilizes ZooKeeper for cluster coordination, metadata storage, and cluster configuration management. In upcoming releases, ZooKeeper will be replaced by KvStore for metadata storage and Raft for cluster coordination and ensuring consistency. This transition aims to streamline operations and enhance system reliability.

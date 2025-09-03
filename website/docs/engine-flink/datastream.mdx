@@ -28,9 +28,9 @@ import TabItem from '@theme/TabItem';
 <Tabs>
     <TabItem value="flink-1.20" label="Flink 1.20" default>
         ```xml
-        <!-- https://mvnrepository.com/artifact/com.alibaba.fluss/fluss-flink-1.20 -->
+        <!-- https://mvnrepository.com/artifact/org.apache.fluss/fluss-flink-1.20 -->
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-flink-1.20</artifactId>
             <version>$FLUSS_VERSION$</version>
         </dependency>
@@ -38,9 +38,9 @@ import TabItem from '@theme/TabItem';
     </TabItem>
     <TabItem value="flink-1.19" label="Flink 1.19">
         ```xml
-        <!-- https://mvnrepository.com/artifact/com.alibaba.fluss/fluss-flink-1.19 -->
+        <!-- https://mvnrepository.com/artifact/org.apache.fluss/fluss-flink-1.19 -->
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-flink-1.19</artifactId>
             <version>$FLUSS_VERSION$</version>
         </dependency>
@@ -48,9 +48,9 @@ import TabItem from '@theme/TabItem';
     </TabItem>
     <TabItem value="flink-1.18" label="Flink 1.18">
         ```xml
-        <!-- https://mvnrepository.com/artifact/com.alibaba.fluss/fluss-flink-1.18 -->
+        <!-- https://mvnrepository.com/artifact/org.apache.fluss/fluss-flink-1.18 -->
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-flink-1.18</artifactId>
             <version>$FLUSS_VERSION$</version>
         </dependency>
@@ -269,7 +269,7 @@ The `FlussSinkBuilder` provides several methods for configuring the sink connect
 * **setOption(String key, String value):** Sets a single configuration option
 * **setOptions(Map&lt;String, String&gt; options):** Sets multiple configuration options at once
 
-**Note:** `FlussSerializationSchema` needs to propagate downstream the operations that take place. See [RowDataSerializationSchema](https://github.com/alibaba/fluss/blob/main/fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/sink/serializer/RowDataSerializationSchema.java) as an example.
+**Note:** `FlussSerializationSchema` needs to propagate downstream the operations that take place. See [RowDataSerializationSchema](https://github.com/apache/fluss/blob/main/fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/sink/serializer/RowDataSerializationSchema.java) as an example.
 
 ### Examples
 
@@ -385,7 +385,7 @@ private static class OrderSerializationSchema
 ```
 
 
-By default you can use the [RowDataSerializationSchema](https://github.com/alibaba/fluss/blob/main/fluss-flink/fluss-flink-common/src/main/java/com/alibaba/fluss/flink/sink/serializer/RowDataSerializationSchema.java).
+By default you can use the [RowDataSerializationSchema](https://github.com/apache/fluss/blob/main/fluss-flink/fluss-flink-common/src/main/java/org/apache/fluss/flink/sink/serializer/RowDataSerializationSchema.java).
 
 The `RowDataSerializationSchema` provides additional configuration options:
 

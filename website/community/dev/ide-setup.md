@@ -21,11 +21,11 @@ Using the included [Maven Wrapper](https://maven.apache.org/wrapper/) by replaci
 ## Preparation: Fork and Clone the Fluss Repository
 
 Fluss uses [git](http://git-scm.com/) for version control.
-The Git repository is mirrored to [GitHub](https://github.com/alibaba/fluss/).
+The Git repository is mirrored to [GitHub](https://github.com/apache/fluss/).
 
 The common way to merge code changes on GitHub is to fork the repository (creating a copy of the repository to your personal GitHub account so you can modify the source code) and issue a pull request.
 
-1. To fork the Fluss repository, log in with your GitHub account. If you do not have one yet, [sign up for free](https://github.com/signup). Then, click the `[Fork]` button on the upper right of the [Fluss repository](https://github.com/alibaba/fluss/).
+1. To fork the Fluss repository, log in with your GitHub account. If you do not have one yet, [sign up for free](https://github.com/signup). Then, click the `[Fork]` button on the upper right of the [Fluss repository](https://github.com/apache/fluss/).
 2. Clone the _forked_ version of the repository over HTTPs or SSH. SSH is recommended but needs to be [explicitly configured](https://docs.github.com/en/authentication/connecting-to-github-with-ssh).
 
 ```bash

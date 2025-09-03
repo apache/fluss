@@ -84,3 +84,24 @@ The compatibility between the Fluss client and the Fluss server is described in 
 |------------|------------|------------|-------------|
 | Client 0.6 | ✔️         | ✔️         |             |
 | Client 0.7 | ✔️         | ✔️         |             |
+
+## Upgrading Fluss datalake tiering service
+
+### Behavior Change
+Since Fluss 0.8, the auto-compaction feature during datalake tiering is **disabled** by default. Compaction will no longer be triggered automatically as part of the tiering process.
+
+| Version                                | Behavior                                                                                                                       |
+|----------------------------------------|--------------------------------------------------------------------------------------------------------------------------------|
+| **Previous Version(v0.7 and earlier)** | Auto-compaction enabled during tiering                                                                                         |
+| **Fluss 0.8+**                         | **Auto-compaction disabled by default**. Tiering service focus solely on data movement; compaction must be explicitly enabled. |
+
+### How to Enable Compaction
+To maintain the previous behavior and enable automatic compaction, you must manually configure `table.datalake.auto-compaction = true` for each table in table option.
+
+**Important Note**: This is a per-table setting. This design provides granular control, allowing you to manage compaction based on the specific performance and storage needs of each individual table.
+
+### Reason for Change & Benefits
+This change was implemented to significantly improve the core stability and performance of the Datalake Tiering Service.
+- **Enhanced Stability & Performance**: Compaction is a resource-intensive operation (CPU/IO) that can impose significant pressure on the tiering service. By disabling it by default, the service can dedicate all resources to its primary function: reliably and efficiently moving data. This results in a more stable, predictable, and smoother tiering experience for all users.
+- **Granular Control & Flexibility**: This change empowers users to make a conscious choice based on their specific needs. You can now decide the optimal balance between storage efficiency (achieved through compaction) and computational resource allocation on a per-table basis.
+

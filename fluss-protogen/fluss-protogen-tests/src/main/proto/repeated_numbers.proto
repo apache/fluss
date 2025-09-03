@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 syntax = "proto2";
-package com.alibaba.fluss.protogen.tests;
+package org.apache.fluss.protogen.tests;
 
 message Repeated {
   enum Enum {

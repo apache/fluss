@@ -20,7 +20,7 @@ This guide will walk you through the process of contributing to the Fluss docume
 ## Build Documentation
 
 ### Fork and Clone
-Fork the [Fluss repository](https://github.com/alibaba/fluss)
+Fork the [Fluss repository](https://github.com/apache/fluss)
     
 ``` bash
 git clone https://github.com/<your-username>/fluss.git
