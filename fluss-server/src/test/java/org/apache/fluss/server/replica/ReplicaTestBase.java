@@ -640,5 +640,13 @@ public class ReplicaTestBase {
         private void unchecked(ThrowingRunnable<?> throwingRunnable) {
             ThrowingRunnable.unchecked(throwingRunnable).run();
         }
+
+        @Override
+        public void handleSnapshotBroken(CompletedSnapshot snapshot) throws Exception {
+            // Remove the broken snapshot from the snapshot store (simulating ZK metadata removal)
+            testKvSnapshotStore.removeSnapshot(snapshot.getTableBucket(), snapshot.getSnapshotID());
+            // Discard the snapshot files async (similar to DefaultSnapshotContext implementation)
+            snapshot.discardAsync(executorService);
+        }
     }
 }
