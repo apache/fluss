@@ -47,6 +47,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.utils.ExceptionUtils;
 
+import org.apache.flink.annotation.Internal;
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.connector.source.SourceEvent;
 import org.apache.flink.api.connector.source.SplitEnumerator;
@@ -87,11 +88,14 @@ import static org.apache.fluss.utils.Preconditions.checkState;
  *       will be assigned to same reader.
  * </ul>
  */
+@Internal
 public class FlinkSourceEnumerator
         implements SplitEnumerator<SourceSplitBase, SourceEnumeratorState> {
+    // TODO: remove it until SplitEnumeratorContext.callAsync supports fixed delay.
 
     private static final Logger LOG = LoggerFactory.getLogger(FlinkSourceEnumerator.class);
 
+    private final WorkerExecutor workerExecutor;
     private final TablePath tablePath;
     private final boolean hasPrimaryKey;
     private final boolean isPartitioned;
@@ -148,29 +152,6 @@ public class FlinkSourceEnumerator
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
-            @Nullable Predicate partitionFilters) {
-        this(
-                tablePath,
-                flussConf,
-                hasPrimaryKey,
-                isPartitioned,
-                context,
-                startingOffsetsInitializer,
-                scanPartitionDiscoveryIntervalMs,
-                streaming,
-                partitionFilters,
-                null);
-    }
-
-    public FlinkSourceEnumerator(
-            TablePath tablePath,
-            Configuration flussConf,
-            boolean hasPrimaryKey,
-            boolean isPartitioned,
-            SplitEnumeratorContext<SourceSplitBase> context,
-            OffsetsInitializer startingOffsetsInitializer,
-            long scanPartitionDiscoveryIntervalMs,
-            boolean streaming,
             @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource) {
         this(
@@ -203,6 +184,38 @@ public class FlinkSourceEnumerator
             boolean streaming,
             @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource) {
+        this(
+                tablePath,
+                flussConf,
+                hasPrimaryKey,
+                isPartitioned,
+                context,
+                assignedTableBuckets,
+                assignedPartitions,
+                pendingHybridLakeFlussSplits,
+                startingOffsetsInitializer,
+                scanPartitionDiscoveryIntervalMs,
+                streaming,
+                partitionFilters,
+                lakeSource,
+                new WorkerExecutor(context));
+    }
+
+    FlinkSourceEnumerator(
+            TablePath tablePath,
+            Configuration flussConf,
+            boolean hasPrimaryKey,
+            boolean isPartitioned,
+            SplitEnumeratorContext<SourceSplitBase> context,
+            Set<TableBucket> assignedTableBuckets,
+            Map<Long, String> assignedPartitions,
+            List<SourceSplitBase> pendingHybridLakeFlussSplits,
+            OffsetsInitializer startingOffsetsInitializer,
+            long scanPartitionDiscoveryIntervalMs,
+            boolean streaming,
+            @Nullable Predicate partitionFilters,
+            @Nullable LakeSource<LakeSplit> lakeSource,
+            WorkerExecutor workerExecutor) {
         this.tablePath = checkNotNull(tablePath);
         this.flussConf = checkNotNull(flussConf);
         this.hasPrimaryKey = hasPrimaryKey;
@@ -222,6 +235,7 @@ public class FlinkSourceEnumerator
         this.stoppingOffsetsInitializer =
                 streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest();
         this.lakeSource = lakeSource;
+        this.workerExecutor = workerExecutor;
     }
 
     @Override
@@ -257,8 +271,8 @@ public class FlinkSourceEnumerator
                                     + "with new partition discovery interval of {} ms.",
                             tablePath,
                             scanPartitionDiscoveryIntervalMs);
-                    // discover new partitions and handle new partitions
-                    context.callAsync(
+                    // discover new partitions and handle new partitions at fixed delay.
+                    workerExecutor.callAsyncAtFixedDelay(
                             this::listPartitions,
                             this::checkPartitionChanges,
                             0,
@@ -268,7 +282,7 @@ public class FlinkSourceEnumerator
                     LOG.info(
                             "Starting the FlussSourceEnumerator for table {} without partition discovery.",
                             tablePath);
-                    context.callAsync(this::listPartitions, this::checkPartitionChanges);
+                    workerExecutor.callAsync(this::listPartitions, this::checkPartitionChanges);
                 }
             } else {
                 startInBatchMode();
@@ -434,7 +448,7 @@ public class FlinkSourceEnumerator
                     partitionChange.newPartitions.size(),
                     tablePath,
                     partitionChange.newPartitions);
-            context.callAsync(
+            workerExecutor.callAsync(
                     () -> initPartitionedSplits(partitionChange.newPartitions),
                     this::handleSplitsAdd);
         }
