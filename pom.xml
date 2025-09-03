@@ -77,6 +77,7 @@
         <module>fluss-lake</module>
         <module>fluss-kafka</module>
         <module>tools/ci/fluss-ci-tools</module>
+        <module>fluss-spark</module>
     </modules>
 
     <properties>
@@ -1005,7 +1006,7 @@
                         <skip>${skip.on.java8}</skip>
                         <java>
                             <googleJavaFormat>
-                                <version>1.15.0</version>
+                                <version>1.7</version>
                                 <style>AOSP</style>
                             </googleJavaFormat>
 
@@ -1018,6 +1019,14 @@
 
                             <removeUnusedImports/>
                         </java>
+                        <scala>
+                            <toggleOffOn />
+
+                            <scalafmt>
+                                <version>${spotless.scalafmt.version}</version>
+                                <file>${maven.multiModuleProjectDirectory}/.scalafmt.conf</file>
+                            </scalafmt>
+                        </scala>
                     </configuration>
                     <executions>
                         <execution>

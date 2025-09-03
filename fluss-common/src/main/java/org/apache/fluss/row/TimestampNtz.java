@@ -44,6 +44,10 @@ public class TimestampNtz implements Comparable<TimestampNtz>, Serializable {
     // the number of milliseconds in a day.
     private static final long MILLIS_PER_DAY = 86400000; // = 24 * 60 * 60 * 1000
 
+    public static final long MICROS_PER_MILLIS = 1000L;
+
+    public static final long NANOS_PER_MICROS = 1000L;
+
     // this field holds the integral second and the milli-of-second.
     private final long millisecond;
 
@@ -68,6 +72,12 @@ public class TimestampNtz implements Comparable<TimestampNtz>, Serializable {
      */
     public int getNanoOfMillisecond() {
         return nanoOfMillisecond;
+    }
+
+    /** Converts this {@link TimestampNtz} object to micros. */
+    public long toMicros() {
+        long micros = Math.multiplyExact(millisecond, MICROS_PER_MILLIS);
+        return micros + nanoOfMillisecond / NANOS_PER_MICROS;
     }
 
     /**

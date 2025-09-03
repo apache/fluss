@@ -80,8 +80,7 @@ public class AuthenticationFactoryTest {
                 .isInstanceOf(TestIdentifierClientAuthenticator.class);
         assertThat(
                         AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration)
-                                .values()
-                                .stream()
+                                .values().stream()
                                 .findAny()
                                 .get()
                                 .get())
@@ -94,8 +93,7 @@ public class AuthenticationFactoryTest {
                 .isInstanceOf(TestIdentifierClientAuthenticator.class);
         assertThat(
                         AuthenticationFactory.loadServerAuthenticatorSuppliers(configuration)
-                                .values()
-                                .stream()
+                                .values().stream()
                                 .findAny()
                                 .get()
                                 .get())

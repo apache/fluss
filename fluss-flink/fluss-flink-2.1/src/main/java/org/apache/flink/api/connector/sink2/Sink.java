@@ -53,9 +53,7 @@ public interface Sink<InputT> extends Serializable {
          */
         MailboxExecutor getMailboxExecutor();
 
-        /**
-         * @return The metric group this writer belongs to.
-         */
+        /** @return The metric group this writer belongs to. */
         SinkWriterMetricGroup metricGroup();
     }
 }

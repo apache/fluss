@@ -44,8 +44,7 @@ import static org.apache.iceberg.types.Types.NestedField.required;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** UT for {@link IcebergConversions}. */
-class IcebergConversionsTest {
-    ;
+class IcebergConversionsTest {;
 
     @Test
     void testToPartition(@TempDir File tempWarehouseDir) {

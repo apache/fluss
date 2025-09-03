@@ -62,7 +62,8 @@ public class BytesTest {
 
         // test binary equals to protobuf
         Bytes.B pbb =
-                Bytes.B.newBuilder()
+                Bytes.B
+                        .newBuilder()
                         .setPayload(ByteString.copyFrom(new byte[] {1, 2, 3, 4, 5}))
                         .build();
 
@@ -254,7 +255,8 @@ public class BytesTest {
         assertThat(lpb.getExtraItemAt(1)).isEqualTo(new byte[] {4, 5, 6, 7});
 
         Bytes.B pbb =
-                Bytes.B.newBuilder()
+                Bytes.B
+                        .newBuilder()
                         .addExtraItems(ByteString.copyFrom(new byte[] {1, 2, 3}))
                         .addExtraItems(ByteString.copyFrom(new byte[] {4, 5, 6, 7}))
                         .build();
