@@ -47,9 +47,7 @@ public interface Predicate extends Serializable {
      */
     boolean test(long rowCount, InternalRow minValues, InternalRow maxValues, Long[] nullCounts);
 
-    /**
-     * @return the negation predicate of this predicate if possible.
-     */
+    /** @return the negation predicate of this predicate if possible. */
     Optional<Predicate> negate();
 
     <T> T visit(PredicateVisitor<T> visitor);

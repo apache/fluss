@@ -58,7 +58,8 @@ public class StringsTest {
         assertThat(lps.getNameAt(2)).isEqualTo("c");
 
         Strings.S pbs =
-                Strings.S.newBuilder()
+                Strings.S
+                        .newBuilder()
                         .setId("id")
                         .addNames("a")
                         .addNames("b")

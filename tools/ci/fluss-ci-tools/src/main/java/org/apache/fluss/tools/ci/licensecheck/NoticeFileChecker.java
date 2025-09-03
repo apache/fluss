@@ -304,8 +304,7 @@ public class NoticeFileChecker {
 
             // find all dependencies missing from NOTICE file
             Collection<Dependency> expectedDependencies =
-                    modulesWithShadedDependencies
-                            .getOrDefault(moduleName, Collections.emptySet())
+                    modulesWithShadedDependencies.getOrDefault(moduleName, Collections.emptySet())
                             .stream()
                             .filter(
                                     dependency ->

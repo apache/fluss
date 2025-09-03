@@ -93,7 +93,8 @@ class GSFileSystemBehaviorITCase extends FileSystemBehaviorTestSuite {
             GoogleCloudStorageFileSystem googleCloudStorageFileSystem =
                     new GoogleCloudStorageFileSystem(
                             googleCloudStorageOptions -> inMemoryGoogleCloudStorage,
-                            GoogleCloudStorageFileSystemOptions.DEFAULT.toBuilder()
+                            GoogleCloudStorageFileSystemOptions.DEFAULT
+                                    .toBuilder()
                                     .setCloudStorageOptions(inMemoryGoogleCloudStorage.getOptions())
                                     .build());
 
