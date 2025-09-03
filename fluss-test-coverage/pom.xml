@@ -324,6 +324,7 @@
                                             org.apache.fluss.security.auth.sasl.plain.PlainSaslServer.PlainSaslServerFactory
                                         </exclude>
                                         <exclude>org.apache.fluss.security.auth.ServerAuthenticator</exclude>
+                                        <exclude>org.apache.fluss.config.dynamic.AlterConfigOp</exclude>
                                         <!-- start exclude for flink-connector -->
                                         <exclude>org.apache.fluss.flink.utils.*</exclude>
                                         <exclude>org.apache.fluss.flink.source.*
