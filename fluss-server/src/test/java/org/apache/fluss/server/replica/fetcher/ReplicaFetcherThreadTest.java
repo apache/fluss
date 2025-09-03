@@ -323,7 +323,12 @@ public class ReplicaFetcherThreadTest {
         scheduler.startup();
 
         LogManager logManager =
-                LogManager.create(conf, zkClient, scheduler, SystemClock.getInstance());
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        scheduler,
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS);
         logManager.startup();
         ReplicaManager replicaManager =
                 new TestingReplicaManager(
