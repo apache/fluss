@@ -61,11 +61,7 @@ public class ConfigOptions {
                 "ch.qos.logback"
             };
 
-    @Internal
-    public static final String[] PARENT_FIRST_HDFS_PATTERNS =
-            new String[] {
-                "hdfs-site", "core-site", "org.apache.hadoop.", "META-INF",
-            };
+
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Cluster
@@ -111,12 +107,11 @@ public class ConfigOptions {
                     .asList()
                     .defaultValues(
                             ArrayUtils.concat(
+                                    // TODO: remove core-site after implement fluss hdfs security utils
                                     new String[] {
-                                        "java.", "org.apache.fluss.", "javax.annotation."
+                                        "java.", "org.apache.fluss.", "javax.annotation.", "org.apache.hadoop.","core-site",
                                     },
-                                    ArrayUtils.concat(
-                                            PARENT_FIRST_LOGGING_PATTERNS,
-                                            PARENT_FIRST_HDFS_PATTERNS)))
+                                    PARENT_FIRST_LOGGING_PATTERNS))
                     .withDescription(
                             "A (semicolon-separated) list of patterns that specifies which classes should always be"
                                     + " resolved through the plugin parent ClassLoader first. A pattern is a simple prefix that is checked "
