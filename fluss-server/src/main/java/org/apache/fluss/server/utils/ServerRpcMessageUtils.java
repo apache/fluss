@@ -23,6 +23,7 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
+import org.apache.fluss.metadata.FlussTableChange;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -88,6 +89,7 @@ import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForTable;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
+import org.apache.fluss.rpc.messages.PbFlussTableChange;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbKvSnapshot;
 import org.apache.fluss.rpc.messages.PbLakeSnapshotForBucket;
@@ -110,7 +112,9 @@ import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
+import org.apache.fluss.rpc.messages.PbResetOption;
 import org.apache.fluss.rpc.messages.PbServerNode;
+import org.apache.fluss.rpc.messages.PbSetOption;
 import org.apache.fluss.rpc.messages.PbStopReplicaReqForBucket;
 import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import org.apache.fluss.rpc.messages.PbTableBucket;
@@ -225,6 +229,21 @@ public class ServerRpcMessageUtils {
                 pbServerNode.getPort(),
                 serverType,
                 pbServerNode.hasRack() ? pbServerNode.getRack() : null);
+    }
+
+    public static FlussTableChange toFlussTableChange(PbFlussTableChange pbFlussTableChange) {
+        switch (pbFlussTableChange.getChangeType()) {
+            case SET_OPTION:
+                PbSetOption pbSetOption = pbFlussTableChange.getSetOption();
+                return FlussTableChange.set(pbSetOption.getKey(), pbSetOption.getValue());
+            case RESET_OPTION:
+                PbResetOption pbResetOption = pbFlussTableChange.getResetOption();
+                return FlussTableChange.reset(pbResetOption.getKey());
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported fluss table change type "
+                                + pbFlussTableChange.getChangeType());
+        }
     }
 
     public static MetadataResponse buildMetadataResponse(

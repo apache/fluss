@@ -21,7 +21,9 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.VisibleForTesting;
 
 import java.lang.reflect.Field;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /** Utilities of Fluss {@link ConfigOptions}. */
@@ -33,9 +35,15 @@ public class FlussConfigUtils {
     public static final String CLIENT_PREFIX = "client.";
     public static final String CLIENT_SECURITY_PREFIX = "client.security.";
 
+    public static final List<String> ALTERABLE_TABLE_CONFIG;
+    public static final List<String> ALTERABLE_CLIENT_OPTIONS;
+
     static {
         TABLE_OPTIONS = extractConfigOptions("table.");
         CLIENT_OPTIONS = extractConfigOptions("client.");
+        ALTERABLE_TABLE_CONFIG = Collections.emptyList();
+        ALTERABLE_CLIENT_OPTIONS =
+                Collections.singletonList(ConfigOptions.CLIENT_CONNECT_TIMEOUT.key());
     }
 
     @VisibleForTesting

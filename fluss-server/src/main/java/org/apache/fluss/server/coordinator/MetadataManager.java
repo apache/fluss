@@ -34,6 +34,7 @@ import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
+import org.apache.fluss.metadata.FlussTableChange;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -55,12 +56,16 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
 
+import static org.apache.fluss.config.FlussConfigUtils.ALTERABLE_CLIENT_OPTIONS;
+import static org.apache.fluss.config.FlussConfigUtils.ALTERABLE_TABLE_CONFIG;
+import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
 
 /** A manager for metadata. */
@@ -298,6 +303,101 @@ public class MetadataManager {
                     return tableId;
                 },
                 "Fail to create table " + tablePath);
+    }
+
+    public void alterTableProperties(
+            TablePath tablePath,
+            List<FlussTableChange.SetOption> setOptions,
+            List<FlussTableChange.ResetOption> resetOptions,
+            boolean ignoreIfNotExists) {
+
+        if (!databaseExists(tablePath.getDatabaseName())) {
+            throw new DatabaseNotExistException(
+                    "Database " + tablePath.getDatabaseName() + " does not exist.");
+        }
+        if (!tableExists(tablePath)) {
+            if (ignoreIfNotExists) {
+                return;
+            } else {
+                throw new TableNotExistException("Table " + tablePath + " does not exists.");
+            }
+        }
+
+        try {
+            TableRegistration updatedTableRegistration =
+                    getUpdatedTableRegistration(tablePath, setOptions, resetOptions);
+            if (updatedTableRegistration != null) {
+                zookeeperClient.updateTable(tablePath, updatedTableRegistration);
+            } else {
+                LOG.info(
+                        "No properties changed when alter table {}, skip update table.", tablePath);
+            }
+        } catch (Exception e) {
+            if (e instanceof KeeperException.NoNodeException) {
+                if (ignoreIfNotExists) {
+                    return;
+                }
+                throw new TableNotExistException("Table " + tablePath + " does not exists.");
+            } else {
+                throw new FlussRuntimeException("Failed to alter table: " + tablePath, e);
+            }
+        }
+    }
+
+    private TableRegistration getUpdatedTableRegistration(
+            TablePath tablePath,
+            List<FlussTableChange.SetOption> setOptions,
+            List<FlussTableChange.ResetOption> resetOptions) {
+
+        TableRegistration existTableReg = getTableRegistration(tablePath);
+
+        Map<String, String> newProperties = new HashMap<>(existTableReg.properties);
+        Map<String, String> newCustomProperties = new HashMap<>(existTableReg.customProperties);
+
+        boolean propertiesChanged = false;
+        boolean customPropertiesChanged = false;
+        for (FlussTableChange.SetOption setOption : setOptions) {
+            String key = setOption.getKey();
+            if (ALTERABLE_TABLE_CONFIG.contains(key)) {
+                // only alterable configs can be updated, other properties keep unchanged.
+                String curValue = newProperties.get(key);
+                String updatedValue = setOption.getValue();
+                if (!updatedValue.equals(curValue)) {
+                    propertiesChanged = true;
+                    newProperties.put(key, updatedValue);
+                }
+            } else if (ALTERABLE_CLIENT_OPTIONS.contains(key)) {
+                String curValue = newProperties.get(key);
+                String updatedValue = setOption.getValue();
+                if (!updatedValue.equals(curValue)) {
+                    customPropertiesChanged = true;
+                    newCustomProperties.put(key, updatedValue);
+                }
+            }
+        }
+
+        for (FlussTableChange.ResetOption resetOption : resetOptions) {
+            String key = resetOption.getKey();
+            if (ALTERABLE_TABLE_CONFIG.contains(key)) {
+                // only alterable configs can be updated, other properties keep unchanged.
+                if (newProperties.containsKey(key)) {
+                    propertiesChanged = true;
+                    newProperties.remove(key);
+                }
+            } else if (ALTERABLE_CLIENT_OPTIONS.contains(key)) {
+                if (newCustomProperties.containsKey(key)) {
+                    customPropertiesChanged = true;
+                    newCustomProperties.remove(key);
+                }
+            }
+        }
+
+        if (!propertiesChanged && !customPropertiesChanged) {
+            // if no properties updated, return null to represent no new TableRegistration
+            return null;
+        }
+        validateAlterTableProperties(newProperties);
+        return existTableReg.newProperties(newProperties, newCustomProperties);
     }
 
     public TableInfo getTable(TablePath tablePath) throws TableNotExistException {

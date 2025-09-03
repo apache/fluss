@@ -31,6 +31,7 @@ import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.FlussTableChange;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -42,6 +43,8 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.AlterTableResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -68,6 +71,7 @@ import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.PbFlussTableChange;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
 import org.apache.fluss.rpc.netty.server.Session;
@@ -94,6 +98,7 @@ import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -110,9 +115,11 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
@@ -281,6 +288,53 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 tablePath, tableDescriptor, tableAssignment, request.isIgnoreIfExists());
 
         return CompletableFuture.completedFuture(new CreateTableResponse());
+    }
+
+    @Override
+    public CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request) {
+        TablePath tablePath = toTablePath(request.getTablePath());
+        tablePath.validate();
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.table(tablePath));
+        }
+
+        AlterTableResponse alterTableResponse = new AlterTableResponse();
+
+        handleFlussTableChanges(
+                tablePath, request.getTableChangesList(), request.isIgnoreIfNotExists());
+
+        return CompletableFuture.completedFuture(alterTableResponse);
+    }
+
+    private void handleFlussTableChanges(
+            TablePath tablePath,
+            List<PbFlussTableChange> pbFlussTableChanges,
+            boolean ignoreIfNotExists) {
+
+        List<FlussTableChange> tableChanges =
+                pbFlussTableChanges.stream()
+                        .filter(Objects::nonNull)
+                        .map(ServerRpcMessageUtils::toFlussTableChange)
+                        .collect(Collectors.toList());
+
+        List<FlussTableChange.SetOption> setOptions = new ArrayList<>();
+        List<FlussTableChange.ResetOption> resetOptions = new ArrayList<>();
+
+        for (FlussTableChange tableChange : tableChanges) {
+            if (tableChange instanceof FlussTableChange.SetOption) {
+                setOptions.add((FlussTableChange.SetOption) tableChange);
+            } else if (tableChange instanceof FlussTableChange.ResetOption) {
+                resetOptions.add((FlussTableChange.ResetOption) tableChange);
+            }
+            // add more FlussTableChange type
+        }
+
+        if (!setOptions.isEmpty() || !resetOptions.isEmpty()) {
+            // handle properties
+            metadataManager.alterTableProperties(
+                    tablePath, setOptions, resetOptions, ignoreIfNotExists);
+        }
+        return;
     }
 
     private TableDescriptor applySystemDefaults(TableDescriptor tableDescriptor) {

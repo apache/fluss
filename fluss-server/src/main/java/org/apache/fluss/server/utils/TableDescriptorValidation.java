@@ -39,6 +39,7 @@ import java.util.Collections;
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -91,6 +92,23 @@ public class TableDescriptorValidation {
         checkTieredLog(tableConf);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema);
         checkSystemColumns(schema);
+    }
+
+    public static void validateAlterTableProperties(Map<String, String> properties) {
+        Configuration tableConf = Configuration.fromMap(properties);
+        // check properties should only contain table.* options,
+        // and this cluster know it,
+        // and value is valid
+        for (String key : tableConf.keySet()) {
+            if (!TABLE_OPTIONS.containsKey(key)) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "'%s' is not a Fluss table property. Please use '.customProperty(..)' to set custom properties.",
+                                key));
+            }
+            ConfigOption<?> option = TABLE_OPTIONS.get(key);
+            validateOptionValue(tableConf, option);
+        }
     }
 
     private static void checkSystemColumns(RowType schema) {

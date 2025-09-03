@@ -48,6 +48,7 @@ import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
+import org.apache.fluss.metadata.FlussTableChange;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -195,6 +196,72 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         // assert created time
         assertThat(tableInfo.getCreatedTime())
                 .isBetween(timestampBeforeCreate, timestampAfterCreate);
+    }
+
+    @Test
+    void testAlterTable() throws Exception {
+        // create table
+        TablePath tablePath = TablePath.of("test_db", "alter_table_1");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+
+        TableDescriptor existingTableDescriptor = tableInfo.toTableDescriptor();
+        Map<String, String> updateProperties =
+                new HashMap<>(existingTableDescriptor.getProperties());
+        Map<String, String> updateCustomProperties =
+                new HashMap<>(existingTableDescriptor.getCustomProperties());
+        updateCustomProperties.put("client.connect-timeout", "240s");
+
+        TableDescriptor newTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(existingTableDescriptor.getSchema())
+                        .comment(existingTableDescriptor.getComment().orElse("test table"))
+                        .partitionedBy(existingTableDescriptor.getPartitionKeys())
+                        .distributedBy(
+                                existingTableDescriptor
+                                        .getTableDistribution()
+                                        .get()
+                                        .getBucketCount()
+                                        .orElse(3),
+                                existingTableDescriptor.getBucketKeys())
+                        .properties(updateProperties)
+                        .customProperties(updateCustomProperties)
+                        .build();
+
+        List<FlussTableChange> tableChanges = new ArrayList<>();
+        FlussTableChange tableChange = FlussTableChange.set("client.connect-timeout", "240s");
+        tableChanges.add(tableChange);
+        // alter table
+        admin.alterTable(tablePath, tableChanges, false).get();
+
+        TableInfo alteredTableInfo = admin.getTableInfo(tablePath).get();
+        TableDescriptor alteredTableDescriptor = alteredTableInfo.toTableDescriptor();
+        assertThat(alteredTableDescriptor).isEqualTo(newTableDescriptor);
+
+        // throw exception if table not exist
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                TablePath.of("test_db", "alter_table_not_exist"),
+                                                tableChanges,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(TableNotExistException.class);
+
+        // throw exception if database not exist
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                TablePath.of(
+                                                        "test_db_not_exist",
+                                                        "alter_table_not_exist"),
+                                                tableChanges,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(DatabaseNotExistException.class);
     }
 
     @Test
