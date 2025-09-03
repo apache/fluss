@@ -1006,7 +1006,7 @@
                         <skip>${skip.on.java8}</skip>
                         <java>
                             <googleJavaFormat>
-                                <version>1.15.0</version>
+                                <version>1.7</version>
                                 <style>AOSP</style>
                             </googleJavaFormat>
 

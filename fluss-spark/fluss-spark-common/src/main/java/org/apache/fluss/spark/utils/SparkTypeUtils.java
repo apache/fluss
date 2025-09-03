@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,25 +17,25 @@
 
 package org.apache.fluss.spark.utils;
 
-import com.alibaba.fluss.types.BigIntType;
-import com.alibaba.fluss.types.BinaryType;
-import com.alibaba.fluss.types.BooleanType;
-import com.alibaba.fluss.types.BytesType;
-import com.alibaba.fluss.types.CharType;
-import com.alibaba.fluss.types.DataField;
-import com.alibaba.fluss.types.DataTypeDefaultVisitor;
-import com.alibaba.fluss.types.DateType;
-import com.alibaba.fluss.types.DecimalType;
-import com.alibaba.fluss.types.DoubleType;
-import com.alibaba.fluss.types.FloatType;
-import com.alibaba.fluss.types.IntType;
-import com.alibaba.fluss.types.LocalZonedTimestampType;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.types.SmallIntType;
-import com.alibaba.fluss.types.StringType;
-import com.alibaba.fluss.types.TimeType;
-import com.alibaba.fluss.types.TimestampType;
-import com.alibaba.fluss.types.TinyIntType;
+import org.apache.fluss.types.BigIntType;
+import org.apache.fluss.types.BinaryType;
+import org.apache.fluss.types.BooleanType;
+import org.apache.fluss.types.BytesType;
+import org.apache.fluss.types.CharType;
+import org.apache.fluss.types.DataField;
+import org.apache.fluss.types.DataTypeDefaultVisitor;
+import org.apache.fluss.types.DateType;
+import org.apache.fluss.types.DecimalType;
+import org.apache.fluss.types.DoubleType;
+import org.apache.fluss.types.FloatType;
+import org.apache.fluss.types.IntType;
+import org.apache.fluss.types.LocalZonedTimestampType;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.SmallIntType;
+import org.apache.fluss.types.StringType;
+import org.apache.fluss.types.TimeType;
+import org.apache.fluss.types.TimestampType;
+import org.apache.fluss.types.TinyIntType;
 
 import org.apache.spark.sql.types.DataType;
 import org.apache.spark.sql.types.DataTypes;
@@ -57,11 +58,11 @@ public class SparkTypeUtils {
         return (StructType) fromFlussType(type);
     }
 
-    public static DataType fromFlussType(com.alibaba.fluss.types.DataType type) {
+    public static DataType fromFlussType(org.apache.fluss.types.DataType type) {
         return type.accept(FlussToSparkTypeVisitor.INSTANCE);
     }
 
-    public static com.alibaba.fluss.types.DataType toFlussType(DataType dataType) {
+    public static org.apache.fluss.types.DataType toFlussType(DataType dataType) {
         return SparkToFlussTypeVisitor.visit(dataType);
     }
 
@@ -169,23 +170,22 @@ public class SparkTypeUtils {
         }
 
         @Override
-        protected DataType defaultMethod(com.alibaba.fluss.types.DataType dataType) {
+        protected DataType defaultMethod(org.apache.fluss.types.DataType dataType) {
             throw new UnsupportedOperationException("Unsupported type: " + dataType);
         }
     }
 
     private static class SparkToFlussTypeVisitor {
 
-        static com.alibaba.fluss.types.DataType visit(DataType type) {
+        static org.apache.fluss.types.DataType visit(DataType type) {
             return visit(type, new SparkToFlussTypeVisitor());
         }
 
-        static com.alibaba.fluss.types.DataType visit(
+        static org.apache.fluss.types.DataType visit(
                 DataType type, SparkToFlussTypeVisitor visitor) {
             if (type instanceof StructType) {
                 StructField[] fields = ((StructType) type).fields();
-                List<com.alibaba.fluss.types.DataType> fieldResults =
-                        new ArrayList<>(fields.length);
+                List<org.apache.fluss.types.DataType> fieldResults = new ArrayList<>(fields.length);
 
                 for (StructField field : fields) {
                     fieldResults.add(visit(field.dataType(), visitor));
@@ -201,13 +201,13 @@ public class SparkTypeUtils {
             }
         }
 
-        public com.alibaba.fluss.types.DataType struct(
-                StructType struct, List<com.alibaba.fluss.types.DataType> fieldResults) {
+        public org.apache.fluss.types.DataType struct(
+                StructType struct, List<org.apache.fluss.types.DataType> fieldResults) {
             StructField[] fields = struct.fields();
             List<DataField> newFields = new ArrayList<>(fields.length);
             for (int i = 0; i < fields.length; i += 1) {
                 StructField field = fields[i];
-                com.alibaba.fluss.types.DataType fieldType =
+                org.apache.fluss.types.DataType fieldType =
                         fieldResults.get(i).copy(field.nullable());
                 String comment = field.getComment().getOrElse(() -> null);
                 newFields.add(new DataField(field.name(), fieldType, comment));
@@ -216,7 +216,7 @@ public class SparkTypeUtils {
             return new RowType(newFields);
         }
 
-        public com.alibaba.fluss.types.DataType atomic(DataType atomic) {
+        public org.apache.fluss.types.DataType atomic(DataType atomic) {
             if (atomic instanceof org.apache.spark.sql.types.BooleanType) {
                 return new BooleanType();
             } else if (atomic instanceof org.apache.spark.sql.types.ByteType) {

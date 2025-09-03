@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <!--
- Copyright (c) 2025 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
 
       http://www.apache.org/licenses/LICENSE-2.0
 
@@ -37,8 +39,6 @@
     </modules>
 
     <properties>
-        <maven.compiler.source>8</maven.compiler.source>
-        <maven.compiler.target>8</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
         <scala212.version>2.12.15</scala212.version>
         <scala.binary.version>2.12</scala.binary.version>
@@ -285,14 +285,14 @@
 
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-server</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-server</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
@@ -300,7 +300,7 @@
         </dependency>
 
         <dependency>
-            <groupId>com.alibaba.fluss</groupId>
+            <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-test-utils</artifactId>
             <version>${project.version}</version>
             <scope>test</scope>
@@ -345,7 +345,7 @@
                     <checkMultipleScalaVersions>false</checkMultipleScalaVersions>
                     <args>
                         <arg>-nobootcp</arg>
-                        <arg>-target:jvm-${target.java.version}</arg>
+                        <arg>-target:jvm-1.8</arg>
                     </args>
                 </configuration>
             </plugin>

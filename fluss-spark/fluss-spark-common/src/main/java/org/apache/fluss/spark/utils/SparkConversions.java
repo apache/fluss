@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,13 +17,13 @@
 
 package org.apache.fluss.spark.utils;
 
-import com.alibaba.fluss.config.ConfigOption;
-import com.alibaba.fluss.config.ConfigOptions;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.config.FlussConfigUtils;
-import com.alibaba.fluss.metadata.Schema;
-import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.ValidationException;
+import org.apache.fluss.config.ConfigOption;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.FlussConfigUtils;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.ValidationException;
 import org.apache.fluss.spark.SparkConnectorOptions;
 
 import org.apache.spark.sql.connector.expressions.Transform;
@@ -54,7 +55,10 @@ public class SparkConversions {
 
         if (properties.containsKey(SparkConnectorOptions.PRIMARY_KEY.key())) {
             List<String> primaryKey =
-                    Arrays.stream(properties.get(SparkConnectorOptions.PRIMARY_KEY.key()).split(","))
+                    Arrays.stream(
+                                    properties
+                                            .get(SparkConnectorOptions.PRIMARY_KEY.key())
+                                            .split(","))
                             .map(String::trim)
                             .collect(Collectors.toList());
             schemBuilder.primaryKey(primaryKey);

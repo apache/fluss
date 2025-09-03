@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,14 +17,14 @@
 
 package org.apache.fluss.spark;
 
-import com.alibaba.fluss.row.BinaryString;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.TimestampLtz;
-import com.alibaba.fluss.row.TimestampNtz;
-import com.alibaba.fluss.types.BigIntType;
-import com.alibaba.fluss.types.DataType;
-import com.alibaba.fluss.types.DataTypeChecks;
-import com.alibaba.fluss.types.RowType;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.BigIntType;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeChecks;
+import org.apache.fluss.types.RowType;
 
 import org.apache.spark.sql.catalyst.util.ArrayData;
 import org.apache.spark.sql.catalyst.util.MapData;
@@ -31,7 +32,7 @@ import org.apache.spark.sql.types.Decimal;
 import org.apache.spark.unsafe.types.CalendarInterval;
 import org.apache.spark.unsafe.types.UTF8String;
 
-import static com.alibaba.fluss.utils.InternalRowUtils.copyInternalRow;
+import static org.apache.fluss.utils.InternalRowUtils.copyInternalRow;
 
 /** Spark {@link org.apache.spark.sql.catalyst.InternalRow} to wrap {@link InternalRow}. */
 public class SparkInternalRow extends org.apache.spark.sql.catalyst.InternalRow {
@@ -105,7 +106,7 @@ public class SparkInternalRow extends org.apache.spark.sql.catalyst.InternalRow 
 
     private long getTimestampMicros(int ordinal) {
         DataType type = rowType.getTypeAt(ordinal);
-        if (type instanceof com.alibaba.fluss.types.TimestampType) {
+        if (type instanceof org.apache.fluss.types.TimestampType) {
             return fromFluss(row.getTimestampNtz(ordinal, DataTypeChecks.getPrecision(type)));
         } else {
             return fromFluss(row.getTimestampLtz(ordinal, DataTypeChecks.getPrecision(type)));
@@ -124,7 +125,7 @@ public class SparkInternalRow extends org.apache.spark.sql.catalyst.InternalRow 
 
     @Override
     public Decimal getDecimal(int ordinal, int precision, int scale) {
-        com.alibaba.fluss.row.Decimal decimal = row.getDecimal(ordinal, precision, scale);
+        org.apache.fluss.row.Decimal decimal = row.getDecimal(ordinal, precision, scale);
         return fromFluss(decimal);
     }
 
@@ -181,7 +182,7 @@ public class SparkInternalRow extends org.apache.spark.sql.catalyst.InternalRow 
             case STRING:
                 return fromFluss((BinaryString) o);
             case DECIMAL:
-                return fromFluss((com.alibaba.fluss.row.Decimal) o);
+                return fromFluss((org.apache.fluss.row.Decimal) o);
             case ROW:
                 return fromFluss((InternalRow) o, (RowType) type);
             default:
@@ -193,7 +194,7 @@ public class SparkInternalRow extends org.apache.spark.sql.catalyst.InternalRow 
         return UTF8String.fromBytes(string.toBytes());
     }
 
-    public static Decimal fromFluss(com.alibaba.fluss.row.Decimal decimal) {
+    public static Decimal fromFluss(org.apache.fluss.row.Decimal decimal) {
         return Decimal.apply(decimal.toBigDecimal());
     }
 

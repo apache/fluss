@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,15 +17,15 @@
 
 package org.apache.fluss.spark;
 
-import com.alibaba.fluss.row.Decimal;
-import com.alibaba.fluss.row.GenericRow;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.TimestampLtz;
-import com.alibaba.fluss.row.TimestampNtz;
+import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.spark.utils.SparkTypeUtils;
-import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.utils.DateTimeUtils;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.utils.DateTimeUtils;
 
 import org.apache.spark.sql.catalyst.CatalystTypeConverters;
 import org.apache.spark.sql.catalyst.util.CharVarcharUtils;
@@ -41,7 +42,7 @@ import java.util.stream.Collectors;
 import scala.Function1;
 import scala.collection.JavaConverters;
 
-import static com.alibaba.fluss.row.BinaryString.fromString;
+import static org.apache.fluss.row.BinaryString.fromString;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link SparkInternalRow}. */

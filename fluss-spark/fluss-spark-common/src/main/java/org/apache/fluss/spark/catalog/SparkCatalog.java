@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2025 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,24 +17,24 @@
 
 package org.apache.fluss.spark.catalog;
 
-import com.alibaba.fluss.client.Connection;
-import com.alibaba.fluss.client.ConnectionFactory;
-import com.alibaba.fluss.client.admin.Admin;
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.exception.PartitionNotExistException;
-import com.alibaba.fluss.exception.TableNotExistException;
-import com.alibaba.fluss.exception.TableNotPartitionedException;
-import com.alibaba.fluss.metadata.DatabaseDescriptor;
-import com.alibaba.fluss.metadata.PartitionInfo;
-import com.alibaba.fluss.metadata.PartitionSpec;
-import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TableInfo;
-import com.alibaba.fluss.metadata.TablePath;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.PartitionNotExistException;
+import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.exception.TableNotPartitionedException;
+import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.spark.SparkTable;
 import org.apache.fluss.spark.exception.CatalogException;
-import com.alibaba.fluss.utils.CatalogExceptionUtils;
-import com.alibaba.fluss.utils.ExceptionUtils;
-import com.alibaba.fluss.utils.IOUtils;
+import org.apache.fluss.utils.CatalogExceptionUtils;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.IOUtils;
 
 import org.apache.spark.sql.catalyst.analysis.NamespaceAlreadyExistsException;
 import org.apache.spark.sql.catalyst.analysis.NoSuchFunctionException;
@@ -63,12 +64,12 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.spark.utils.SparkConversions.toFlussClientConfig;
 import static org.apache.fluss.spark.utils.SparkConversions.toFlussTable;
-import static com.alibaba.fluss.utils.CatalogExceptionUtils.isPartitionAlreadyExists;
-import static com.alibaba.fluss.utils.CatalogExceptionUtils.isPartitionInvalid;
-import static com.alibaba.fluss.utils.CatalogExceptionUtils.isPartitionNotExist;
-import static com.alibaba.fluss.utils.CatalogExceptionUtils.isTableNotExist;
-import static com.alibaba.fluss.utils.CatalogExceptionUtils.isTableNotPartitioned;
-import static com.alibaba.fluss.utils.Preconditions.checkArgument;
+import static org.apache.fluss.utils.CatalogExceptionUtils.isPartitionAlreadyExists;
+import static org.apache.fluss.utils.CatalogExceptionUtils.isPartitionInvalid;
+import static org.apache.fluss.utils.CatalogExceptionUtils.isPartitionNotExist;
+import static org.apache.fluss.utils.CatalogExceptionUtils.isTableNotExist;
+import static org.apache.fluss.utils.CatalogExceptionUtils.isTableNotPartitioned;
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** A Spark Catalog for Fluss. */
 public class SparkCatalog implements SupportsNamespaces, FunctionCatalog, TableCatalog, Closeable {
