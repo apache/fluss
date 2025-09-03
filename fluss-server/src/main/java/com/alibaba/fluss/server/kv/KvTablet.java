@@ -64,14 +64,12 @@ import com.alibaba.fluss.utils.BytesUtils;
 import com.alibaba.fluss.utils.FileUtils;
 import com.alibaba.fluss.utils.FlussPaths;
 import com.alibaba.fluss.utils.types.Tuple2;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 import javax.annotation.concurrent.ThreadSafe;
-
 import java.io.File;
 import java.io.IOException;
 import java.util.Collection;
@@ -158,7 +156,8 @@ public final class KvTablet {
             KvFormat kvFormat,
             Schema schema,
             RowMerger rowMerger,
-            ArrowCompressionInfo arrowCompressionInfo)
+            ArrowCompressionInfo arrowCompressionInfo,
+            Map<String, String> tableProperties)
             throws IOException {
         Tuple2<PhysicalTablePath, TableBucket> tablePathAndBucket =
                 FlussPaths.parseTabletDir(kvTabletDir);
@@ -173,7 +172,8 @@ public final class KvTablet {
                 kvFormat,
                 schema,
                 rowMerger,
-                arrowCompressionInfo);
+                arrowCompressionInfo,
+                tableProperties);
     }
 
     public static KvTablet create(
@@ -187,9 +187,10 @@ public final class KvTablet {
             KvFormat kvFormat,
             Schema schema,
             RowMerger rowMerger,
-            ArrowCompressionInfo arrowCompressionInfo)
+            ArrowCompressionInfo arrowCompressionInfo,
+            Map<String, String> tableProperties)
             throws IOException {
-        RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir);
+        RocksDBKv kv = buildRocksDBKv(tableProperties, serverConf, kvTabletDir);
         return new KvTablet(
                 tablePath,
                 tableBucket,
@@ -206,10 +207,16 @@ public final class KvTablet {
                 arrowCompressionInfo);
     }
 
-    private static RocksDBKv buildRocksDBKv(Configuration configuration, File kvDir)
+    private static RocksDBKv buildRocksDBKv(
+            Map<String, String> tableProperties, Configuration configuration, File kvDir)
             throws IOException {
+        // include tableProperties in configuration and set tableProperties
+        // before it falls back to global options for RocksDB
+        Configuration tableConf = Configuration.fromMap(tableProperties);
+        Configuration tablePropertiesWithGlobalFallback = new Configuration(configuration);
+        tablePropertiesWithGlobalFallback.addAll(tableConf);
         RocksDBResourceContainer rocksDBResourceContainer =
-                new RocksDBResourceContainer(configuration, kvDir);
+                new RocksDBResourceContainer(tablePropertiesWithGlobalFallback, kvDir);
         RocksDBKvBuilder rocksDBKvBuilder =
                 new RocksDBKvBuilder(
                         kvDir,
