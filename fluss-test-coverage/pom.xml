@@ -292,6 +292,7 @@
                                         <exclude>org.apache.fluss.utils.*</exclude>
                                         <exclude>org.apache.fluss.exception.*</exclude>
                                         <exclude>org.apache.fluss.row.arrow.*</exclude>
+                                        <exclude>org.apache.fluss.row.BinaryWriter</exclude>
                                         <exclude>
                                             org.apache.fluss.row.columnar.BytesColumnVector.Bytes
                                         </exclude>

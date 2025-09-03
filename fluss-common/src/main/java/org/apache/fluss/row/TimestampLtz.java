@@ -22,7 +22,9 @@ import org.apache.fluss.types.LocalZonedTimestampType;
 
 import java.io.Serializable;
 import java.time.Instant;
+import java.time.LocalDateTime;
 
+import static org.apache.commons.lang3.time.DateUtils.MILLIS_PER_DAY;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
@@ -53,6 +55,21 @@ public class TimestampLtz implements Comparable<TimestampLtz>, Serializable {
         checkArgument(nanoOfMillisecond >= 0 && nanoOfMillisecond <= 999_999);
         this.millisecond = millisecond;
         this.nanoOfMillisecond = nanoOfMillisecond;
+    }
+
+    /**
+     * Creates an instance of {@link TimestampLtz} from an instance of {@link LocalDateTime}.
+     *
+     * @param dateTime an instance of {@link LocalDateTime}
+     */
+    public static TimestampLtz fromLocalDateTime(LocalDateTime dateTime) {
+        long epochDay = dateTime.toLocalDate().toEpochDay();
+        long nanoOfDay = dateTime.toLocalTime().toNanoOfDay();
+
+        long millisecond = epochDay * MILLIS_PER_DAY + nanoOfDay / 1_000_000;
+        int nanoOfMillisecond = (int) (nanoOfDay % 1_000_000);
+
+        return new TimestampLtz(millisecond, nanoOfMillisecond);
     }
 
     /** Returns the number of milliseconds since {@code 1970-01-01 00:00:00}. */
