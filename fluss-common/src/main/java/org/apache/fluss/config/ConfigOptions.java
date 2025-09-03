@@ -61,8 +61,6 @@ public class ConfigOptions {
                 "ch.qos.logback"
             };
 
-
-
     // ------------------------------------------------------------------------
     //  ConfigOptions for Fluss Cluster
     // ------------------------------------------------------------------------
@@ -107,9 +105,14 @@ public class ConfigOptions {
                     .asList()
                     .defaultValues(
                             ArrayUtils.concat(
-                                    // TODO: remove core-site after implement fluss hdfs security utils
+                                    // TODO: remove core-site after implement fluss hdfs security
+                                    // utils
                                     new String[] {
-                                        "java.", "org.apache.fluss.", "javax.annotation.", "org.apache.hadoop.","core-site",
+                                        "java.",
+                                        "org.apache.fluss.",
+                                        "javax.annotation.",
+                                        "org.apache.hadoop.",
+                                        "core-site",
                                     },
                                     PARENT_FIRST_LOGGING_PATTERNS))
                     .withDescription(
