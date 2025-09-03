@@ -919,7 +919,7 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         assertThatThrownBy(() -> createLogScanner(table, new int[] {1, 2, 3, 4, 5}))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
-                        "Projected field index 2 is out of bound for schema ROW<`a` INT, `b` STRING>");
+                        "Projected field index 2 is out of bound for schema ROW<`a` INT '...', `b` STRING '...'>");
     }
 
     @ParameterizedTest

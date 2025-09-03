@@ -416,6 +416,7 @@
                                         </exclude>
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <!-- end exclude for flink tiering service -->
+                                        <exclude>com.alibaba.fluss.spark.*</exclude>
                                     </excludes>
                                 </rule>
                             </rules>
