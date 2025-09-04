@@ -195,7 +195,7 @@ public class WriterStateManager {
             long start = System.currentTimeMillis();
             writeSnapshot(snapshotFile.file(), writers);
             LOG.info(
-                    "Wrote writer snapshot at offset {} with {} producer ids for table bucket {} in {} ms.",
+                    "Wrote writer snapshot at offset {} with {} writer ids for table bucket {} in {} ms.",
                     lastMapOffset,
                     writers.size(),
                     tableBucket,
