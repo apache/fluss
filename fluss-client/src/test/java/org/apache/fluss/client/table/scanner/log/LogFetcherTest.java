@@ -85,6 +85,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                 new LogFetcher(
                         DATA1_TABLE_INFO,
                         null,
+                        null,
                         logScannerStatus,
                         clientConf,
                         metadataUpdater,
@@ -161,6 +162,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                 new LogFetcher(
                         DATA1_TABLE_INFO,
                         null,
+                        null,
                         logScannerStatus,
                         clientConf,
                         metadataUpdater,
@@ -194,6 +196,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         logFetcher =
                 new LogFetcher(
                         DATA1_TABLE_INFO,
+                        null,
                         null,
                         logScannerStatus,
                         clientConf,

@@ -29,6 +29,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -43,27 +44,33 @@ public class TableScan implements Scan {
 
     /** The projected fields to do projection. No projection if is null. */
     @Nullable private final int[] projectedColumns;
+
     /** The limited row number to read. No limit if is null. */
     @Nullable private final Integer limit;
 
+    /** The record batch filter to apply. No filter if is null. */
+    @Nullable private final Predicate recordBatchFilter;
+
     public TableScan(FlussConnection conn, TableInfo tableInfo) {
-        this(conn, tableInfo, null, null);
+        this(conn, tableInfo, null, null, null);
     }
 
     private TableScan(
             FlussConnection conn,
             TableInfo tableInfo,
             @Nullable int[] projectedColumns,
-            @Nullable Integer limit) {
+            @Nullable Integer limit,
+            @Nullable Predicate recordBatchFilter) {
         this.conn = conn;
         this.tableInfo = tableInfo;
         this.projectedColumns = projectedColumns;
         this.limit = limit;
+        this.recordBatchFilter = recordBatchFilter;
     }
 
     @Override
     public Scan project(@Nullable int[] projectedColumns) {
-        return new TableScan(conn, tableInfo, projectedColumns, limit);
+        return new TableScan(conn, tableInfo, projectedColumns, limit, recordBatchFilter);
     }
 
     @Override
@@ -82,12 +89,17 @@ public class TableScan implements Scan {
             }
             columnIndexes[i] = index;
         }
-        return new TableScan(conn, tableInfo, columnIndexes, limit);
+        return new TableScan(conn, tableInfo, columnIndexes, limit, recordBatchFilter);
     }
 
     @Override
     public Scan limit(int rowNumber) {
-        return new TableScan(conn, tableInfo, projectedColumns, rowNumber);
+        return new TableScan(conn, tableInfo, projectedColumns, rowNumber, recordBatchFilter);
+    }
+
+    @Override
+    public Scan filter(@Nullable Predicate predicate) {
+        return new TableScan(conn, tableInfo, projectedColumns, limit, predicate);
     }
 
     @Override
@@ -104,7 +116,8 @@ public class TableScan implements Scan {
                 conn.getMetadataUpdater(),
                 conn.getClientMetricGroup(),
                 conn.getOrCreateRemoteFileDownloader(),
-                projectedColumns);
+                projectedColumns,
+                recordBatchFilter);
     }
 
     @Override

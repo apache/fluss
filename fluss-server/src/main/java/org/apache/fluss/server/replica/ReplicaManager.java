@@ -1084,13 +1084,25 @@ public class ReplicaManager {
                     fetchParams.markReadOneMessage();
                 }
                 limitBytes = Math.max(0, limitBytes - recordBatchSize);
-
-                logReadResult.put(
-                        tb,
-                        new LogReadResult(
-                                new FetchLogResultForBucket(
-                                        tb, fetchedData.getRecords(), readInfo.getHighWatermark()),
-                                fetchedData.getFetchOffsetMetadata()));
+                if (fetchedData.getSkipToNextFetchOffset() > 0) {
+                    logReadResult.put(
+                            tb,
+                            new LogReadResult(
+                                    new FetchLogResultForBucket(
+                                            tb,
+                                            readInfo.getHighWatermark(),
+                                            fetchedData.getSkipToNextFetchOffset()),
+                                    fetchedData.getFetchOffsetMetadata()));
+                } else {
+                    logReadResult.put(
+                            tb,
+                            new LogReadResult(
+                                    new FetchLogResultForBucket(
+                                            tb,
+                                            fetchedData.getRecords(),
+                                            readInfo.getHighWatermark()),
+                                    fetchedData.getFetchOffsetMetadata()));
+                }
 
                 // update metrics
                 if (isFromFollower) {

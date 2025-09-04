@@ -24,14 +24,18 @@ import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
 import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffsetWithStats;
 import static org.apache.fluss.record.LogRecordBatchFormat.attributeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.batchSequenceOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.crcOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.lastOffsetDeltaOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.leaderEpochOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
+import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSizeWithStats;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordsCountOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.schemaIdOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.statisticsDataOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.statisticsOffsetOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.writeClientIdOffset;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -77,5 +81,29 @@ public class LogRecordBatchFormatTest {
         assertThat(recordsCountOffset(magic)).isEqualTo(48);
         assertThat(recordBatchHeaderSize(magic)).isEqualTo(52);
         assertThat(arrowChangeTypeOffset(magic)).isEqualTo(52);
+    }
+
+    @Test
+    void testLogRecordBatchFormatForMagicV2() {
+        byte magic = (byte) 2;
+        assertThat(leaderEpochOffset(magic)).isEqualTo(21);
+        assertThat(crcOffset(magic)).isEqualTo(25);
+        assertThat(schemaIdOffset(magic)).isEqualTo(29);
+        assertThat(attributeOffset(magic)).isEqualTo(31);
+        assertThat(lastOffsetDeltaOffset(magic)).isEqualTo(32);
+        assertThat(writeClientIdOffset(magic)).isEqualTo(36);
+        assertThat(batchSequenceOffset(magic)).isEqualTo(44);
+        assertThat(recordsCountOffset(magic)).isEqualTo(48);
+        assertThat(statisticsOffsetOffset(magic)).isEqualTo(52);
+        assertThat(statisticsDataOffset(magic)).isEqualTo(56); // Records start offset
+        assertThat(recordBatchHeaderSize(magic)).isEqualTo(56); // Header size without statistics
+        assertThat(arrowChangeTypeOffset(magic)).isEqualTo(56); // Arrow change type offset
+
+        // Test with statistics length (statistics are appended after records and statistics length)
+        int statisticsLength = 100;
+        assertThat(recordBatchHeaderSizeWithStats(magic, statisticsLength))
+                .isEqualTo(56); // Header size is fixed, statistics are after records
+        assertThat(arrowChangeTypeOffsetWithStats(magic, statisticsLength))
+                .isEqualTo(56); // Arrow change type offset is fixed
     }
 }

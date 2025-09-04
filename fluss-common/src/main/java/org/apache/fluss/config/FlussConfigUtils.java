@@ -35,7 +35,6 @@ public class FlussConfigUtils {
     public static final String TABLE_PREFIX = "table.";
     public static final String CLIENT_PREFIX = "client.";
     public static final String CLIENT_SECURITY_PREFIX = "client.security.";
-
     public static final List<String> ALTERABLE_TABLE_OPTIONS;
 
     static {

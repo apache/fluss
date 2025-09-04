@@ -143,6 +143,10 @@ public class ArrowWriter implements AutoCloseable {
         return writeLimitInBytes;
     }
 
+    public RowType getSchema() {
+        return schema;
+    }
+
     public boolean isFull() {
         if (recordsCount > 0 && recordsCount >= estimatedMaxRecordsCount) {
             root.setRowCount(recordsCount);

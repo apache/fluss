@@ -20,10 +20,13 @@ package org.apache.fluss.metadata;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -63,6 +66,8 @@ public final class TableInfo {
 
     private final long createdTime;
     private final long modifiedTime;
+
+    private int[] cachedStatsIndexMapping = null;
 
     public TableInfo(
             TablePath tablePath,
@@ -213,6 +218,90 @@ public final class TableInfo {
     /** Check if the table is partitioned and auto partition is enabled. */
     public boolean isAutoPartitioned() {
         return isPartitioned() && tableConfig.getAutoPartitionStrategy().isAutoPartitionEnabled();
+    }
+
+    /**
+     * Check if statistics collection is enabled for this table.
+     *
+     * <p>Statistics collection helps optimize query performance by providing data distribution
+     * information about the table's columns. When enabled, the system collects and maintains
+     * statistical information such as min/max values, null counts, and cardinality estimates.
+     *
+     * @return true if statistics collection is enabled, false otherwise
+     */
+    public boolean isStatisticsEnabled() {
+        return tableConfig.isStatisticsEnabled();
+    }
+
+    /**
+     * Returns the column index mapping for statistics collection.
+     *
+     * <p>This method provides a mapping array where each element at index {@code i} represents the
+     * original column index in the table schema for the {@code i}-th statistics column. This
+     * mapping is used to efficiently project rows when collecting statistics data.
+     *
+     * <p>The behavior varies based on the statistics configuration:
+     *
+     * <ul>
+     *   <li><b>Disabled</b>: Returns an empty array when statistics collection is disabled
+     *   <li><b>Specific columns</b>: When specific columns are configured, returns mapping for
+     *       those columns only
+     *   <li><b>All columns ("*")</b>: Returns mapping for all non-binary columns in the table
+     *       schema (binary columns are excluded as they are not suitable for statistical analysis)
+     * </ul>
+     *
+     * <p>The result is cached after the first computation to avoid repeated processing.
+     *
+     * @return an array where {@code result[i]} is the original column index for the {@code i}-th
+     *     statistics column. Returns an empty array if statistics collection is disabled.
+     * @throws IllegalArgumentException if a configured statistics column is not found in the table
+     *     schema
+     */
+    public int[] getStatsIndexMapping() {
+        if (cachedStatsIndexMapping != null) {
+            return cachedStatsIndexMapping;
+        }
+
+        Optional<List<String>> statsColumnsOpt = tableConfig.getStatisticsColumns();
+        List<String> statsColumns;
+
+        if (statsColumnsOpt == null) {
+            // Statistics collection is disabled (empty string configuration)
+            cachedStatsIndexMapping = new int[0];
+            return cachedStatsIndexMapping;
+        } else if (statsColumnsOpt.isPresent()) {
+            // User specified specific columns for statistics
+            statsColumns = statsColumnsOpt.get();
+        } else {
+            // Collect all non-binary columns ("*" configuration)
+            statsColumns = new ArrayList<>();
+            for (int rowIndex = 0; rowIndex < rowType.getFieldCount(); rowIndex++) {
+                DataType columnType = rowType.getTypeAt(rowIndex);
+                if (!DataTypeChecks.isBinaryType(columnType)) {
+                    String columnName = rowType.getFields().get(rowIndex).getName();
+                    statsColumns.add(columnName);
+                }
+            }
+        }
+
+        // Build mapping from stats column index to original row column index
+        int[] mapping = new int[statsColumns.size()];
+        for (int statsIndex = 0; statsIndex < statsColumns.size(); statsIndex++) {
+            String statsColumnName = statsColumns.get(statsIndex);
+            // Find the original column index for this stats column
+            int originalIndex = rowType.getFieldIndex(statsColumnName);
+            if (originalIndex == -1) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Statistics column '%s' not found in table schema",
+                                statsColumnName));
+            }
+            mapping[statsIndex] = originalIndex;
+        }
+
+        // Cache the result
+        cachedStatsIndexMapping = mapping;
+        return mapping;
     }
 
     /**

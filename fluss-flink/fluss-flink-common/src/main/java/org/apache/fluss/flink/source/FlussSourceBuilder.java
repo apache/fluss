@@ -27,6 +27,7 @@ import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
 import org.slf4j.Logger;
@@ -68,6 +69,7 @@ public class FlussSourceBuilder<OUT> {
 
     private int[] projectedFields;
     private String[] projectedFieldNames;
+    private Predicate logRecordBatchFilter;
     private Long scanPartitionDiscoveryIntervalMs;
     private OffsetsInitializer offsetsInitializer;
     private FlussDeserializationSchema<OUT> deserializationSchema;
@@ -171,6 +173,12 @@ public class FlussSourceBuilder<OUT> {
     public FlussSourceBuilder<OUT> setProjectedFields(String... projectedFieldNames) {
         checkNotNull(projectedFieldNames, "Field names must not be null");
         this.projectedFieldNames = projectedFieldNames;
+        return this;
+    }
+
+    public FlussSourceBuilder<OUT> setlogRecordBatchFilter(Predicate logRecordBatchFilter) {
+        checkNotNull(logRecordBatchFilter, "logRecordBatchFilter must not be null");
+        this.logRecordBatchFilter = logRecordBatchFilter;
         return this;
     }
 
@@ -297,6 +305,7 @@ public class FlussSourceBuilder<OUT> {
                 isPartitioned,
                 sourceOutputType,
                 projectedFields,
+                logRecordBatchFilter,
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,

@@ -85,14 +85,26 @@ public class MultiBytesView implements BytesView {
         private final List<BytesView> views = new ArrayList<>();
         private FileRegionBytesView lastFileRegionView = null;
 
-        /** Adds a bytes section from a byte array. */
+        /**
+         * Adds a bytes section from a byte array.
+         *
+         * @param bytes the byte array to add as a bytes view
+         * @return this builder instance for method chaining
+         */
         public Builder addBytes(byte[] bytes) {
             views.add(new ByteBufBytesView(bytes));
             lastFileRegionView = null;
             return this;
         }
 
-        /** Adds a bytes section from a range of {@link MemorySegment}. */
+        /**
+         * Adds a bytes section from a range of {@link MemorySegment}.
+         *
+         * @param memorySegment the memory segment to read bytes from
+         * @param position the starting position in the memory segment
+         * @param size the number of bytes to read from the memory segment
+         * @return this builder instance for method chaining
+         */
         public Builder addBytes(MemorySegment memorySegment, int position, int size) {
             views.add(new MemorySegmentBytesView(memorySegment, position, size));
             lastFileRegionView = null;
@@ -105,7 +117,50 @@ public class MultiBytesView implements BytesView {
             return this;
         }
 
-        /** Adds a bytes section from a range of {@link FileChannel}. */
+        /**
+         * Adds a {@link BytesView} to this builder. If the bytes view is a {@link
+         * FileRegionBytesView} and is continuous with the last added file region view, they will be
+         * merged to improve file read performance.
+         *
+         * @param bytesView the bytes view to add
+         * @return this builder instance for method chaining
+         */
+        public Builder addBytes(BytesView bytesView) {
+            if (bytesView instanceof FileRegionBytesView) {
+                FileRegionBytesView fileRegionBytesView = (FileRegionBytesView) bytesView;
+                if (lastFileRegionView != null
+                        && lastFileRegionView.fileChannel == fileRegionBytesView.fileChannel
+                        && lastFileRegionView.position + lastFileRegionView.size
+                                == fileRegionBytesView.position) {
+                    // merge file region with previous one if they are continuous to improve
+                    // file read performance.
+                    lastFileRegionView =
+                            new FileRegionBytesView(
+                                    lastFileRegionView.fileChannel,
+                                    lastFileRegionView.position,
+                                    lastFileRegionView.size + fileRegionBytesView.size);
+                    views.set(views.size() - 1, lastFileRegionView);
+                } else {
+                    lastFileRegionView = fileRegionBytesView;
+                    views.add(fileRegionBytesView);
+                }
+            } else {
+                views.add(bytesView);
+                lastFileRegionView = null;
+            }
+            return this;
+        }
+
+        /**
+         * Adds a bytes section from a range of {@link FileChannel}. If this file region is
+         * continuous with the last added file region view from the same channel, they will be
+         * merged to improve file read performance.
+         *
+         * @param fileChannel the file channel to read bytes from
+         * @param position the starting position in the file channel
+         * @param size the number of bytes to read from the file channel
+         * @return this builder instance for method chaining
+         */
         public Builder addBytes(FileChannel fileChannel, long position, int size) {
             if (lastFileRegionView != null
                     && lastFileRegionView.fileChannel == fileChannel
@@ -123,6 +178,10 @@ public class MultiBytesView implements BytesView {
                 views.add(lastFileRegionView);
             }
             return this;
+        }
+
+        public boolean isEmpty() {
+            return views.isEmpty();
         }
 
         /** Builds a {@link MultiBytesView}. */

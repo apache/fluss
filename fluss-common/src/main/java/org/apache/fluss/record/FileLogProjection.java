@@ -20,6 +20,8 @@ package org.apache.fluss.record;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
+import org.apache.fluss.record.FileLogInputStream.FileChannelLogRecordBatch;
+import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.shaded.arrow.com.google.flatbuffers.FlatBufferBuilder;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.flatbuf.Buffer;
@@ -58,14 +60,18 @@ import static org.apache.fluss.record.DefaultLogRecordBatch.APPEND_ONLY_FLAG_MAS
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V2;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
 import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.STATISTICS_FLAG_MASK;
 import static org.apache.fluss.record.LogRecordBatchFormat.V0_RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.LogRecordBatchFormat.V1_RECORD_BATCH_HEADER_SIZE;
+import static org.apache.fluss.record.LogRecordBatchFormat.V2_RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.attributeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordsCountOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.statisticsOffsetOffset;
 import static org.apache.fluss.utils.FileUtils.readFully;
 import static org.apache.fluss.utils.FileUtils.readFullyOrFail;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -93,7 +99,7 @@ public class FileLogProjection {
      * Buffer to read log records batch header. V1 is larger than V0, so use V1 head buffer can read
      * V0 header even if there is no enough bytes in log file.
      */
-    private final ByteBuffer logHeaderBuffer = ByteBuffer.allocate(V1_RECORD_BATCH_HEADER_SIZE);
+    private final ByteBuffer logHeaderBuffer = ByteBuffer.allocate(V2_RECORD_BATCH_HEADER_SIZE);
 
     private final ByteBuffer arrowHeaderBuffer = ByteBuffer.allocate(ARROW_HEADER_SIZE);
     private ByteBuffer arrowMetadataBuffer;
@@ -163,6 +169,125 @@ public class FileLogProjection {
                         bodyCompression,
                         selectedFields);
         projectionsCache.put(tableId, currentProjection);
+    }
+
+    public BytesView projectRecordBatch(FileChannelLogRecordBatch batch) throws IOException {
+        checkNotNull(currentProjection, "There is no projection registered yet.");
+        FileChannel channel = batch.fileRecords.channel();
+        int position = batch.position();
+        int end = position + batch.sizeInBytes();
+
+        MultiBytesView.Builder builder = MultiBytesView.builder();
+
+        // read log header
+        logHeaderBuffer.rewind();
+        readLogHeaderFullyOrFail(channel, logHeaderBuffer, position);
+
+        logHeaderBuffer.rewind();
+        byte magic = logHeaderBuffer.get(MAGIC_OFFSET);
+
+        logHeaderBuffer.rewind();
+        int batchSizeInBytes = LOG_OVERHEAD + logHeaderBuffer.getInt(LENGTH_OFFSET);
+        if (position > end - batchSizeInBytes) {
+            // the remaining bytes in the file are not enough to read a full batch
+            return builder.build();
+        }
+
+        // Return null if meets empty batch. The empty batch was generated when build cdc log batch
+        // when there
+        // is no cdc log generated for this kv batch. See the comments about the field
+        // 'lastOffsetDelta' in DefaultLogRecordBatch.
+        if (batchSizeInBytes == recordBatchHeaderSize(magic)) {
+            return builder.build();
+        }
+
+        boolean isAppendOnly =
+                (logHeaderBuffer.get(attributeOffset(magic)) & APPEND_ONLY_FLAG_MASK) > 0;
+
+        final int changeTypeBytes;
+        final long arrowHeaderOffset;
+        if (isAppendOnly) {
+            changeTypeBytes = 0;
+            arrowHeaderOffset = position + recordBatchHeaderSize(magic);
+        } else {
+            changeTypeBytes = logHeaderBuffer.getInt(recordsCountOffset(magic));
+            arrowHeaderOffset = position + recordBatchHeaderSize(magic) + changeTypeBytes;
+        }
+
+        // read arrow header
+        arrowHeaderBuffer.rewind();
+        readFullyOrFail(channel, arrowHeaderBuffer, arrowHeaderOffset, "arrow header");
+        arrowHeaderBuffer.position(ARROW_IPC_METADATA_SIZE_OFFSET);
+        int arrowMetadataSize = arrowHeaderBuffer.getInt();
+
+        resizeArrowMetadataBuffer(arrowMetadataSize);
+        arrowMetadataBuffer.rewind();
+        readFullyOrFail(
+                channel,
+                arrowMetadataBuffer,
+                arrowHeaderOffset + ARROW_HEADER_SIZE,
+                "arrow metadata");
+
+        arrowMetadataBuffer.rewind();
+        Message metadata = Message.getRootAsMessage(arrowMetadataBuffer);
+        ProjectedArrowBatch projectedArrowBatch =
+                projectArrowBatch(
+                        metadata,
+                        currentProjection.nodesProjection,
+                        currentProjection.buffersProjection,
+                        currentProjection.bufferCount);
+        long arrowBodyLength = projectedArrowBatch.bodyLength();
+
+        // Check if this batch contains statistics (V2+ only)
+
+        int newBatchSizeInBytes =
+                recordBatchHeaderSize(magic)
+                        + changeTypeBytes
+                        + currentProjection.arrowMetadataLength
+                        + (int) arrowBodyLength;
+
+        // 3. create new arrow batch metadata which already projected.
+        byte[] headerMetadata =
+                serializeArrowRecordBatchMetadata(
+                        projectedArrowBatch, arrowBodyLength, currentProjection.bodyCompression);
+        checkState(
+                headerMetadata.length == currentProjection.arrowMetadataLength,
+                "Invalid metadata length");
+
+        // 4. update and copy log batch header
+        logHeaderBuffer.position(LENGTH_OFFSET);
+        logHeaderBuffer.putInt(newBatchSizeInBytes - LOG_OVERHEAD);
+
+        // For V2 format, clear statistics information since projection removes statistics
+        if (magic == LOG_MAGIC_VALUE_V2) {
+            // Set StatisticsOffset to 0 (no statistics)
+            logHeaderBuffer.position(statisticsOffsetOffset(magic));
+            logHeaderBuffer.putInt(0);
+
+            // Clear statistics flag from attributes
+            logHeaderBuffer.position(attributeOffset(magic));
+            byte attributes = logHeaderBuffer.get();
+            logHeaderBuffer.position(attributeOffset(magic));
+            logHeaderBuffer.put((byte) (attributes & ~STATISTICS_FLAG_MASK));
+        }
+
+        logHeaderBuffer.rewind();
+        // the logHeader can't be reused, as it will be sent to network
+        int recordBatchHeaderSize = recordBatchHeaderSize(magic);
+        byte[] logHeader = new byte[recordBatchHeaderSize];
+        logHeaderBuffer.get(logHeader);
+
+        // 5. build log records
+        builder.addBytes(logHeader);
+        if (!isAppendOnly) {
+            builder.addBytes(channel, position + arrowChangeTypeOffset(magic), changeTypeBytes);
+        }
+        builder.addBytes(headerMetadata);
+        final long bufferOffset = arrowHeaderOffset + ARROW_HEADER_SIZE + arrowMetadataSize;
+        projectedArrowBatch.buffers.forEach(
+                b -> builder.addBytes(channel, bufferOffset + b.getOffset(), (int) b.getSize()));
+
+        return builder.build();
     }
 
     /**
@@ -248,7 +373,7 @@ public class FileLogProjection {
                     recordBatchHeaderSize
                             + changeTypeBytes
                             + currentProjection.arrowMetadataLength
-                            + (int) arrowBodyLength; // safe to cast to int
+                            + (int) arrowBodyLength;
             if (newBatchSizeInBytes > maxBytes) {
                 // the remaining bytes in the file are not enough to read a full batch
                 return new BytesViewLogRecords(builder.build());
@@ -267,6 +392,20 @@ public class FileLogProjection {
             // 4. update and copy log batch header
             logHeaderBuffer.position(LENGTH_OFFSET);
             logHeaderBuffer.putInt(newBatchSizeInBytes - LOG_OVERHEAD);
+
+            // For V2 format, clear statistics information since projection removes statistics
+            if (magic == LOG_MAGIC_VALUE_V2) {
+                // Set StatisticsOffset to 0 (no statistics)
+                logHeaderBuffer.position(statisticsOffsetOffset(magic));
+                logHeaderBuffer.putInt(0);
+
+                // Clear statistics flag from attributes
+                logHeaderBuffer.position(attributeOffset(magic));
+                byte attributes = logHeaderBuffer.get();
+                logHeaderBuffer.position(attributeOffset(magic));
+                logHeaderBuffer.put((byte) (attributes & ~STATISTICS_FLAG_MASK));
+            }
+
             logHeaderBuffer.rewind();
             // the logHeader can't be reused, as it will be sent to network
             byte[] logHeader = new byte[recordBatchHeaderSize];

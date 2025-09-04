@@ -27,7 +27,10 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.utils.AutoPartitionStrategy;
 
 import java.time.Duration;
+import java.util.Arrays;
+import java.util.List;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 /**
  * Helper class to get table configs (prefixed with "table.*" properties).
@@ -125,5 +128,43 @@ public class TableConfig {
     /** Gets the auto partition strategy of the table. */
     public AutoPartitionStrategy getAutoPartitionStrategy() {
         return AutoPartitionStrategy.from(config);
+    }
+
+    /** Gets whether statistics collection is enabled for the table. */
+    public boolean isStatisticsEnabled() {
+        String columnsStr = config.get(ConfigOptions.TABLE_STATISTICS_COLUMNS);
+        return !columnsStr.isEmpty();
+    }
+
+    /**
+     * Gets the statistics columns configuration of the table.
+     *
+     * @return Optional containing the list of column names if specific columns are configured,
+     *     empty if all non-binary columns should be collected ("*" configuration), null if
+     *     statistics collection is disabled (empty string configuration)
+     */
+    public Optional<List<String>> getStatisticsColumns() {
+        String columnsStr = config.get(ConfigOptions.TABLE_STATISTICS_COLUMNS);
+        if (columnsStr.isEmpty()) {
+            return null; // null means statistics collection is disabled
+        }
+        if ("*".equals(columnsStr)) {
+            return Optional.empty(); // Empty means collect all non-binary columns
+        }
+        List<String> columns =
+                Arrays.stream(columnsStr.split(","))
+                        .map(String::trim)
+                        .filter(s -> !s.isEmpty())
+                        .collect(Collectors.toList());
+        return Optional.of(columns);
+    }
+
+    /**
+     * Checks whether the table is configured to collect statistics for all non-binary columns.
+     *
+     * @return true if configured with "*" (collect all non-binary columns), false otherwise
+     */
+    public boolean isCollectAllNonBinaryColumns() {
+        return "*".equals(config.get(ConfigOptions.TABLE_STATISTICS_COLUMNS));
     }
 }

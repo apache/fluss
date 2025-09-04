@@ -23,6 +23,7 @@ import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.LogRecordBatchStatisticsCollector;
 import org.apache.fluss.record.MemoryLogRecordsArrowBuilder;
 import org.apache.fluss.record.bytesview.BytesView;
 import org.apache.fluss.row.InternalRow;
@@ -55,11 +56,13 @@ public class ArrowLogWriteBatch extends WriteBatch {
             int schemaId,
             ArrowWriter arrowWriter,
             AbstractPagedOutputView outputView,
-            long createdMs) {
+            long createdMs,
+            LogRecordBatchStatisticsCollector statisticsCollector) {
         super(bucketId, physicalTablePath, createdMs);
         this.outputView = outputView;
         this.recordsBuilder =
-                MemoryLogRecordsArrowBuilder.builder(schemaId, arrowWriter, outputView, true);
+                MemoryLogRecordsArrowBuilder.builder(
+                        schemaId, arrowWriter, outputView, true, statisticsCollector);
     }
 
     @Override
