@@ -541,11 +541,21 @@ public class FlinkTableSource
             }
             partitionFilters = converted.isEmpty() ? null : PredicateBuilder.and(converted);
             // lake source is not null
-            if (lakeSource != null && partitionFilters != null) {
+            if (lakeSource != null) {
+                PredicateVisitor<Boolean> lakePredicateVisitor =
+                        new PartitionPredicateVisitor(tableOutputType.getFieldNames());
 
                 List<Predicate> lakePredicates = new ArrayList<>();
+                for (ResolvedExpression filter : filters) {
 
-                lakePredicates.addAll(converted);
+                    Optional<Predicate> predicateOptional =
+                            PredicateConverter.convert(tableOutputType, filter);
+
+                    if (predicateOptional.isPresent()) {
+                        Predicate p = predicateOptional.get();
+                        lakePredicates.add(p);
+                    }
+                }
 
                 if (!lakePredicates.isEmpty()) {
                     final LakeSource.FilterPushDownResult filterPushDownResult =
