@@ -44,4 +44,10 @@ public abstract class ProtobufAbstractRepeated<FieldType extends Field<?>>
         w.format("            return this;\n");
         w.format("        }\n");
     }
+
+    @Override
+    public void stringify(PrintWriter w, String sep) {
+        w.format("                + \"%s%s=\"\n", sep, pluralName);
+        w.format("                + %s\n", pluralName);
+    }
 }
