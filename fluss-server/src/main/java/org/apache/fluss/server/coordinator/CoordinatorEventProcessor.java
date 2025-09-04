@@ -56,6 +56,7 @@ import org.apache.fluss.server.coordinator.event.DropTableEvent;
 import org.apache.fluss.server.coordinator.event.EventProcessor;
 import org.apache.fluss.server.coordinator.event.FencedCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
+import org.apache.fluss.server.coordinator.event.NotifyKvSnapshotOffsetEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.watcher.TableChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
@@ -117,6 +118,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorEventProcessor.class);
 
     private final ZooKeeperClient zooKeeperClient;
+    private final ExecutorService ioExecutor;
     private final CoordinatorContext coordinatorContext;
     private final ReplicaStateMachine replicaStateMachine;
     private final TableBucketStateMachine tableBucketStateMachine;
@@ -190,6 +192,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
         this.internalListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
+        this.ioExecutor = ioExecutor;
     }
 
     public CoordinatorEventManager getCoordinatorEventManager() {
@@ -455,9 +458,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                             adjustIsrReceivedEvent.getLeaderAndIsrMap())));
         } else if (event instanceof CommitKvSnapshotEvent) {
             CommitKvSnapshotEvent commitKvSnapshotEvent = (CommitKvSnapshotEvent) event;
-            CompletableFuture<CommitKvSnapshotResponse> callback =
-                    commitKvSnapshotEvent.getRespCallback();
-            completeFromCallable(callback, () -> tryProcessCommitKvSnapshot(commitKvSnapshotEvent));
+            tryProcessCommitKvSnapshot(
+                    commitKvSnapshotEvent, commitKvSnapshotEvent.getRespCallback());
+        } else if (event instanceof NotifyKvSnapshotOffsetEvent) {
+            processNotifyKvSnapshotOffsetEvent((NotifyKvSnapshotOffsetEvent) event);
         } else if (event instanceof CommitRemoteLogManifestEvent) {
             CommitRemoteLogManifestEvent commitRemoteLogManifestEvent =
                     (CommitRemoteLogManifestEvent) event;
@@ -936,21 +940,39 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
     }
 
-    private CommitKvSnapshotResponse tryProcessCommitKvSnapshot(CommitKvSnapshotEvent event)
-            throws Exception {
+    private void tryProcessCommitKvSnapshot(
+            CommitKvSnapshotEvent event, CompletableFuture<CommitKvSnapshotResponse> callback) {
         // validate
-        validateFencedEvent(event);
+        try {
+            validateFencedEvent(event);
+        } catch (Exception e) {
+            callback.completeExceptionally(e);
+            return;
+        }
+        // commit the kv snapshot asynchronously
+        ioExecutor.execute(
+                () -> {
+                    try {
+                        TableBucket tb = event.getTableBucket();
+                        CompletedSnapshot completedSnapshot =
+                                event.getAddCompletedSnapshotData().getCompletedSnapshot();
+                        // add completed snapshot
+                        CompletedSnapshotStore completedSnapshotStore =
+                                completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(tb);
+                        completedSnapshotStore.add(completedSnapshot);
+                        coordinatorEventManager.put(
+                                new NotifyKvSnapshotOffsetEvent(
+                                        tb, completedSnapshot.getLogOffset()));
+                        callback.complete(new CommitKvSnapshotResponse());
+                    } catch (Exception e) {
+                        callback.completeExceptionally(e);
+                    }
+                });
+    }
 
+    private void processNotifyKvSnapshotOffsetEvent(NotifyKvSnapshotOffsetEvent event) {
         TableBucket tb = event.getTableBucket();
-        CompletedSnapshot completedSnapshot =
-                event.getAddCompletedSnapshotData().getCompletedSnapshot();
-        // add completed snapshot
-        CompletedSnapshotStore completedSnapshotStore =
-                completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(tb);
-        completedSnapshotStore.add(completedSnapshot);
-
-        // send notify snapshot request to all replicas.
-        // TODO: this should be moved after sending AddCompletedSnapshotResponse
+        long logOffset = event.getLogOffset();
         coordinatorRequestBatch.newBatch();
         coordinatorContext
                 .getBucketLeaderAndIsr(tb)
@@ -961,10 +983,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                                 coordinatorContext.getFollowers(
                                                         tb, leaderAndIsr.leader()),
                                                 tb,
-                                                completedSnapshot.getLogOffset()));
+                                                logOffset));
         coordinatorRequestBatch.sendNotifyKvSnapshotOffsetRequest(
                 coordinatorContext.getCoordinatorEpoch());
-        return new CommitKvSnapshotResponse();
     }
 
     private CommitRemoteLogManifestResponse tryProcessCommitRemoteLogManifest(
