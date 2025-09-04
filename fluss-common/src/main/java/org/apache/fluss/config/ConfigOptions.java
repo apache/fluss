@@ -739,10 +739,10 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> NETTY_CLIENT_NUM_NETWORK_THREADS =
             key("netty.client.num-network-threads")
                     .intType()
-                    .defaultValue(1)
+                    .defaultValue(3)
                     .withDescription(
                             "The number of threads that the client uses for sending requests to the "
-                                    + "network and receiving responses from network. The default value is 1");
+                                    + "network and receiving responses from network. The default value is 3");
 
     // ------------------------------------------------------------------------
     //  Client Settings
