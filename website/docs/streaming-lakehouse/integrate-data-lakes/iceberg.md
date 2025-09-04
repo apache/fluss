@@ -8,6 +8,8 @@ sidebar_position: 2
 [Apache Iceberg](https://iceberg.apache.org/) is an open table format for huge analytic datasets. It provides ACID transactions, schema evolution, and efficient data organization for data lakes.
 To integrate Fluss with Iceberg, you must enable lakehouse storage and configure Iceberg as the lakehouse storage. For more details, see [Enable Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md#enable-lakehouse-storage).
 
+Supported Iceberg Versions: Fluss supports both Iceberg v1 and v2 table formats. Log tables (append-only) are compatible with v1 tables, while primary key tables leverage v2 features such as delete files and merge-on-read capabilities for efficient updates and deletes.
+
 ## Introduction
 
 When a table is created or altered with the option `'table.datalake.enabled' = 'true'` and configured with Iceberg as the datalake format, Fluss will automatically create a corresponding Iceberg table with the same table path.
@@ -33,7 +35,7 @@ CREATE TABLE fluss_order_with_lake (
 ```
 
 Then, the datalake tiering service continuously tiers data from Fluss to Iceberg. The parameter `table.datalake.freshness` controls the frequency that Fluss writes data to Iceberg tables. By default, the data freshness is 3 minutes.  
-For primary key tables, changelogs are also generated in the Iceberg format, enabling stream-based consumption via Iceberg APIs. Primary key tables use merge-on-read (MOR) strategy for efficient updates and deletes.
+For primary key tables, updates and deletes are handled using Iceberg's delete files (equality deletes and position deletes) with a merge-on-read (MOR) strategy for efficient change management.
 
 Since Fluss version 0.8, you can also specify Iceberg table properties when creating a datalake-enabled Fluss table by using the `iceberg.` prefix within the Fluss table properties clause.
 
@@ -67,8 +69,6 @@ Fluss uses a special bucketing strategy when integrating with Iceberg to ensure 
 When Iceberg is configured as the datalake format, Fluss uses `IcebergBucketingFunction` to bucket data following Iceberg's bucketing strategy. This ensures:
 - **Data distribution consistency**: The same record goes to the same bucket in both Fluss and Iceberg
 - **Efficient data access**: You can quickly locate data for a specific Fluss bucket within Iceberg
-- **Dynamic enablement**: Tables can be enabled for datalake without rewriting existing data
-
 ### Primary Key Tables
 
 Primary key tables in Fluss are mapped to Iceberg tables with:
@@ -230,10 +230,10 @@ When you specify the `$lake` suffix, the table behaves like a standard Iceberg t
 #### Union Read Limitations
 
 **Important**: Iceberg does not currently support union read of data from both Fluss and Iceberg layers. You can only read data from:
-- **Fluss layer only**: Query the table directly without `$lake` suffix (real-time data)
-- **Iceberg layer only**: Query the table with `$lake` suffix (historical data)
+- **Fluss layer only**: Fluss layer only: Query the table directly without `$lake` suffix (reads all data from Fluss tablet servers - both historical and fresh data)
+- **Iceberg layer only**: Query the table with `$lake` suffix (reads only tiered historical data from lakehouse storage)
 
-Union read functionality may be added in future releases.
+Union read functionality will be added in future releases.
 
 ### Reading with other Engines
 
@@ -303,12 +303,11 @@ When integrating with Iceberg, Fluss automatically converts between Fluss data t
 
 ## Maintenance and Optimization
 
-### Auto Maintenance
+### Auto Compaction
 
-The `table.datalake.auto-maintenance` option (disabled by default) provides automatic maintenance:
+The `table.datalake.auto-compaction` option (disabled by default) provides automatic compaction:
 
 - **File Compaction**: Small files are automatically compacted during tiering
-- **Snapshot Expiration**: Old snapshots are cleaned up based on retention policies
 - **Per-bucket Compaction**: Compaction operates within individual buckets for efficiency
 
 ### Snapshot Metadata
@@ -333,11 +332,8 @@ When using Iceberg as lakehouse storage with Fluss, there are current limitation
 - **Union Read**: Union read of data from both Fluss and Iceberg layers is not supported
 - **Complex Types**: Array, Map, and Row types are not supported
 - **Multiple bucket keys**: Not supported until Iceberg implements multi-argument partition transforms
-- **Reading from Iceberg via Fluss**: Direct reading from Iceberg via Fluss APIs is not implemented
 
 ### Unsupported Scenarios
 Tables with multiple bucket keys or unsupported bucket data types:
-- **Cannot enable datalake dynamically**: Must be configured at table creation time
-- **Fallback behavior**: Uses Fluss default bucketing strategy instead of Iceberg bucketing
-
-These limitations may be addressed in future releases as the Iceberg ecosystem evolves and multi-argument partition transforms become available.
+- **Cannot enable datalake**: Throws UnsupportedOperationException when attempting to create lakehouse-enabled tables 
+- **Must be configured at table creation time**: Dynamic datalake enablement is not possible for these configurations
