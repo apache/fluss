@@ -73,6 +73,13 @@ public class FlinkRowAssertionsUtils {
 
     public static List<String> collectRowsWithTimeout(
             CloseableIterator<Row> iterator, int expectedCount, boolean closeIterator) {
+        if (expectedCount < 0) {
+            throw new IllegalArgumentException(
+                    "Expected count must be non-negative: " + expectedCount);
+        }
+        if (iterator == null) {
+            throw new IllegalArgumentException("Iterator cannot be null");
+        }
         return collectRowsWithTimeout(
                 iterator,
                 expectedCount,
