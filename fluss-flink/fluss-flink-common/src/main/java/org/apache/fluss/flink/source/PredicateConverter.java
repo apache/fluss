@@ -211,8 +211,6 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
                 if (actualLogicalType.getTypeRoot().equals(expectedLogicalType.getTypeRoot())
                         && !isStringType(expectedLogicalType)) {
                     return FlinkAsFlussRow.fromFlinkObject(value, expectedType);
-                } else if (isStringType(actualLogicalType) || isStringType(expectedLogicalType)) {
-                    return value.toString();
                 } else if (supportsImplicitCast(actualLogicalType, expectedLogicalType)) {
                     try {
                         return TypeUtils.castFromString(

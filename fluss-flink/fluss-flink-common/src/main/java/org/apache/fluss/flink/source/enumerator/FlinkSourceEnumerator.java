@@ -35,14 +35,16 @@ import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
 import org.apache.fluss.flink.source.split.LogSplit;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.state.SourceEnumeratorState;
-import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.types.DataField;
+import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.annotation.VisibleForTesting;
@@ -133,7 +135,7 @@ public class FlinkSourceEnumerator
 
     private volatile boolean closed = false;
 
-    private Predicate predicate;
+    private Predicate partitionFilters;
 
     @Nullable private final LakeSource<LakeSplit> lakeSource;
 
@@ -146,7 +148,7 @@ public class FlinkSourceEnumerator
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
-            Predicate predicate) {
+            Predicate partitionFilters) {
         this(
                 tablePath,
                 flussConf,
@@ -169,7 +171,7 @@ public class FlinkSourceEnumerator
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
-            List<FieldEqual> partitionFilters,
+            Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource) {
         this(
                 tablePath,
@@ -199,7 +201,7 @@ public class FlinkSourceEnumerator
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
-            List<FieldEqual> partitionFilters,
+            Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource) {
         this.tablePath = checkNotNull(tablePath);
         this.flussConf = checkNotNull(flussConf);
@@ -216,7 +218,7 @@ public class FlinkSourceEnumerator
                         : new LinkedList<>(pendingHybridLakeFlussSplits);
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.streaming = streaming;
-        this.partitionFilters = checkNotNull(partitionFilters);
+        this.partitionFilters = partitionFilters;
         this.stoppingOffsetsInitializer =
                 streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest();
         this.lakeSource = lakeSource;
@@ -354,22 +356,37 @@ public class FlinkSourceEnumerator
 
     /** Apply partition filter. */
     private List<PartitionInfo> applyPartitionFilter(List<PartitionInfo> partitionInfos) {
-        if (predicate == null) {
+        if (partitionFilters == null) {
             return partitionInfos;
         } else {
+            int originalSize = partitionInfos.size();
             List<PartitionInfo> filteredPartitionInfos =
                     partitionInfos.stream()
                             .filter(
                                     partitionInfo ->
-                                            predicate.test(
+                                            partitionFilters.test(
                                                     convertPartitionInfoToInternalRow(
                                                             partitionInfo)))
                             .collect(Collectors.toList());
-            LOG.info(
-                    "Filtered partitions {} for table {} with predicate: {}",
-                    filteredPartitionInfos,
-                    tablePath,
-                    predicate);
+            
+            int filteredSize = filteredPartitionInfos.size();
+            // Only log when there's actual filtering happening or when it's the first time
+            if (originalSize != filteredSize) {
+                LOG.info(
+                        "Applied partition filter for table {}: {} partitions filtered to {} partitions with predicate: {}",
+                        tablePath,
+                        originalSize,
+                        filteredSize,
+                        partitionFilters);
+                if (LOG.isDebugEnabled()) {
+                    LOG.debug("Filtered partitions: {}", filteredPartitionInfos);
+                }
+            } else if (LOG.isDebugEnabled()) {
+                LOG.debug(
+                        "Partition filter applied for table {} but no partitions were filtered out (total: {})",
+                        tablePath,
+                        originalSize);
+            }
             return filteredPartitionInfos;
         }
     }
@@ -394,17 +411,34 @@ public class FlinkSourceEnumerator
             LOG.error("Failed to list partitions for {}", tablePath, t);
             return;
         }
+        
+        if (LOG.isDebugEnabled()) {
+            LOG.debug("Checking partition changes for table {}, found {} partitions", 
+                    tablePath, partitionInfos.size());
+        }
+        
         final PartitionChange partitionChange = getPartitionChange(partitionInfos);
         if (partitionChange.isEmpty()) {
+            if (LOG.isDebugEnabled()) {
+                LOG.debug("No partition changes detected for table {}", tablePath);
+            }
             return;
         }
 
         // handle removed partitions
-        handlePartitionsRemoved(partitionChange.removedPartitions);
+        if (!partitionChange.removedPartitions.isEmpty()) {
+            LOG.info("Handling {} removed partitions for table {}: {}", 
+                    partitionChange.removedPartitions.size(), tablePath, partitionChange.removedPartitions);
+            handlePartitionsRemoved(partitionChange.removedPartitions);
+        }
 
         // handle new partitions
-        context.callAsync(
-                () -> initPartitionedSplits(partitionChange.newPartitions), this::handleSplitsAdd);
+        if (!partitionChange.newPartitions.isEmpty()) {
+            LOG.info("Handling {} new partitions for table {}: {}", 
+                    partitionChange.newPartitions.size(), tablePath, partitionChange.newPartitions);
+            context.callAsync(
+                    () -> initPartitionedSplits(partitionChange.newPartitions), this::handleSplitsAdd);
+        }
     }
 
     private PartitionChange getPartitionChange(Set<PartitionInfo> fetchedPartitionInfos) {

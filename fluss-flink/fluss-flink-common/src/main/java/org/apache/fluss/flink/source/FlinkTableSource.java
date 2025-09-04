@@ -34,8 +34,10 @@ import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.GreaterOrEqual;
 import org.apache.fluss.predicate.LeafPredicate;
+import org.apache.fluss.predicate.PartitionPredicateVisitor;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
+import org.apache.fluss.predicate.PredicateVisitor;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -72,6 +74,7 @@ import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.functions.LookupFunction;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.table.types.logical.VarCharType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -89,9 +92,6 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
-import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
-import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLUSS_INTERNAL_VALUE;
-import static org.apache.fluss.flink.utils.PushdownUtils.extractFieldEquals;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -541,31 +541,20 @@ public class FlinkTableSource
             }
             partitionFilters = converted.isEmpty() ? null : PredicateBuilder.and(converted);
             // lake source is not null
-            if (lakeSource != null) {
-                // and exist field equals, push down to lake source
-                if (!fieldEquals.isEmpty()) {
-                    // convert flink row type to fluss row type
-                    RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
+            if (lakeSource != null && partitionFilters != null) {
 
-                    List<Predicate> lakePredicates = new ArrayList<>();
-                    PredicateBuilder predicateBuilder = new PredicateBuilder(flussRowType);
+                List<Predicate> lakePredicates = new ArrayList<>();
 
-                    for (FieldEqual fieldEqual : fieldEquals) {
-                        lakePredicates.add(
-                                predicateBuilder.equal(
-                                        fieldEqual.fieldIndex, fieldEqual.equalValue));
-                    }
+                lakePredicates.addAll(converted);
 
-                    if (!lakePredicates.isEmpty()) {
-                        final LakeSource.FilterPushDownResult filterPushDownResult =
-                                lakeSource.withFilters(lakePredicates);
-                        if (filterPushDownResult.acceptedPredicates().size()
-                                != lakePredicates.size()) {
-                            LOG.info(
-                                    "LakeSource rejected some partition filters. Falling back to Flink-side filtering.");
-                            // Flink will apply all filters to preserve correctness
-                            return Result.of(Collections.emptyList(), filters);
-                        }
+                if (!lakePredicates.isEmpty()) {
+                    final LakeSource.FilterPushDownResult filterPushDownResult =
+                            lakeSource.withFilters(lakePredicates);
+                    if (filterPushDownResult.acceptedPredicates().size() != lakePredicates.size()) {
+                        LOG.info(
+                                "LakeSource rejected some partition filters. Falling back to Flink-side filtering.");
+                        // Flink will apply all filters to preserve correctness
+                        return Result.of(Collections.emptyList(), filters);
                     }
                 }
             }
