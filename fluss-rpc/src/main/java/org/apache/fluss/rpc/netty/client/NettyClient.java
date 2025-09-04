@@ -45,6 +45,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Supplier;
 
@@ -71,6 +72,8 @@ public final class NettyClient implements RpcClient {
      */
     private final Map<String, ServerConnection> connections;
 
+    private final Map<String, CompletableFuture<ServerConnection>> connectionFutures;
+
     /** Metric groups for client. */
     private final ClientMetricGroup clientMetricGroup;
 
@@ -87,6 +90,7 @@ public final class NettyClient implements RpcClient {
     public NettyClient(
             Configuration conf, ClientMetricGroup clientMetricGroup, boolean isInnerClient) {
         this.connections = MapUtils.newConcurrentHashMap();
+        this.connectionFutures = MapUtils.newConcurrentHashMap();
 
         // build bootstrap
         this.eventGroup =
@@ -188,20 +192,51 @@ public final class NettyClient implements RpcClient {
 
     private ServerConnection getOrCreateConnection(ServerNode node) {
         String serverId = node.uid();
-        return connections.computeIfAbsent(
-                serverId,
-                ignored -> {
-                    LOG.debug("Creating connection to server {}.", node);
-                    ServerConnection connection =
-                            new ServerConnection(
-                                    bootstrap,
-                                    node,
-                                    clientMetricGroup,
-                                    authenticatorSupplier.get(),
-                                    isInnerClient);
-                    connection.whenClose(ignore -> connections.remove(serverId, connection));
-                    return connection;
-                });
+
+        ServerConnection existing = connections.get(serverId);
+        if (existing != null) {
+            return existing;
+        }
+
+        CompletableFuture<ServerConnection> newFuture = new CompletableFuture<>();
+        CompletableFuture<ServerConnection> f = connectionFutures.putIfAbsent(serverId, newFuture);
+        if (f == null) {
+            f = newFuture;
+            try {
+                LOG.debug("Creating connection to server {}.", node);
+                ServerConnection conn =
+                        new ServerConnection(
+                                bootstrap,
+                                node,
+                                clientMetricGroup,
+                                authenticatorSupplier.get(),
+                                isInnerClient);
+
+                // We must add the connection to the connections map before registering close
+                // callback.
+                // Otherwise, the connection may never be removed from the connections map if the
+                // connection close immediately.
+                connections.put(serverId, conn);
+                conn.whenClose(ignored -> connections.remove(serverId, conn));
+
+                newFuture.complete(conn);
+            } finally {
+                connectionFutures.remove(serverId, newFuture);
+            }
+        }
+
+        try {
+            return f.get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException(e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+            }
+            throw new RuntimeException(cause);
+        }
     }
 
     @VisibleForTesting
