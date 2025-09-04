@@ -66,6 +66,22 @@ public class SharedKvFileRegistry implements AutoCloseable {
         this.open = true;
     }
 
+    public long getFileSize() {
+        synchronized (registeredKvEntries) {
+            long size = 0;
+            for (SharedKvEntry entry : registeredKvEntries.values()) {
+                size += entry.kvFileHandle.getSize();
+            }
+            return size;
+        }
+    }
+
+    public long getNumSnapshots() {
+        synchronized (registeredKvEntries) {
+            return registeredKvEntries.size();
+        }
+    }
+
     public KvFileHandle registerReference(
             final SharedKvFileRegistryKey registrationKey,
             final KvFileHandle newHandle,

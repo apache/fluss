@@ -189,10 +189,11 @@ public class TabletServer extends ServerBase {
             this.scheduler = new FlussScheduler(conf.get(BACKGROUND_THREADS));
             scheduler.startup();
 
-            this.logManager = LogManager.create(conf, zkClient, scheduler, clock);
+            this.logManager =
+                    LogManager.create(conf, zkClient, scheduler, clock, tabletServerMetricGroup);
             logManager.startup();
 
-            this.kvManager = KvManager.create(conf, zkClient, logManager);
+            this.kvManager = KvManager.create(conf, zkClient, logManager, tabletServerMetricGroup);
             kvManager.startup();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);

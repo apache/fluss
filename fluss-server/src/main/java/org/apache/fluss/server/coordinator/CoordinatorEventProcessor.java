@@ -185,7 +185,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 new CompletedSnapshotStoreManager(
                         conf.getInt(ConfigOptions.KV_MAX_RETAINED_SNAPSHOTS),
                         ioExecutor,
-                        zooKeeperClient);
+                        zooKeeperClient,
+                        coordinatorMetricGroup);
         this.autoPartitionManager = autoPartitionManager;
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.coordinatorMetricGroup = coordinatorMetricGroup;
@@ -485,10 +486,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
             return;
         }
         TableInfo tableInfo = createTableEvent.getTableInfo();
+        TablePath tablePath = tableInfo.getTablePath();
         coordinatorContext.putTableInfo(tableInfo);
         TableAssignment tableAssignment = createTableEvent.getTableAssignment();
-        tableManager.onCreateNewTable(
-                tableInfo.getTablePath(), tableInfo.getTableId(), tableAssignment);
+        tableManager.onCreateNewTable(tablePath, tableInfo.getTableId(), tableAssignment);
         if (createTableEvent.isAutoPartitionTable()) {
             autoPartitionManager.addAutoPartitionTable(tableInfo, true);
         }
@@ -507,6 +508,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
                     null,
                     null,
                     tableBuckets);
+
+            // register table metrics.
+            coordinatorMetricGroup.addTableBucketMetricGroup(
+                    PhysicalTablePath.of(tablePath),
+                    tableId,
+                    null,
+                    tableAssignment.getBucketAssignments().keySet());
+
         } else {
             updateTabletServerMetadataCache(
                     new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
@@ -524,10 +533,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
 
         long tableId = createPartitionEvent.getTableId();
+        TablePath tablePath = createPartitionEvent.getTablePath();
         String partitionName = createPartitionEvent.getPartitionName();
         PartitionAssignment partitionAssignment = createPartitionEvent.getPartitionAssignment();
         tableManager.onCreateNewPartition(
-                createPartitionEvent.getTablePath(),
+                tablePath,
                 tableId,
                 createPartitionEvent.getPartitionId(),
                 partitionName,
@@ -541,6 +551,14 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 .forEach(
                         bucketId ->
                                 tableBuckets.add(new TableBucket(tableId, partitionId, bucketId)));
+
+        // register partition metrics.
+        coordinatorMetricGroup.addTableBucketMetricGroup(
+                PhysicalTablePath.of(tablePath),
+                tableId,
+                partitionId,
+                partitionAssignment.getBucketAssignments().keySet());
+
         updateTabletServerMetadataCache(
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
                 null,
@@ -573,6 +591,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 tableId,
                 null,
                 Collections.emptySet());
+
+        // remove table metrics.
+        coordinatorMetricGroup.removeTableMetricGroup(dropTableInfo.getTablePath(), tableId);
     }
 
     private void processDropPartition(DropPartitionEvent dropPartitionEvent) {
@@ -600,6 +621,10 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 tableId,
                 tablePartition.getPartitionId(),
                 Collections.emptySet());
+
+        // remove partition metrics.
+        coordinatorMetricGroup.removeTablePartitionMetricsGroup(
+                dropTableInfo.getTablePath(), tableId, tablePartition.getPartitionId());
     }
 
     private void processDeleteReplicaResponseReceived(
@@ -946,7 +971,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 event.getAddCompletedSnapshotData().getCompletedSnapshot();
         // add completed snapshot
         CompletedSnapshotStore completedSnapshotStore =
-                completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(tb);
+                completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
+                        coordinatorContext.getTablePathById(tb.getTableId()), tb);
         completedSnapshotStore.add(completedSnapshot);
 
         // send notify snapshot request to all replicas.
