@@ -18,6 +18,7 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
@@ -101,6 +102,9 @@ public class CoordinatorContext {
      */
     private final Map<Integer, Set<TableBucket>> replicasOnOffline = new HashMap<>();
 
+    /** A mapping from tabletServers to server tag. */
+    private final Map<Integer, ServerTag> serverTags = new HashMap<>();
+
     private ServerInfo coordinatorServerInfo = null;
     private int coordinatorEpoch = INITIAL_COORDINATOR_EPOCH;
 
@@ -161,7 +165,7 @@ public class CoordinatorContext {
         return tablePathById;
     }
 
-    public Set<TableBucket> allBuckets() {
+    public Set<TableBucket> getAllBuckets() {
         Set<TableBucket> allBuckets = new HashSet<>();
         for (Map.Entry<Long, Map<Integer, List<Integer>>> tableAssign :
                 tableAssignments.entrySet()) {
@@ -616,6 +620,26 @@ public class CoordinatorContext {
         }
     }
 
+    public void initSeverTags(Map<Integer, ServerTag> initialServerTags) {
+        serverTags.putAll(initialServerTags);
+    }
+
+    public void putServerTag(int serverId, ServerTag serverTag) {
+        serverTags.put(serverId, serverTag);
+    }
+
+    public Map<Integer, ServerTag> getServerTags() {
+        return new HashMap<>(serverTags);
+    }
+
+    public Optional<ServerTag> getServerTag(int serverId) {
+        return Optional.ofNullable(serverTags.get(serverId));
+    }
+
+    public void removeServerTag(int serverId) {
+        serverTags.remove(serverId);
+    }
+
     private void clearTablesState() {
         tableAssignments.clear();
         partitionAssignments.clear();
@@ -636,5 +660,6 @@ public class CoordinatorContext {
         clearTablesState();
         // clear the live tablet servers
         liveTabletServers.clear();
+        serverTags.clear();
     }
 }

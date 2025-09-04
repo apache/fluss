@@ -24,6 +24,7 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
@@ -39,6 +40,9 @@ import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
+import org.apache.fluss.exception.ServerNotExistException;
+import org.apache.fluss.exception.ServerTagAlreadyExistException;
+import org.apache.fluss.exception.ServerTagNotExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.TooManyBucketsException;
@@ -60,6 +64,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
+import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.types.DataTypes;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -1049,5 +1054,64 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 + "because they are reserved system columns in Fluss. "
                                 + "Please use other names for these columns. "
                                 + "The reserved system columns are: __offset, __timestamp, __bucket");
+    }
+
+    @Test
+    public void testAddAndRemoveServerTags() throws Exception {
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+        // 1.add server tag to a none exists server.
+        assertThatThrownBy(
+                        () ->
+                                admin.addServerTag(
+                                                Collections.singletonList(100),
+                                                ServerTag.PERMANENT_OFFLINE)
+                                        .get())
+                .cause()
+                .isInstanceOf(ServerNotExistException.class)
+                .hasMessageContaining("Server 100 not exists when trying to add server tag.");
+
+        // 2.add server tag for server 0,1.
+        admin.addServerTag(Arrays.asList(0, 1), ServerTag.PERMANENT_OFFLINE).get();
+        // TODO use api to get serverTags instead of getting from zk directly
+        assertThat(zkClient.getServerTags()).isPresent();
+        assertThat(zkClient.getServerTags().get().getServerTags())
+                .containsEntry(0, ServerTag.PERMANENT_OFFLINE)
+                .containsEntry(1, ServerTag.PERMANENT_OFFLINE);
+
+        // 3.add server tag for server 0,2. error will be thrown and tag for 2 will not be added.
+        assertThatThrownBy(
+                        () ->
+                                admin.addServerTag(Arrays.asList(0, 2), ServerTag.PERMANENT_OFFLINE)
+                                        .get())
+                .cause()
+                .isInstanceOf(ServerTagAlreadyExistException.class)
+                .hasMessageContaining("Server tag PERMANENT_OFFLINE already exists for server 0.");
+
+        // 4.remove server tag for server 100
+        assertThatThrownBy(
+                        () ->
+                                admin.removeServerTag(
+                                                Collections.singletonList(100),
+                                                ServerTag.PERMANENT_OFFLINE)
+                                        .get())
+                .cause()
+                .isInstanceOf(ServerNotExistException.class)
+                .hasMessageContaining("Server 100 not exists when trying to removing server tag.");
+
+        // 5.remove server tag for server 0,1.
+        admin.removeServerTag(Arrays.asList(0, 1), ServerTag.PERMANENT_OFFLINE).get();
+        assertThat(zkClient.getServerTags()).isPresent();
+        assertThat(zkClient.getServerTags().get().getServerTags()).isEmpty();
+
+        // 6.remove server tag for server 2. error will be thrown and tag for 2 will not be removed.
+        assertThatThrownBy(
+                        () ->
+                                admin.removeServerTag(
+                                                Collections.singletonList(0),
+                                                ServerTag.PERMANENT_OFFLINE)
+                                        .get())
+                .cause()
+                .isInstanceOf(ServerTagNotExistException.class)
+                .hasMessageContaining("Server tag PERMANENT_OFFLINE not exists for server 0.");
     }
 }

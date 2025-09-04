@@ -15,23 +15,19 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.coordinator.statemachine;
+package org.apache.fluss.server.coordinator.event;
 
-import java.util.List;
-import java.util.Optional;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 
-/** The algorithms to elect the replica leader. */
-public class ReplicaLeaderElectionAlgorithms {
-    public static Optional<Integer> defaultReplicaLeaderElection(
-            List<Integer> assignments, List<Integer> aliveReplicas, List<Integer> isr) {
-        // currently, we always use the first replica in assignment, which also in aliveReplicas and
-        // isr as the leader replica.
-        for (int assignment : assignments) {
-            if (aliveReplicas.contains(assignment) && isr.contains(assignment)) {
-                return Optional.of(assignment);
-            }
-        }
+/** An event of executing rebalance task. */
+public class ExecuteRebalanceTaskEvent implements CoordinatorEvent {
+    private final RebalancePlanForBucket rebalancePlanForBucket;
 
-        return Optional.empty();
+    public ExecuteRebalanceTaskEvent(RebalancePlanForBucket rebalancePlanForBucket) {
+        this.rebalancePlanForBucket = rebalancePlanForBucket;
+    }
+
+    public RebalancePlanForBucket getRebalancePlanForBucket() {
+        return rebalancePlanForBucket;
     }
 }
