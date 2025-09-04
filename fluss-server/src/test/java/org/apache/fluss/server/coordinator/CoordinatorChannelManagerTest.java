@@ -94,6 +94,7 @@ class CoordinatorChannelManagerTest {
         UpdateMetadataRequest updateMetadataRequest =
                 makeUpdateMetadataRequest(
                         null,
+                        null,
                         Collections.emptySet(),
                         Collections.emptyList(),
                         Collections.emptyList());

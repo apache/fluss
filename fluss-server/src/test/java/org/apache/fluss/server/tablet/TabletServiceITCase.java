@@ -864,6 +864,7 @@ public class TabletServiceITCase {
                 .updateMetadata(
                         makeUpdateMetadataRequest(
                                 coordinatorServerInfo,
+                                null,
                                 newTabletServerInfos,
                                 Collections.emptyList(),
                                 Collections.emptyList()))
