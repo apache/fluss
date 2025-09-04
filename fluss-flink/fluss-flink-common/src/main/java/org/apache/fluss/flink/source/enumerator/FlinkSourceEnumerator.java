@@ -368,7 +368,7 @@ public class FlinkSourceEnumerator
                                                     convertPartitionInfoToInternalRow(
                                                             partitionInfo)))
                             .collect(Collectors.toList());
-            
+
             int filteredSize = filteredPartitionInfos.size();
             // Only log when there's actual filtering happening or when it's the first time
             if (originalSize != filteredSize) {
@@ -411,12 +411,14 @@ public class FlinkSourceEnumerator
             LOG.error("Failed to list partitions for {}", tablePath, t);
             return;
         }
-        
+
         if (LOG.isDebugEnabled()) {
-            LOG.debug("Checking partition changes for table {}, found {} partitions", 
-                    tablePath, partitionInfos.size());
+            LOG.debug(
+                    "Checking partition changes for table {}, found {} partitions",
+                    tablePath,
+                    partitionInfos.size());
         }
-        
+
         final PartitionChange partitionChange = getPartitionChange(partitionInfos);
         if (partitionChange.isEmpty()) {
             if (LOG.isDebugEnabled()) {
@@ -427,17 +429,24 @@ public class FlinkSourceEnumerator
 
         // handle removed partitions
         if (!partitionChange.removedPartitions.isEmpty()) {
-            LOG.info("Handling {} removed partitions for table {}: {}", 
-                    partitionChange.removedPartitions.size(), tablePath, partitionChange.removedPartitions);
+            LOG.info(
+                    "Handling {} removed partitions for table {}: {}",
+                    partitionChange.removedPartitions.size(),
+                    tablePath,
+                    partitionChange.removedPartitions);
             handlePartitionsRemoved(partitionChange.removedPartitions);
         }
 
         // handle new partitions
         if (!partitionChange.newPartitions.isEmpty()) {
-            LOG.info("Handling {} new partitions for table {}: {}", 
-                    partitionChange.newPartitions.size(), tablePath, partitionChange.newPartitions);
+            LOG.info(
+                    "Handling {} new partitions for table {}: {}",
+                    partitionChange.newPartitions.size(),
+                    tablePath,
+                    partitionChange.newPartitions);
             context.callAsync(
-                    () -> initPartitionedSplits(partitionChange.newPartitions), this::handleSplitsAdd);
+                    () -> initPartitionedSplits(partitionChange.newPartitions),
+                    this::handleSplitsAdd);
         }
     }
 
