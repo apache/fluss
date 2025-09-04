@@ -193,6 +193,7 @@ public class ReplicaFetcherManager {
     @VisibleForTesting
     public RemoteLeaderEndpoint buildRemoteLogEndpoint(int leaderId) {
         return new RemoteLeaderEndpoint(
+                replicaManager,
                 conf,
                 serverId,
                 leaderId,

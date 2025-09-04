@@ -43,12 +43,21 @@ public interface IsrState {
     /** Indicates if we have an AdjustIsr request inflight. */
     boolean isInflight();
 
+    List<Integer> standbyReplicas();
+
+    List<Integer> issr();
+
     /** Class to represent the committed isr state of a {@link TableBucket}. */
     class CommittedIsrState implements IsrState {
         private final List<Integer> isr;
+        private final List<Integer> standbyReplicas;
+        private final List<Integer> issr;
 
-        public CommittedIsrState(List<Integer> isr) {
+        public CommittedIsrState(
+                List<Integer> isr, List<Integer> standbyReplicas, List<Integer> issr) {
             this.isr = isr;
+            this.standbyReplicas = standbyReplicas;
+            this.issr = issr;
         }
 
         @Override
@@ -67,6 +76,16 @@ public interface IsrState {
         }
 
         @Override
+        public List<Integer> standbyReplicas() {
+            return standbyReplicas;
+        }
+
+        @Override
+        public List<Integer> issr() {
+            return issr;
+        }
+
+        @Override
         public boolean equals(Object o) {
             if (this == o) {
                 return true;
@@ -75,12 +94,21 @@ public interface IsrState {
                 return false;
             }
             CommittedIsrState that = (CommittedIsrState) o;
-            return isr.equals(that.isr);
+            return isr.equals(that.isr)
+                    && standbyReplicas.equals(that.standbyReplicas)
+                    && issr.equals(that.issr);
         }
 
         @Override
         public String toString() {
-            return "CommittedIsrState{" + "isr=" + isr + '}';
+            return "CommittedIsrState{"
+                    + "isr="
+                    + isr
+                    + ", standbyReplicas="
+                    + standbyReplicas
+                    + ", issr="
+                    + issr
+                    + '}';
         }
     }
 
@@ -145,6 +173,16 @@ public interface IsrState {
         @Override
         public boolean isInflight() {
             return true;
+        }
+
+        @Override
+        public List<Integer> standbyReplicas() {
+            return lastCommittedState.standbyReplicas;
+        }
+
+        @Override
+        public List<Integer> issr() {
+            return lastCommittedState.issr;
         }
 
         @Override
@@ -213,6 +251,16 @@ public interface IsrState {
         @Override
         public boolean isInflight() {
             return true;
+        }
+
+        @Override
+        public List<Integer> standbyReplicas() {
+            return lastCommittedState.standbyReplicas;
+        }
+
+        @Override
+        public List<Integer> issr() {
+            return lastCommittedState.issr;
         }
 
         @Override

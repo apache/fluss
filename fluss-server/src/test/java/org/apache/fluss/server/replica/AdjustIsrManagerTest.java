@@ -41,19 +41,51 @@ class AdjustIsrManagerTest {
                 new AdjustIsrManager(
                         new FlussScheduler(1), new TestCoordinatorGateway(), tabletServerId);
 
+        LeaderAndIsr.Builder builder = new LeaderAndIsr.Builder();
+
         // shrink isr
         TableBucket tb = new TableBucket(150001L, 0);
         List<Integer> currentIsr = Arrays.asList(1, 2);
-        LeaderAndIsr adjustIsr = new LeaderAndIsr(tabletServerId, 0, currentIsr, 0, 0);
+
+        LeaderAndIsr adjustIsr =
+                builder.leader(tabletServerId)
+                        .leaderEpoch(0)
+                        .isr(currentIsr)
+                        .coordinatorEpoch(0)
+                        .bucketEpoch(0)
+                        .build();
         LeaderAndIsr result = adjustIsrManager.submit(tb, adjustIsr).get();
+
+        builder = new LeaderAndIsr.Builder();
         assertThat(result)
-                .isEqualTo(new LeaderAndIsr(tabletServerId, 0, Arrays.asList(1, 2), 0, 1));
+                .isEqualTo(
+                        builder.leader(tabletServerId)
+                                .leaderEpoch(0)
+                                .isr(Arrays.asList(1, 2))
+                                .coordinatorEpoch(0)
+                                .bucketEpoch(1)
+                                .build());
 
         // expand isr
         currentIsr = Arrays.asList(1, 2, 3);
-        adjustIsr = new LeaderAndIsr(tabletServerId, 0, currentIsr, 0, 1);
+        builder = new LeaderAndIsr.Builder();
+        adjustIsr =
+                builder.leader(tabletServerId)
+                        .leaderEpoch(0)
+                        .isr(currentIsr)
+                        .coordinatorEpoch(0)
+                        .bucketEpoch(1)
+                        .build();
         result = adjustIsrManager.submit(tb, adjustIsr).get();
+
+        builder = new LeaderAndIsr.Builder();
         assertThat(result)
-                .isEqualTo(new LeaderAndIsr(tabletServerId, 0, Arrays.asList(1, 2, 3), 0, 2));
+                .isEqualTo(
+                        builder.leader(tabletServerId)
+                                .leaderEpoch(0)
+                                .isr(Arrays.asList(1, 2, 3))
+                                .coordinatorEpoch(0)
+                                .bucketEpoch(2)
+                                .build());
     }
 }

@@ -1080,12 +1080,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                                 tb,
                                 Arrays.asList(1, 2, 3),
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        1,
-                                        Arrays.asList(1, 2, 3),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                leaderAndIsr(TABLET_SERVER_ID, 1, Arrays.asList(1, 2, 3)))),
                 future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
@@ -1100,12 +1095,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                                 tb,
                                 Arrays.asList(1, 2, 3),
-                                new LeaderAndIsr(
+                                leaderAndIsr(
                                         TABLET_SERVER_ID,
                                         INITIAL_LEADER_EPOCH,
-                                        Arrays.asList(1, 2, 3),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                        Arrays.asList(1, 2, 3)))),
                 future::complete);
         assertThat(future.get())
                 .containsOnly(
@@ -1134,12 +1127,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                                 tb,
                                 Arrays.asList(1, 2, 3),
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        1,
-                                        Arrays.asList(1, 2, 3),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                leaderAndIsr(TABLET_SERVER_ID, 1, Arrays.asList(1, 2, 3)))),
                 future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
@@ -1165,12 +1153,7 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                                 tb,
                                 Arrays.asList(1, 2, 3),
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        2,
-                                        Arrays.asList(1, 2, 3),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                leaderAndIsr(TABLET_SERVER_ID, 2, Arrays.asList(1, 2, 3)))),
                 future::complete);
         assertThat(future.get()).containsOnly(new NotifyLeaderAndIsrResultForBucket(tb));
         assertReplicaEpochEquals(
@@ -1881,5 +1864,9 @@ class ReplicaManagerTest extends ReplicaTestBase {
                                         "Table partition '" + k + "' does not exist.");
                     }
                 });
+    }
+
+    private LeaderAndIsr leaderAndIsr(int leader, int leaderEpoch, List<Integer> isr) {
+        return new LeaderAndIsr.Builder().leader(leader).leaderEpoch(leaderEpoch).isr(isr).build();
     }
 }

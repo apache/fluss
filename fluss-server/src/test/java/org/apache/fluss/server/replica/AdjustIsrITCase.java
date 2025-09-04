@@ -131,12 +131,13 @@ public class AdjustIsrITCase {
 
         currentLeaderAndIsr = zkClient.getLeaderAndIsr(tb).get();
         LeaderAndIsr newLeaderAndIsr =
-                new LeaderAndIsr(
-                        currentLeaderAndIsr.leader(),
-                        currentLeaderAndIsr.leaderEpoch() + 1,
-                        isr,
-                        currentLeaderAndIsr.coordinatorEpoch(),
-                        currentLeaderAndIsr.bucketEpoch());
+                new LeaderAndIsr.Builder()
+                        .leader(currentLeaderAndIsr.leader())
+                        .leaderEpoch(currentLeaderAndIsr.leaderEpoch() + 1)
+                        .isr(isr)
+                        .coordinatorEpoch(currentLeaderAndIsr.coordinatorEpoch())
+                        .bucketEpoch(currentLeaderAndIsr.bucketEpoch())
+                        .build();
         isr.add(stopFollower);
         FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
                 stopFollower, DATA1_TABLE_PATH, tb, newLeaderAndIsr, isr);

@@ -68,6 +68,7 @@ final class FollowerReplica {
      */
     void updateFetchState(
             LogOffsetMetadata followerFetchOffsetMetadata,
+            long kvAppliedOffset,
             long followerFetchTimeMs,
             long leaderEndOffset) {
         followerReplicaState.updateAndGet(
@@ -87,6 +88,7 @@ final class FollowerReplica {
                     }
                     return new FollowerReplicaState(
                             followerFetchOffsetMetadata,
+                            kvAppliedOffset,
                             Math.max(
                                     leaderEndOffset,
                                     currentReplicaState.getLastFetchLeaderLogEndOffset()),
@@ -115,11 +117,13 @@ final class FollowerReplica {
                         return new FollowerReplicaState(
                                 LogOffsetMetadata.UNKNOWN_OFFSET_METADATA,
                                 -1L,
+                                -1L,
                                 0L,
                                 lastCaughtUpTimeMs);
                     } else {
                         return new FollowerReplicaState(
                                 currentReplicaState.getLogEndOffsetMetadata(),
+                                currentReplicaState.getKvAppliedOffset(),
                                 leaderEndOffset,
                                 isFollowerInSync ? currentTimeMs : 0L,
                                 lastCaughtUpTimeMs);
@@ -149,6 +153,8 @@ final class FollowerReplica {
          */
         private final LogOffsetMetadata logEndOffsetMetadata;
 
+        private final long kvAppliedOffset;
+
         /**
          * The log end offset value at the time the leader received the last FetchRequest from this
          * follower. This is used to determine the lastCaughtUpTimeMs of the follower. It is reset
@@ -171,14 +177,17 @@ final class FollowerReplica {
         private final long lastCaughtUpTimeMs;
 
         static final FollowerReplicaState EMPTY =
-                new FollowerReplicaState(LogOffsetMetadata.UNKNOWN_OFFSET_METADATA, 0L, 0L, 0L);
+                new FollowerReplicaState(
+                        LogOffsetMetadata.UNKNOWN_OFFSET_METADATA, -1L, 0L, 0L, 0L);
 
         FollowerReplicaState(
                 LogOffsetMetadata logEndOffsetMetadata,
+                long kvAppliedOffset,
                 long lastFetchLeaderLogEndOffset,
                 long lastFetchTimeMs,
                 long lastCaughtUpTimeMs) {
             this.logEndOffsetMetadata = logEndOffsetMetadata;
+            this.kvAppliedOffset = kvAppliedOffset;
             this.lastFetchLeaderLogEndOffset = lastFetchLeaderLogEndOffset;
             this.lastFetchTimeMs = lastFetchTimeMs;
             this.lastCaughtUpTimeMs = lastCaughtUpTimeMs;
@@ -191,6 +200,10 @@ final class FollowerReplica {
         /** Returns the current log end offset of the follower replica. */
         long getLogEndOffset() {
             return logEndOffsetMetadata.getMessageOffset();
+        }
+
+        long getKvAppliedOffset() {
+            return kvAppliedOffset;
         }
 
         long getLastCaughtUpTimeMs() {
@@ -221,6 +234,8 @@ final class FollowerReplica {
             return "FollowerReplicaState{"
                     + "logEndOffsetMetadata="
                     + logEndOffsetMetadata
+                    + ", kvAppliedOffset="
+                    + kvAppliedOffset
                     + ", lastFetchLeaderLogEndOffset="
                     + lastFetchLeaderLogEndOffset
                     + ", lastFetchTimeMs="

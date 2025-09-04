@@ -39,6 +39,7 @@ import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.replica.fetcher.LeaderEndpoint.FetchData;
+import org.apache.fluss.server.replica.standby.KvStandbyManager;
 import org.apache.fluss.shaded.netty4.io.netty.buffer.ByteBuf;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -537,12 +538,32 @@ final class ReplicaFetcherThread extends ShutdownableThread {
                 replicaData.getHighWatermark());
 
         // Append the messages to the follower log tablet.
-        LogAppendInfo logAppendInfo = replica.appendRecordsToFollower(records);
-        LOG.trace(
-                "Follower has replica log end offset {} after appending {} bytes of messages for replica {}",
-                logTablet.localLogEndOffset(),
-                records.sizeInBytes(),
-                tableBucket);
+        LogAppendInfo logAppendInfo;
+        if (replica.isHotStandbyReplica()) {
+            KvStandbyManager kvStandbyManager = replicaManager.getKvStandbyManager();
+            // first, cancel standby task.
+            if (kvStandbyManager.hasBecomeHotStandbyTask(tableBucket)) {
+                kvStandbyManager.cancelBecomeHotStandbyTask(tableBucket);
+            }
+
+            // apply log to kv.
+            logAppendInfo =
+                    replica.putRecordsToHotStandby(
+                            records, kvStandbyManager.getApplyLogToKvHelper(tableBucket));
+            LOG.trace(
+                    "Follower(HotStandbyReplica) has replica log end offset {} after appending {} bytes of messages for replica {}",
+                    logTablet.localLogEndOffset(),
+                    records.sizeInBytes(),
+                    tableBucket);
+
+        } else {
+            logAppendInfo = replica.appendRecordsToFollower(records);
+            LOG.trace(
+                    "Follower has replica log end offset {} after appending {} bytes of messages for replica {}",
+                    logTablet.localLogEndOffset(),
+                    records.sizeInBytes(),
+                    tableBucket);
+        }
 
         // For the follower replica, we do not need to keep its segment base offset and physical
         // position. These values will be computed upon becoming leader or handling a preferred read

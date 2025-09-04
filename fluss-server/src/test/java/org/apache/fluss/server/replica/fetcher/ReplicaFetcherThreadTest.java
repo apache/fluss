@@ -72,8 +72,6 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
-import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
-import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
@@ -293,12 +291,10 @@ public class ReplicaFetcherThreadTest {
                                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                                 tb,
                                 Arrays.asList(leaderServerId, followerServerId),
-                                new LeaderAndIsr(
-                                        leaderServerId,
-                                        INITIAL_LEADER_EPOCH,
-                                        Arrays.asList(leaderServerId, followerServerId),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                new LeaderAndIsr.Builder()
+                                        .leader(leaderServerId)
+                                        .isr(Arrays.asList(leaderServerId, followerServerId))
+                                        .build())),
                 result -> {});
         followerRM.becomeLeaderOrFollower(
                 INITIAL_COORDINATOR_EPOCH,
@@ -307,12 +303,10 @@ public class ReplicaFetcherThreadTest {
                                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                                 tb,
                                 Arrays.asList(leaderServerId, followerServerId),
-                                new LeaderAndIsr(
-                                        leaderServerId,
-                                        INITIAL_LEADER_EPOCH,
-                                        Arrays.asList(leaderServerId, followerServerId),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))),
+                                new LeaderAndIsr.Builder()
+                                        .leader(leaderServerId)
+                                        .isr(Arrays.asList(leaderServerId, followerServerId))
+                                        .build())),
                 result -> {});
     }
 

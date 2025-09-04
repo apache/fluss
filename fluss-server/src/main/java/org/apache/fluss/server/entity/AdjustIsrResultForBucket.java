@@ -32,7 +32,7 @@ public class AdjustIsrResultForBucket extends ResultForBucket {
     }
 
     public AdjustIsrResultForBucket(TableBucket tableBucket, ApiError error) {
-        this(tableBucket, new LeaderAndIsr(-1, 0), error);
+        this(tableBucket, new LeaderAndIsr.Builder().leader(-1).leaderEpoch(0).build(), error);
     }
 
     private AdjustIsrResultForBucket(

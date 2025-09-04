@@ -20,6 +20,7 @@ package org.apache.fluss.server.utils;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
@@ -29,6 +30,7 @@ import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.BytesViewLogRecords;
 import org.apache.fluss.record.DefaultKvRecordBatch;
@@ -108,6 +110,8 @@ import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
+import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
+import org.apache.fluss.rpc.messages.PbRebalancePlanForTable;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbServerNode;
@@ -124,6 +128,7 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -155,6 +160,7 @@ import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.RebalancePlan;
 
 import javax.annotation.Nullable;
 
@@ -498,7 +504,9 @@ public class ServerRpcMessageUtils {
         reqForBucket
                 .setPhysicalTablePath(fromPhysicalTablePath(physicalTablePath))
                 .setReplicas(notifyLeaderAndIsrData.getReplicasArray())
-                .setIsrs(notifyLeaderAndIsrData.getIsrArray());
+                .setIsrs(notifyLeaderAndIsrData.getIsrArray())
+                .setHotStandbyReplicas(notifyLeaderAndIsrData.getStandbyArray())
+                .setIssrs(notifyLeaderAndIsrData.getIssrArray());
 
         return reqForBucket;
     }
@@ -519,17 +527,26 @@ public class ServerRpcMessageUtils {
             }
 
             PbTableBucket pbTableBucket = reqForBucket.getTableBucket();
+            LeaderAndIsr.Builder builder =
+                    new LeaderAndIsr.Builder()
+                            .leader(reqForBucket.getLeader())
+                            .leaderEpoch(reqForBucket.getLeaderEpoch())
+                            .isr(isr)
+                            .coordinatorEpoch(request.getCoordinatorEpoch())
+                            .bucketEpoch(reqForBucket.getBucketEpoch());
+
+            builder.standbyReplicas(
+                    Arrays.stream(reqForBucket.getHotStandbyReplicas())
+                            .boxed()
+                            .collect(Collectors.toList()));
+            builder.issr(
+                    Arrays.stream(reqForBucket.getIssrs()).boxed().collect(Collectors.toList()));
             notifyLeaderAndIsrDataList.add(
                     new NotifyLeaderAndIsrData(
                             toPhysicalTablePath(reqForBucket.getPhysicalTablePath()),
                             toTableBucket(pbTableBucket),
                             replicas,
-                            new LeaderAndIsr(
-                                    reqForBucket.getLeader(),
-                                    reqForBucket.getLeaderEpoch(),
-                                    isr,
-                                    request.getCoordinatorEpoch(),
-                                    reqForBucket.getBucketEpoch())));
+                            builder.build()));
         }
         return notifyLeaderAndIsrDataList;
     }
@@ -702,7 +719,10 @@ public class ServerRpcMessageUtils {
                                 tableId,
                                 fetchLogReqForBucket.getFetchOffset(),
                                 fetchLogReqForBucket.getMaxFetchBytes(),
-                                projectionFields));
+                                projectionFields,
+                                fetchLogReqForBucket.hasKvAppliedOffset()
+                                        ? fetchLogReqForBucket.getKvAppliedOffset()
+                                        : null));
             }
         }
 
@@ -1036,7 +1056,10 @@ public class ServerRpcMessageUtils {
                     if (tb.getPartitionId() != null) {
                         reqForBucket.setPartitionId(tb.getPartitionId());
                     }
+
                     leaderAndIsr.isr().forEach(reqForBucket::addNewIsr);
+                    leaderAndIsr.issr().forEach(reqForBucket::addNewIssr);
+
                     if (reqForBucketByTableId.containsKey(tb.getTableId())) {
                         reqForBucketByTableId.get(tb.getTableId()).add(reqForBucket);
                     } else {
@@ -1080,12 +1103,13 @@ public class ServerRpcMessageUtils {
                 }
                 leaderAndIsrMap.put(
                         tb,
-                        new LeaderAndIsr(
-                                leaderId,
-                                reqForBucket.getLeaderEpoch(),
-                                newIsr,
-                                reqForBucket.getCoordinatorEpoch(),
-                                reqForBucket.getBucketEpoch()));
+                        new LeaderAndIsr.Builder()
+                                .leader(leaderId)
+                                .leaderEpoch(reqForBucket.getLeaderEpoch())
+                                .isr(newIsr)
+                                .coordinatorEpoch(reqForBucket.getCoordinatorEpoch())
+                                .bucketEpoch(reqForBucket.getBucketEpoch())
+                                .build());
             }
         }
         return leaderAndIsrMap;
@@ -1110,7 +1134,9 @@ public class ServerRpcMessageUtils {
                         .setLeaderEpoch(leaderAndIsr.leaderEpoch())
                         .setCoordinatorEpoch(leaderAndIsr.coordinatorEpoch())
                         .setBucketEpoch(leaderAndIsr.bucketEpoch())
-                        .setIsrs(leaderAndIsr.isrArray());
+                        .setIsrs(leaderAndIsr.isrArray())
+                        .setHotStandbyReplicas(leaderAndIsr.standbyArray())
+                        .setIssrs(leaderAndIsr.issrArray());
             }
 
             if (respMap.containsKey(tb.getTableId())) {
@@ -1163,12 +1189,13 @@ public class ServerRpcMessageUtils {
                         tb,
                         new AdjustIsrResultForBucket(
                                 tb,
-                                new LeaderAndIsr(
-                                        respForBucket.getLeaderId(),
-                                        respForBucket.getLeaderEpoch(),
-                                        isr,
-                                        respForBucket.getCoordinatorEpoch(),
-                                        respForBucket.getBucketEpoch())));
+                                new LeaderAndIsr.Builder()
+                                        .leader(respForBucket.getLeaderId())
+                                        .leaderEpoch(respForBucket.getLeaderEpoch())
+                                        .isr(isr)
+                                        .coordinatorEpoch(respForBucket.getCoordinatorEpoch())
+                                        .bucketEpoch(respForBucket.getBucketEpoch())
+                                        .build()));
             }
         }
         return adjustIsrResult;
@@ -1622,6 +1649,76 @@ public class ServerRpcMessageUtils {
     public static LakeTieringHeartbeatResponse makeLakeTieringHeartbeatResponse(
             int coordinatorEpoch) {
         return new LakeTieringHeartbeatResponse().setCoordinatorEpoch(coordinatorEpoch);
+    }
+
+    public static RebalanceResponse makeRebalanceRespose(RebalancePlan rebalancePlan) {
+        RebalanceResponse response = new RebalanceResponse();
+        List<PbRebalancePlanForTable> planForTables = new ArrayList<>();
+
+        // for none-partitioned tables.
+        for (Map.Entry<Long, List<RebalancePlanForBucket>> planForTable :
+                rebalancePlan.getPlanForBuckets().entrySet()) {
+            PbRebalancePlanForTable pbRebalancePlanForTable =
+                    response.addPlanForTable().setTableId(planForTable.getKey());
+            List<PbRebalancePlanForBucket> planForBuckets = new ArrayList<>();
+            planForTable
+                    .getValue()
+                    .forEach(
+                            planForBucket ->
+                                    planForBuckets.add(toPbRebalancePlanForBucket(planForBucket)));
+            pbRebalancePlanForTable.addAllBucketsPlans(planForBuckets);
+            planForTables.add(pbRebalancePlanForTable);
+        }
+        response.addAllPlanForTables(planForTables);
+
+        // for partitioned tables.
+        Map<Long, Map<Long, List<PbRebalancePlanForBucket>>> planForBucketsOfPartitionedTable =
+                new HashMap<>();
+        for (Map.Entry<TablePartition, List<RebalancePlanForBucket>> planForTable :
+                rebalancePlan.getPlanForBucketsOfPartitionedTable().entrySet()) {
+            Map<Long, List<PbRebalancePlanForBucket>> bucketsPlanForPartition =
+                    planForBucketsOfPartitionedTable.computeIfAbsent(
+                            planForTable.getKey().getTableId(), k -> new HashMap<>());
+            bucketsPlanForPartition.put(
+                    planForTable.getKey().getPartitionId(),
+                    planForTable.getValue().stream()
+                            .map(ServerRpcMessageUtils::toPbRebalancePlanForBucket)
+                            .collect(Collectors.toList()));
+        }
+
+        for (Map.Entry<Long, Map<Long, List<PbRebalancePlanForBucket>>> planForPartition :
+                planForBucketsOfPartitionedTable.entrySet()) {
+            PbRebalancePlanForTable pbRebalancePlanForTable =
+                    response.addPlanForTable().setTableId(planForPartition.getKey());
+            planForPartition
+                    .getValue()
+                    .forEach(
+                            (partitionId, planForBuckets) ->
+                                    pbRebalancePlanForTable
+                                            .addPartitionsPlan()
+                                            .setPartitionId(partitionId)
+                                            .addAllBucketsPlans(planForBuckets));
+        }
+        return response;
+    }
+
+    private static PbRebalancePlanForBucket toPbRebalancePlanForBucket(
+            RebalancePlanForBucket planForBucket) {
+        PbRebalancePlanForBucket pbRebalancePlanForBucket =
+                new PbRebalancePlanForBucket()
+                        .setBucketId(planForBucket.getBucketId())
+                        .setOriginalLeader(planForBucket.getOriginalLeader())
+                        .setNewLeader(planForBucket.getNewLeader());
+        pbRebalancePlanForBucket
+                .setOriginalReplicas(
+                        planForBucket.getOriginReplicas().stream()
+                                .mapToInt(Integer::intValue)
+                                .toArray())
+                .setNewReplicas(
+                        planForBucket.getNewReplicas().stream()
+                                .mapToInt(Integer::intValue)
+                                .toArray());
+        return pbRebalancePlanForBucket;
     }
 
     private static <T> Map<TableBucket, T> mergeResponse(

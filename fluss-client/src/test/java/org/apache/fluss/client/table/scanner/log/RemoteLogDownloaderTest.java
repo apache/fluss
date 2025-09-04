@@ -19,13 +19,13 @@ package org.apache.fluss.client.table.scanner.log;
 
 import org.apache.fluss.client.metrics.ScannerMetricGroup;
 import org.apache.fluss.client.metrics.TestingScannerMetricGroup;
-import org.apache.fluss.client.table.scanner.RemoteFileDownloader;
 import org.apache.fluss.client.table.scanner.log.RemoteLogDownloader.RemoteLogDownloadRequest;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.remote.RemoteFileDownloader;
 import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;

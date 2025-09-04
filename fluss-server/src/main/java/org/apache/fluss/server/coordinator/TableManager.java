@@ -34,10 +34,13 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionStrategy.DEFAULT_ELECTION;
 
 /** A manager for tables. */
 public class TableManager {
@@ -148,13 +151,15 @@ public class TableManager {
                 tableBuckets,
                 coordinatorContext.getTablePathById(tableId));
         // first, we transmit it to state NewBucket
-        tableBucketStateMachine.handleStateChange(tableBuckets, BucketState.NewBucket);
+        tableBucketStateMachine.handleStateChange(
+                tableBuckets, BucketState.NewBucket, DEFAULT_ELECTION);
         // then get all the replicas of the all table buckets
         Set<TableBucketReplica> replicas = coordinatorContext.getBucketReplicas(tableBuckets);
         // transmit all the replicas to state NewReplica
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NewReplica);
         // transmit it to state Online
-        tableBucketStateMachine.handleStateChange(tableBuckets, BucketState.OnlineBucket);
+        tableBucketStateMachine.handleStateChange(
+                tableBuckets, BucketState.OnlineBucket, DEFAULT_ELECTION);
         // transmit all the replicas to state online
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.OnlineReplica);
     }
@@ -162,8 +167,10 @@ public class TableManager {
     /** Invoked with a table to be deleted. */
     public void onDeleteTable(long tableId) {
         Set<TableBucket> tableBuckets = coordinatorContext.getAllBucketsForTable(tableId);
-        tableBucketStateMachine.handleStateChange(tableBuckets, BucketState.OfflineBucket);
-        tableBucketStateMachine.handleStateChange(tableBuckets, BucketState.NonExistentBucket);
+        tableBucketStateMachine.handleStateChange(
+                tableBuckets, BucketState.OfflineBucket, DEFAULT_ELECTION);
+        tableBucketStateMachine.handleStateChange(
+                tableBuckets, BucketState.NonExistentBucket, DEFAULT_ELECTION);
         onDeleteTableBucket(coordinatorContext.getAllReplicasForTable(tableId));
     }
 
@@ -171,8 +178,10 @@ public class TableManager {
     public void onDeletePartition(long tableId, long partitionId) {
         Set<TableBucket> deleteBuckets =
                 coordinatorContext.getAllBucketsForPartition(tableId, partitionId);
-        tableBucketStateMachine.handleStateChange(deleteBuckets, BucketState.OfflineBucket);
-        tableBucketStateMachine.handleStateChange(deleteBuckets, BucketState.NonExistentBucket);
+        tableBucketStateMachine.handleStateChange(
+                deleteBuckets, BucketState.OfflineBucket, DEFAULT_ELECTION);
+        tableBucketStateMachine.handleStateChange(
+                deleteBuckets, BucketState.NonExistentBucket, DEFAULT_ELECTION);
         onDeleteTableBucket(coordinatorContext.getAllReplicasForPartition(tableId, partitionId));
     }
 
@@ -203,6 +212,7 @@ public class TableManager {
     }
 
     private void resumeTableDeletions() {
+        new ArrayList<>(8);
         Set<Long> tablesToBeDeleted = new HashSet<>(coordinatorContext.getTablesToBeDeleted());
         Set<Long> eligibleTableDeletion = new HashSet<>();
 

@@ -61,6 +61,7 @@ import static org.apache.fluss.server.coordinator.statemachine.BucketState.NewBu
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.NonExistentBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionStrategy.DEFAULT_ELECTION;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -131,10 +132,24 @@ class TableBucketStateMachineTest {
         coordinatorContext.updateBucketReplicaAssignment(t2b0, Arrays.asList(1, 2));
 
         // create LeaderAndIsr for t10/t11 info in zk,
+        LeaderAndIsr.Builder builder = new LeaderAndIsr.Builder();
         zookeeperClient.registerLeaderAndIsr(
-                new TableBucket(t1Id, 0), new LeaderAndIsr(0, 0, Arrays.asList(0, 1), 0, 0));
+                new TableBucket(t1Id, 0),
+                builder.leader(0)
+                        .leaderEpoch(0)
+                        .isr(Arrays.asList(0, 1))
+                        .coordinatorEpoch(0)
+                        .bucketEpoch(0)
+                        .build());
+        builder = new LeaderAndIsr.Builder();
         zookeeperClient.registerLeaderAndIsr(
-                new TableBucket(t1Id, 1), new LeaderAndIsr(2, 0, Arrays.asList(2, 3), 0, 0));
+                new TableBucket(t1Id, 1),
+                builder.leader(2)
+                        .leaderEpoch(0)
+                        .isr(Arrays.asList(2, 3))
+                        .coordinatorEpoch(0)
+                        .bucketEpoch(0)
+                        .build());
         // update the LeaderAndIsr to context
         coordinatorContext.putBucketLeaderAndIsr(
                 t1b0, zookeeperClient.getLeaderAndIsr(new TableBucket(t1Id, 0)).get());
@@ -170,9 +185,9 @@ class TableBucketStateMachineTest {
 
         // NonExistent to Online/Offline is invalid, shouldn't do state transmit
         tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tableBucket0), OnlineBucket);
+                Collections.singleton(tableBucket0), OnlineBucket, DEFAULT_ELECTION);
         tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tableBucket1), OfflineBucket);
+                Collections.singleton(tableBucket1), OfflineBucket, DEFAULT_ELECTION);
 
         // check it
         assertThat(coordinatorContext.getBucketState(tableBucket0)).isEqualTo(NonExistentBucket);
@@ -198,7 +213,8 @@ class TableBucketStateMachineTest {
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketState(tableBucket, NewBucket);
         // case1: init a new leader for NewBucket to OnlineBucket
-        tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket), OnlineBucket);
+        tableBucketStateMachine.handleStateChange(
+                Collections.singleton(tableBucket), OnlineBucket, DEFAULT_ELECTION);
         // non any alive servers, the state change fail
         assertThat(coordinatorContext.getBucketState(tableBucket)).isEqualTo(NewBucket);
 
@@ -209,7 +225,8 @@ class TableBucketStateMachineTest {
                 coordinatorContext, testCoordinatorChannelManager);
 
         // change to online again
-        tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket), OnlineBucket);
+        tableBucketStateMachine.handleStateChange(
+                Collections.singleton(tableBucket), OnlineBucket, DEFAULT_ELECTION);
         assertThat(coordinatorContext.getBucketState(tableBucket)).isEqualTo(OnlineBucket);
 
         // check bucket LeaderAndIsr
@@ -220,7 +237,8 @@ class TableBucketStateMachineTest {
         coordinatorContext.setLiveTabletServers(
                 CoordinatorTestUtils.createServers(Arrays.asList(1, 2)));
 
-        tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket), OnlineBucket);
+        tableBucketStateMachine.handleStateChange(
+                Collections.singleton(tableBucket), OnlineBucket, DEFAULT_ELECTION);
         // check state is online
         assertThat(coordinatorContext.getBucketState(tableBucket)).isEqualTo(OnlineBucket);
 
@@ -232,7 +250,12 @@ class TableBucketStateMachineTest {
         coordinatorContext.putBucketState(tableBucket, OfflineBucket);
         coordinatorContext.setLiveTabletServers(
                 CoordinatorTestUtils.createServers(Collections.emptyList()));
-        tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket), OnlineBucket);
+        tableBucketStateMachine.handleStateChange(
+                Collections.singleton(tableBucket), OnlineBucket, DEFAULT_ELECTION);
+        coordinatorContext.setLiveTabletServers(
+                CoordinatorTestUtils.createServers(Collections.emptyList()));
+        tableBucketStateMachine.handleStateChange(
+                Collections.singleton(tableBucket), OnlineBucket, DEFAULT_ELECTION);
         // the state will still be offline
         assertThat(coordinatorContext.getBucketState(tableBucket)).isEqualTo(OfflineBucket);
 
@@ -277,7 +300,7 @@ class TableBucketStateMachineTest {
         coordinatorContext.updateBucketReplicaAssignment(tableBucket1, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketState(tableBucket1, NewBucket);
         tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tableBucket1), OnlineBucket);
+                Collections.singleton(tableBucket1), OnlineBucket, DEFAULT_ELECTION);
         // retry util the leader has changed to 1
         retry(
                 Duration.ofMinutes(1),
@@ -304,18 +327,18 @@ class TableBucketStateMachineTest {
         coordinatorContext.putBucketState(tableBucket1, OnlineBucket);
 
         tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tableBucket0), OfflineBucket);
+                Collections.singleton(tableBucket0), OfflineBucket, DEFAULT_ELECTION);
         tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tableBucket0), NonExistentBucket);
+                Collections.singleton(tableBucket0), NonExistentBucket, DEFAULT_ELECTION);
         // bucket 0 should be removed
         assertThat(coordinatorContext.getBucketState(tableBucket0)).isNull();
         // bucket 1 should still exist
         assertThat(coordinatorContext.getBucketState(tableBucket1)).isNotNull();
 
         tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tableBucket1), OfflineBucket);
+                Collections.singleton(tableBucket1), OfflineBucket, DEFAULT_ELECTION);
         tableBucketStateMachine.handleStateChange(
-                Collections.singleton(tableBucket1), NonExistentBucket);
+                Collections.singleton(tableBucket1), NonExistentBucket, DEFAULT_ELECTION);
         assertThat(coordinatorContext.getBucketState(tableBucket0)).isNull();
     }
 

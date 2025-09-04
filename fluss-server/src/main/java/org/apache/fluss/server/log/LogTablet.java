@@ -113,6 +113,11 @@ public final class LogTablet {
     // The minimum offset that should be retained in the local log. This is used to ensure that,
     // the offset of kv snapshot should be retained, otherwise, kv recovery will fail.
     private volatile long minRetainOffset;
+
+    // The minimum offset that should be retained in the local log for kv recovery for hotStandby
+    // replica.
+    private volatile long minKvAppliedOffset;
+
     // tracking the log start offset in remote storage
     private volatile long remoteLogStartOffset = Long.MAX_VALUE;
     // tracking the log end offset in remote storage
@@ -163,6 +168,7 @@ public final class LogTablet {
         // updating this value in time. Default value to Long.MAX_VALUE for normal log table,
         // as we don't need to retain logs for kv recovery.
         this.minRetainOffset = isChangelog ? 0L : Long.MAX_VALUE;
+        this.minKvAppliedOffset = Long.MAX_VALUE;
     }
 
     public PhysicalTablePath getPhysicalTablePath() {
@@ -491,6 +497,15 @@ public final class LogTablet {
         }
     }
 
+    public void updateMinKvAppliedOffset(long minKvAppliedOffset) {
+        if (minKvAppliedOffset > this.minKvAppliedOffset) {
+            this.minKvAppliedOffset = minKvAppliedOffset;
+        }
+
+        // try to delete the old segments that are not needed.
+        deleteSegmentsAlreadyExistsInRemote();
+    }
+
     public void updateLakeTableSnapshotId(long snapshotId) {
         if (snapshotId > this.lakeTableSnapshotId) {
             this.lakeTableSnapshotId = snapshotId;
@@ -558,7 +573,8 @@ public final class LogTablet {
 
         try {
             // shouldn't clean up segments that will be used by kv recovery.
-            long cleanupToOffset = Math.min(minRetainOffset, cleanUpToOffset);
+            long cleanupToOffset =
+                    Math.min(Math.min(minRetainOffset, minKvAppliedOffset), cleanUpToOffset);
             deleteOldSegments(cleanupToOffset, SegmentDeletionReason.LOG_MOVE_TO_REMOTE);
         } catch (IOException e) {
             LOG.error(

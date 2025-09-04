@@ -836,12 +836,14 @@ public class TabletServiceITCase {
                                 makeNotifyLeaderAndIsrRequest(
                                         DATA1_PHYSICAL_TABLE_PATH,
                                         tb,
-                                        new LeaderAndIsr(
-                                                leader,
-                                                1,
-                                                originLeaderAndIsr.isr(),
-                                                originLeaderAndIsr.coordinatorEpoch(),
-                                                originLeaderAndIsr.bucketEpoch())))
+                                        new LeaderAndIsr.Builder()
+                                                .leader(leader)
+                                                .leaderEpoch(1)
+                                                .isr(originLeaderAndIsr.isr())
+                                                .coordinatorEpoch(
+                                                        originLeaderAndIsr.coordinatorEpoch())
+                                                .bucketEpoch(originLeaderAndIsr.bucketEpoch())
+                                                .build()))
                         .get();
         List<NotifyLeaderAndIsrResultForBucket> result =
                 getNotifyLeaderAndIsrResponseData(notifyLeaderAndIsrResponse);
@@ -878,12 +880,14 @@ public class TabletServiceITCase {
                                 makeNotifyLeaderAndIsrRequest(
                                         DATA1_PHYSICAL_TABLE_PATH,
                                         tb,
-                                        new LeaderAndIsr(
-                                                leader,
-                                                2,
-                                                originLeaderAndIsr.isr(),
-                                                originLeaderAndIsr.coordinatorEpoch(),
-                                                originLeaderAndIsr.bucketEpoch())))
+                                        new LeaderAndIsr.Builder()
+                                                .leader(leader)
+                                                .leaderEpoch(2)
+                                                .isr(originLeaderAndIsr.isr())
+                                                .coordinatorEpoch(
+                                                        originLeaderAndIsr.coordinatorEpoch())
+                                                .bucketEpoch(originLeaderAndIsr.bucketEpoch())
+                                                .build()))
                         .get();
         result = getNotifyLeaderAndIsrResponseData(notifyLeaderAndIsrResponse);
         assertThat(result.size()).isEqualTo(1);

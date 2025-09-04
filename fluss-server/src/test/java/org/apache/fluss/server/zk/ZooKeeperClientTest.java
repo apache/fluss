@@ -19,6 +19,8 @@ package org.apache.fluss.server.zk;
 
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.TabletServerInfo;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.Schema;
@@ -33,6 +35,8 @@ import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.RebalancePlan;
+import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
@@ -165,12 +169,12 @@ class ZooKeeperClientTest {
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).isEmpty();
 
         // try to register bucket leaderAndIsr
-        LeaderAndIsr leaderAndIsr = new LeaderAndIsr(1, 10, Arrays.asList(1, 2, 3), 100, 1000);
+        LeaderAndIsr leaderAndIsr = leaderAndIsr(1, 10, Arrays.asList(1, 2, 3), 100, 1000);
         zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).hasValue(leaderAndIsr);
 
         // test update
-        leaderAndIsr = new LeaderAndIsr(2, 20, Collections.emptyList(), 200, 2000);
+        leaderAndIsr = leaderAndIsr(2, 20, Collections.emptyList(), 200, 2000);
         zookeeperClient.updateLeaderAndIsr(tableBucket, leaderAndIsr);
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).hasValue(leaderAndIsr);
 
@@ -188,7 +192,7 @@ class ZooKeeperClientTest {
             TableBucket tableBucket =
                     isPartitionTable ? new TableBucket(1, 2L, i) : new TableBucket(1, i);
             LeaderAndIsr leaderAndIsr =
-                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
+                    leaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
             leaderAndIsrList.add(leaderAndIsr);
             RegisterTableBucketLeadAndIsrInfo info =
                     isPartitionTable
@@ -248,7 +252,7 @@ class ZooKeeperClientTest {
         for (int i = 0; i < totalCount; i++) {
             TableBucket tableBucket = new TableBucket(1, i);
             LeaderAndIsr leaderAndIsr =
-                    new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
+                    leaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 100, 1000);
             leaderAndIsrList.put(tableBucket, leaderAndIsr);
             zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
         }
@@ -261,7 +265,7 @@ class ZooKeeperClientTest {
                                         Map.Entry::getKey,
                                         entry -> {
                                             LeaderAndIsr old = entry.getValue();
-                                            return new LeaderAndIsr(
+                                            return leaderAndIsr(
                                                     old.leader() + 1,
                                                     old.leaderEpoch() + 1,
                                                     old.isr(),
@@ -504,6 +508,80 @@ class ZooKeeperClientTest {
     }
 
     @Test
+    void testServerTag() throws Exception {
+        Map<Integer, ServerTag> serverTags = new HashMap<>();
+        serverTags.put(0, ServerTag.PERMANENT_OFFLINE);
+        serverTags.put(1, ServerTag.TEMPORARY_OFFLINE);
+
+        zookeeperClient.registerServerTags(new ServerTags(serverTags));
+        assertThat(zookeeperClient.getServerTags()).hasValue(new ServerTags(serverTags));
+
+        // update server tags.
+        serverTags.put(0, ServerTag.TEMPORARY_OFFLINE);
+        serverTags.remove(1);
+        zookeeperClient.registerServerTags(new ServerTags(serverTags));
+        assertThat(zookeeperClient.getServerTags()).hasValue(new ServerTags(serverTags));
+
+        zookeeperClient.registerServerTags(new ServerTags(Collections.emptyMap()));
+        assertThat(zookeeperClient.getServerTags())
+                .hasValue(new ServerTags(Collections.emptyMap()));
+    }
+
+    @Test
+    void testRebalancePlan() throws Exception {
+        Map<TableBucket, RebalancePlanForBucket> bucketPlan = new HashMap<>();
+        bucketPlan.put(
+                new TableBucket(0L, 0),
+                new RebalancePlanForBucket(
+                        new TableBucket(0L, 0),
+                        0,
+                        3,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(3, 4, 5)));
+        bucketPlan.put(
+                new TableBucket(0L, 1),
+                new RebalancePlanForBucket(
+                        new TableBucket(0L, 1),
+                        1,
+                        1,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(1, 2, 3)));
+        bucketPlan.put(
+                new TableBucket(1L, 1L, 0),
+                new RebalancePlanForBucket(
+                        new TableBucket(1L, 1L, 0),
+                        1,
+                        1,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(1, 2, 3)));
+        bucketPlan.put(
+                new TableBucket(1L, 1L, 1),
+                new RebalancePlanForBucket(
+                        new TableBucket(1L, 1L, 1),
+                        1,
+                        1,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(1, 2, 3)));
+        zookeeperClient.registerRebalancePlan(new RebalancePlan(bucketPlan));
+        assertThat(zookeeperClient.getRebalancePlan()).hasValue(new RebalancePlan(bucketPlan));
+
+        bucketPlan = new HashMap<>();
+        bucketPlan.put(
+                new TableBucket(0L, 0),
+                new RebalancePlanForBucket(
+                        new TableBucket(0L, 0),
+                        0,
+                        3,
+                        Arrays.asList(0, 1, 2),
+                        Arrays.asList(3, 4, 5)));
+        zookeeperClient.registerRebalancePlan(new RebalancePlan(bucketPlan));
+        assertThat(zookeeperClient.getRebalancePlan()).hasValue(new RebalancePlan(bucketPlan));
+
+        zookeeperClient.deleteRebalancePlan();
+        assertThat(zookeeperClient.getRebalancePlan()).isEmpty();
+    }
+
+    @Test
     void testZookeeperConfigPath() throws Exception {
         final Configuration config = new Configuration();
         config.setString(
@@ -531,5 +609,16 @@ class ZooKeeperClientTest {
             assertThat(clientConfig.getProperty(ZKClientConfig.ZK_SASL_CLIENT_USERNAME))
                     .isEqualTo("zookeeper2");
         }
+    }
+
+    private LeaderAndIsr leaderAndIsr(
+            int leader, int leaderEpoch, List<Integer> isr, int coordinatorEpoch, int bucketEpoch) {
+        return new LeaderAndIsr.Builder()
+                .leader(leader)
+                .leaderEpoch(leaderEpoch)
+                .isr(isr)
+                .coordinatorEpoch(coordinatorEpoch)
+                .bucketEpoch(bucketEpoch)
+                .build();
     }
 }

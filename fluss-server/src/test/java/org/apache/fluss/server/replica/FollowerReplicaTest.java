@@ -122,14 +122,17 @@ final class FollowerReplicaTest {
     private long updateFetchState(long followerFetchOffset, long leaderEndOffset) {
         long currentTimeMillis = System.currentTimeMillis();
         followerReplica.updateFetchState(
-                new LogOffsetMetadata(followerFetchOffset), currentTimeMillis, leaderEndOffset);
+                new LogOffsetMetadata(followerFetchOffset),
+                -1L,
+                currentTimeMillis,
+                leaderEndOffset);
         return currentTimeMillis;
     }
 
     private void updateFetchState(
             long currentTimeMs, long followerFetchOffset, long leaderEndOffset) {
         followerReplica.updateFetchState(
-                new LogOffsetMetadata(followerFetchOffset), currentTimeMs, leaderEndOffset);
+                new LogOffsetMetadata(followerFetchOffset), -1L, currentTimeMs, leaderEndOffset);
     }
 
     private long resetReplicaState(

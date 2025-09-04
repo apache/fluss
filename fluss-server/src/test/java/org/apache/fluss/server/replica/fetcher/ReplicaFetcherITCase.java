@@ -309,12 +309,13 @@ public class ReplicaFetcherITCase {
         // then the kv should be flushed finally
         LeaderAndIsr currentLeaderAndIsr = zkClient.getLeaderAndIsr(tb).get();
         LeaderAndIsr newLeaderAndIsr =
-                new LeaderAndIsr(
-                        currentLeaderAndIsr.leader(),
-                        currentLeaderAndIsr.leaderEpoch() + 1,
-                        currentLeaderAndIsr.isr(),
-                        currentLeaderAndIsr.coordinatorEpoch(),
-                        currentLeaderAndIsr.bucketEpoch());
+                new LeaderAndIsr.Builder()
+                        .leader(currentLeaderAndIsr.leader())
+                        .leaderEpoch(currentLeaderAndIsr.leaderEpoch() + 1)
+                        .isr(currentLeaderAndIsr.isr())
+                        .coordinatorEpoch(currentLeaderAndIsr.coordinatorEpoch())
+                        .bucketEpoch(currentLeaderAndIsr.bucketEpoch())
+                        .build();
         FLUSS_CLUSTER_EXTENSION.notifyLeaderAndIsr(
                 followerToStop, DATA1_TABLE_PATH, tb, newLeaderAndIsr, Arrays.asList(0, 1, 2));
 

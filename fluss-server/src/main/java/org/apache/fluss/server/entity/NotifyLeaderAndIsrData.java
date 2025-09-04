@@ -78,8 +78,24 @@ public final class NotifyLeaderAndIsrData {
         return leaderAndIsr.isr();
     }
 
+    public List<Integer> getHotStandbyReplicas() {
+        return leaderAndIsr.standbyList();
+    }
+
     public int[] getIsrArray() {
         return leaderAndIsr.isr().stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    public List<Integer> getIssr() {
+        return leaderAndIsr.issr();
+    }
+
+    public int[] getStandbyArray() {
+        return leaderAndIsr.standbyList().stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    public int[] getIssrArray() {
+        return leaderAndIsr.issr().stream().mapToInt(Integer::intValue).toArray();
     }
 
     public LeaderAndIsr getLeaderAndIsr() {

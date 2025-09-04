@@ -21,12 +21,21 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceStatusForBucket;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
+import org.apache.fluss.exception.RebalanceFailureException;
+import org.apache.fluss.exception.ServerNotExistException;
+import org.apache.fluss.exception.ServerTagAlreadyExistException;
+import org.apache.fluss.exception.ServerTagNotExistException;
+import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -34,14 +43,19 @@ import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.rpc.messages.AddServerTagResponse;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
+import org.apache.fluss.rpc.messages.RebalanceResponse;
+import org.apache.fluss.rpc.messages.RemoveServerTagResponse;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
+import org.apache.fluss.server.coordinator.event.AddServerTagEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
+import org.apache.fluss.server.coordinator.event.CancalRebalanceEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
@@ -54,9 +68,11 @@ import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEv
 import org.apache.fluss.server.coordinator.event.DropPartitionEvent;
 import org.apache.fluss.server.coordinator.event.DropTableEvent;
 import org.apache.fluss.server.coordinator.event.EventProcessor;
+import org.apache.fluss.server.coordinator.event.ExecuteRebalanceTaskEvent;
 import org.apache.fluss.server.coordinator.event.FencedCoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.NewTabletServerEvent;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
+import org.apache.fluss.server.coordinator.event.RemoveServerTagEvent;
 import org.apache.fluss.server.coordinator.event.watcher.TableChangeWatcher;
 import org.apache.fluss.server.coordinator.event.watcher.TabletServerChangeWatcher;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaStateMachine;
@@ -76,7 +92,9 @@ import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
+import org.apache.fluss.server.zk.data.RebalancePlan;
 import org.apache.fluss.server.zk.data.RemoteLogManifestHandle;
+import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
 import org.apache.fluss.server.zk.data.ZkData.PartitionIdsZNode;
@@ -95,6 +113,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -103,11 +122,15 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionStrategy.DEFAULT_ELECTION;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionStrategy.REASSIGN_BUCKET_LEADER_ELECTION;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.NewReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionStarted;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeAdjustIsrResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceRespose;
 import static org.apache.fluss.utils.concurrent.FutureUtils.completeFromCallable;
 
 /** An implementation for {@link EventProcessor}. */
@@ -130,7 +153,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
     private final TabletServerChangeWatcher tabletServerChangeWatcher;
     private final CoordinatorMetadataCache serverMetadataCache;
     private final CoordinatorRequestBatch coordinatorRequestBatch;
-    private final CoordinatorMetricGroup coordinatorMetricGroup;
     private final String internalListenerName;
 
     private final CompletedSnapshotStoreManager completedSnapshotStoreManager;
@@ -188,7 +210,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         zooKeeperClient);
         this.autoPartitionManager = autoPartitionManager;
         this.lakeTableTieringManager = lakeTableTieringManager;
-        this.coordinatorMetricGroup = coordinatorMetricGroup;
         this.internalListenerName = conf.getString(ConfigOptions.INTERNAL_LISTENER_NAME);
     }
 
@@ -297,6 +318,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorContext.setLiveTabletServers(tabletServerInfos);
         // init tablet server channels
         coordinatorChannelManager.startup(internalServerNodes);
+
+        // load server tags.
+        zooKeeperClient
+                .getServerTags()
+                .ifPresent(tags -> coordinatorContext.initSeverTags(tags.getServerTags()));
 
         // load all tables
         List<TableInfo> autoPartitionTables = new ArrayList<>();
@@ -470,6 +496,20 @@ public class CoordinatorEventProcessor implements EventProcessor {
             completeFromCallable(
                     commitLakeTableSnapshotEvent.getRespCallback(),
                     () -> tryProcessCommitLakeTableSnapshot(commitLakeTableSnapshotEvent));
+        } else if (event instanceof AddServerTagEvent) {
+            AddServerTagEvent addServerTagEvent = (AddServerTagEvent) event;
+            completeFromCallable(
+                    addServerTagEvent.getRespCallback(),
+                    () -> processAddServerTag(addServerTagEvent));
+        } else if (event instanceof RemoveServerTagEvent) {
+            RemoveServerTagEvent removeServerTagEvent = (RemoveServerTagEvent) event;
+            completeFromCallable(
+                    removeServerTagEvent.getRespCallback(),
+                    () -> processRemoveServerTag(removeServerTagEvent));
+        } else if (event instanceof ExecuteRebalanceTaskEvent) {
+            tryToProcessRegisterRebalanceTask((ExecuteRebalanceTaskEvent) event);
+        } else if (event instanceof CancalRebalanceEvent) {
+            processCancelRebalanceEvent();
         } else if (event instanceof AccessContextEvent) {
             AccessContextEvent<?> accessContextEvent = (AccessContextEvent<?>) event;
             processAccessContext(accessContextEvent);
@@ -687,9 +727,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // for the bucket with offline leader, we set it to offline and
         // then try to transmit to Online
         // set it to offline as the leader replica fail
-        tableBucketStateMachine.handleStateChange(bucketWithOfflineLeader, OfflineBucket);
+        tableBucketStateMachine.handleStateChange(
+                bucketWithOfflineLeader, OfflineBucket, DEFAULT_ELECTION);
         // try to change it to online again, which may trigger re-election
-        tableBucketStateMachine.handleStateChange(bucketWithOfflineLeader, OnlineBucket);
+        tableBucketStateMachine.handleStateChange(
+                bucketWithOfflineLeader, OnlineBucket, DEFAULT_ELECTION);
 
         // for all the offline replicas, do nothing other than set it to offline currently like
         // kafka, todo: but we may need to select another tablet server to put
@@ -805,7 +847,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         .collect(Collectors.toSet());
         // trigger offline state for all the table buckets whose current leader
         // is the failed tablet server
-        tableBucketStateMachine.handleStateChange(bucketsWithOfflineLeader, OfflineBucket);
+        tableBucketStateMachine.handleStateChange(
+                bucketsWithOfflineLeader, OfflineBucket, DEFAULT_ELECTION);
 
         // trigger online state changes for offline or new buckets
         tableBucketStateMachine.triggerOnlineBucketStateChange();
@@ -825,6 +868,521 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // update tabletServer metadata cache by send updateMetadata request.
         updateTabletServerMetadataCache(serverInfos, null, null, bucketsWithOfflineLeader);
+    }
+
+    private AddServerTagResponse processAddServerTag(AddServerTagEvent event) {
+        AddServerTagResponse addServerTagResponse = new AddServerTagResponse();
+        List<Integer> serverIds = event.getServerIds();
+        ServerTag serverTag = event.getServerTag();
+
+        // Verify that dose serverTag exist for input serverIds. If any of them exists, throw
+        // an error and none of them will be written to coordinatorContext and zk.
+        Map<Integer, ServerInfo> liveTabletServers = coordinatorContext.getLiveTabletServers();
+        for (Integer serverId : serverIds) {
+            if (!liveTabletServers.containsKey(serverId)) {
+                throw new ServerNotExistException(
+                        String.format(
+                                "Server %s not exists when trying to add server tag.", serverId));
+            }
+
+            if (coordinatorContext.getServerTag(serverId).isPresent()) {
+                throw new ServerTagAlreadyExistException(
+                        String.format(
+                                "Server tag %s already exists for server %s.",
+                                serverTag, serverId));
+            }
+        }
+
+        // First register to zk, and then update coordinatorContext.
+        Map<Integer, ServerTag> serverTags = coordinatorContext.getServerTags();
+        for (Integer serverId : serverIds) {
+            serverTags.put(serverId, serverTag);
+        }
+
+        try {
+            zooKeeperClient.registerServerTags(new ServerTags(serverTags));
+        } catch (Exception e) {
+            LOG.error("Error when register server tags to zookeeper.", e);
+            throw new UnknownServerException("Error when register server tags to zookeeper.", e);
+        }
+
+        // Then update coordinatorContext.
+        serverIds.forEach(serverId -> coordinatorContext.putServerTag(serverId, serverTag));
+        LOG.info("Server tag {} added for servers {}.", serverTag, serverIds);
+
+        return addServerTagResponse;
+    }
+
+    private RemoveServerTagResponse processRemoveServerTag(RemoveServerTagEvent event) {
+        RemoveServerTagResponse removeServerTagResponse = new RemoveServerTagResponse();
+        List<Integer> serverIds = event.getServerIds();
+        ServerTag serverTag = event.getServerTag();
+
+        // Verify that dose serverTag not exist for input serverIds. If any of them not exists,
+        // throw an error and none of them will be removed form coordinatorContext and zk.
+        Map<Integer, ServerInfo> liveTabletServers = coordinatorContext.getLiveTabletServers();
+        for (Integer serverId : serverIds) {
+            if (!liveTabletServers.containsKey(serverId)) {
+                throw new ServerNotExistException(
+                        String.format(
+                                "Server %s not exists when trying to removing server tag.",
+                                serverId));
+            }
+
+            if (!coordinatorContext.getServerTag(serverId).isPresent()) {
+                throw new ServerTagNotExistException(
+                        String.format(
+                                "Server tag %s not exists for server %s.", serverTag, serverId));
+            }
+        }
+
+        // First register to zk, and then update coordinatorContext.
+        Map<Integer, ServerTag> serverTags = coordinatorContext.getServerTags();
+        for (Integer serverId : serverIds) {
+            serverTags.remove(serverId);
+        }
+
+        try {
+            zooKeeperClient.registerServerTags(new ServerTags(serverTags));
+        } catch (Exception e) {
+            LOG.error("Error when register server tags to zookeeper.", e);
+            throw new UnknownServerException("Error when register server tags to zookeeper.", e);
+        }
+
+        // Then update coordinatorContext.
+        serverIds.forEach(coordinatorContext::removeServerTag);
+        LOG.info("Server tag {} removed for servers {}.", serverTag, serverIds);
+
+        return removeServerTagResponse;
+    }
+
+    /** try to finish rebalance tasks after receive notify leader and isr response. */
+    private void tryToFinishRebalanceTasks(TableBucket tableBucket) {
+        RebalanceResultForBucket rebalanceResultForBucket =
+                coordinatorContext.getOngoingRebalanceTask(tableBucket);
+        if (rebalanceResultForBucket != null) {
+            ReplicaReassignment reassignment =
+                    ReplicaReassignment.build(
+                            rebalanceResultForBucket.originalLeader(),
+                            rebalanceResultForBucket.targetLeader(),
+                            coordinatorContext.getAssignment(tableBucket),
+                            rebalanceResultForBucket.targetReplicas());
+            try {
+                boolean isReassignmentComplete = isReassignmentComplete(tableBucket, reassignment);
+                if (isReassignmentComplete) {
+                    LOG.info(
+                            "Target replicas {} have all caught up with the leader for reassigning bucket {}",
+                            reassignment.getTargetReplicas(),
+                            tableBucket);
+                    onBucketReassignment(tableBucket, reassignment);
+                }
+            } catch (Exception e) {
+                LOG.error(
+                        "Failed to check reassignment complete for table bucket {}",
+                        tableBucket,
+                        e);
+                coordinatorContext.putFinishedRebalanceTask(
+                        tableBucket,
+                        coordinatorContext.removeOngoingRebalanceTask(tableBucket).markFailed());
+            }
+        }
+
+        // judge whether the rebalance task is finished
+        LOG.info(
+                "Ongoing rebalance tasks: {}.",
+                coordinatorContext.getOngoingRebalanceTasks().size());
+        LOG.info(
+                "Finished rebalance tasks: {}.",
+                coordinatorContext.getFinishedRebalanceTasks().size());
+        if (coordinatorContext.getOngoingRebalanceTasks().isEmpty()) {
+            coordinatorContext.getFinishedRebalanceTasks().clear();
+            // zk to remove rebalance task.
+            try {
+                zooKeeperClient.deleteRebalancePlan();
+            } catch (Exception e) {
+                LOG.error("Error when delete rebalance plan from zookeeper.", e);
+            }
+        }
+    }
+
+    /**
+     * This method can be trigger by:
+     *
+     * <ul>
+     *   <li>The rebalanceManager submit a new rebalance task.
+     *   <li>The coordinatorServer restart, and want to do the unfinished rebalance task stored in
+     *       Zookeeper.
+     * </ul>
+     */
+    private void tryToProcessRegisterRebalanceTask(ExecuteRebalanceTaskEvent event) {
+        LOG.info("Register rebalance task.");
+        CompletableFuture<RebalanceResponse> respCallback = event.getRespCallback();
+        if (!coordinatorContext.getOngoingRebalanceTasks().isEmpty()
+                || !coordinatorContext.getFinishedRebalanceTasks().isEmpty()) {
+            respCallback.completeExceptionally(
+                    new RebalanceFailureException(
+                            "Rebalance task already exists. Please wait for it to finish or cancel it first."));
+        }
+
+        // first register to zookeeper.
+        try {
+            zooKeeperClient.registerRebalancePlan(new RebalancePlan(event.getRebalancePlan()));
+        } catch (Exception e) {
+            LOG.error("Error when register rebalance task to zookeeper.", e);
+            respCallback.completeExceptionally(
+                    new RebalanceFailureException(
+                            "Error when register rebalance task to zookeeper.", e));
+        }
+
+        // buckets only need to change leader like preferred leader election and leader replica
+        // rebalance. (Excluding for PrimaryKey Table)
+        Set<TableBucket> electableBuckets = new HashSet<>();
+        // buckets to do reassignments.
+        Map<TableBucket, ReplicaReassignment> reassignments = new HashMap<>();
+        Set<TableBucket> allBuckets = coordinatorContext.getAllBuckets();
+        for (Map.Entry<TableBucket, RebalancePlanForBucket> rebalancePlan :
+                event.getRebalancePlan().entrySet()) {
+            TableBucket tableBucket = rebalancePlan.getKey();
+            RebalancePlanForBucket planForBucket = rebalancePlan.getValue();
+
+            if (!allBuckets.contains(tableBucket)) {
+                LOG.warn(
+                        "Skipping rebalance task of tableBucket {} since it doesn't exist.",
+                        tableBucket);
+                coordinatorContext.putFinishedRebalanceTask(
+                        tableBucket,
+                        RebalanceResultForBucket.of(
+                                planForBucket, RebalanceStatusForBucket.FAILED));
+                continue;
+            }
+
+            if (coordinatorContext.isTableQueuedForDeletion(tableBucket.getTableId())) {
+                LOG.warn(
+                        "Skipping rebalance task of tableBucket {} since the respective "
+                                + "tables are being deleted.",
+                        tableBucket);
+                coordinatorContext.putFinishedRebalanceTask(
+                        tableBucket,
+                        RebalanceResultForBucket.of(
+                                planForBucket, RebalanceStatusForBucket.FAILED));
+                continue;
+            }
+
+            List<Integer> newReplicas = planForBucket.getNewReplicas();
+            ReplicaReassignment reassignment =
+                    ReplicaReassignment.build(
+                            planForBucket.getOriginalLeader(),
+                            planForBucket.getNewLeader(),
+                            coordinatorContext.getAssignment(tableBucket),
+                            newReplicas);
+            if (planForBucket.isLeaderAction()
+                    && !reassignment.isBeingReassigned()
+                    && !coordinatorContext
+                            .getTableInfoById(tableBucket.getTableId())
+                            .hasPrimaryKey()) {
+                LOG.info("trigger leader election for tableBucket {}.", tableBucket);
+                electableBuckets.add(tableBucket);
+                coordinatorContext.putOngoingRebalanceTask(
+                        tableBucket,
+                        new RebalanceResultForBucket(
+                                planForBucket.getOriginalLeader(),
+                                planForBucket.getNewLeader(),
+                                planForBucket.getOriginReplicas(),
+                                planForBucket.getNewReplicas(),
+                                RebalanceStatusForBucket.PENDING));
+                continue;
+            }
+
+            reassignments.put(tableBucket, reassignment);
+            coordinatorContext.putOngoingRebalanceTask(
+                    tableBucket,
+                    new RebalanceResultForBucket(
+                            planForBucket.getOriginalLeader(),
+                            planForBucket.getNewLeader(),
+                            planForBucket.getOriginReplicas(),
+                            planForBucket.getNewReplicas(),
+                            RebalanceStatusForBucket.PENDING));
+        }
+
+        // try to trigger leader election together.
+        tableBucketStateMachine.handleStateChange(
+                electableBuckets, OnlineBucket, REASSIGN_BUCKET_LEADER_ELECTION);
+        electableBuckets.forEach(
+                tableBucket ->
+                        coordinatorContext.putFinishedRebalanceTask(
+                                tableBucket,
+                                coordinatorContext
+                                        .removeOngoingRebalanceTask(tableBucket)
+                                        .markCompleted()));
+
+        // then try to trigger bucket reassignments.
+        reassignments.forEach(
+                (tableBucket, reassignment) -> {
+                    try {
+                        LOG.info(
+                                "Try to processing bucket reassignment for tableBucket {} with assignment: {}.",
+                                tableBucket,
+                                reassignment);
+                        onBucketReassignment(tableBucket, reassignment);
+                    } catch (Exception e) {
+                        LOG.error("Error when processing bucket reassignment.", e);
+                        RebalanceResultForBucket resultForBucket =
+                                coordinatorContext.removeOngoingRebalanceTask(tableBucket);
+                        if (resultForBucket != null) {
+                            coordinatorContext.putFinishedRebalanceTask(
+                                    tableBucket, resultForBucket.markFailed());
+                        }
+                    }
+                });
+
+        LOG.info("Register rebalance task success.");
+        event.getRespCallback()
+                .complete(makeRebalanceRespose(new RebalancePlan(event.getRebalancePlan())));
+    }
+
+    private void processCancelRebalanceEvent() {
+        LOG.info("Cancel rebalance task.");
+
+        coordinatorContext.getFinishedRebalanceTasks().clear();
+        coordinatorContext.getOngoingRebalanceTasks().clear();
+        // zk to remove rebalance task.
+        try {
+            zooKeeperClient.deleteRebalancePlan();
+        } catch (Exception e) {
+            LOG.error("Error when delete rebalance plan from zookeeper.", e);
+        }
+
+        LOG.info("Cancel rebalance task success.");
+    }
+
+    /**
+     * Reassigning replicas for a tableBucket goes through a few steps listed in the code.
+     *
+     * <ul>
+     *   <li>RS = current assigned replica set
+     *   <li>ORS = original assigned replica set
+     *   <li>TRS = target replica set
+     *   <li>AR = the replicas we are adding as part of this reassignment
+     *   <li>RR = the replicas we are removing as part of this reassignment
+     * </ul>
+     *
+     * <p>A reassignment may have up to two phases, each with its own steps:
+     *
+     * <p>To complete the reassignment, we need to bring the new replicas into sync, so depending on
+     * the state of the ISR, we will execute one of the following steps.
+     *
+     * <p>Phase A (when TRS != ISR): The reassignment is not yet complete
+     *
+     * <ul>
+     *   <li>A1. Bump the leader epoch for the bucket and send LeaderAndIsr updates to CRS.
+     *   <li>A2. Start new replicas AR by moving replicas in AR to NewReplica state.
+     * </ul>
+     *
+     * <p>Phase B (when TRS = ISR): The reassignment is complete
+     *
+     * <ul>
+     *   <li>B1. Move all replicas in AR to OnlineReplica state.
+     *   <li>B2. Set RS = TRS, AR = [], RR = [] in memory.
+     *   <li>B3. Send a LeaderAndIsr request with RS = TRS. This will prevent the leader from adding
+     *       any replica in TRS - ORS back in the isr. If the current leader is not in TRS or isn't
+     *       alive, we move the leader to a new replica in TRS. We may send the LeaderAndIsr to more
+     *       than the TRS replicas due to the way the partition state machine works (it reads
+     *       replicas from ZK)
+     *   <li>B4. Move all replicas in RR to OfflineReplica state. As part of OfflineReplica state
+     *       change, we shrink the isr to remove RR in ZooKeeper and send a LeaderAndIsr ONLY to the
+     *       Leader to notify it of the shrunk isr. After that, we send a StopReplica (delete =
+     *       false) to the replicas in RR.
+     *   <li>B5. Move all replicas in RR to NonExistentReplica state. This will send a StopReplica
+     *       (delete = true) to he replicas in RR to physically delete the replicas on disk.
+     *   <li>B6. Update ZK with RS=TRS, AR=[], RR=[].
+     *   <li>B7. After electing leader, the replicas and isr information changes. So resend the
+     *       update metadata request to every tabletServer.
+     *   <li>B8. Mark the ongoing rebalance task to finish.
+     * </ul>
+     *
+     * <p>In general, there are two goals we want to aim for:
+     *
+     * <ul>
+     *   <li>1. Every replica present in the replica set of a LeaderAndIsrRequest gets the request
+     *       sent to it
+     *   <li>2. Replicas that are removed from a bucket's assignment get StopReplica sent to them
+     * </ul>
+     *
+     * <p>For example, if ORS = {1,2,3} and TRS = {4,5,6}, the values in the table and leader/isr
+     * paths in ZK may go through the following transitions.
+     *
+     * <table cellpadding="2" cellspacing="2">
+     * <tr><th>RS</th>        <th>AR</th>       <th>RR</th>        <th>leader</th> <th>isr</th>             <th>step</th></tr>
+     * <tr><td>{1,2,3}        </td><td>{}       </td><td>{}        </td><td>1      </td><td>{1,2,3}         </td><td>(initial state) </td></tr>
+     * <tr><td>{4,5,6,1,2,3}  </td><td>{4,5,6}  </td><td>{1,2,3}   </td><td>1      </td><td>{1,2,3}         </td><td>(step A2)       </td></tr>
+     * <tr><td>{4,5,6,1,2,3}  </td><td>{4,5,6}  </td><td>{1,2,3}   </td><td>1      </td><td>{1,2,3,4,5,6}   </td><td>(phase B)       </td></tr>
+     * <tr><td>{4,5,6,1,2,3}  </td><td>{4,5,6}  </td><td>{1,2,3}   </td><td>4      </td><td>{1,2,3,4,5,6}   </td><td>(step B3)       </td></tr>
+     * <tr><td>{4,5,6,1,2,3}  </td><td>{4,5,6}  </td><td>{1,2,3}   </td><td>4      </td><td>{4,5,6}         </td><td>(step B4)       </td></tr>
+     * <tr><td>{4,5,6}        </td><td>{}       </td><td>{}        </td><td>4      </td><td>{4,5,6}         </td><td>(step B6)       </td></tr>
+     * </table>
+     *
+     * <p>Note that we have to update RS in ZK with TRS last since it's the only place where we
+     * store ORS persistently. This way, if the coordinatorServer crashes before that step, we can
+     * still recover.
+     */
+    private void onBucketReassignment(TableBucket tableBucket, ReplicaReassignment reassignment)
+            throws Exception {
+        List<Integer> addingReplicas = reassignment.addingReplicas;
+        List<Integer> removingReplicas = reassignment.removingReplicas;
+
+        if (!isReassignmentComplete(tableBucket, reassignment)) {
+            // A1. Send LeaderAndIsr request to every replica in ORS + TRS (with the new RS, AR and
+            // RR).
+            updateLeaderEpochAndSendRequest(tableBucket, reassignment);
+
+            // A2. Set RS = TRS, AR = [], RR = [] in memory.
+            coordinatorContext.updateBucketReplicaAssignment(tableBucket, reassignment.replicas);
+            updateReplicaAssignmentForBucket(tableBucket, reassignment.replicas);
+
+            // A3. replicas in AR -> NewReplica
+            // send the start replica request to the tabletSevers in the reassigned replicas list
+            // that are not in the assigned
+            addingReplicas.forEach(
+                    replica ->
+                            replicaStateMachine.handleStateChanges(
+                                    Collections.singleton(
+                                            new TableBucketReplica(tableBucket, replica)),
+                                    NewReplica));
+        } else {
+            // B1. replicas in AR -> OnlineReplica
+            addingReplicas.forEach(
+                    replica ->
+                            replicaStateMachine.handleStateChanges(
+                                    Collections.singleton(
+                                            new TableBucketReplica(tableBucket, replica)),
+                                    OnlineReplica));
+            List<Integer> targetReplicas = reassignment.getTargetReplicas();
+            // B3. Send LeaderAndIsr request with a potential new leader (if current leader not in
+            // TRS) and a new RS (using TRS) and same isr to every tabletServer in ORS + TRS or TRS
+            maybeReassignedBucketLeaderIfRequired(
+                    tableBucket,
+                    reassignment.originalLeader,
+                    reassignment.newLeader,
+                    targetReplicas);
+            // B4. replicas in RR -> Offline (force those replicas out of isr)
+            // B5. replicas in RR -> NonExistentReplica (force those replicas to be deleted)
+            stopRemovedReplicasOfReassignedBucket(tableBucket, removingReplicas);
+            // B2. Set RS = TRS, AR = [], RR = [] in memory.
+            coordinatorContext.updateBucketReplicaAssignment(
+                    tableBucket, reassignment.getTargetReplicas());
+            // B6. Update ZK with RS = TRS, AR = [], RR = [].
+            updateReplicaAssignmentForBucket(tableBucket, targetReplicas);
+            // B7. After electing a leader in B3, the replicas and isr information changes, so
+            // resend the update metadata request to every tabletServer.
+            updateTabletServerMetadataCache(
+                    new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
+                    null,
+                    null,
+                    Collections.singleton(tableBucket));
+            // B8. Mark the ongoing rebalance task to finish.
+            coordinatorContext.putFinishedRebalanceTask(
+                    tableBucket,
+                    coordinatorContext.removeOngoingRebalanceTask(tableBucket).markCompleted());
+        }
+    }
+
+    private boolean isReassignmentComplete(
+            TableBucket tableBucket, ReplicaReassignment reassignment) throws Exception {
+        LeaderAndIsr leaderAndIsr = zooKeeperClient.getLeaderAndIsr(tableBucket).get();
+        List<Integer> isr = leaderAndIsr.isr();
+        List<Integer> targetReplicas = reassignment.getTargetReplicas();
+
+        boolean isPrimaryKeyTable =
+                coordinatorContext.getTableInfoById(tableBucket.getTableId()).hasPrimaryKey();
+        if (isPrimaryKeyTable) {
+            return new HashSet<>(leaderAndIsr.issr()).contains(reassignment.newLeader)
+                    && (targetReplicas.isEmpty() || new HashSet<>(isr).containsAll(targetReplicas));
+        } else {
+            return targetReplicas.isEmpty() || new HashSet<>(isr).containsAll(targetReplicas);
+        }
+    }
+
+    private void maybeReassignedBucketLeaderIfRequired(
+            TableBucket tableBucket,
+            int originalLeader,
+            int newLeader,
+            List<Integer> targetReplicas)
+            throws Exception {
+        int currentLeader = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get().leader();
+        if (!targetReplicas.contains(currentLeader)) {
+            LOG.info(
+                    "Leader {} for tableBucket {} being reassigned, is not in the new list of replicas {}. Re-electing leader",
+                    currentLeader,
+                    tableBucket,
+                    targetReplicas);
+            tableBucketStateMachine.handleStateChange(
+                    Collections.singleton(tableBucket),
+                    OnlineBucket,
+                    REASSIGN_BUCKET_LEADER_ELECTION);
+        } else if (coordinatorContext.isReplicaAndServerOnline(currentLeader, tableBucket)) {
+            LOG.info(
+                    "Leader {} for tableBucket {} being reassigned, is already in the new list of replicas {} and ia alive",
+                    currentLeader,
+                    tableBucket,
+                    targetReplicas);
+            updateLeaderEpochAndSendRequest(
+                    tableBucket,
+                    new ReplicaReassignment(
+                            targetReplicas,
+                            originalLeader,
+                            newLeader,
+                            Collections.emptyList(),
+                            Collections.emptyList()));
+        } else {
+            LOG.info(
+                    "Leader {} for tableBucket {} being reassigned, is already in the new list of replicas {} but is dead",
+                    currentLeader,
+                    tableBucket,
+                    targetReplicas);
+            tableBucketStateMachine.handleStateChange(
+                    Collections.singleton(tableBucket),
+                    OnlineBucket,
+                    REASSIGN_BUCKET_LEADER_ELECTION);
+        }
+    }
+
+    private void stopRemovedReplicasOfReassignedBucket(
+            TableBucket tableBucket, List<Integer> removingReplicas) {
+        Set<TableBucketReplica> replicasToBeDeleted = new HashSet<>();
+        removingReplicas.forEach(
+                replica -> replicasToBeDeleted.add(new TableBucketReplica(tableBucket, replica)));
+        replicaStateMachine.handleStateChanges(replicasToBeDeleted, OfflineReplica);
+        // send stop replica command to the old replicas.
+        replicaStateMachine.handleStateChanges(replicasToBeDeleted, ReplicaDeletionStarted);
+        // replicaStateMachine.handleStateChanges(replicasToBeDeleted, ReplicaDeletionSuccessful);
+        // replicaStateMachine.handleStateChanges(replicasToBeDeleted, NonExistentReplica);
+    }
+
+    private void updateReplicaAssignmentForBucket(
+            TableBucket tableBucket, List<Integer> targetReplicas) throws Exception {
+        long tableId = tableBucket.getTableId();
+        @Nullable Long partitionId = tableBucket.getPartitionId();
+        if (partitionId == null) {
+            Map<Integer, List<Integer>> tableAssignment =
+                    coordinatorContext.getTableAssignment(tableId);
+            tableAssignment.put(tableBucket.getBucket(), targetReplicas);
+            Map<Integer, BucketAssignment> newTableAssignment = new HashMap<>();
+            tableAssignment.forEach(
+                    (bucket, replicas) ->
+                            newTableAssignment.put(bucket, new BucketAssignment(replicas)));
+            zooKeeperClient.updateTableAssignment(tableId, new TableAssignment(newTableAssignment));
+        } else {
+            Map<Integer, List<Integer>> partitionAssignment =
+                    coordinatorContext.getPartitionAssignment(
+                            new TablePartition(tableId, partitionId));
+            partitionAssignment.put(tableBucket.getBucket(), targetReplicas);
+            Map<Integer, BucketAssignment> newPartitionAssignment = new HashMap<>();
+            partitionAssignment.forEach(
+                    (bucket, replicas) ->
+                            newPartitionAssignment.put(bucket, new BucketAssignment(replicas)));
+            zooKeeperClient.updatePartitionAssignment(
+                    partitionId, new PartitionAssignment(tableId, newPartitionAssignment));
+        }
     }
 
     private List<AdjustIsrResultForBucket> tryProcessAdjustIsr(
@@ -853,18 +1411,19 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                             new FlussRuntimeException(
                                                     "Leader not found for table bucket "
                                                             + tableBucket));
-            LeaderAndIsr newLeaderAndIsr =
-                    new LeaderAndIsr(
-                            // the leaderEpoch in request has been validated to be equal to current
-                            // leaderEpoch, which means the leader is still the same, so we use
-                            // leader and leaderEpoch in currentLeaderAndIsr.
-                            currentLeaderAndIsr.leader(),
-                            currentLeaderAndIsr.leaderEpoch(),
-                            // TODO: reject the request if there is a replica in ISR is not online,
-                            //  see KIP-841.
-                            tryAdjustLeaderAndIsr.isr(),
-                            coordinatorContext.getCoordinatorEpoch(),
-                            currentLeaderAndIsr.bucketEpoch() + 1);
+
+            LeaderAndIsr.Builder builder = new LeaderAndIsr.Builder();
+            // the leaderEpoch in request has been validated to be equal to current
+            // leaderEpoch, which means the leader is still the same, so we use
+            // leader and leaderEpoch in currentLeaderAndIsr.
+            builder.leader(currentLeaderAndIsr.leader())
+                    .leaderEpoch(currentLeaderAndIsr.leaderEpoch());
+            // TODO: reject the request if there is a replica in ISR is not online,
+            //  see KIP-841.
+            builder.isr(tryAdjustLeaderAndIsr.isr())
+                    .coordinatorEpoch(currentLeaderAndIsr.coordinatorEpoch())
+                    .bucketEpoch(currentLeaderAndIsr.bucketEpoch() + 1);
+            LeaderAndIsr newLeaderAndIsr = builder.build();
             newLeaderAndIsrList.put(tableBucket, newLeaderAndIsr);
         }
 
@@ -893,6 +1452,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // update coordinator leader and isr cache.
         newLeaderAndIsrList.forEach(coordinatorContext::putBucketLeaderAndIsr);
+
+        // First, try to judge whether the bucket is in rebalance task when isr change.
+        newLeaderAndIsrList.keySet().forEach(this::tryToFinishRebalanceTasks);
 
         // TODO update metadata for all alive tablet servers.
 
@@ -1156,8 +1718,154 @@ public class CoordinatorEventProcessor implements EventProcessor {
         coordinatorRequestBatch.sendUpdateMetadataRequest();
     }
 
+    private void updateLeaderEpochAndSendRequest(
+            TableBucket tableBucket, ReplicaReassignment reassignment) throws Exception {
+        Optional<LeaderAndIsr> leaderAndIsrOpt =
+                coordinatorContext.getBucketLeaderAndIsr(tableBucket);
+        if (!leaderAndIsrOpt.isPresent()) {
+            return;
+        }
+
+        LeaderAndIsr leaderAndIsr = leaderAndIsrOpt.get();
+        String partitionName = null;
+        if (tableBucket.getPartitionId() != null) {
+            partitionName = coordinatorContext.getPartitionName(tableBucket.getPartitionId());
+            if (partitionName == null) {
+                LOG.error("Can't find partition name for partition: {}.", tableBucket.getBucket());
+                return;
+            }
+        }
+
+        // For kv table, we need to add hot standby replica.
+        if (coordinatorContext.getTableInfoById(tableBucket.getTableId()).hasPrimaryKey()
+                && reassignment.isLeaderAction()) {
+            int newLeader = reassignment.getNewLeader();
+            // Set issr to empty list.
+            leaderAndIsr =
+                    leaderAndIsr.newLeaderAndIsr(
+                            Collections.singletonList(newLeader), Collections.emptyList());
+        }
+
+        coordinatorRequestBatch.newBatch();
+        coordinatorRequestBatch.addNotifyLeaderRequestForTabletServers(
+                new HashSet<>(reassignment.replicas),
+                PhysicalTablePath.of(
+                        coordinatorContext.getTablePathById(tableBucket.getTableId()),
+                        partitionName),
+                tableBucket,
+                reassignment.replicas,
+                leaderAndIsr);
+        coordinatorRequestBatch.sendRequestToTabletServers(
+                coordinatorContext.getCoordinatorEpoch());
+    }
+
+    /** Does not change leader or isr, but just increments the leader epoch. */
+    private @Nullable LeaderAndIsr updateLeaderEpoch(TableBucket tableBucket) throws Exception {
+        LOG.debug("Updating leader epoch for bucket {}", tableBucket);
+        Optional<LeaderAndIsr> leaderAndIsrOpt = zooKeeperClient.getLeaderAndIsr(tableBucket);
+        if (!leaderAndIsrOpt.isPresent()) {
+            return null;
+        }
+        LeaderAndIsr leaderAndIsr = leaderAndIsrOpt.get();
+        return leaderAndIsr;
+    }
+
     @VisibleForTesting
     CompletedSnapshotStoreManager completedSnapshotStoreManager() {
         return completedSnapshotStoreManager;
+    }
+
+    private static final class ReplicaReassignment {
+        private final List<Integer> replicas;
+        private final int originalLeader;
+        private final int newLeader;
+        private final List<Integer> addingReplicas;
+        private final List<Integer> removingReplicas;
+
+        private ReplicaReassignment(
+                List<Integer> replicas,
+                int originalLeader,
+                int newLeader,
+                List<Integer> addingReplicas,
+                List<Integer> removingReplicas) {
+            this.replicas = Collections.unmodifiableList(replicas);
+            this.originalLeader = originalLeader;
+            this.newLeader = newLeader;
+            this.addingReplicas = Collections.unmodifiableList(addingReplicas);
+            this.removingReplicas = Collections.unmodifiableList(removingReplicas);
+        }
+
+        private static ReplicaReassignment build(
+                int originalLeader,
+                int newLeader,
+                List<Integer> originReplicas,
+                List<Integer> targetReplicas) {
+            // targetReplicas behind originReplicas in full set.
+            List<Integer> fullReplicaSet = new ArrayList<>(targetReplicas);
+            fullReplicaSet.addAll(originReplicas);
+            fullReplicaSet = fullReplicaSet.stream().distinct().collect(Collectors.toList());
+
+            List<Integer> newAddingReplicas = new ArrayList<>(fullReplicaSet);
+            newAddingReplicas.removeAll(originReplicas);
+
+            List<Integer> newRemovingReplicas = new ArrayList<>(originReplicas);
+            newRemovingReplicas.removeAll(targetReplicas);
+
+            return new ReplicaReassignment(
+                    fullReplicaSet,
+                    originalLeader,
+                    newLeader,
+                    newAddingReplicas,
+                    newRemovingReplicas);
+        }
+
+        private int getNewLeader() {
+            return newLeader;
+        }
+
+        private List<Integer> getTargetReplicas() {
+            List<Integer> computed = new ArrayList<>(replicas);
+            computed.removeAll(removingReplicas);
+            return Collections.unmodifiableList(computed);
+        }
+
+        private boolean isLeaderAction() {
+            return originalLeader != newLeader;
+        }
+
+        private boolean isBeingReassigned() {
+            return !addingReplicas.isEmpty() || !removingReplicas.isEmpty();
+        }
+
+        @Override
+        public String toString() {
+            return String.format(
+                    "ReplicaAssignment(replicas=%s, originalLeader=%s, newLeader=%s, addingReplicas=%s, removingReplicas=%s)",
+                    replicas, originalLeader, newLeader, addingReplicas, removingReplicas);
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) {
+                return true;
+            }
+
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+
+            ReplicaReassignment that = (ReplicaReassignment) o;
+            return Objects.equals(replicas, that.replicas)
+                    && Objects.equals(addingReplicas, that.addingReplicas)
+                    && Objects.equals(removingReplicas, that.removingReplicas)
+                    && Objects.equals(originalLeader, that.originalLeader)
+                    && Objects.equals(newLeader, that.newLeader);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(
+                    replicas, originalLeader, newLeader, addingReplicas, removingReplicas);
+        }
     }
 }

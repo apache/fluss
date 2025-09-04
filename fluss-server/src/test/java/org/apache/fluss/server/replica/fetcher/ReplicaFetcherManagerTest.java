@@ -60,6 +60,7 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
                         "test-fetcher-thread",
                         replicaManager,
                         new RemoteLeaderEndpoint(
+                                replicaManager,
                                 conf,
                                 TABLET_SERVER_ID,
                                 leader.id(),
@@ -87,12 +88,10 @@ class ReplicaFetcherManagerTest extends ReplicaTestBase {
                                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                                 tb,
                                 Arrays.asList(leader.id(), TABLET_SERVER_ID),
-                                new LeaderAndIsr(
-                                        leader.id(),
-                                        LeaderAndIsr.INITIAL_LEADER_EPOCH,
-                                        Arrays.asList(leader.id(), TABLET_SERVER_ID),
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        LeaderAndIsr.INITIAL_BUCKET_EPOCH))),
+                                new LeaderAndIsr.Builder()
+                                        .leader(leader.id())
+                                        .isr(Arrays.asList(leader.id(), TABLET_SERVER_ID))
+                                        .build())),
                 result -> {});
 
         InitialFetchStatus initialFetchStatus =

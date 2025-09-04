@@ -29,7 +29,10 @@ import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForTable;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.protocol.Errors;
+import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.log.ListOffsetsParam;
+import org.apache.fluss.server.replica.Replica;
+import org.apache.fluss.server.replica.ReplicaManager;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -40,9 +43,11 @@ import java.util.concurrent.CompletableFuture;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.getFetchLogResultForBucket;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListOffsetsRequest;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Facilitates fetches from a remote replica leader in one tablet server. */
 final class RemoteLeaderEndpoint implements LeaderEndpoint {
+    private final ReplicaManager replicaManager;
     private final int followerServerId;
     private final int remoteServerId;
     private final TabletServerGateway tabletServerGateway;
@@ -55,10 +60,12 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
     private final int maxFetchWaitMs;
 
     RemoteLeaderEndpoint(
+            ReplicaManager replicaManager,
             Configuration conf,
             int followerServerId,
             int remoteServerId,
             TabletServerGateway tabletServerGateway) {
+        this.replicaManager = replicaManager;
         this.followerServerId = followerServerId;
         this.remoteServerId = remoteServerId;
         this.maxFetchSize = (int) conf.get(ConfigOptions.LOG_REPLICA_FETCH_MAX_BYTES).getBytes();
@@ -128,8 +135,20 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
     @Override
     public Optional<FetchLogContext> buildFetchLogContext(
             Map<TableBucket, BucketFetchStatus> replicas) {
+        Map<TableBucket, Long> kvAppliedOffsets = new HashMap<>();
+        for (Map.Entry<TableBucket, BucketFetchStatus> entry : replicas.entrySet()) {
+            TableBucket tb = entry.getKey();
+            Replica replica = replicaManager.getReplicaOrException(tb);
+            if (replica.isStandbyReplica()) {
+                KvTablet kvTablet = replica.getKvTablet();
+                checkNotNull(kvTablet);
+                kvAppliedOffsets.put(tb, kvTablet.getKvAppliedOffset());
+            }
+        }
+
         return buildFetchLogContext(
                 replicas,
+                kvAppliedOffsets,
                 followerServerId,
                 maxFetchSize,
                 maxFetchSizeForBucket,
@@ -144,6 +163,7 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
 
     static Optional<FetchLogContext> buildFetchLogContext(
             Map<TableBucket, BucketFetchStatus> replicas,
+            Map<TableBucket, Long> kvAppliedOffsets,
             int followerServerId,
             int maxFetchSize,
             int maxFetchSizeForBucket,
@@ -170,6 +190,11 @@ final class RemoteLeaderEndpoint implements LeaderEndpoint {
                 if (tb.getPartitionId() != null) {
                     fetchLogReqForBucket.setPartitionId(tb.getPartitionId());
                 }
+
+                if (kvAppliedOffsets.containsKey(tb)) {
+                    fetchLogReqForBucket.setKvAppliedOffset(kvAppliedOffsets.get(tb));
+                }
+
                 fetchLogReqForBuckets
                         .computeIfAbsent(tb.getTableId(), key -> new ArrayList<>())
                         .add(fetchLogReqForBucket);

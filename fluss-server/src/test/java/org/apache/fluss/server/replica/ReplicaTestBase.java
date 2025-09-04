@@ -52,6 +52,7 @@ import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.server.replica.standby.KvStandbyManager;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -107,7 +108,6 @@ import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_PATH;
 import static org.apache.fluss.server.coordinator.CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
 import static org.apache.fluss.server.replica.ReplicaManager.HIGH_WATERMARK_CHECKPOINT_FILE_NAME;
-import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_BUCKET_EPOCH;
 import static org.apache.fluss.server.zk.data.LeaderAndIsr.INITIAL_LEADER_EPOCH;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.apache.fluss.utils.FlussPaths.remoteLogDir;
@@ -133,6 +133,7 @@ public class ReplicaTestBase {
     protected ManualClock manualClock;
     protected LogManager logManager;
     protected KvManager kvManager;
+    protected KvStandbyManager kvStandbyManager;
     protected ReplicaManager replicaManager;
     protected RpcClient rpcClient;
     protected Configuration conf;
@@ -183,6 +184,14 @@ public class ReplicaTestBase {
 
         kvManager = KvManager.create(conf, zkClient, logManager);
         kvManager.startup();
+
+        kvStandbyManager =
+                new KvStandbyManager(
+                        conf,
+                        scheduler,
+                        zkClient,
+                        logManager.getDataDir().getAbsolutePath(),
+                        remoteLogManager);
 
         serverMetadataCache =
                 new TabletServerMetadataCache(new MetadataManager(zkClient, conf), zkClient);
@@ -351,12 +360,10 @@ public class ReplicaTestBase {
                                         : DATA1_PHYSICAL_TABLE_PATH,
                                 tb,
                                 replicas,
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        INITIAL_LEADER_EPOCH,
-                                        isr,
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        INITIAL_BUCKET_EPOCH))));
+                                new LeaderAndIsr.Builder()
+                                        .leader(TABLET_SERVER_ID)
+                                        .isr(isr)
+                                        .build())));
     }
 
     // TODO this is only for single tablet server unit test.
@@ -392,13 +399,13 @@ public class ReplicaTestBase {
                                         : PhysicalTablePath.of(tablePath),
                                 tb,
                                 replicas,
-                                new LeaderAndIsr(
-                                        TABLET_SERVER_ID,
-                                        leaderEpoch,
-                                        isr,
-                                        INITIAL_COORDINATOR_EPOCH,
-                                        // use leader epoch as bucket epoch
-                                        leaderEpoch))));
+                                new LeaderAndIsr.Builder()
+                                        .leader(TABLET_SERVER_ID)
+                                        .leaderEpoch(leaderEpoch)
+                                        .isr(isr)
+                                        .coordinatorEpoch(INITIAL_COORDINATOR_EPOCH)
+                                        .bucketEpoch(leaderEpoch)
+                                        .build())));
     }
 
     protected void makeLeaderAndFollower(List<NotifyLeaderAndIsrData> notifyLeaderAndIsrDataList) {
@@ -459,7 +466,8 @@ public class ReplicaTestBase {
                 NOPErrorHandler.INSTANCE,
                 metricGroup,
                 DATA1_TABLE_INFO,
-                manualClock);
+                manualClock,
+                isPkTable ? kvStandbyManager : null);
     }
 
     private void initRemoteLogEnv() throws Exception {

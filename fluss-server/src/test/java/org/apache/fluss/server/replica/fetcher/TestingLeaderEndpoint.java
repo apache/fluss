@@ -33,6 +33,7 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.replica.ReplicaManager;
 
 import java.nio.ByteBuffer;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Optional;
@@ -102,7 +103,13 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
     public Optional<FetchLogContext> buildFetchLogContext(
             Map<TableBucket, BucketFetchStatus> replicas) {
         return RemoteLeaderEndpoint.buildFetchLogContext(
-                replicas, localNode.id(), maxFetchSize, maxFetchSizeForBucket, -1, -1);
+                replicas,
+                Collections.emptyMap(),
+                localNode.id(),
+                maxFetchSize,
+                maxFetchSizeForBucket,
+                -1,
+                -1);
     }
 
     @Override

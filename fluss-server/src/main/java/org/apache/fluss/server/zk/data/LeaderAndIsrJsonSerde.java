@@ -35,13 +35,15 @@ public class LeaderAndIsrJsonSerde
 
     public static final LeaderAndIsrJsonSerde INSTANCE = new LeaderAndIsrJsonSerde();
     private static final String VERSION_KEY = "version";
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
 
     private static final String LEADER = "leader";
     private static final String LEADER_EPOCH = "leader_epoch";
     private static final String ISR = "isr";
     private static final String COORDINATOR_EPOCH = "coordinator_epoch";
     private static final String BUCKET_EPOCH = "bucket_epoch";
+    private static final String HOT_STANDBY_REPLICAS = "hot_standby_replicas";
+    private static final String ISSR = "issr";
 
     @Override
     public void serialize(LeaderAndIsr leaderAndIsr, JsonGenerator generator) throws IOException {
@@ -57,11 +59,24 @@ public class LeaderAndIsrJsonSerde
         generator.writeNumberField(COORDINATOR_EPOCH, leaderAndIsr.coordinatorEpoch());
         generator.writeNumberField(BUCKET_EPOCH, leaderAndIsr.bucketEpoch());
 
+        generator.writeArrayFieldStart(HOT_STANDBY_REPLICAS);
+        for (Integer replica : leaderAndIsr.standbyList()) {
+            generator.writeNumber(replica);
+        }
+        generator.writeEndArray();
+
+        generator.writeArrayFieldStart(ISSR);
+        for (Integer replica : leaderAndIsr.issr()) {
+            generator.writeNumber(replica);
+        }
+        generator.writeEndArray();
+
         generator.writeEndObject();
     }
 
     @Override
     public LeaderAndIsr deserialize(JsonNode node) {
+        int version = node.get(VERSION_KEY).asInt();
         int leader = node.get(LEADER).asInt();
         int leaderEpoch = node.get(LEADER_EPOCH).asInt();
         int coordinatorEpoch = node.get(COORDINATOR_EPOCH).asInt();
@@ -71,6 +86,29 @@ public class LeaderAndIsrJsonSerde
         while (isrNodes.hasNext()) {
             isr.add(isrNodes.next().asInt());
         }
-        return new LeaderAndIsr(leader, leaderEpoch, isr, coordinatorEpoch, bucketEpoch);
+
+        List<Integer> hotStandbyList = new ArrayList<>();
+        List<Integer> iss = new ArrayList<>();
+        if (version > 1) {
+            Iterator<JsonNode> hotStandbyListNodes = node.get(HOT_STANDBY_REPLICAS).elements();
+            while (hotStandbyListNodes.hasNext()) {
+                hotStandbyList.add(hotStandbyListNodes.next().asInt());
+            }
+
+            Iterator<JsonNode> issNodes = node.get(ISSR).elements();
+            while (issNodes.hasNext()) {
+                iss.add(issNodes.next().asInt());
+            }
+        }
+
+        return new LeaderAndIsr.Builder()
+                .leader(leader)
+                .leaderEpoch(leaderEpoch)
+                .isr(isr)
+                .coordinatorEpoch(coordinatorEpoch)
+                .bucketEpoch(bucketEpoch)
+                .standbyReplicas(hotStandbyList)
+                .issr(iss)
+                .build();
     }
 }

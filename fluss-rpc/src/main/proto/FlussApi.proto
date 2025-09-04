@@ -530,6 +530,43 @@ message LakeTieringHeartbeatResponse {
   repeated PbHeartbeatRespForTable failed_table_resp = 5;
 }
 
+message AddServerTagRequest {
+  repeated int32 server_ids = 1 [packed = true];
+  required int32 server_tag = 2;
+}
+
+message AddServerTagResponse {
+}
+
+message RemoveServerTagRequest {
+  repeated int32 server_ids = 1 [packed = true];
+  required int32 server_tag = 2;
+}
+
+message RemoveServerTagResponse {
+}
+
+message RebalanceRequest {
+  repeated int32 goals = 1 [packed = true];
+  required bool dry_run = 2;
+}
+
+message RebalanceResponse {
+  repeated PbRebalancePlanForTable plan_for_table = 1;
+}
+
+message ListRebalanceProcessRequest {
+}
+
+message ListRebalanceProcessResponse {
+  repeated PbRebalanceProcessForTable process_for_table = 1;
+}
+
+message CancelRebalanceRequest {
+}
+
+message CancelRebalanceResponse {
+}
 
 // --------------- Inner classes ----------------
 message PbApiVersion {
@@ -619,6 +656,7 @@ message PbFetchLogReqForBucket {
   // TODO leader epoch
   required int64 fetch_offset = 3;
   required int32 max_fetch_bytes = 4;
+  optional int64 kv_applied_offset = 5;
 }
 
 message PbFetchLogRespForTable {
@@ -705,6 +743,8 @@ message PbAdjustIsrReqForBucket {
   repeated int32 new_isr = 4 [packed = true];
   required int32 coordinator_epoch = 5;
   required int32 bucket_epoch = 6;
+  // inSyncStandbyReplicas
+  repeated int32 new_issr = 7 [packed = true];
 }
 
 message PbAdjustIsrRespForTable {
@@ -722,6 +762,8 @@ message PbAdjustIsrRespForBucket {
   repeated int32 isr = 7 [packed = true];
   optional int32 bucket_epoch = 8;
   optional int32 coordinator_epoch = 9;
+  repeated int32 hot_standby_replicas = 10 [packed = true];
+  repeated int32 issr = 11 [packed = true];
 }
 
 message PbListOffsetsRespForBucket {
@@ -742,6 +784,8 @@ message PbNotifyLeaderAndIsrReqForBucket {
   repeated int32 replicas = 5 [packed = true];
   repeated int32 isr = 6 [packed = true];
   required int32 bucket_epoch = 7;
+  repeated int32 hot_standby_replicas = 8 [packed = true];
+  repeated int32 issr = 9 [packed = true];
 }
 
 message PbNotifyLeaderAndIsrRespForBucket {
@@ -867,4 +911,42 @@ message PbHeartbeatReqForTable {
 message PbHeartbeatRespForTable {
   required int64 table_id = 1;
   optional ErrorResponse error = 2;
+}
+
+message PbRebalancePlanForTable {
+  required int64 table_id = 1;
+  repeated PbRebalancePlanForPartition partitions_plan = 2; // for none-partition table, this is empty
+  repeated PbRebalancePlanForBucket buckets_plan = 3; // for partition table, this is empty
+
+}
+
+message PbRebalancePlanForPartition {
+  required int64 partition_id = 1;
+  repeated PbRebalancePlanForBucket buckets_plan = 2;
+}
+
+message PbRebalancePlanForBucket {
+  required int32 bucket_id = 1;
+  optional int32 original_leader = 2;
+  optional int32 new_leader = 3;
+  repeated int32 original_replicas = 4 [packed = true];
+  repeated int32 new_replicas = 5 [packed = true];
+}
+
+message PbRebalanceProcessForTable {
+  required int64 table_id = 1;
+  repeated PbRebalanceProcessForPartition partitions_process = 2;
+  repeated PbRebalanceProcessForBucket buckets_process = 3;
+}
+
+message PbRebalanceProcessForPartition {
+  required int64 partition_id = 1;
+  repeated PbRebalanceProcessForBucket buckets_process = 2;
+}
+
+message PbRebalanceProcessForBucket {
+  required int32 bucket_id = 1;
+  repeated int32 original_replicas = 2 [packed = true];
+  repeated int32 new_replicas = 3 [packed = true];
+  required int32 rebalance_status = 4;
 }
