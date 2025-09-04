@@ -5,8 +5,8 @@ sidebar_position: 3
 
 # Monitor Metrics
 
-Fluss has built a metrics system to measure the behaviours of cluster and table, like the active CoordinatorServer, 
-the number of table, the bytes written, the number of records written, etc.
+Fluss has built a metrics system to measure the behaviors of cluster and table, like the active CoordinatorServer, 
+the number of tables, the bytes written, the number of records written, etc.
 
 Fluss supports different metric types: **Counters**, **Gauges**, **Histograms**, and **Meters**.
 
@@ -16,18 +16,18 @@ Fluss supports different metric types: **Counters**, **Gauges**, **Histograms**,
 - `Meter`: The gauge exports the meter's rate.
 
 Fluss client also has supported built-in metrics to measure operations of **write to**, **read from** fluss cluster, 
-which can be bridged to Flink use Flink connector standard metrics.
+which can be bridged to Flink using Flink connector standard metrics.
 
 ## Scope
 
-Every metric is assigned an identifier and a set of key-value pairs under which the metric will be reported.
+Every metric in Fluss is assigned an identifier and a set of key-value pairs under which the metric will be reported.
 
 The identifier is delimited by `metrics.scope.delimiter`. Currently, the `metrics.scope.delimiter` is not configurable, 
-it determined by the metric reporter. Take prometheus as example, the scope will delimited by `_`, so the scope like `A_B_C`, 
+it is determined by the metric reporter. Take prometheus as example, the scope will delimited by `_`, so the scope like `A_B_C`, 
 while Fluss metrics will always begin with `fluss`, as `fluss_A_B_C`.
 
 The key-value pairs are called **variables** and are used to filter metrics. There are no restrictions on the 
-number of order of variables. Variables are case-sensitive.
+number or order of variables. Variables are case-sensitive.
 
 ## Reporter
 
@@ -35,31 +35,33 @@ For information on how to set up Fluss's metric reporters please take a look at 
 
 ## Metrics List
 
-By default, Fluss provides **cluster state** metrics, **table state** metrics, and bridging to
-**Flink connector** standard metrics. This section is a reference of all these metrics.
+By default, Fluss provides **cluster state** metrics, **table state** metrics, and a bridge to the
+**Flink connector** standard metrics. This section lists those metrics.
 
-The tables below generally feature 5 columns:
+The tables below generally feature five columns:
 
-* The "Scope" column describes which scope format is used to generate the system scope.
-  For example, if the cell contains `tabletserver` then the scope format for `fluss_tabletserver` is used.
-  If the cell contains multiple values, separated by a slash, then the metrics are reported multiple
-  times for different entities, like for both `tabletserver` and `coordinator`.
+* **Scope** — Describes which scope format is used to generate the metric scope.  
+  For example, if the cell contains `tabletserver` the scope format for `fluss_tabletserver` is used.  
+  If the cell contains multiple values separated by a slash, the metric is reported for each entity (for example, both `tabletserver` and `coordinator`).
 
-* The (optional)"Infix" column describes which infix is appended to the scope.
+* **Infix** (optional) — The infix appended to the scope.  
+  **Note:** A dash (`-`) in the Infix column indicates that there is no infix for that metric.
 
-* The "Metrics" column lists the names of all metrics that are registered for the given scope and infix.
+* **Metrics** — The registered metric names for the given scope and infix.
 
-* The "Description" column provides information as to what a given metric is measuring.
+* **Description** — What the metric measures.
 
-* The "Type" column describes which metric type is used for the measurement.
+* **Type** — The metric type used for the measurement (Counter, Gauge, Histogram, Meter).
 
 Thus, in order to infer the metric identifier:
 
-1. Take the "fluss_" first.
-2. Take the scope-format based on the "Scope" column
-3. Append the value in the "Infix" column if present, and account for the `metrics.scope.delimiter` setting
-4. Append metric name.
-5. One metric for prometheus will be like `fluss_tabletserver_status_JVM_CPU_load`
+1. Start with `fluss_`.
+2. Append the scope format from the **Scope** column.
+3. If present, append the **Infix** using the configured `metrics.scope.delimiter`.
+4. Append the metric name.
+
+Example (Prometheus, where the scope delimiter is `_`):
+`fluss_tabletserver_status_JVM_CPU_load`.
 
 ### CPU
 
@@ -88,6 +90,8 @@ Thus, in order to infer the metric identifier:
     </tr>
   </tbody>
 </table>
+
+The above table summarizes the key CPU-related metrics available for monitoring Fluss components.
 
 ### Memory
 
@@ -210,7 +214,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </tbody>
 </table>
 
-### GarbageCollection
+### Garbage Collection
 <table class="table table-bordered">
   <thead>
     <tr>
@@ -322,7 +326,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td>replicasToDeleteCount</td>
-      <td>The total number of replicas in the progress to be deleted in this cluster.</td>
+      <td>The total number of replicas in the process of being deleted in this cluster.</td>
       <td>Gauge</td>
     </tr>
     <tr>
@@ -380,7 +384,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td>writerIdCount</td>
-      <td>The writer id count</td>
+      <td>The writer id count.</td>
       <td>Gauge</td>
     </tr>
     <tr>
@@ -405,7 +409,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
     </tr>
     <tr>
       <td>delayedFetchFromClientExpiresPerSecond</td>
-      <td>The delayed fetch log operation from client expire count per second in this TabletServer.</td>
+      <td>The number of delayed fetch log operations from client that expired per second in this TabletServer.</td>
       <td>Meter</td>
     </tr>
   </tbody>
@@ -531,10 +535,10 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="39"><strong>tabletserver</strong></th>
+      <th rowspan="40"><strong>tabletserver</strong></th>
       <td rowspan="20">table</td>
       <td>messagesInPerSecond</td>
-      <td>The number of messages written per second to this table</td>
+      <td>The number of messages written per second to this table.</td>
       <td>Meter</td>
     </tr>
      <tr>
@@ -642,33 +646,33 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>underMinIsr</td>
       <td>If this bucket is under min isr, this value is 1, otherwise 0.</td>
       <td>Gauge</td>
-    </tr>
+     </tr>
      <tr>
       <td>underReplicated</td>
       <td>If this bucket is under replication factor, this value is 1, otherwise 0.</td>
       <td>Gauge</td>
-    </tr>
+     </tr>
      <tr>
       <td>atMinIsr</td>
       <td>If this bucket is at min isr, this value is 1, otherwise 0.</td>
       <td>Gauge</td>
-    </tr>
+     </tr>
      <tr>
       <td>isrExpandsPerSecond</td>
       <td>The number of isr expands per second.</td>
       <td>Meter</td>
-    </tr>
+     </tr>
      <tr>
       <td>isrShrinksPerSecond</td>
       <td>The number of isr shrinks per second.</td>
       <td>Meter</td>
-    </tr>
+     </tr>
      <tr>
       <td>failedIsrUpdatesPerSecond</td>
       <td>The failed isr updates per second.</td>
       <td>Meter</td>
-    </tr>
-     <tr>
+     </tr>
+    <tr>
       <td rowspan="5">table_bucket_log</td>
       <td>numSegments</td>
       <td>The number of segments in local storage for this table bucket.</td>
@@ -678,22 +682,22 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>endOffset</td>
       <td>The end offset in local storage for this table bucket.</td>
       <td>Gauge</td>
-    </tr>
+     </tr>
      <tr>
       <td>size</td>
       <td>The total log sizes in local storage for this table bucket.</td>
       <td>Gauge</td>
-    </tr>
+     </tr>
      <tr>
       <td>flushPerSecond</td>
       <td>The log flush count per second.</td>
       <td>Meter</td>
-    </tr>
+     </tr>
      <tr>
       <td>flushLatencyMs</td>
       <td>The log flush latency in ms.</td>
       <td>Histogram</td>
-    </tr>
+     </tr>
     <tr>
       <td rowspan="3">table_bucket_remoteLog</td>
       <td>numSegments</td>
@@ -704,12 +708,12 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>endOffset</td>
       <td>The end offset in remote storage for this table bucket.</td>
       <td>Gauge</td>
-    </tr>
+     </tr>
      <tr>
       <td>size</td>
       <td>The number of bytes written per second to this table.</td>
       <td>Gauge</td>
-    </tr>
+     </tr>
     <tr>
       <td rowspan="4">table_bucket_kv</td>
       <td>preWriteBufferFlushPerSecond</td>
@@ -720,17 +724,17 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>preWriteBufferFlushLatencyMs</td>
       <td>The kv pre-write buffer latency in ms.</td>
       <td>Histogram</td>
-    </tr>
+     </tr>
      <tr>
       <td>preWriteBufferTruncateAsDuplicatedPerSecond</td>
       <td>The number of kv pre-write buffer truncate due to the batch duplicated per second.</td>
       <td>Meter</td>
-    </tr>
+     </tr>
      <tr>
       <td>preWriteBufferTruncateAsErrorPerSecond</td>
       <td>The number of kv pre-write buffer truncate due to the error happened when writing cdc to log per second.</td>
       <td>Meter</td>
-    </tr>
+     </tr>
     <tr>
       <td rowspan="1">table_bucket_kv_snapshot</td>
       <td>latestSnapshotSize</td>
@@ -744,10 +748,10 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
 ### Flink connector standard metrics
 
 When using Flink to read and write, Fluss has implemented some key standard Flink connector metrics 
-to measure the source latency and output of sink, see [FLIP-33: Standardize Connector Metrics](https://cwiki.apache.org/confluence/display/FLINK/FLIP-33%3A+Standardize+Connector+Metrics). 
+to measure the source latency and the output of the sink, see [FLIP-33: Standardize Connector Metrics](https://cwiki.apache.org/confluence/display/FLINK/FLIP-33%3A+Standardize+Connector+Metrics). 
 Flink source / sink metrics implemented are listed here.
 
-How to Use Flink Metrics, you can see [Flink Metrics](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/ops/metrics/#system-metrics) for more details.
+For information on how to use Flink Metrics, see [Flink Metrics](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/ops/metrics/#system-metrics) for more details.
 
 #### Source Metrics
 

@@ -25,9 +25,9 @@ the rolling upgrade method. Specifically, upgrade the `TabletServers` one-by-one
 The following is an example of upgrading the Fluss server from 0.6 to $FLUSS_VERSION$ on
 a [Distributed Cluster](docs/install-deploy/deploying-distributed-cluster.md):
 
-### Download And Configure Fluss
+### Download and Configure Fluss
 
-1. First, download Fluss binary file for $FLUSS_VERSION$:
+1. First, [download](/downloads/) Fluss binary file for $FLUSS_VERSION$:
 
 ```shell
 tar -xzf fluss-$FLUSS_VERSION$-bin.tgz
@@ -38,7 +38,7 @@ cd fluss-$FLUSS_VERSION$/
    see [Add other jars required by datalake](docs/maintenance/tiered-storage/lakehouse-storage.md#add-other-jars-required-by-datalake).
 
 3. Next, copy the configuration options from 0.6 (`fluss-0.6/conf/server.yaml`) to the new configuration
-file (`fluss-$FLUSS_VERSION$/conf/server.yaml`). Adding any new options introduced in version $FLUSS_VERSION$ as
+file (`fluss-$FLUSS_VERSION$/conf/server.yaml`). Add any new options introduced in version $FLUSS_VERSION$ as
 needed to experience the new features.
 
 ### Upgrade the TabletServers one-by-one
