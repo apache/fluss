@@ -34,6 +34,7 @@ import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.table.api.TableResult;
 import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
+import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -51,8 +52,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertRowResultsIgnoreOrder;
-import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -122,9 +123,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
 
         List<Row> expectedRows = new ArrayList<>();
         if (isPartitioned) {
-            List<String> partitions = Arrays.asList("2025", "2026");
-
-            for (String partition : partitions) {
+            for (String partition : waitUntilPartitions(t1).values()) {
                 expectedRows.add(
                         Row.of(
                                 false,
@@ -269,9 +268,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
 
         expectedRows = new ArrayList<>();
         if (isPartitioned) {
-            List<String> partitions = Arrays.asList("2025", "2026");
-
-            for (String partition : partitions) {
+            for (String partition : waitUntilPartitions(t1).values()) {
                 expectedRows.add(
                         Row.of(
                                 false,
@@ -396,63 +393,89 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // check the status of replica after synced
         assertReplicaStatus(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned, bucketLogEndOffset);
 
-        // will read paimon snapshot, won't merge log since it's empty
-        List<Row> expectedRows = buildExpectedRow(isPartitioned, 0, 1, -1);
-        assertRowResultsIgnoreOrder(
-                streamTEnv.executeSql("select * from " + tableName).collect(), expectedRows, true);
-
-        // test point query with fluss
-        String queryFilterStr = "c4 = 30";
-        String partitionName =
-                isPartitioned ? waitUntilPartitions(t1).values().iterator().next() : null;
-        if (partitionName != null) {
-            queryFilterStr = queryFilterStr + " and c16= '" + partitionName + "'";
+        // will read paimon snapshot, should only +I since no change log
+        List<Row> expectedRows = new ArrayList<>();
+        if (isPartitioned) {
+            for (String partition : waitUntilPartitions(t1).values()) {
+                expectedRows.add(
+                        Row.of(
+                                false,
+                                (byte) 1,
+                                (short) 2,
+                                3,
+                                4L,
+                                5.1f,
+                                6.0d,
+                                "string",
+                                Decimal.fromUnscaledLong(9, 5, 2),
+                                Decimal.fromBigDecimal(new java.math.BigDecimal(10), 20, 0),
+                                TimestampLtz.fromEpochMillis(1698235273182L),
+                                TimestampLtz.fromEpochMillis(1698235273182L, 5000),
+                                TimestampNtz.fromMillis(1698235273183L),
+                                TimestampNtz.fromMillis(1698235273183L, 6000),
+                                new byte[] {1, 2, 3, 4},
+                                partition));
+                expectedRows.add(
+                        Row.of(
+                                true,
+                                (byte) 10,
+                                (short) 20,
+                                30,
+                                40L,
+                                50.1f,
+                                60.0d,
+                                "another_string",
+                                Decimal.fromUnscaledLong(90, 5, 2),
+                                Decimal.fromBigDecimal(new java.math.BigDecimal(100), 20, 0),
+                                TimestampLtz.fromEpochMillis(1698235273200L),
+                                TimestampLtz.fromEpochMillis(1698235273200L, 5000),
+                                TimestampNtz.fromMillis(1698235273201L),
+                                TimestampNtz.fromMillis(1698235273201L, 6000),
+                                new byte[] {1, 2, 3, 4},
+                                partition));
+            }
+        } else {
+            expectedRows =
+                    Arrays.asList(
+                            Row.of(
+                                    false,
+                                    (byte) 1,
+                                    (short) 2,
+                                    3,
+                                    4L,
+                                    5.1f,
+                                    6.0d,
+                                    "string",
+                                    Decimal.fromUnscaledLong(9, 5, 2),
+                                    Decimal.fromBigDecimal(new java.math.BigDecimal(10), 20, 0),
+                                    TimestampLtz.fromEpochMillis(1698235273182L),
+                                    TimestampLtz.fromEpochMillis(1698235273182L, 5000),
+                                    TimestampNtz.fromMillis(1698235273183L),
+                                    TimestampNtz.fromMillis(1698235273183L, 6000),
+                                    new byte[] {1, 2, 3, 4},
+                                    null),
+                            Row.of(
+                                    true,
+                                    (byte) 10,
+                                    (short) 20,
+                                    30,
+                                    40L,
+                                    50.1f,
+                                    60.0d,
+                                    "another_string",
+                                    Decimal.fromUnscaledLong(90, 5, 2),
+                                    Decimal.fromBigDecimal(new java.math.BigDecimal(100), 20, 0),
+                                    TimestampLtz.fromEpochMillis(1698235273200L),
+                                    TimestampLtz.fromEpochMillis(1698235273200L, 5000),
+                                    TimestampNtz.fromMillis(1698235273201L),
+                                    TimestampNtz.fromMillis(1698235273201L, 6000),
+                                    new byte[] {1, 2, 3, 4},
+                                    null));
         }
 
-        TableResult tableResult =
-                streamTEnv.executeSql(
-                        String.format("select * from %s where %s", tableName, queryFilterStr));
-
-        expectedRows = buildExpectedRow(isPartitioned, 0, 1, -1);
-        List<Row> expectedPointQueryRows =
-                expectedRows.stream()
-                        .filter(
-                                row -> {
-                                    boolean isMatch = row.getField(3).equals(30);
-                                    if (partitionName != null) {
-                                        isMatch = isMatch && row.getField(15).equals(partitionName);
-                                    }
-                                    return isMatch;
-                                })
-                        .sorted()
-                        .collect(Collectors.toList());
-
-        assertRowResultsIgnoreOrder(tableResult.collect(), expectedPointQueryRows, true);
-
-        // test point query with paimon
-        tableResult =
-                streamTEnv.executeSql(
-                        String.format("select * from %s$lake where %s", tableName, queryFilterStr));
-
-        List<String> paimonPointQueryRows =
-                collectRowsWithTimeout(tableResult.collect(), expectedPointQueryRows.size(), true)
-                        .stream()
-                        .map(
-                                row -> {
-                                    int columnCount = row.getArity() - 3;
-                                    Object[] fields = new Object[columnCount];
-                                    for (int i = 0; i < columnCount; i++) {
-                                        fields[i] = row.getField(i);
-                                    }
-                                    return Row.of(fields).toString();
-                                })
-                        .sorted()
-                        .collect(Collectors.toList());
-        assertThat(paimonPointQueryRows)
-                .containsExactlyInAnyOrderElementsOf(
-                        expectedPointQueryRows.stream()
-                                .map(Row::toString)
-                                .collect(Collectors.toList()));
+        String query = "select * from " + tableName;
+        CloseableIterator<Row> actual = streamTEnv.executeSql(query).collect();
+        assertRowResultsIgnoreOrder(actual, expectedRows, false);
 
         // stop lake tiering service
         jobClient.cancel().get();
@@ -467,28 +490,106 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
             writeFullTypeRow(t1, null);
         }
 
-        // now, query the result, it must be the union result of lake snapshot and log
-        expectedRows = buildExpectedRow(isPartitioned, 0, 1, 2);
-        List<Row> actual =
-                collectRowsWithTimeout(
-                                streamTEnv.executeSql("select * from " + tableName).collect(),
-                                isPartitioned ? 8 : 4,
-                                true)
-                        .stream()
-                        .filter(
-                                row ->
-                                        row.getKind() != RowKind.UPDATE_BEFORE
-                                                && row.getKind() != RowKind.DELETE)
-                        .map(
-                                row -> {
-                                    row.setKind(RowKind.INSERT);
-                                    return row;
-                                })
-                        .collect(Collectors.toList());
+        // should generate -U & +U
+        List<Row> expectedRows2 = new ArrayList<>();
+        if (isPartitioned) {
+            for (String partition : waitUntilPartitions(t1).values()) {
+                expectedRows2.add(
+                        Row.ofKind(
+                                RowKind.UPDATE_BEFORE,
+                                true,
+                                (byte) 10,
+                                (short) 20,
+                                30,
+                                40L,
+                                50.1f,
+                                60.0d,
+                                "another_string",
+                                Decimal.fromUnscaledLong(90, 5, 2),
+                                Decimal.fromBigDecimal(new java.math.BigDecimal(100), 20, 0),
+                                TimestampLtz.fromEpochMillis(1698235273200L),
+                                TimestampLtz.fromEpochMillis(1698235273200L, 5000),
+                                TimestampNtz.fromMillis(1698235273201L),
+                                TimestampNtz.fromMillis(1698235273201L, 6000),
+                                new byte[] {1, 2, 3, 4},
+                                partition));
+                expectedRows2.add(
+                        Row.ofKind(
+                                RowKind.UPDATE_AFTER,
+                                true,
+                                (byte) 100,
+                                (short) 200,
+                                30,
+                                400L,
+                                500.1f,
+                                600.0d,
+                                "another_string_2",
+                                Decimal.fromUnscaledLong(900, 5, 2),
+                                Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                                TimestampLtz.fromEpochMillis(1698235273400L),
+                                TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                                TimestampNtz.fromMillis(1698235273501L),
+                                TimestampNtz.fromMillis(1698235273501L, 8000),
+                                new byte[] {5, 6, 7, 8},
+                                partition));
+            }
+        } else {
+            expectedRows2.add(
+                    Row.ofKind(
+                            RowKind.UPDATE_BEFORE,
+                            true,
+                            (byte) 10,
+                            (short) 20,
+                            30,
+                            40L,
+                            50.1f,
+                            60.0d,
+                            "another_string",
+                            Decimal.fromUnscaledLong(90, 5, 2),
+                            Decimal.fromBigDecimal(new java.math.BigDecimal(100), 20, 0),
+                            TimestampLtz.fromEpochMillis(1698235273200L),
+                            TimestampLtz.fromEpochMillis(1698235273200L, 5000),
+                            TimestampNtz.fromMillis(1698235273201L),
+                            TimestampNtz.fromMillis(1698235273201L, 6000),
+                            new byte[] {1, 2, 3, 4},
+                            null));
+            expectedRows2.add(
+                    Row.ofKind(
+                            RowKind.UPDATE_AFTER,
+                            true,
+                            (byte) 100,
+                            (short) 200,
+                            30,
+                            400L,
+                            500.1f,
+                            600.0d,
+                            "another_string_2",
+                            Decimal.fromUnscaledLong(900, 5, 2),
+                            Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                            TimestampLtz.fromEpochMillis(1698235273400L),
+                            TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                            TimestampNtz.fromMillis(1698235273501L),
+                            TimestampNtz.fromMillis(1698235273501L, 8000),
+                            new byte[] {5, 6, 7, 8},
+                            null));
+        }
 
-        assertThat(actual.stream().map(Row::toString).collect(Collectors.toList()))
-                .containsExactlyInAnyOrderElementsOf(
-                        expectedRows.stream().map(Row::toString).collect(Collectors.toList()));
+        if (isPartitioned) {
+            assertRowResultsIgnoreOrder(actual, expectedRows2, true);
+        } else {
+            assertResultsExactOrder(actual, expectedRows2, true);
+        }
+
+        // query again
+        actual = streamTEnv.executeSql(query).collect();
+        List<Row> totalExpectedRows = new ArrayList<>(expectedRows);
+        totalExpectedRows.addAll(expectedRows2);
+
+        if (isPartitioned) {
+            assertRowResultsIgnoreOrder(actual, totalExpectedRows, true);
+        } else {
+            assertResultsExactOrder(actual, totalExpectedRows, true);
+        }
     }
 
     private List<Row> sortedRows(List<Row> rows) {
@@ -681,84 +782,6 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         TimestampNtz.fromMillis(1698235273201L),
                         TimestampNtz.fromMillis(1698235273201L, 6000),
                         new byte[] {1, 2, 3, 4},
-                        partition));
-    }
-
-    private List<Row> buildExpectedRow(
-            boolean isPartitioned, int record1, int record2, int record3) {
-        List<Row> records = new ArrayList<>();
-        if (isPartitioned) {
-            List<String> partitions = Arrays.asList("2025", "2026");
-            for (String partition : partitions) {
-                List<Row> rows = generateFlinkRows(partition);
-                records.add(rows.get(record1));
-                records.add(rows.get(record2));
-                if (record3 > 0) {
-                    records.add(rows.get(record3));
-                }
-            }
-        } else {
-            records.add(generateFlinkRows(null).get(record1));
-            records.add(generateFlinkRows(null).get(record2));
-            if (record3 > 0) {
-                records.add(generateFlinkRows(null).get(record3));
-            }
-        }
-        return records;
-    }
-
-    private List<Row> generateFlinkRows(@Nullable String partition) {
-        return Arrays.asList(
-                Row.of(
-                        false,
-                        (byte) 1,
-                        (short) 2,
-                        3,
-                        4L,
-                        5.1f,
-                        6.0d,
-                        "string",
-                        Decimal.fromUnscaledLong(9, 5, 2),
-                        Decimal.fromBigDecimal(new java.math.BigDecimal(10), 20, 0),
-                        TimestampLtz.fromEpochMillis(1698235273182L),
-                        TimestampLtz.fromEpochMillis(1698235273182L, 5000),
-                        TimestampNtz.fromMillis(1698235273183L),
-                        TimestampNtz.fromMillis(1698235273183L, 6000),
-                        new byte[] {1, 2, 3, 4},
-                        partition),
-                Row.of(
-                        true,
-                        (byte) 10,
-                        (short) 20,
-                        30,
-                        40L,
-                        50.1f,
-                        60.0d,
-                        "another_string",
-                        Decimal.fromUnscaledLong(90, 5, 2),
-                        Decimal.fromBigDecimal(new java.math.BigDecimal(100), 20, 0),
-                        TimestampLtz.fromEpochMillis(1698235273200L),
-                        TimestampLtz.fromEpochMillis(1698235273200L, 5000),
-                        TimestampNtz.fromMillis(1698235273201L),
-                        TimestampNtz.fromMillis(1698235273201L, 6000),
-                        new byte[] {1, 2, 3, 4},
-                        partition),
-                Row.of(
-                        true,
-                        (byte) 100,
-                        (short) 200,
-                        30,
-                        400L,
-                        500.1f,
-                        600.0d,
-                        "another_string_2",
-                        Decimal.fromUnscaledLong(900, 5, 2),
-                        Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
-                        TimestampLtz.fromEpochMillis(1698235273400L),
-                        TimestampLtz.fromEpochMillis(1698235273400L, 7000),
-                        TimestampNtz.fromMillis(1698235273501L),
-                        TimestampNtz.fromMillis(1698235273501L, 8000),
-                        new byte[] {5, 6, 7, 8},
                         partition));
     }
 }

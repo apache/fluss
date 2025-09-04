@@ -54,7 +54,7 @@ class LakeSplitSerializerTest {
     private final SimpleVersionedSerializer<LakeSplit> sourceSplitSerializer =
             new TestSimpleVersionedSerializer();
 
-    private TableBucket tableBucket = new TableBucket(0, 1L, 0);
+    private final TableBucket tableBucket = new TableBucket(0, 1L, 0);
 
     private final LakeSplitSerializer serializer = new LakeSplitSerializer(sourceSplitSerializer);
 

@@ -20,8 +20,8 @@ package org.apache.fluss.flink.lake;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.flink.lake.reader.LakeSnapshotAndLogSplitScanner;
-import org.apache.fluss.flink.lake.reader.LakeSnapshotAndLogSplitWithoutMergeScanner;
 import org.apache.fluss.flink.lake.reader.LakeSnapshotScanner;
+import org.apache.fluss.flink.lake.reader.SeekableLakeSnapshotSplitScanner;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
 import org.apache.fluss.flink.source.reader.BoundedSplitReader;
@@ -31,7 +31,7 @@ import org.apache.fluss.lake.source.LakeSplit;
 
 import javax.annotation.Nullable;
 
-import java.util.Optional;
+import java.util.Collections;
 import java.util.Queue;
 
 /** A generator to generate reader for lake split. */
@@ -51,18 +51,11 @@ public class LakeSplitReaderGenerator {
         this.lakeSource = lakeSource;
     }
 
-    public void addSplit(
-            SourceSplitBase split,
-            Queue<SourceSplitBase> boundedSplits,
-            Queue<LakeSnapshotAndFlussLogSplit> unboundedSplits) {
+    public void addSplit(SourceSplitBase split, Queue<SourceSplitBase> boundedSplits) {
         if (split instanceof LakeSnapshotSplit) {
             boundedSplits.add(split);
         } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
-            LakeSnapshotAndFlussLogSplit lakeSplit = (LakeSnapshotAndFlussLogSplit) split;
-            boundedSplits.add(lakeSplit);
-            if (lakeSplit.getStoppingOffset().isPresent() && lakeSplit.isStreaming()) {
-                unboundedSplits.add(lakeSplit);
-            }
+            boundedSplits.add(split);
         } else {
             throw new UnsupportedOperationException(
                     String.format("The split type of %s is not supported.", split.getClass()));
@@ -86,18 +79,21 @@ public class LakeSplitReaderGenerator {
     }
 
     private BatchScanner getBatchScanner(LakeSnapshotAndFlussLogSplit lakeSplit) {
-        BatchScanner lakeSnapshotAndLogSplitScanner;
-        Optional<Long> stoppingOffset = lakeSplit.getStoppingOffset();
+        BatchScanner lakeBatchScanner;
         if (lakeSplit.isStreaming()) {
-            lakeSnapshotAndLogSplitScanner =
-                    new LakeSnapshotAndLogSplitWithoutMergeScanner(
-                            table, lakeSource, lakeSplit, projectedFields);
+            lakeBatchScanner =
+                    new SeekableLakeSnapshotSplitScanner(
+                            lakeSource,
+                            lakeSplit.getLakeSplits() == null
+                                    ? Collections.emptyList()
+                                    : lakeSplit.getLakeSplits(),
+                            lakeSplit.getCurrentLakeSplitIndex());
 
         } else {
-            lakeSnapshotAndLogSplitScanner =
+            lakeBatchScanner =
                     new LakeSnapshotAndLogSplitScanner(
                             table, lakeSource, lakeSplit, projectedFields);
         }
-        return lakeSnapshotAndLogSplitScanner;
+        return lakeBatchScanner;
     }
 }

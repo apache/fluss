@@ -54,6 +54,17 @@ public class FlinkRowAssertionsUtils {
                 .containsExactlyInAnyOrderElementsOf(expected);
     }
 
+    public static void assertResultsExactOrder(
+            CloseableIterator<Row> iterator, List<Row> expected, boolean closeIterator) {
+        List<String> actual = collectRowsWithTimeout(iterator, expected.size(), closeIterator);
+        assertThat(actual)
+                .as(
+                        "Expected %d records but got %d after waiting. Actual results: %s",
+                        expected.size(), actual.size(), actual)
+                .containsExactlyElementsOf(
+                        expected.stream().map(Row::toString).collect(Collectors.toList()));
+    }
+
     public static void assertQueryResultExactOrder(
             TableEnvironment env, String query, List<String> expected) throws Exception {
         try (CloseableIterator<Row> rowIter = env.executeSql(query).collect()) {

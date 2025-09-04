@@ -26,6 +26,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
+import org.apache.fluss.flink.tiering.event.TieringRestoreEvent;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSplitGenerator;
 import org.apache.fluss.flink.tiering.source.state.TieringSourceEnumeratorState;
@@ -215,6 +216,15 @@ public class TieringSourceEnumerator
             } else {
                 failedTableEpochs.put(failedTableId, tieringEpoch);
             }
+        }
+
+        if (sourceEvent instanceof TieringRestoreEvent) {
+            LOG.info(
+                    "Receiving tiering restore event, mark current tiering table epoch {} as failed.",
+                    tieringTableEpochs);
+            // we need to make all as failed
+            failedTableEpochs.putAll(new HashMap<>(tieringTableEpochs));
+            tieringTableEpochs.clear();
         }
 
         if (!finishedTableEpochs.isEmpty() || !failedTableEpochs.isEmpty()) {

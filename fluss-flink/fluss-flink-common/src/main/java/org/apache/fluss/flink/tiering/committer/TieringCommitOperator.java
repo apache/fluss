@@ -25,6 +25,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
+import org.apache.fluss.flink.tiering.event.TieringRestoreEvent;
 import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
 import org.apache.fluss.flink.tiering.source.TieringSource;
 import org.apache.fluss.lake.committer.BucketOffset;
@@ -43,6 +44,7 @@ import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
 
 import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
 import org.apache.flink.runtime.source.event.SourceEventWrapper;
+import org.apache.flink.runtime.state.StateInitializationContext;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
@@ -122,6 +124,17 @@ public class TieringCommitOperator<WriteResult, Committable>
         flussTableLakeSnapshotCommitter.open();
         connection = ConnectionFactory.createConnection(flussConfig);
         admin = connection.getAdmin();
+    }
+
+    @Override
+    public void initializeState(StateInitializationContext context) throws Exception {
+        super.initializeState(context);
+        int attemptNumber = getRuntimeContext().getAttemptNumber();
+        if (attemptNumber > 0) {
+            // attempt number is greater than zero, the job must failover
+            operatorEventGateway.sendEventToCoordinator(
+                    new SourceEventWrapper(new TieringRestoreEvent()));
+        }
     }
 
     @Override

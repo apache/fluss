@@ -56,8 +56,15 @@ public class LakeSourceUtils {
                 Configuration.fromMap(properties)
                         .get(ConfigOptions.TABLE_DATALAKE_FORMAT)
                         .toString();
-        LakeStoragePlugin lakeStoragePlugin =
-                LakeStoragePluginSetUp.fromDataLakeFormat(dataLake, null);
+        LakeStoragePlugin lakeStoragePlugin;
+        try {
+            lakeStoragePlugin = LakeStoragePluginSetUp.fromDataLakeFormat(dataLake, null);
+        } catch (UnsupportedOperationException e) {
+            LOG.info(
+                    "No LakeStoragePlugin can be found for datalake format: {}, return null to disable reading from lake source.",
+                    dataLake);
+            return null;
+        }
         LakeStorage lakeStorage = checkNotNull(lakeStoragePlugin).createLakeStorage(lakeConfig);
         try {
             return (LakeSource<LakeSplit>) lakeStorage.createLakeSource(tablePath);

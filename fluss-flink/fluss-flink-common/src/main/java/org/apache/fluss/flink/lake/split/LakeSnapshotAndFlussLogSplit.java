@@ -31,34 +31,20 @@ import java.util.Optional;
 public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
 
     public static final byte LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND = -2;
-    public static final int DEFAULT_ITERATOR_INDEX = 0;
 
-    // may be null when no snapshot data for the bucket
+    // may be null when no lake snapshot data for the bucket
     @Nullable private final List<LakeSplit> lakeSnapshotSplits;
 
-    /** The records to skip when reading the splits. */
-    private long recordOffset = 0;
-    // TODO: Support skip read file by record fileOffset
-
-    private final long startingOffset;
-    private final long stoppingOffset;
-
+    /**
+     * The index of the current split in the lake snapshot splits to be read, enable to skip read
+     * lake split via this lake split index.
+     */
     private int currentLakeSplitIndex;
+    /** The records to skip when reading a split. */
+    private long recordOffset;
 
-    public LakeSnapshotAndFlussLogSplit(
-            TableBucket tableBucket,
-            @Nullable List<LakeSplit> snapshotSplits,
-            long startingOffset,
-            long stoppingOffset) {
-        this(
-                tableBucket,
-                null,
-                snapshotSplits,
-                startingOffset,
-                stoppingOffset,
-                0,
-                DEFAULT_ITERATOR_INDEX);
-    }
+    private long startingOffset;
+    private final long stoppingOffset;
 
     public LakeSnapshotAndFlussLogSplit(
             TableBucket tableBucket,
@@ -66,14 +52,7 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
             @Nullable List<LakeSplit> snapshotSplits,
             long startingOffset,
             long stoppingOffset) {
-        this(
-                tableBucket,
-                partitionName,
-                snapshotSplits,
-                startingOffset,
-                stoppingOffset,
-                0,
-                DEFAULT_ITERATOR_INDEX);
+        this(tableBucket, partitionName, snapshotSplits, startingOffset, stoppingOffset, 0, 0);
     }
 
     public LakeSnapshotAndFlussLogSplit(
@@ -102,6 +81,11 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
         return this;
     }
 
+    public LakeSnapshotAndFlussLogSplit updateWithStartingOffset(long startingOffset) {
+        this.startingOffset = startingOffset;
+        return this;
+    }
+
     public long getRecordsToSkip() {
         return recordOffset;
     }
@@ -120,7 +104,7 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
     }
 
     public boolean isStreaming() {
-        return Long.MAX_VALUE == this.stoppingOffset;
+        return !getStoppingOffset().isPresent();
     }
 
     protected byte splitKind() {
@@ -132,13 +116,9 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
         return toSplitId("lake-hybrid-snapshot-log-", tableBucket);
     }
 
+    @Nullable
     public List<LakeSplit> getLakeSplits() {
-        if (lakeSnapshotSplits == null) {
-            return null;
-        } else {
-
-            return lakeSnapshotSplits.subList(currentLakeSplitIndex, lakeSnapshotSplits.size());
-        }
+        return lakeSnapshotSplits;
     }
 
     public int getCurrentLakeSplitIndex() {

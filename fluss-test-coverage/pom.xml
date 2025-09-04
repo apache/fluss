@@ -392,6 +392,7 @@
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringSourceOptions</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringSource.Builder</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringSource</exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.event.TieringRestoreEvent</exclude>
                                         <exclude>
                                             org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator
                                         </exclude>

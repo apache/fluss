@@ -28,16 +28,16 @@ import org.apache.fluss.client.table.scanner.ScanRecord;
 public class MutableRecordAndPos extends RecordAndPos {
 
     public MutableRecordAndPos() {
-        super(null, NO_READ_RECORDS_COUNT, DEFAULT_ITERATOR_INDEX);
+        super(null, NO_READ_RECORDS_COUNT, DEFAULT_SPLIT_INDEX);
     }
 
     public void setRecord(ScanRecord scanRecord, long readRecordsCount) {
-        setRecord(scanRecord, readRecordsCount, DEFAULT_ITERATOR_INDEX);
+        setRecord(scanRecord, readRecordsCount, DEFAULT_SPLIT_INDEX);
     }
 
     public void setRecord(ScanRecord scanRecord, long readRecordsCount, int currentIteratorIndex) {
         this.scanRecord = scanRecord;
         this.readRecordsCount = readRecordsCount;
-        this.currentIteratorIndex = currentIteratorIndex;
+        this.currentSplitIndex = currentIteratorIndex;
     }
 }
