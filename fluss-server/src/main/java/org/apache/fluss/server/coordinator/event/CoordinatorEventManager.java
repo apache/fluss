@@ -25,6 +25,7 @@ import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.statemachine.ReplicaState;
+import org.apache.fluss.server.metrics.group.CoordinatorEventMetricGroup;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.utils.concurrent.ShutdownableThread;
 
@@ -58,7 +59,6 @@ public final class CoordinatorEventManager implements EventManager {
     private final Lock putLock = new ReentrantLock();
 
     // metrics
-    private Histogram eventProcessingTime;
     private Histogram eventQueueTime;
 
     // Coordinator metrics moved from CoordinatorEventProcessor
@@ -79,13 +79,6 @@ public final class CoordinatorEventManager implements EventManager {
     }
 
     private void registerMetrics() {
-        coordinatorMetricGroup.gauge(MetricNames.EVENT_QUEUE_SIZE, queue::size);
-
-        eventProcessingTime =
-                coordinatorMetricGroup.histogram(
-                        MetricNames.EVENT_PROCESSING_TIME_MS,
-                        new DescriptiveStatisticsHistogram(WINDOW_SIZE));
-
         eventQueueTime =
                 coordinatorMetricGroup.histogram(
                         MetricNames.EVENT_QUEUE_TIME_MS,
@@ -188,7 +181,10 @@ public final class CoordinatorEventManager implements EventManager {
                         QueuedEvent queuedEvent =
                                 new QueuedEvent(event, System.currentTimeMillis());
                         queue.put(queuedEvent);
-
+                        coordinatorMetricGroup
+                                .getOrAddEventTypeMetricGroup(event.getClass())
+                                .queuedEventCount()
+                                .inc();
                         LOG.debug(
                                 "Put coordinator event {} of event type {}.",
                                 event,
@@ -243,7 +239,12 @@ public final class CoordinatorEventManager implements EventManager {
                 LOG.error("Uncaught error processing event {}.", coordinatorEvent, e);
             } finally {
                 long costTimeMs = System.currentTimeMillis() - eventStartTimeMs;
-                eventProcessingTime.update(costTimeMs);
+                // Use event type specific histogram
+                CoordinatorEventMetricGroup eventMetricGroup =
+                        coordinatorMetricGroup.getOrAddEventTypeMetricGroup(
+                                coordinatorEvent.getClass());
+                eventMetricGroup.eventProcessingTime().update(costTimeMs);
+                eventMetricGroup.queuedEventCount().dec();
                 LOG.debug(
                         "Finished processing event {} of event type {} in {}ms.",
                         coordinatorEvent,
