@@ -21,14 +21,14 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.PreAllocatedPagedOutputView;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.CompactedLogRecord;
 import org.apache.fluss.record.DefaultLogRecordBatch;
-import org.apache.fluss.record.IndexedLogRecord;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.bytesview.BytesView;
-import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -44,26 +44,26 @@ import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_INFO;
-import static org.apache.fluss.testutils.DataTestUtils.indexedRow;
+import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Test for {@link IndexedLogWriteBatch}. */
-public class IndexedLogWriteBatchTest {
-    private IndexedRow row;
+/** Test for {@link CompactedLogWriteBatch}. */
+public class CompactedLogWriteBatchTest {
+    private CompactedRow row;
     private int estimatedSizeInBytes;
 
     @BeforeEach
     void setup() {
-        row = indexedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
-        estimatedSizeInBytes = IndexedLogRecord.sizeOf(row);
+        row = compactedRow(DATA1_ROW_TYPE, new Object[] {1, "a"});
+        estimatedSizeInBytes = CompactedLogRecord.sizeOf(row);
     }
 
     @Test
     void testTryAppendWithWriteLimit() throws Exception {
         int bucketId = 0;
         int writeLimit = 100;
-        IndexedLogWriteBatch logProducerBatch =
+        CompactedLogWriteBatch logProducerBatch =
                 createLogWriteBatch(
                         new TableBucket(DATA1_TABLE_ID, bucketId),
                         0L,
@@ -87,7 +87,7 @@ public class IndexedLogWriteBatchTest {
     @Test
     void testToBytes() throws Exception {
         int bucketId = 0;
-        IndexedLogWriteBatch logProducerBatch =
+        CompactedLogWriteBatch logProducerBatch =
                 createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
         boolean appendResult = logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isTrue();
@@ -103,7 +103,7 @@ public class IndexedLogWriteBatchTest {
     @Test
     void testCompleteTwice() throws Exception {
         int bucketId = 0;
-        IndexedLogWriteBatch logWriteBatch =
+        CompactedLogWriteBatch logWriteBatch =
                 createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
         boolean appendResult = logWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isTrue();
@@ -118,7 +118,7 @@ public class IndexedLogWriteBatchTest {
     @Test
     void testFailedTwice() throws Exception {
         int bucketId = 0;
-        IndexedLogWriteBatch logWriteBatch =
+        CompactedLogWriteBatch logWriteBatch =
                 createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
         boolean appendResult = logWriteBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isTrue();
@@ -133,7 +133,7 @@ public class IndexedLogWriteBatchTest {
     @Test
     void testClose() throws Exception {
         int bucketId = 0;
-        IndexedLogWriteBatch logProducerBatch =
+        CompactedLogWriteBatch logProducerBatch =
                 createLogWriteBatch(new TableBucket(DATA1_TABLE_ID, bucketId), 0L);
         boolean appendResult = logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
         assertThat(appendResult).isTrue();
@@ -149,7 +149,7 @@ public class IndexedLogWriteBatchTest {
     void testBatchAborted() throws Exception {
         int bucketId = 0;
         int writeLimit = 10240;
-        IndexedLogWriteBatch logProducerBatch =
+        CompactedLogWriteBatch logProducerBatch =
                 createLogWriteBatch(
                         new TableBucket(DATA1_TABLE_ID, bucketId),
                         0L,
@@ -180,7 +180,7 @@ public class IndexedLogWriteBatchTest {
                         () -> logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback()))
                 .isInstanceOf(IllegalStateException.class)
                 .hasMessageContaining(
-                        "Tried to append a record, but MemoryLogRecordsIndexedBuilder has already been aborted");
+                        "Tried to append a record, but MemoryLogRecordsCompactedBuilder has already been aborted");
 
         // try to build.
         assertThatThrownBy(logProducerBatch::build)
@@ -197,18 +197,18 @@ public class IndexedLogWriteBatchTest {
     }
 
     private WriteRecord createWriteRecord() {
-        return WriteRecord.forIndexedAppend(DATA1_PHYSICAL_TABLE_PATH, row, null);
+        return WriteRecord.forCompactedAppend(DATA1_PHYSICAL_TABLE_PATH, row, null);
     }
 
-    private IndexedLogWriteBatch createLogWriteBatch(TableBucket tb, long baseLogOffset)
+    private CompactedLogWriteBatch createLogWriteBatch(TableBucket tb, long baseLogOffset)
             throws Exception {
         return createLogWriteBatch(
                 tb, baseLogOffset, Integer.MAX_VALUE, MemorySegment.allocateHeapMemory(1000));
     }
 
-    private IndexedLogWriteBatch createLogWriteBatch(
+    private CompactedLogWriteBatch createLogWriteBatch(
             TableBucket tb, long baseLogOffset, int writeLimit, MemorySegment memorySegment) {
-        return new IndexedLogWriteBatch(
+        return new CompactedLogWriteBatch(
                 tb.getBucket(),
                 DATA1_PHYSICAL_TABLE_PATH,
                 DATA1_TABLE_INFO.getSchemaId(),
@@ -222,7 +222,7 @@ public class IndexedLogWriteBatchTest {
         assertThat(recordBatch.baseLogOffset()).isEqualTo(0L);
         assertThat(recordBatch.schemaId()).isEqualTo((short) DATA1_TABLE_INFO.getSchemaId());
         try (LogRecordReadContext readContext =
-                        LogRecordReadContext.createIndexedReadContext(
+                        LogRecordReadContext.createCompactedRowReadContext(
                                 DATA1_ROW_TYPE, DATA1_TABLE_INFO.getSchemaId());
                 CloseableIterator<LogRecord> iterator = recordBatch.records(readContext)) {
             assertThat(iterator.hasNext()).isTrue();

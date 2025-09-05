@@ -19,12 +19,14 @@ package org.apache.fluss.client.write;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.record.CompactedLogRecord;
 import org.apache.fluss.record.DefaultKvRecord;
 import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.DefaultLogRecordBatch;
 import org.apache.fluss.record.IndexedLogRecord;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.row.indexed.IndexedRow;
 
 import javax.annotation.Nullable;
@@ -105,6 +107,22 @@ public final class WriteRecord {
         int estimatedSizeInBytes = -1;
         return new WriteRecord(
                 tablePath, null, bucketKey, row, WriteFormat.ARROW_LOG, null, estimatedSizeInBytes);
+    }
+
+    /** Creates a write record for append operation for Compacted format. */
+    public static WriteRecord forCompactedAppend(
+            PhysicalTablePath tablePath, CompactedRow row, @Nullable byte[] bucketKey) {
+        checkNotNull(row);
+        int estimatedSizeInBytes =
+                CompactedLogRecord.sizeOf(row) + DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+        return new WriteRecord(
+                tablePath,
+                null,
+                bucketKey,
+                row,
+                WriteFormat.COMPACTED_LOG,
+                null,
+                estimatedSizeInBytes);
     }
 
     // ------------------------------------------------------------------------------------------
