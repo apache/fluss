@@ -174,6 +174,8 @@ public class ReplicaTestBase {
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, MemorySize.parse("512b"));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("1kb"));
 
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofHours(12));
+
         scheduler = new FlussScheduler(2);
         scheduler.startup();
 
