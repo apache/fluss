@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 
 import java.util.Iterator;
 
-import static org.apache.fluss.record.DefaultLogRecordBatch.LOG_OVERHEAD;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.assertj.core.api.Assertions.assertThat;
 

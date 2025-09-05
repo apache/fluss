@@ -27,6 +27,8 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.GatheringByteChannel;
 
+import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
+
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
@@ -72,13 +74,14 @@ public class MemoryLogRecords implements LogRecords {
         sizeInBytes = 0;
     }
 
-    public void ensureValid() {
-        if (sizeInBytes < DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE) {
+    public void ensureValid(byte recordBatchMagic) {
+        int recordBatchHeaderSize = recordBatchHeaderSize(recordBatchMagic);
+        if (sizeInBytes < recordBatchHeaderSize) {
             throw new RuntimeException(
                     "Record batch is corrupt (the size "
                             + sizeInBytes
                             + " is smaller than the minimum allowed overhead "
-                            + DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE
+                            + recordBatchHeaderSize
                             + ")");
         }
     }

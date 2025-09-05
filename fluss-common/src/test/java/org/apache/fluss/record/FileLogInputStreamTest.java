@@ -17,28 +17,40 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.utils.CloseableIterator;
 
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
 import java.util.Collections;
 
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
-import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithBaseOffset;
+import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link FileLogInputStream}. */
 public class FileLogInputStreamTest extends LogTestBase {
     private @TempDir File tempDir;
 
-    @Test
-    void testWriteTo() throws Exception {
+    @ParameterizedTest
+    @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
+    void testWriteTo(byte recordBatchMagic) throws Exception {
         try (FileLogRecords fileLogRecords = FileLogRecords.open(new File(tempDir, "test.tmp"))) {
             fileLogRecords.append(
-                    genMemoryLogRecordsWithBaseOffset(
-                            0L, Collections.singletonList(new Object[] {0, "abc"})));
+                    createRecordsWithoutBaseLogOffset(
+                            DATA1_ROW_TYPE,
+                            DEFAULT_SCHEMA_ID,
+                            0L,
+                            -1L,
+                            recordBatchMagic,
+                            Collections.singletonList(new Object[] {0, "abc"}),
+                            LogFormat.ARROW));
             fileLogRecords.flush();
 
             FileLogInputStream logInputStream =
@@ -46,7 +58,7 @@ public class FileLogInputStreamTest extends LogTestBase {
 
             FileLogInputStream.FileChannelLogRecordBatch batch = logInputStream.nextBatch();
             assertThat(batch).isNotNull();
-            assertThat(batch.magic()).isEqualTo(magic);
+            assertThat(batch.magic()).isEqualTo(recordBatchMagic);
 
             LogRecordBatch recordBatch = batch.loadFullBatch();
 

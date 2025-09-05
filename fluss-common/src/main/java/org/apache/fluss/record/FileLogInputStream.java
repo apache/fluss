@@ -28,12 +28,12 @@ import java.nio.ByteOrder;
 import java.nio.channels.FileChannel;
 import java.util.Objects;
 
-import static org.apache.fluss.record.DefaultLogRecordBatch.BASE_OFFSET_OFFSET;
-import static org.apache.fluss.record.DefaultLogRecordBatch.LENGTH_OFFSET;
-import static org.apache.fluss.record.DefaultLogRecordBatch.LOG_OVERHEAD;
-import static org.apache.fluss.record.DefaultLogRecordBatch.MAGIC_LENGTH;
-import static org.apache.fluss.record.DefaultLogRecordBatch.MAGIC_OFFSET;
-import static org.apache.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.HEADER_SIZE_UP_TO_MAGIC;
+import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
+import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -42,9 +42,6 @@ import static org.apache.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_
 /** A log input stream which is backed by a {@link FileChannel}. */
 public class FileLogInputStream
         implements LogInputStream<FileLogInputStream.FileChannelLogRecordBatch> {
-
-    private static final int HEADER_SIZE_UP_TO_MAGIC = MAGIC_OFFSET + MAGIC_LENGTH;
-
     private int position;
     private final int end;
     private final FileLogRecords fileRecords;
@@ -153,6 +150,11 @@ public class FileLogInputStream
         }
 
         @Override
+        public int leaderEpoch() {
+            return loadBatchHeader().leaderEpoch();
+        }
+
+        @Override
         public long lastLogOffset() {
             return loadBatchHeader().lastLogOffset();
         }
@@ -189,7 +191,7 @@ public class FileLogInputStream
         }
 
         private int headerSize() {
-            return RECORD_BATCH_HEADER_SIZE;
+            return recordBatchHeaderSize(magic);
         }
 
         protected LogRecordBatch loadFullBatch() {

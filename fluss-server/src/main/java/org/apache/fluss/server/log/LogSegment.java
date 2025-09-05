@@ -46,7 +46,7 @@ import java.io.File;
 import java.io.IOException;
 import java.util.Optional;
 
-import static org.apache.fluss.record.DefaultLogRecordBatch.RECORD_BATCH_HEADER_SIZE;
+import static org.apache.fluss.record.LogRecordBatchFormat.HEADER_SIZE_UP_TO_MAGIC;
 import static org.apache.fluss.utils.IOUtils.closeQuietly;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -495,7 +495,7 @@ public final class LogSegment {
                 new LogOffsetMetadata(startOffset, this.baseOffset, startPosition);
         int adjustedMaxSize =
                 minOneMessage ? Math.max(maxSize, startOffsetAndSize.getSize()) : maxSize;
-        if (adjustedMaxSize <= RECORD_BATCH_HEADER_SIZE) {
+        if (adjustedMaxSize <= HEADER_SIZE_UP_TO_MAGIC) {
             return new FetchDataInfo(offsetMetadata, MemoryLogRecords.EMPTY);
         }
         if (projection == null) {
