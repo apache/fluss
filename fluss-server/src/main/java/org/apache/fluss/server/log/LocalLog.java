@@ -29,7 +29,9 @@ import org.apache.fluss.metrics.DescriptiveStatisticsHistogram;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.record.FileLogProjection;
+import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.RecordBatchFilter;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 
@@ -346,7 +348,7 @@ public final class LocalLog {
      * offset is out of range, throw an OffsetOutOfRangeException.
      */
     LogOffsetMetadata convertToOffsetMetadataOrThrow(long offset) throws IOException {
-        FetchDataInfo fetchDataInfo = read(offset, 1, false, nextOffsetMetadata, null);
+        FetchDataInfo fetchDataInfo = read(offset, 1, false, nextOffsetMetadata, null, null, null);
         return fetchDataInfo.getFetchOffsetMetadata();
     }
 
@@ -358,6 +360,11 @@ public final class LocalLog {
      * @param minOneMessage If this is true, the first message will be returned even if it exceeds
      *     `maxLength` (if one exists)
      * @param maxOffsetMetadata The metadata of the maximum offset to be fetched
+     * @param projection The column projection to apply to the log records
+     * @param recordBatchFilter The filter to apply to the log records (must be null if readContext
+     *     is null)
+     * @param readContext The read context for batch filtering (must be null if recordBatchFilter is
+     *     null)
      * @throws LogOffsetOutOfRangeException If startOffset is beyond the log start and end offset
      * @return The fetch data information including fetch starting offset metadata and messages
      *     read.
@@ -367,8 +374,16 @@ public final class LocalLog {
             int maxLength,
             boolean minOneMessage,
             LogOffsetMetadata maxOffsetMetadata,
-            @Nullable FileLogProjection projection)
+            @Nullable FileLogProjection projection,
+            @Nullable RecordBatchFilter recordBatchFilter,
+            @Nullable LogRecordBatch.ReadContext readContext)
             throws IOException {
+        // Validate that recordBatchFilter and readContext are either both null or both non-null
+        if ((recordBatchFilter == null) != (readContext == null)) {
+            throw new IllegalArgumentException(
+                    "recordBatchFilter and readContext must be either both null or both non-null");
+        }
+
         if (LOG.isTraceEnabled()) {
             LOG.trace(
                     "Reading maximum {} bytes at offset {} from log with total length {} bytes",
@@ -414,7 +429,14 @@ public final class LocalLog {
                                 ? maxOffsetMetadata.getRelativePositionInSegment()
                                 : segment.getSizeInBytes();
                 fetchDataInfo =
-                        segment.read(readOffset, maxLength, maxPosition, minOneMessage, projection);
+                        segment.read(
+                                readOffset,
+                                maxLength,
+                                maxPosition,
+                                minOneMessage,
+                                projection,
+                                recordBatchFilter,
+                                readContext);
                 if (fetchDataInfo == null) {
                     segmentOpt = segments.higherSegment(baseOffset);
                 }
@@ -426,7 +448,14 @@ public final class LocalLog {
                 // start offset is in range, this can happen when all messages with offset larger
                 // than start offsets have been deleted. In this case, we will return the empty set
                 // with log end offset metadata
-                return new FetchDataInfo(nextOffsetMetadata, MemoryLogRecords.EMPTY);
+                // When using filter, we should create a filtered empty response to notify client
+                // about the correct offset to continue fetching from
+                if (recordBatchFilter != null) {
+                    return FetchDataInfo.createFilteredEmptyResponse(
+                            nextOffsetMetadata, nextOffsetMetadata.getMessageOffset());
+                } else {
+                    return new FetchDataInfo(nextOffsetMetadata, MemoryLogRecords.EMPTY);
+                }
             }
         }
     }

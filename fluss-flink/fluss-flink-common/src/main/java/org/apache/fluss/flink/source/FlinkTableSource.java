@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.source;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
@@ -32,10 +33,12 @@ import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.CompoundPredicate;
 import org.apache.fluss.predicate.GreaterOrEqual;
 import org.apache.fluss.predicate.LeafPredicate;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
+import org.apache.fluss.predicate.PredicateVisitor;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -85,6 +88,8 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
 import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
@@ -128,6 +133,12 @@ public class FlinkTableSource
     private final boolean isDataLakeEnabled;
     @Nullable private final MergeEngineType mergeEngineType;
 
+    // table-level configuration
+    private final Configuration tableConfig;
+
+    // pre-computed available statistics columns
+    private final Set<String> availableStatsColumns;
+
     // output type after projection pushdown
     private LogicalType producedDataType;
 
@@ -149,10 +160,12 @@ public class FlinkTableSource
     private final Map<String, String> tableOptions;
 
     @Nullable private LakeSource<LakeSplit> lakeSource;
+    private Predicate logRecordBatchFilter;
 
     public FlinkTableSource(
             TablePath tablePath,
             Configuration flussConfig,
+            Configuration tableConfig,
             org.apache.flink.table.types.logical.RowType tableOutputType,
             int[] primaryKeyIndexes,
             int[] bucketKeyIndexes,
@@ -187,6 +200,11 @@ public class FlinkTableSource
         if (isDataLakeEnabled) {
             this.lakeSource = createLakeSource(tablePath, tableOptions);
         }
+        this.tableConfig = tableConfig;
+
+        // Pre-compute available statistics columns to avoid repeated calculation
+        RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
+        this.availableStatsColumns = computeAvailableStatsColumns(flussRowType);
     }
 
     @Override
@@ -306,6 +324,7 @@ public class FlinkTableSource
                         isPartitioned(),
                         flussRowType,
                         projectedFields,
+                        logRecordBatchFilter,
                         offsetsInitializer,
                         scanPartitionDiscoveryIntervalMs,
                         new RowDataDeserializationSchema(),
@@ -419,6 +438,7 @@ public class FlinkTableSource
                 new FlinkTableSource(
                         tablePath,
                         flussConfig,
+                        tableConfig,
                         tableOutputType,
                         primaryKeyIndexes,
                         bucketKeyIndexes,
@@ -438,6 +458,8 @@ public class FlinkTableSource
         source.modificationScanType = modificationScanType;
         source.partitionFilters = partitionFilters;
         source.lakeSource = lakeSource;
+        source.logRecordBatchFilter = logRecordBatchFilter;
+        // Note: availableStatsColumns is already computed in the constructor
         return source;
     }
 
@@ -490,13 +512,16 @@ public class FlinkTableSource
                 lookupRow.setField(keyRowProjection[fieldEqual.fieldIndex], fieldEqual.equalValue);
                 visitedPkFields.add(fieldEqual.fieldIndex);
             }
+
             // if not all primary key fields are in condition, we skip to pushdown
             if (!visitedPkFields.equals(primaryKeyTypes.keySet())) {
                 return Result.of(Collections.emptyList(), filters);
             }
             singleRowFilter = lookupRow;
             return Result.of(acceptedFilters, remainingFilters);
-        } else if (isPartitioned()) {
+        }
+
+        if (isPartitioned()) {
             // dynamic partition pushdown
             List<FieldEqual> fieldEquals =
                     extractFieldEquals(
@@ -538,10 +563,177 @@ public class FlinkTableSource
                     }
                 }
             }
-            return Result.of(acceptedFilters, remainingFilters);
-        } else {
-            return Result.of(Collections.emptyList(), filters);
+            this.partitionFilters = fieldEquals;
         }
+
+        if (acceptedFilters.isEmpty() && remainingFilters.isEmpty()) {
+            remainingFilters.addAll(filters);
+        }
+
+        if (!hasPrimaryKey()) {
+            Result recordBatchResult = pushdownRecordBatchFilter(remainingFilters);
+            acceptedFilters.addAll(recordBatchResult.getAcceptedFilters());
+            remainingFilters = recordBatchResult.getRemainingFilters();
+        }
+        return Result.of(acceptedFilters, remainingFilters);
+    }
+
+    private Result pushdownRecordBatchFilter(List<ResolvedExpression> filters) {
+        // Use pre-computed available statistics columns
+        LOG.trace("Statistics available columns: {}", availableStatsColumns);
+
+        // Convert to fluss row type for predicate operations
+        RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
+
+        List<Predicate> pushdownPredicates = new ArrayList<>();
+        List<ResolvedExpression> acceptedFilters = new ArrayList<>();
+        List<ResolvedExpression> remainingFilters = new ArrayList<>();
+
+        for (ResolvedExpression filter : filters) {
+            java.util.Optional<Predicate> predicateOpt =
+                    PredicateConverter.convert(tableOutputType, filter);
+
+            if (predicateOpt.isPresent()) {
+                Predicate predicate = predicateOpt.get();
+                LOG.trace("Converted filter to predicate: {}", predicate);
+                // Check if predicate can benefit from statistics
+                if (canPredicateUseStatistics(predicate, flussRowType, availableStatsColumns)) {
+                    pushdownPredicates.add(predicate);
+                    acceptedFilters.add(filter);
+                }
+            }
+            remainingFilters.add(filter);
+        }
+
+        if (!pushdownPredicates.isEmpty()) {
+            Predicate merged =
+                    pushdownPredicates.size() == 1
+                            ? pushdownPredicates.get(0)
+                            : org.apache.fluss.predicate.PredicateBuilder.and(pushdownPredicates);
+            LOG.info("Accept merged predicate for record batch filter: {}", merged);
+            this.logRecordBatchFilter = merged;
+        } else {
+            this.logRecordBatchFilter = null;
+        }
+        return Result.of(acceptedFilters, remainingFilters);
+    }
+
+    /**
+     * Checks if a data type is binary.
+     *
+     * @param dataType the data type to check
+     * @return true if it's a binary type
+     */
+    private boolean isBinaryType(org.apache.fluss.types.DataType dataType) {
+        switch (dataType.getTypeRoot()) {
+            case BINARY:
+            case BYTES:
+                return true;
+            default:
+                return false;
+        }
+    }
+
+    /**
+     * Checks if a predicate can benefit from statistics based on the available statistics columns.
+     *
+     * @param predicate the predicate to check
+     * @param rowType the row type
+     * @param availableStatsColumns the columns that have statistics available
+     * @return true if the predicate can use statistics
+     */
+    private boolean canPredicateUseStatistics(
+            Predicate predicate, RowType rowType, Set<String> availableStatsColumns) {
+
+        class StatisticsUsageVisitor implements PredicateVisitor<Boolean> {
+            @Override
+            public Boolean visit(org.apache.fluss.predicate.LeafPredicate leaf) {
+                // Check if the field referenced by this predicate has statistics available
+                String fieldName = rowType.getFieldNames().get(leaf.index());
+                // Check if statistics are available for this column
+                return availableStatsColumns.contains(fieldName);
+            }
+
+            @Override
+            public Boolean visit(CompoundPredicate compound) {
+                // For compound predicates, all children must be able to use statistics
+                for (Predicate child : compound.children()) {
+                    if (!child.visit(this)) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+        }
+
+        return predicate.visit(new StatisticsUsageVisitor());
+    }
+
+    /**
+     * Computes the available statistics columns based on table configuration. This method is called
+     * once during construction to pre-compute the result.
+     *
+     * @param flussRowType the row type
+     * @return set of column names that have statistics available
+     */
+    private Set<String> computeAvailableStatsColumns(RowType flussRowType) {
+        Set<String> availableStatsColumns = new HashSet<>();
+
+        // Get the configured statistics columns
+        String columnsConfig = tableConfig.get(ConfigOptions.TABLE_STATISTICS_COLUMNS);
+
+        // Check if statistics are enabled for the table
+        if (null == columnsConfig || columnsConfig.isEmpty()) {
+            LOG.debug("Statistics collection is disabled for the table");
+            return availableStatsColumns;
+        }
+
+        if ("*".equals(columnsConfig)) {
+            // Collect all non-binary columns
+            for (int i = 0; i < flussRowType.getFieldCount(); i++) {
+                org.apache.fluss.types.DataType fieldType = flussRowType.getTypeAt(i);
+                if (!isBinaryType(fieldType)) {
+                    availableStatsColumns.add(flussRowType.getFieldNames().get(i));
+                }
+            }
+        } else {
+            // Use user-specified columns (validate they exist and are non-binary)
+            List<String> configuredColumns =
+                    Arrays.stream(columnsConfig.split(","))
+                            .map(String::trim)
+                            .filter(s -> !s.isEmpty())
+                            .collect(Collectors.toList());
+
+            for (String columnName : configuredColumns) {
+                // Find the column in the row type
+                int columnIndex = flussRowType.getFieldNames().indexOf(columnName);
+                if (columnIndex >= 0) {
+                    org.apache.fluss.types.DataType fieldType = flussRowType.getTypeAt(columnIndex);
+                    if (!isBinaryType(fieldType)) {
+                        availableStatsColumns.add(columnName);
+                    } else {
+                        LOG.trace(
+                                "Configured statistics column '{}' is a binary type and will be ignored",
+                                columnName);
+                    }
+                } else {
+                    LOG.trace(
+                            "Configured statistics column '{}' does not exist in table schema",
+                            columnName);
+                }
+            }
+        }
+
+        return availableStatsColumns;
+    }
+
+    /**
+     * Gets the pre-computed available statistics columns.
+     *
+     * @return set of column names that have statistics available
+     */
+    private Set<String> getAvailableStatsColumns() {
+        return availableStatsColumns;
     }
 
     @Override
@@ -643,5 +835,22 @@ public class FlinkTableSource
     @VisibleForTesting
     public int[] getPartitionKeyIndexes() {
         return partitionKeyIndexes;
+    }
+
+    @VisibleForTesting
+    @Nullable
+    public Predicate getLogRecordBatchFilter() {
+        return logRecordBatchFilter;
+    }
+
+    @VisibleForTesting
+    @Nullable
+    public GenericRowData getSingleRowFilter() {
+        return singleRowFilter;
+    }
+
+    @VisibleForTesting
+    public List<FieldEqual> getPartitionFilters() {
+        return partitionFilters;
     }
 }

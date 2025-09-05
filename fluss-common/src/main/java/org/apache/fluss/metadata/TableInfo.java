@@ -20,10 +20,12 @@ package org.apache.fluss.metadata;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 import java.util.Optional;
@@ -63,6 +65,8 @@ public final class TableInfo {
 
     private final long createdTime;
     private final long modifiedTime;
+
+    private int[] cachedStatsIndexMapping = null;
 
     public TableInfo(
             TablePath tablePath,
@@ -213,6 +217,83 @@ public final class TableInfo {
     /** Check if the table is partitioned and auto partition is enabled. */
     public boolean isAutoPartitioned() {
         return isPartitioned() && tableConfig.getAutoPartitionStrategy().isAutoPartitionEnabled();
+    }
+
+    public boolean isStatisticsEnabled() {
+        return tableConfig.isStatisticsEnabled();
+    }
+
+    public int[] getStatsIndexMapping() {
+        if (cachedStatsIndexMapping != null) {
+            return cachedStatsIndexMapping;
+        }
+
+        Optional<List<String>> statsColumnsOpt = tableConfig.getStatisticsColumns();
+        List<String> statsColumns;
+
+        if (statsColumnsOpt == null) {
+            // Statistics collection is disabled (empty string configuration)
+            cachedStatsIndexMapping = new int[0];
+            return cachedStatsIndexMapping;
+        } else if (statsColumnsOpt.isPresent()) {
+            // User specified specific columns for statistics
+            statsColumns = statsColumnsOpt.get();
+        } else {
+            // Collect all non-binary columns ("*" configuration)
+            statsColumns = new ArrayList<>();
+            for (int rowIndex = 0; rowIndex < rowType.getFieldCount(); rowIndex++) {
+                DataType columnType = rowType.getTypeAt(rowIndex);
+                if (!isBinaryType(columnType)) {
+                    String columnName = rowType.getFields().get(rowIndex).getName();
+                    statsColumns.add(columnName);
+                }
+            }
+        }
+
+        // Build mapping from stats column index to original row column index
+        int[] mapping = new int[statsColumns.size()];
+        for (int statsIndex = 0; statsIndex < statsColumns.size(); statsIndex++) {
+            String statsColumnName = statsColumns.get(statsIndex);
+            // Find the original column index for this stats column
+            int originalIndex = findColumnIndex(statsColumnName);
+            if (originalIndex == -1) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Statistics column '%s' not found in table schema",
+                                statsColumnName));
+            }
+            mapping[statsIndex] = originalIndex;
+        }
+
+        // Cache the result
+        cachedStatsIndexMapping = mapping;
+        return mapping;
+    }
+
+    /**
+     * Check if the given data type is a binary type (BINARY or BYTES).
+     *
+     * @param dataType the data type to check
+     * @return true if the data type is binary, false otherwise
+     */
+    private boolean isBinaryType(DataType dataType) {
+        return dataType.getTypeRoot() == org.apache.fluss.types.DataTypeRoot.BINARY
+                || dataType.getTypeRoot() == org.apache.fluss.types.DataTypeRoot.BYTES;
+    }
+
+    /**
+     * Find the column index by column name in the row type.
+     *
+     * @param columnName the column name to find
+     * @return the index of the column, or -1 if not found
+     */
+    private int findColumnIndex(String columnName) {
+        for (int i = 0; i < rowType.getFieldCount(); i++) {
+            if (rowType.getFields().get(i).getName().equals(columnName)) {
+                return i;
+            }
+        }
+        return -1;
     }
 
     /**

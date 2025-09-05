@@ -20,7 +20,6 @@ package org.apache.fluss.record;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.record.FileLogInputStream.FileChannelLogRecordBatch;
-import org.apache.fluss.utils.AbstractIterator;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 
@@ -190,6 +189,7 @@ public class FileLogRecords implements LogRecords, Closeable {
     }
 
     /** Close this record set. */
+    @Override
     public void close() throws IOException {
         flush();
         trim();
@@ -262,6 +262,7 @@ public class FileLogRecords implements LogRecords, Closeable {
         return originalSize - targetSize;
     }
 
+    @Override
     public int sizeInBytes() {
         return size.get();
     }
@@ -307,17 +308,24 @@ public class FileLogRecords implements LogRecords, Closeable {
         return new FileChannelChunk(channel, start, sizeInBytes());
     }
 
-    private AbstractIterator<FileChannelLogRecordBatch> batchIterator(int start)
+    public LogRecordBatchIterator<FileChannelLogRecordBatch> batchIterator(int start)
             throws IOException {
+        return new LogRecordBatchIterator<>(makeFileLogInputStream(start));
+    }
+
+    public LogRecordBatchIterator<FileChannelLogRecordBatch> batchIterator(
+            long targetOffset, int start) throws IOException {
+        return new LogRecordBatchIterator<>(makeFileLogInputStream(start), targetOffset);
+    }
+
+    private FileLogInputStream makeFileLogInputStream(int start) throws IOException {
         final int end;
         if (isSlice) {
             end = this.end;
         } else {
             end = this.sizeInBytes();
         }
-
-        FileLogInputStream inputStream = new FileLogInputStream(this, start, end);
-        return new LogRecordBatchIterator<>(inputStream);
+        return new FileLogInputStream(this, start, end);
     }
 
     /**

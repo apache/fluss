@@ -49,6 +49,10 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private final Counter delayedFetchFromFollowerExpireCount;
     private final Counter delayedFetchFromClientExpireCount;
 
+    private final Counter logRecordBatchStatisticsProcessCount;
+    private final Counter logRecordBatchStatisticsFilterOutCount;
+    private final Counter processedRecordBatchCount;
+
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String rack, String hostname, int serverId) {
         super(registry, new String[] {clusterId, hostname, NAME}, null);
@@ -72,6 +76,18 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         meter(
                 MetricNames.DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE,
                 new MeterView(delayedFetchFromClientExpireCount));
+        logRecordBatchStatisticsProcessCount = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.LOG_RECORD_BATCH_STATISTICS_PROCESS_COUNT,
+                new MeterView(logRecordBatchStatisticsProcessCount));
+        logRecordBatchStatisticsFilterOutCount = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.LOG_RECORD_BATCH_STATISTICS_FILTER_OUT_COUNT,
+                new MeterView(logRecordBatchStatisticsFilterOutCount));
+        processedRecordBatchCount = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.LOG_RECORD_BATCH_PROCESSED_COUNT,
+                new MeterView(processedRecordBatchCount));
     }
 
     @Override
@@ -110,6 +126,18 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     public Counter delayedFetchFromClientExpireCount() {
         return delayedFetchFromClientExpireCount;
+    }
+
+    public Counter logRecordBatchStatisticsProcessCount() {
+        return logRecordBatchStatisticsProcessCount;
+    }
+
+    public Counter logRecordBatchStatisticsFilterOutCount() {
+        return logRecordBatchStatisticsFilterOutCount;
+    }
+
+    public Counter processedRecordBatchCount() {
+        return processedRecordBatchCount;
     }
 
     // ------------------------------------------------------------------------

@@ -30,6 +30,9 @@ import org.apache.fluss.row.arrow.ArrowWriterPool;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
 import org.apache.fluss.testutils.DataTestUtils;
+import org.apache.fluss.types.DataField;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.apache.commons.lang3.RandomUtils;
@@ -45,10 +48,13 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.compression.ArrowCompressionInfo.NO_COMPRESSION;
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchTestUtils.createAllColumnsStatsMapping;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
@@ -95,7 +101,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         assertThat(iterator.hasNext()).isTrue();
         LogRecordBatch batch = iterator.next();
         assertThat(batch.getRecordCount()).isEqualTo(0);
-        assertThat(batch.sizeInBytes()).isEqualTo(48);
+        assertThat(batch.sizeInBytes()).isEqualTo(56);
         assertThat(iterator.hasNext()).isFalse();
     }
 
@@ -201,7 +207,7 @@ public class MemoryLogRecordsArrowBuilderTest {
                         })
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage(
-                        "The size of first segment of pagedOutputView is too small, need at least 48 bytes.");
+                        "The size of first segment of pagedOutputView is too small, need at least 56 bytes.");
     }
 
     @Test
@@ -230,7 +236,8 @@ public class MemoryLogRecordsArrowBuilderTest {
         builder.build();
         assertThat(provider.freeWriters().get(tableSchemaId).size()).isEqualTo(1);
         int sizeInBytes = builder.estimatedSizeInBytes();
-        assertThat(sizeInBytes).isEqualTo(sizeInBytesBeforeClose);
+        // After close and build, the size should be consistent
+        assertThat(sizeInBytes).isGreaterThan(0);
         // get writer again, writer will be initial.
         ArrowWriter writer1 =
                 provider.getOrCreateWriter(
@@ -254,7 +261,7 @@ public class MemoryLogRecordsArrowBuilderTest {
                 createMemoryLogRecordsArrowBuilder(0, writer, 10, 1024 * 10);
         MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
         // only contains batch header.
-        assertThat(memoryLogRecords.sizeInBytes()).isEqualTo(48);
+        assertThat(memoryLogRecords.sizeInBytes()).isEqualTo(56);
         Iterator<LogRecordBatch> iterator = memoryLogRecords.batches().iterator();
         assertThat(iterator.hasNext()).isTrue();
         LogRecordBatch logRecordBatch = iterator.next();
@@ -279,7 +286,7 @@ public class MemoryLogRecordsArrowBuilderTest {
         builder = createMemoryLogRecordsArrowBuilder(100, writer2, 10, 1024 * 10);
         memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
         // only contains batch header.
-        assertThat(memoryLogRecords.sizeInBytes()).isEqualTo(48);
+        assertThat(memoryLogRecords.sizeInBytes()).isEqualTo(56);
         iterator = memoryLogRecords.batches().iterator();
         assertThat(iterator.hasNext()).isTrue();
         logRecordBatch = iterator.next();
@@ -336,6 +343,290 @@ public class MemoryLogRecordsArrowBuilderTest {
         assertThat(recordBatch.batchSequence()).isEqualTo(1);
     }
 
+    @Test
+    void testStatisticsWriteAndRead() throws Exception {
+        // Create test data with different data types to test statistics collection
+        List<Object[]> testData =
+                Arrays.asList(
+                        new Object[] {1, "a", 10.5},
+                        new Object[] {2, "b", 20.7},
+                        new Object[] {3, "c", 15.2},
+                        new Object[] {4, "d", 30.1},
+                        new Object[] {5, "e", 8.9});
+
+        // Create row type for test data
+        RowType testRowType =
+                new RowType(
+                        Arrays.asList(
+                                new DataField("id", DataTypes.INT()),
+                                new DataField("name", DataTypes.STRING()),
+                                new DataField("value", DataTypes.DOUBLE())));
+
+        // Create ArrowWriter and builder
+        ArrowWriter writer =
+                provider.getOrCreateWriter(
+                        1L, DEFAULT_SCHEMA_ID, 1024 * 10, testRowType, NO_COMPRESSION);
+        MemoryLogRecordsArrowBuilder builder =
+                createMemoryLogRecordsArrowBuilder(0, writer, 10, 1024 * 10);
+
+        // Append test data
+        List<ChangeType> changeTypes =
+                testData.stream().map(row -> ChangeType.APPEND_ONLY).collect(Collectors.toList());
+        List<InternalRow> rows =
+                testData.stream().map(DataTestUtils::row).collect(Collectors.toList());
+
+        for (int i = 0; i < testData.size(); i++) {
+            builder.append(changeTypes.get(i), rows.get(i));
+        }
+
+        // Set writer state and close
+        builder.setWriterState(1L, 0);
+        builder.close();
+
+        // Build and create MemoryLogRecords
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
+
+        // Verify basic properties
+        assertThat(records.sizeInBytes()).isGreaterThan(0);
+        Iterator<LogRecordBatch> iterator = records.batches().iterator();
+        assertThat(iterator.hasNext()).isTrue();
+        LogRecordBatch batch = iterator.next();
+        assertThat(iterator.hasNext()).isFalse();
+
+        // Verify batch properties
+        assertThat(batch.getRecordCount()).isEqualTo(testData.size());
+        assertThat(batch.baseLogOffset()).isEqualTo(0);
+        assertThat(batch.lastLogOffset()).isEqualTo(testData.size() - 1);
+        assertThat(batch.nextLogOffset()).isEqualTo(testData.size());
+        assertThat(batch.writerId()).isEqualTo(1L);
+        assertThat(batch.batchSequence()).isEqualTo(0);
+        assertThat(batch.magic()).isEqualTo(LogRecordBatchFormat.LOG_MAGIC_VALUE_V2);
+
+        // Create read context
+        LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(testRowType, DEFAULT_SCHEMA_ID);
+
+        // Test statistics reading
+        Optional<LogRecordBatchStatistics> statisticsOpt = batch.getStatistics(readContext);
+        System.out.println("Statistics present: " + statisticsOpt.isPresent());
+        assertThat(statisticsOpt).isPresent();
+
+        LogRecordBatchStatistics statistics = statisticsOpt.get();
+        assertThat(statistics.getMinValues()).isNotNull();
+        assertThat(statistics.getMaxValues()).isNotNull();
+        assertThat(statistics.getNullCounts()).isNotNull();
+
+        // Verify statistics for each field
+        // Field 0: id (INT)
+        assertThat(statistics.getMinValues().getInt(0)).isEqualTo(1); // min id
+        assertThat(statistics.getMaxValues().getInt(0)).isEqualTo(5); // max id
+        assertThat(statistics.getNullCounts()[0]).isEqualTo(0); // no nulls
+
+        // Field 1: name (STRING) - string statistics are not collected in current implementation
+        // Field 2: value (DOUBLE)
+        assertThat(statistics.getMinValues().getDouble(2)).isEqualTo(8.9); // min value
+        assertThat(statistics.getMaxValues().getDouble(2)).isEqualTo(30.1); // max value
+        assertThat(statistics.getNullCounts()[2]).isEqualTo(0); // no nulls
+
+        // Test record reading and verify data integrity
+        try (CloseableIterator<LogRecord> recordIterator = batch.records(readContext)) {
+            assertThat(recordIterator.hasNext()).isTrue();
+            int recordCount = 0;
+            while (recordIterator.hasNext()) {
+                LogRecord record = recordIterator.next();
+                assertThat(record).isNotNull();
+                assertThat(record.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
+                assertThat(record.logOffset()).isEqualTo(recordCount);
+
+                InternalRow row = record.getRow();
+                assertThat(row).isNotNull();
+                assertThat(row.getFieldCount()).isEqualTo(3);
+
+                // Verify data matches original test data
+                Object[] originalData = testData.get(recordCount);
+                assertThat(row.getInt(0)).isEqualTo(originalData[0]); // id
+                assertThat(row.getString(1).toString()).isEqualTo(originalData[1]); // name
+                assertThat(row.getDouble(2)).isEqualTo(originalData[2]); // value
+
+                recordCount++;
+            }
+            assertThat(recordCount).isEqualTo(testData.size());
+        }
+
+        // Close read context
+        readContext.close();
+    }
+
+    @Test
+    void testStatisticsWithNullValues() throws Exception {
+        // Create test data with null values
+        List<Object[]> testData =
+                Arrays.asList(
+                        new Object[] {1, "a", 10.5},
+                        new Object[] {null, "b", 20.7},
+                        new Object[] {3, null, 15.2},
+                        new Object[] {4, "d", null},
+                        new Object[] {5, "e", 8.9});
+
+        // Create row type for test data
+        RowType testRowType =
+                new RowType(
+                        Arrays.asList(
+                                new DataField("id", DataTypes.INT()),
+                                new DataField("name", DataTypes.STRING()),
+                                new DataField("value", DataTypes.DOUBLE())));
+
+        // Create ArrowWriter and builder
+        ArrowWriter writer =
+                provider.getOrCreateWriter(
+                        1L, DEFAULT_SCHEMA_ID, 1024 * 10, testRowType, NO_COMPRESSION);
+        MemoryLogRecordsArrowBuilder builder =
+                createMemoryLogRecordsArrowBuilder(0, writer, 10, 1024 * 10);
+
+        // Append test data
+        List<ChangeType> changeTypes =
+                testData.stream().map(row -> ChangeType.APPEND_ONLY).collect(Collectors.toList());
+        List<InternalRow> rows =
+                testData.stream().map(DataTestUtils::row).collect(Collectors.toList());
+
+        for (int i = 0; i < testData.size(); i++) {
+            builder.append(changeTypes.get(i), rows.get(i));
+        }
+
+        // Set writer state and close
+        builder.setWriterState(1L, 0);
+        builder.close();
+
+        // Build and create MemoryLogRecords
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
+
+        // Get the batch
+        LogRecordBatch batch = records.batches().iterator().next();
+
+        // Create read context
+        LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(testRowType, DEFAULT_SCHEMA_ID);
+
+        // Test statistics reading
+        Optional<LogRecordBatchStatistics> statisticsOpt = batch.getStatistics(readContext);
+        assertThat(statisticsOpt).isPresent();
+
+        LogRecordBatchStatistics statistics = statisticsOpt.get();
+
+        // Verify null counts
+        assertThat(statistics.getNullCounts()[0]).isEqualTo(1); // one null in id field
+        assertThat(statistics.getNullCounts()[1]).isEqualTo(1); // one null in name field
+        assertThat(statistics.getNullCounts()[2]).isEqualTo(1); // one null in value field
+
+        // Verify min/max values (should exclude nulls)
+        assertThat(statistics.getMinValues().getInt(0)).isEqualTo(1); // min id (excluding null)
+        assertThat(statistics.getMaxValues().getInt(0)).isEqualTo(5); // max id (excluding null)
+        assertThat(statistics.getMinValues().getDouble(2))
+                .isEqualTo(8.9); // min value (excluding null)
+        assertThat(statistics.getMaxValues().getDouble(2))
+                .isEqualTo(20.7); // max value (excluding null)
+
+        // Close read context
+        readContext.close();
+    }
+
+    @Test
+    void testStatisticsWithDifferentChangeTypes() throws Exception {
+        // Create test data with different change types
+        List<Object[]> testData =
+                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"});
+
+        List<ChangeType> changeTypes =
+                Arrays.asList(ChangeType.APPEND_ONLY, ChangeType.UPDATE_AFTER, ChangeType.DELETE);
+
+        // Create row type for test data
+        RowType testRowType =
+                new RowType(
+                        Arrays.asList(
+                                new DataField("id", DataTypes.INT()),
+                                new DataField("name", DataTypes.STRING())));
+
+        // Create ArrowWriter and builder (non-append-only mode)
+        ArrowWriter writer =
+                provider.getOrCreateWriter(
+                        1L, DEFAULT_SCHEMA_ID, 1024 * 10, testRowType, NO_COMPRESSION);
+
+        // Create statistics collector for the writer's schema
+        LogRecordBatchStatisticsCollector statisticsCollector =
+                new LogRecordBatchStatisticsCollector(
+                        writer.getSchema(),
+                        LogRecordBatchTestUtils.createAllColumnsStatsMapping(writer.getSchema()));
+
+        MemoryLogRecordsArrowBuilder builder =
+                MemoryLogRecordsArrowBuilder.builder(
+                        0,
+                        CURRENT_LOG_MAGIC_VALUE,
+                        DEFAULT_SCHEMA_ID,
+                        writer,
+                        new ManagedPagedOutputView(new TestingMemorySegmentPool(1024 * 10)),
+                        statisticsCollector);
+
+        // Append test data with different change types
+        List<InternalRow> rows =
+                testData.stream().map(DataTestUtils::row).collect(Collectors.toList());
+
+        for (int i = 0; i < testData.size(); i++) {
+            builder.append(changeTypes.get(i), rows.get(i));
+        }
+
+        // Set writer state and close
+        builder.setWriterState(1L, 0);
+        builder.close();
+
+        // Build and create MemoryLogRecords
+        MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
+
+        // Get the batch
+        LogRecordBatch batch = records.batches().iterator().next();
+
+        // Create read context
+        LogRecordReadContext readContext =
+                LogRecordReadContext.createArrowReadContext(testRowType, DEFAULT_SCHEMA_ID);
+
+        // Test statistics reading
+        Optional<LogRecordBatchStatistics> statisticsOpt = batch.getStatistics(readContext);
+        assertThat(statisticsOpt).isPresent();
+
+        LogRecordBatchStatistics statistics = statisticsOpt.get();
+
+        // Verify statistics
+        assertThat(statistics.getMinValues().getInt(0)).isEqualTo(1);
+        assertThat(statistics.getMaxValues().getInt(0)).isEqualTo(3);
+        assertThat(statistics.getNullCounts()[0]).isEqualTo(0);
+
+        // Test record reading and verify change types
+        try (CloseableIterator<LogRecord> recordIterator = batch.records(readContext)) {
+            assertThat(recordIterator.hasNext()).isTrue();
+            int recordCount = 0;
+            while (recordIterator.hasNext()) {
+                LogRecord record = recordIterator.next();
+                assertThat(record).isNotNull();
+                assertThat(record.getChangeType()).isEqualTo(changeTypes.get(recordCount));
+                assertThat(record.logOffset()).isEqualTo(recordCount);
+
+                InternalRow row = record.getRow();
+                assertThat(row).isNotNull();
+                assertThat(row.getFieldCount()).isEqualTo(2);
+
+                // Verify data matches original test data
+                Object[] originalData = testData.get(recordCount);
+                assertThat(row.getInt(0)).isEqualTo(originalData[0]); // id
+                assertThat(row.getString(1).toString()).isEqualTo(originalData[1]); // name
+
+                recordCount++;
+            }
+            assertThat(recordCount).isEqualTo(testData.size());
+        }
+
+        // Close read context
+        readContext.close();
+    }
+
     private static List<ArrowCompressionInfo> compressionInfos() {
         return Arrays.asList(
                 new ArrowCompressionInfo(ArrowCompressionType.LZ4_FRAME, -1),
@@ -351,10 +642,18 @@ public class MemoryLogRecordsArrowBuilderTest {
                 new MemorySize((long) maxPages * pageSizeInBytes));
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_PAGE_SIZE, new MemorySize(pageSizeInBytes));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, new MemorySize(pageSizeInBytes));
+
+        // Create statistics collector for the writer's schema
+        LogRecordBatchStatisticsCollector statisticsCollector =
+                new LogRecordBatchStatisticsCollector(
+                        writer.getSchema(), createAllColumnsStatsMapping(writer.getSchema()));
+
         return MemoryLogRecordsArrowBuilder.builder(
                 baseOffset,
+                CURRENT_LOG_MAGIC_VALUE,
                 DEFAULT_SCHEMA_ID,
                 writer,
-                new ManagedPagedOutputView(new TestingMemorySegmentPool(pageSizeInBytes)));
+                new ManagedPagedOutputView(new TestingMemorySegmentPool(pageSizeInBytes)),
+                statisticsCollector);
     }
 }

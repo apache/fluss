@@ -23,7 +23,7 @@ import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link org.apache.fluss.row.BinarySegmentUtils}. */
+/** Test for {@link BinarySegmentUtils}. */
 public class BinarySegmentUtilsTest {
 
     @Test

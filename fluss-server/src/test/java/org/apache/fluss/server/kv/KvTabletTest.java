@@ -77,8 +77,9 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
-import static org.apache.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
-import static org.apache.fluss.record.LogRecordBatch.NO_WRITER_ID;
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA3_SCHEMA_PK;
@@ -876,7 +877,14 @@ class KvTabletTest {
             LogTablet logTablet, long startOffset, @Nullable FileLogProjection projection)
             throws Exception {
         return logTablet
-                .read(startOffset, Integer.MAX_VALUE, FetchIsolation.LOG_END, false, projection)
+                .read(
+                        startOffset,
+                        Integer.MAX_VALUE,
+                        FetchIsolation.LOG_END,
+                        false,
+                        projection,
+                        null,
+                        null)
                 .getRecords();
     }
 
@@ -893,6 +901,7 @@ class KvTabletTest {
                 DEFAULT_SCHEMA_ID,
                 baseOffset,
                 -1L,
+                CURRENT_LOG_MAGIC_VALUE,
                 NO_WRITER_ID,
                 NO_BATCH_SEQUENCE,
                 changeTypes,

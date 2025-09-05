@@ -1316,6 +1316,18 @@ public class ConfigOptions {
                             "The column name of the version column for the `versioned` merge engine. "
                                     + "If the merge engine is set to `versioned`, the version column must be set.");
 
+    public static final ConfigOption<String> TABLE_STATISTICS_COLUMNS =
+            key("table.statistics.columns")
+                    .stringType()
+                    .defaultValue("*")
+                    .withDescription(
+                            "Configures statistics collection for the table. "
+                                    + "Empty string ('') (default) means disable statistics collection completely. "
+                                    + "The value '*' means collect statistics for all non-binary columns. "
+                                    + "Comma-separated list of column names means collect statistics only for the specified columns. "
+                                    + "Binary and bytes columns are not supported for statistics collection. "
+                                    + "Example: 'id,name,timestamp' to collect statistics only for specified columns.");
+
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
     // ------------------------------------------------------------------------
