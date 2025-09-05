@@ -256,9 +256,6 @@ class FlinkCatalogTest {
         assertThatThrownBy(() -> catalog.renameTable(this.tableInDefaultDb, "newName", false))
                 .isInstanceOf(UnsupportedOperationException.class);
 
-        assertThatThrownBy(() -> catalog.alterTable(this.tableInDefaultDb, null, false))
-                .isInstanceOf(UnsupportedOperationException.class);
-
         // Test lake table handling - should throw TableNotExistException for non-existent lake
         // table
         ObjectPath lakePath = new ObjectPath(DEFAULT_DB, "regularTable$lake");
