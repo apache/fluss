@@ -272,24 +272,20 @@ class FlinkCatalogTest {
         Map<String, String> options = new HashMap<>();
         options.put(TABLE_DATALAKE_ENABLED.key(), "true");
         options.put(TABLE_DATALAKE_FORMAT.key(), PAIMON.name());
-        assertThatThrownBy(() -> catalog.getTable(tableInDefaultDb))
-                .isInstanceOf(TableNotExistException.class)
-                .hasMessage(
-                        String.format(
-                                "Table (or view) %s does not exist in Catalog %s.",
-                                tableInDefaultDb, CATALOG_NAME));
+
+        ObjectPath lakeTablePath = new ObjectPath(DEFAULT_DB, "lake_table");
         CatalogTable table = this.newCatalogTable(options);
-        catalog.createTable(this.tableInDefaultDb, table, false);
-        assertThat(catalog.tableExists(this.tableInDefaultDb)).isTrue();
+        catalog.createTable(lakeTablePath, table, false);
+        assertThat(catalog.tableExists(lakeTablePath)).isTrue();
         // drop fluss table
-        catalog.dropTable(this.tableInDefaultDb, false);
+        catalog.dropTable(lakeTablePath, false);
         // create the table again, should throw exception with ignore if exist = false
-        assertThatThrownBy(() -> catalog.createTable(this.tableInDefaultDb, table, false))
+        assertThatThrownBy(() -> catalog.createTable(lakeTablePath, table, false))
                 .isInstanceOf(CatalogException.class)
                 .hasMessage(
                         String.format(
                                 "The table %s already exists in %s catalog, please first drop the table in %s catalog or use a new table name.",
-                                this.tableInDefaultDb, "paimon", "paimon"));
+                                lakeTablePath, "paimon", "paimon"));
     }
 
     @Test

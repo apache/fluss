@@ -164,11 +164,9 @@ public class FlinkRowAssertionsUtils {
     private static boolean waitForNextWithTimeout(
             CloseableIterator<Row> iterator, long maxWaitTime) {
         CompletableFuture<Boolean> future = CompletableFuture.supplyAsync(iterator::hasNext);
-        System.out.println("Waiting for " + maxWaitTime + " ms to finish.");
         try {
             return future.get(maxWaitTime, TimeUnit.MILLISECONDS);
         } catch (TimeoutException e) {
-            System.err.println("Timeout waiting for " + maxWaitTime + " ms to finish.");
             future.cancel(true);
             return false;
         } catch (Exception e) {
