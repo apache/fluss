@@ -46,6 +46,7 @@ import java.util.stream.Collectors;
 import java.util.stream.IntStream;
 
 import static org.apache.fluss.client.table.scanner.log.LogScanner.EARLIEST_OFFSET;
+import static org.apache.fluss.flink.source.split.LogSplit.NO_STOPPING_OFFSET;
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR;
 
 /** A generator for lake splits. */
@@ -240,7 +241,8 @@ public class LakeSplitGenerator {
                                     tableBucket, partitionName, EARLIEST_OFFSET, stoppingOffset));
                 } else {
                     // need to read remain fluss log
-                    if (snapshotLogOffset < stoppingOffset) {
+                    if (stoppingOffset == NO_STOPPING_OFFSET
+                            || snapshotLogOffset < stoppingOffset) {
                         splits.add(
                                 new LogSplit(
                                         tableBucket,
