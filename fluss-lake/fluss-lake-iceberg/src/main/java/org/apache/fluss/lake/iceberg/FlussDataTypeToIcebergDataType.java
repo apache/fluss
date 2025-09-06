@@ -31,12 +31,15 @@ import org.apache.fluss.types.FloatType;
 import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.LocalZonedTimestampType;
 import org.apache.fluss.types.MapType;
+import org.apache.fluss.types.MultisetType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.SmallIntType;
 import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+import org.apache.fluss.types.VarBinaryType;
+import org.apache.fluss.types.VarCharType;
 
 import org.apache.iceberg.types.Type;
 import org.apache.iceberg.types.Types;
@@ -53,6 +56,11 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
     }
 
     @Override
+    public Type visit(VarCharType varCharType) {
+        return null;
+    }
+
+    @Override
     public Type visit(StringType stringType) {
         return Types.StringType.get();
     }
@@ -65,6 +73,11 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
     @Override
     public Type visit(BinaryType binaryType) {
         return Types.BinaryType.get();
+    }
+
+    @Override
+    public Type visit(VarBinaryType varBinaryType) {
+        return null;
     }
 
     @Override
@@ -140,5 +153,10 @@ public class FlussDataTypeToIcebergDataType implements DataTypeVisitor<Type> {
     @Override
     public Type visit(RowType rowType) {
         throw new UnsupportedOperationException("Unsupported row type");
+    }
+
+    @Override
+    public Type visit(MultisetType multisetType) {
+        return null;
     }
 }
