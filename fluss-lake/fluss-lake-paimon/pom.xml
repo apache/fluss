@@ -81,6 +81,12 @@
             <artifactId>hadoop-mapreduce-client-core</artifactId>
             <version>2.8.5</version>
             <scope>test</scope>
+            <exclusions>
+                <exclusion>
+                    <artifactId>commons-io</artifactId>
+                    <groupId>commons-io</groupId>
+                </exclusion>
+            </exclusions>
         </dependency>
 
         <dependency>
