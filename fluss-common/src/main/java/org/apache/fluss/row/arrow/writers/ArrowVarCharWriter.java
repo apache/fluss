@@ -19,14 +19,14 @@ package org.apache.fluss.row.arrow.writers;
 
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.row.BinaryString;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
 
 import java.nio.ByteBuffer;
 
 /** {@link ArrowFieldWriter} for VarChar. */
 @Internal
-public class ArrowVarCharWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowVarCharWriter extends ArrowFieldWriter<DataGetters> {
 
     public static ArrowVarCharWriter forField(VarCharVector varCharVector) {
         return new ArrowVarCharWriter(varCharVector);
@@ -37,7 +37,7 @@ public class ArrowVarCharWriter extends ArrowFieldWriter<InternalRow> {
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
         VarCharVector vector = (VarCharVector) getValueVector();
         if (isNullAt(row, ordinal)) {
             vector.setNull(getCount());
@@ -47,11 +47,11 @@ public class ArrowVarCharWriter extends ArrowFieldWriter<InternalRow> {
         }
     }
 
-    private boolean isNullAt(InternalRow row, int ordinal) {
+    private boolean isNullAt(DataGetters row, int ordinal) {
         return row.isNullAt(ordinal);
     }
 
-    private BinaryString readString(InternalRow row, int ordinal) {
+    private BinaryString readString(DataGetters row, int ordinal) {
         return row.getString(ordinal);
     }
 }

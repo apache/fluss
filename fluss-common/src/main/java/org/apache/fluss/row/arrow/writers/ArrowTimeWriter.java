@@ -18,7 +18,7 @@
 package org.apache.fluss.row.arrow.writers;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.BaseFixedWidthVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeMicroVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeMilliVector;
@@ -30,7 +30,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** {@link ArrowFieldWriter} for Time. */
 @Internal
-public class ArrowTimeWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowTimeWriter extends ArrowFieldWriter<DataGetters> {
 
     public static ArrowTimeWriter forField(ValueVector valueVector) {
         return new ArrowTimeWriter(valueVector);
@@ -46,7 +46,7 @@ public class ArrowTimeWriter extends ArrowFieldWriter<InternalRow> {
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
         ValueVector valueVector = getValueVector();
         if (isNullAt(row, ordinal)) {
             ((BaseFixedWidthVector) valueVector).setNull(getCount());
@@ -81,11 +81,11 @@ public class ArrowTimeWriter extends ArrowFieldWriter<InternalRow> {
         }
     }
 
-    private boolean isNullAt(InternalRow row, int ordinal) {
+    private boolean isNullAt(DataGetters row, int ordinal) {
         return row.isNullAt(ordinal);
     }
 
-    private int readTime(InternalRow row, int ordinal) {
+    private int readTime(DataGetters row, int ordinal) {
         return row.getInt(ordinal);
     }
 }
