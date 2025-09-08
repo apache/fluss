@@ -48,8 +48,8 @@ metrics.reporter.jmx.port: 9250-9260
 
 Metrics exposed through JMX are identified by a domain and a list of key-properties, which together form the object name.
 
-The domain always begins with `com.alibaba.fluss` followed by a generalized metric identifier.
-An example for such a domain would be `com.alibaba.fluss.tabletserver.replicaCount`.
+The domain always begins with `org.apache.fluss` followed by a generalized metric identifier.
+An example for such a domain would be `org.apache.fluss.tabletserver.replicaCount`.
 
 The key-property list contains the values for all variables, that are associated
 with a given metric.

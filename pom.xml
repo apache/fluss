@@ -27,15 +27,15 @@
         <version>30</version>
     </parent>
 
-    <groupId>com.alibaba.fluss</groupId>
+    <groupId>org.apache.fluss</groupId>
     <artifactId>fluss</artifactId>
     <version>0.8-SNAPSHOT</version>
 
     <name>Fluss :</name>
     <packaging>pom</packaging>
     <description>The Streaming Storage for Real-Time Analytics</description>
-    <url>https://github.com/alibaba/fluss</url>
-    <inceptionYear>2023</inceptionYear>
+    <url>https://github.com/apache/fluss</url>
+    <inceptionYear>2025</inceptionYear>
 
     <licenses>
         <license>
@@ -46,8 +46,8 @@
     </licenses>
 
     <scm>
-        <url>https://github.com/alibaba/fluss</url>
-        <connection>git@github.com:alibaba/fluss.git</connection>
+        <url>https://github.com/apache/fluss</url>
+        <connection>git@github.com:apache/fluss.git</connection>
     </scm>
 
     <distributionManagement>
@@ -89,18 +89,18 @@
         <test.skip.coverage>true</test.skip.coverage>
         <fluss.forkCount>2</fluss.forkCount>
         <fluss.reuseForks>true</fluss.reuseForks>
+        <skip.on.java8>false</skip.on.java8>
 
         <!-- library versions in fluss-shaded -->
-        <fluss.shaded.version>2.2</fluss.shaded.version>
+        <fluss.shaded.version>1.0-incubating</fluss.shaded.version>
         <guava.version>32.1.3-jre</guava.version>
         <jackson.version>2.15.3</jackson.version>
         <zookeeper.version>3.8.3</zookeeper.version>
         <curator.version>5.4.0</curator.version>
-        <netty.version>4.1.104</netty.version>
+        <netty.version>4.1.104.Final</netty.version>
         <arrow.version>15.0.0</arrow.version>
         <paimon.version>1.2.0</paimon.version>
-        <!--    todo: Revisit to add support as per Iceberg 1.9.1 post #1195 merge for Java 11 support-->
-        <iceberg.version>1.4.3</iceberg.version>
+        <iceberg.version>1.9.1</iceberg.version>
 
         <fluss.hadoop.version>2.10.2</fluss.hadoop.version>
         <frocksdb.version>6.20.3-ververica-2.0</frocksdb.version>
@@ -313,38 +313,38 @@
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-guava</artifactId>
                 <version>${guava.version}-${fluss.shaded.version}</version>
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-jackson</artifactId>
                 <version>${jackson.version}-${fluss.shaded.version}</version>
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-zookeeper</artifactId>
                 <version>${zookeeper.version}-${fluss.shaded.version}</version>
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-test-utils</artifactId>
                 <version>${project.version}</version>
                 <scope>test</scope>
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-netty</artifactId>
                 <version>${netty.version}-${fluss.shaded.version}</version>
             </dependency>
 
             <dependency>
-                <groupId>com.alibaba.fluss</groupId>
+                <groupId>org.apache.fluss</groupId>
                 <artifactId>fluss-shaded-arrow</artifactId>
                 <version>${arrow.version}-${fluss.shaded.version}</version>
             </dependency>
@@ -448,6 +448,7 @@
             <id>java8</id>
             <properties>
                 <target.java.version>1.8</target.java.version>
+                <skip.on.java8>true</skip.on.java8>
             </properties>
             <build>
                 <plugins>
@@ -467,6 +468,7 @@
                 </plugins>
             </build>
         </profile>
+
         <profile>
             <id>test-coverage</id>
             <properties>
@@ -582,7 +584,8 @@
                 <inherited>false</inherited>
                 <executions>
                     <execution>
-                        <phase>verify</phase>
+                        <id>rat-check</id>
+                        <phase>validate</phase>
                         <goals>
                             <goal>check</goal>
                         </goals>
@@ -616,12 +619,27 @@
                                 <pattern>Licensed to the Apache Software Foundation (ASF) under one</pattern>
                             </patterns>
                         </license>
+                        <license>
+                            <!-- Explicitly forbid Alibaba license to catch non-compliant headers during our migration from Alibaba to ASF.
+                                We must add this check because an Alibaba license header may contain Apache text and be wrongly marked as approved. -->
+                            <family>BAN</family>
+                            <text>Alibaba Group Holding Ltd</text>
+                        </license>
                     </licenses>
+                    <families>
+                        <family>
+                            <id>BAN</id>
+                            <name>The license not allowed in this project.</name>
+                        </family>
+                    </families>
                     <licenseFamilies>
                         <licenseFamily implementation="org.apache.rat.license.SimpleLicenseFamily">
                             <familyName>Apache License 2.0</familyName>
                         </licenseFamily>
                     </licenseFamilies>
+                    <approvedLicenses>
+                        <id>AL2</id>
+                    </approvedLicenses>
                     <excludes>
                         <!-- Additional files like .gitignore etc.-->
                         <exclude>**/.*/**</exclude>
@@ -984,16 +1002,17 @@
                     <artifactId>spotless-maven-plugin</artifactId>
                     <version>${spotless.version}</version>
                     <configuration>
+                        <skip>${skip.on.java8}</skip>
                         <java>
                             <googleJavaFormat>
-                                <version>1.7</version>
+                                <version>1.15.0</version>
                                 <style>AOSP</style>
                             </googleJavaFormat>
 
                             <!-- \# refers to the static imports -->
                             <importOrder>
                                 <order>
-                                    com.alibaba.fluss,,javax,java,scala,\#
+                                    org.apache.fluss,,javax,java,scala,\#
                                 </order>
                             </importOrder>
 
@@ -1089,13 +1108,13 @@
                         </execution>
                     </executions>
                     <configuration>
-                        <mainClass>com.alibaba.fluss.tools.ci.licensecheck.LicenseChecker</mainClass>
+                        <mainClass>org.apache.fluss.tools.ci.licensecheck.LicenseChecker</mainClass>
                         <includePluginDependencies>true</includePluginDependencies>
                         <includeProjectDependencies>false</includeProjectDependencies>
                     </configuration>
                     <dependencies>
                         <dependency>
-                            <groupId>com.alibaba.fluss</groupId>
+                            <groupId>org.apache.fluss</groupId>
                             <artifactId>fluss-ci-tools</artifactId>
                             <version>${project.version}</version>
                         </dependency>
