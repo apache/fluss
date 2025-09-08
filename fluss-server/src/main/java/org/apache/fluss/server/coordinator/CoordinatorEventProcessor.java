@@ -959,6 +959,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         // add completed snapshot
                         CompletedSnapshotStore completedSnapshotStore =
                                 completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(tb);
+                        // this involves IO operation (ZK), so we do it in ioExecutor
                         completedSnapshotStore.add(completedSnapshot);
                         coordinatorEventManager.put(
                                 new NotifyKvSnapshotOffsetEvent(
