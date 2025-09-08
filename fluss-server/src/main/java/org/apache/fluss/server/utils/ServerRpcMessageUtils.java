@@ -17,17 +17,18 @@
 
 package org.apache.fluss.server.utils;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.BytesViewLogRecords;
@@ -115,6 +116,7 @@ import org.apache.fluss.rpc.messages.PbStopReplicaReqForBucket;
 import org.apache.fluss.rpc.messages.PbStopReplicaRespForBucket;
 import org.apache.fluss.rpc.messages.PbTableBucket;
 import org.apache.fluss.rpc.messages.PbTableMetadata;
+import org.apache.fluss.rpc.messages.PbTableMetadataV2;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.PbValue;
 import org.apache.fluss.rpc.messages.PbValueList;
@@ -303,15 +305,15 @@ public class ServerRpcMessageUtils {
                     .setPort(coordinatorServer.endpoints().get(0).getPort());
         }
 
-        List<PbTableMetadata> pbTableMetadataList = new ArrayList<>();
+        List<PbTableMetadataV2> pbTableMetadataV2List = new ArrayList<>();
         tableMetadataList.forEach(
-                tableMetadata -> pbTableMetadataList.add(toPbTableMetadata(tableMetadata)));
+                tableMetadata -> pbTableMetadataV2List.add(toPbTableMetadataV2(tableMetadata)));
 
         List<PbPartitionMetadata> pbPartitionMetadataList = new ArrayList<>();
         partitionMetadataList.forEach(
                 partitionMetadata ->
                         pbPartitionMetadataList.add(toPbPartitionMetadata(partitionMetadata)));
-        updateMetadataRequest.addAllTableMetadatas(pbTableMetadataList);
+        updateMetadataRequest.addAllTableMetadataV2s(pbTableMetadataV2List);
         updateMetadataRequest.addAllPartitionMetadatas(pbPartitionMetadataList);
 
         return updateMetadataRequest;
@@ -360,8 +362,16 @@ public class ServerRpcMessageUtils {
         }
 
         List<TableMetadata> tableMetadataList = new ArrayList<>();
-        request.getTableMetadatasList()
-                .forEach(tableMetadata -> tableMetadataList.add(toTableMetaData(tableMetadata)));
+        if (request.getTableMetadataV2sCount() > 0) {
+            request.getTableMetadataV2sList()
+                    .forEach(
+                            tableMetadata -> tableMetadataList.add(toTableMetaData(tableMetadata)));
+        } else {
+            // for backward compatibility for versions <= 0.7
+            request.getTableMetadatasList()
+                    .forEach(
+                            tableMetadata -> tableMetadataList.add(toTableMetaData(tableMetadata)));
+        }
 
         List<PartitionMetadata> partitionMetadataList = new ArrayList<>();
         request.getPartitionMetadatasList()
@@ -375,6 +385,11 @@ public class ServerRpcMessageUtils {
 
     private static PbTableMetadata toPbTableMetadata(TableMetadata tableMetadata) {
         TableInfo tableInfo = tableMetadata.getTableInfo();
+        if (tableInfo == null) {
+            // We set TableInfo for metadata request, so it should not be null.
+            throw new FlussRuntimeException(
+                    String.format("TableInfo for %s is null", tableMetadata.getTablePath()));
+        }
         PbTableMetadata pbTableMetadata =
                 new PbTableMetadata()
                         .setTableId(tableInfo.getTableId())
@@ -383,6 +398,23 @@ public class ServerRpcMessageUtils {
                         .setCreatedTime(tableInfo.getCreatedTime())
                         .setModifiedTime(tableInfo.getModifiedTime());
         TablePath tablePath = tableInfo.getTablePath();
+        pbTableMetadata
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        pbTableMetadata.addAllBucketMetadatas(
+                toPbBucketMetadata(tableMetadata.getBucketMetadataList()));
+        return pbTableMetadata;
+    }
+
+    private static PbTableMetadataV2 toPbTableMetadataV2(TableMetadata tableMetadata) {
+        PbTableMetadataV2 pbTableMetadata =
+                new PbTableMetadataV2()
+                        .setTableId(tableMetadata.getTableId())
+                        .setSchemaId(tableMetadata.getSchemaId())
+                        .setCreatedTime(tableMetadata.getCreatedTime())
+                        .setModifiedTime(tableMetadata.getModifiedTime());
+        TablePath tablePath = tableMetadata.getTablePath();
         pbTableMetadata
                 .setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
@@ -403,7 +435,8 @@ public class ServerRpcMessageUtils {
         return pbPartitionMetadata;
     }
 
-    private static List<PbBucketMetadata> toPbBucketMetadata(
+    @VisibleForTesting
+    public static List<PbBucketMetadata> toPbBucketMetadata(
             List<BucketMetadata> bucketMetadataList) {
         List<PbBucketMetadata> pbBucketMetadataList = new ArrayList<>();
         for (BucketMetadata bucketMetadata : bucketMetadataList) {
@@ -430,23 +463,33 @@ public class ServerRpcMessageUtils {
     }
 
     private static TableMetadata toTableMetaData(PbTableMetadata pbTableMetadata) {
-        TablePath tablePath = toTablePath(pbTableMetadata.getTablePath());
-        long tableId = pbTableMetadata.getTableId();
-        TableInfo tableInfo =
-                TableInfo.of(
-                        tablePath,
-                        tableId,
-                        pbTableMetadata.getSchemaId(),
-                        TableDescriptor.fromJsonBytes(pbTableMetadata.getTableJson()),
-                        pbTableMetadata.getCreatedTime(),
-                        pbTableMetadata.getModifiedTime());
-
         List<BucketMetadata> bucketMetadata = new ArrayList<>();
         for (PbBucketMetadata pbBucketMetadata : pbTableMetadata.getBucketMetadatasList()) {
             bucketMetadata.add(toBucketMetadata(pbBucketMetadata));
         }
 
-        return new TableMetadata(tableInfo, bucketMetadata);
+        return new TableMetadata(
+                pbTableMetadata.getTableId(),
+                pbTableMetadata.getSchemaId(),
+                pbTableMetadata.getCreatedTime(),
+                pbTableMetadata.getModifiedTime(),
+                toTablePath(pbTableMetadata.getTablePath()),
+                bucketMetadata);
+    }
+
+    private static TableMetadata toTableMetaData(PbTableMetadataV2 pbTableMetadataV2) {
+        List<BucketMetadata> bucketMetadata = new ArrayList<>();
+        for (PbBucketMetadata pbBucketMetadata : pbTableMetadataV2.getBucketMetadatasList()) {
+            bucketMetadata.add(toBucketMetadata(pbBucketMetadata));
+        }
+
+        return new TableMetadata(
+                pbTableMetadataV2.getTableId(),
+                pbTableMetadataV2.getSchemaId(),
+                pbTableMetadataV2.getCreatedTime(),
+                pbTableMetadataV2.getModifiedTime(),
+                toTablePath(pbTableMetadataV2.getTablePath()),
+                bucketMetadata);
     }
 
     private static BucketMetadata toBucketMetadata(PbBucketMetadata pbBucketMetadata) {

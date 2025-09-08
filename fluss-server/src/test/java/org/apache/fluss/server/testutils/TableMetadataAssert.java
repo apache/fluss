@@ -38,6 +38,9 @@ public class TableMetadataAssert extends AbstractAssert<TableMetadataAssert, Tab
     }
 
     public TableMetadataAssert isEqualTo(TableMetadata expected) {
+        assertThat(expected.getTableId()).isEqualTo(actual.getTableId());
+        assertThat(expected.getSchemaId()).isEqualTo(actual.getSchemaId());
+        assertThat(expected.getTablePath()).isEqualTo(actual.getTablePath());
         assertThat(expected.getTableInfo()).isEqualTo(actual.getTableInfo());
         List<BucketMetadata> bucketMetadataList = expected.getBucketMetadataList();
         List<BucketMetadata> actualBucketMetadataList = actual.getBucketMetadataList();

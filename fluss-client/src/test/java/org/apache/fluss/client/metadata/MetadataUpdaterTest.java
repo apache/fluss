@@ -24,6 +24,7 @@ import org.apache.fluss.client.utils.MetadataUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -51,6 +52,7 @@ class MetadataUpdaterTest {
         Admin admin = conn.getAdmin();
         TablePath tablePath = TablePath.of("fluss", "test");
         admin.createTable(tablePath, DATA1_TABLE_DESCRIPTOR, true).get();
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
         admin.close();
         conn.close();
 
@@ -59,6 +61,7 @@ class MetadataUpdaterTest {
         // update metadata
         metadataUpdater.updateMetadata(Collections.singleton(tablePath), null, null);
         Cluster cluster = metadataUpdater.getCluster();
+        assertThat(cluster.getTable(tablePath).get()).isEqualTo(tableInfo);
 
         // repeat 20K times to reproduce StackOverflowError if there is
         // any N levels UnmodifiableCollection

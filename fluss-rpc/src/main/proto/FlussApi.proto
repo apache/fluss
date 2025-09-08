@@ -173,6 +173,7 @@ message UpdateMetadataRequest {
   repeated PbTableMetadata table_metadata = 3;
   repeated PbPartitionMetadata partition_metadata = 4;
   optional int32 coordinator_epoch = 5;
+  repeated PbTableMetadataV2 table_metadata_v2 = 6;
 }
 
 message UpdateMetadataResponse {
@@ -573,6 +574,19 @@ message PbTableMetadata {
 
   // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
   // trace by: https://github.com/apache/fluss/issues/981
+}
+
+message PbTableMetadataV2 {
+  required PbTablePath table_path = 1;
+  required int64 table_id = 2;
+  required int32 schema_id = 3;
+  optional bytes table_json = 4;
+  repeated PbBucketMetadata bucket_metadata = 5;
+  required int64 created_time = 6;
+  required int64 modified_time = 7;
+
+  // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
+  // trace by: https://github.com/alibaba/fluss/issues/981
 }
 
 message PbPartitionMetadata {
