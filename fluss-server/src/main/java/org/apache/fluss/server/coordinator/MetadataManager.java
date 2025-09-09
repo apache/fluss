@@ -40,7 +40,6 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.server.utils.LakeStorageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
@@ -69,9 +68,9 @@ public class MetadataManager {
     private static final Logger LOG = LoggerFactory.getLogger(MetadataManager.class);
 
     private final ZooKeeperClient zookeeperClient;
-    private @Nullable final Map<String, String> defaultTableLakeOptions;
     private final int maxPartitionNum;
     private final int maxBucketNum;
+    private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
     /**
      * Creates a new metadata manager.
@@ -79,11 +78,14 @@ public class MetadataManager {
      * @param zookeeperClient the zookeeper client
      * @param conf the cluster configuration
      */
-    public MetadataManager(ZooKeeperClient zookeeperClient, Configuration conf) {
+    public MetadataManager(
+            ZooKeeperClient zookeeperClient,
+            Configuration conf,
+            LakeCatalogDynamicLoader lakeCatalogDynamicLoader) {
         this.zookeeperClient = zookeeperClient;
-        this.defaultTableLakeOptions = LakeStorageUtils.generateDefaultTableLakeOptions(conf);
         this.maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
         this.maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
+        this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
     }
 
     public void createDatabase(
@@ -313,7 +315,8 @@ public class MetadataManager {
         }
         TableRegistration tableReg = optionalTable.get();
         SchemaInfo schemaInfo = getLatestSchema(tablePath);
-        return tableReg.toTableInfo(tablePath, schemaInfo, defaultTableLakeOptions);
+        return tableReg.toTableInfo(
+                tablePath, schemaInfo, lakeCatalogDynamicLoader.getDefaultLakeProperties());
     }
 
     public TableRegistration getTableRegistration(TablePath tablePath) {

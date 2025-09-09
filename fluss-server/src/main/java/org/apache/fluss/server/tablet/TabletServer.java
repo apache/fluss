@@ -31,9 +31,11 @@ import org.apache.fluss.rpc.RpcServer;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
+import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
+import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
@@ -144,6 +146,12 @@ public class TabletServer extends ServerBase {
     @Nullable
     private Authorizer authorizer;
 
+    @GuardedBy("lock")
+    private DynamicConfigManager dynamicConfigManager;
+
+    @GuardedBy("lock")
+    private LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
+
     public TabletServer(Configuration conf) {
         this(conf, SystemClock.getInstance());
     }
@@ -182,8 +190,10 @@ public class TabletServer extends ServerBase {
                             serverId);
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
-
-            MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+            this.lakeCatalogDynamicLoader =
+                    new LakeCatalogDynamicLoader(dynamicServerConfig, pluginManager, true);
+            MetadataManager metadataManager =
+                    new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
             this.metadataCache = new TabletServerMetadataCache(metadataManager, zkClient);
 
             this.scheduler = new FlussScheduler(conf.get(BACKGROUND_THREADS));
@@ -200,6 +210,7 @@ public class TabletServer extends ServerBase {
             if (authorizer != null) {
                 authorizer.startup();
             }
+
             // rpc client to sent request to the tablet server where the leader replica is located
             // to fetch log.
             this.clientMetricGroup =
@@ -230,6 +241,10 @@ public class TabletServer extends ServerBase {
                             clock);
             replicaManager.startup();
 
+            this.dynamicConfigManager =
+                    new DynamicConfigManager(zkClient, dynamicServerConfig, false);
+            dynamicConfigManager.startup();
+
             this.tabletService =
                     new TabletService(
                             serverId,
@@ -238,7 +253,8 @@ public class TabletServer extends ServerBase {
                             replicaManager,
                             metadataCache,
                             metadataManager,
-                            authorizer);
+                            authorizer,
+                            dynamicConfigManager);
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
@@ -395,6 +411,14 @@ public class TabletServer extends ServerBase {
 
                 if (authorizer != null) {
                     authorizer.close();
+                }
+
+                if (dynamicConfigManager != null) {
+                    dynamicConfigManager.close();
+                }
+
+                if (lakeCatalogDynamicLoader != null) {
+                    lakeCatalogDynamicLoader.close();
                 }
 
             } catch (Throwable t) {
