@@ -321,7 +321,7 @@ class FileLogProjectionTest {
     }
 
     @SafeVarargs
-    private FileLogRecords createFileLogRecords(
+    final FileLogRecords createFileLogRecords(
             byte recordBatchMagic, RowType rowType, List<Object[]>... inputs) throws Exception {
         FileLogRecords fileLogRecords = FileLogRecords.open(new File(tempDir, "test.tmp"));
         long offsetBase = 0L;
