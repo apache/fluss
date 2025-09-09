@@ -31,17 +31,21 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
+import org.apache.flink.core.execution.SavepointFormatType;
 import org.apache.flink.table.api.TableResult;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.io.File;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -59,6 +63,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** The IT case for Flink union data in lake and fluss for primary key table. */
 class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
+
+    @TempDir public static File savepointDir;
 
     @BeforeAll
     protected static void beforeAll() {
@@ -592,6 +598,244 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testUnionReadPrimaryKeyTableFailover(boolean isPartitioned) throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName1 =
+                "restore_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String resultTableName =
+                "result_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
+
+        TablePath table1 = TablePath.of(DEFAULT_DB, tableName1);
+        TablePath resultTable = TablePath.of(DEFAULT_DB, resultTableName);
+
+        // create table and write data
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+        long tableId =
+                preparePKTableFullType(
+                        table1, DEFAULT_BUCKET_NUM, isPartitioned, bucketLogEndOffset);
+
+        // wait until records has been synced
+        waitUntilBucketSynced(table1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
+
+        // check the status of replica after synced
+        assertReplicaStatus(table1, tableId, DEFAULT_BUCKET_NUM, isPartitioned, bucketLogEndOffset);
+
+        // create result table
+        createPkTableFullType(resultTable, DEFAULT_BUCKET_NUM, isPartitioned, false);
+        // union read lake data
+        // TODO should add a case, stop job and restorewhen read lake data break in lake read
+        StreamTableEnvironment streamTEnv = buildSteamTEnv(null);
+        TableResult insertResult =
+                streamTEnv.executeSql(
+                        "insert into " + resultTableName + " select * from " + tableName1);
+
+        // will read paimon snapshot, should only +I since no change log
+        List<Row> expectedRows = new ArrayList<>();
+        if (isPartitioned) {
+            for (String partition : waitUntilPartitions(table1).values()) {
+                expectedRows.add(
+                        Row.of(
+                                false,
+                                (byte) 1,
+                                (short) 2,
+                                3,
+                                4L,
+                                5.1f,
+                                6.0d,
+                                "string",
+                                Decimal.fromUnscaledLong(9, 5, 2),
+                                Decimal.fromBigDecimal(new java.math.BigDecimal(10), 20, 0),
+                                TimestampLtz.fromEpochMillis(1698235273182L),
+                                TimestampLtz.fromEpochMillis(1698235273182L, 5000),
+                                TimestampNtz.fromMillis(1698235273183L),
+                                TimestampNtz.fromMillis(1698235273183L, 6000),
+                                new byte[] {1, 2, 3, 4},
+                                partition));
+                expectedRows.add(
+                        Row.of(
+                                true,
+                                (byte) 10,
+                                (short) 20,
+                                30,
+                                40L,
+                                50.1f,
+                                60.0d,
+                                "another_string",
+                                Decimal.fromUnscaledLong(90, 5, 2),
+                                Decimal.fromBigDecimal(new java.math.BigDecimal(100), 20, 0),
+                                TimestampLtz.fromEpochMillis(1698235273200L),
+                                TimestampLtz.fromEpochMillis(1698235273200L, 5000),
+                                TimestampNtz.fromMillis(1698235273201L),
+                                TimestampNtz.fromMillis(1698235273201L, 6000),
+                                new byte[] {1, 2, 3, 4},
+                                partition));
+            }
+        } else {
+            expectedRows =
+                    Arrays.asList(
+                            Row.of(
+                                    false,
+                                    (byte) 1,
+                                    (short) 2,
+                                    3,
+                                    4L,
+                                    5.1f,
+                                    6.0d,
+                                    "string",
+                                    Decimal.fromUnscaledLong(9, 5, 2),
+                                    Decimal.fromBigDecimal(new java.math.BigDecimal(10), 20, 0),
+                                    TimestampLtz.fromEpochMillis(1698235273182L),
+                                    TimestampLtz.fromEpochMillis(1698235273182L, 5000),
+                                    TimestampNtz.fromMillis(1698235273183L),
+                                    TimestampNtz.fromMillis(1698235273183L, 6000),
+                                    new byte[] {1, 2, 3, 4},
+                                    null),
+                            Row.of(
+                                    true,
+                                    (byte) 10,
+                                    (short) 20,
+                                    30,
+                                    40L,
+                                    50.1f,
+                                    60.0d,
+                                    "another_string",
+                                    Decimal.fromUnscaledLong(90, 5, 2),
+                                    Decimal.fromBigDecimal(new java.math.BigDecimal(100), 20, 0),
+                                    TimestampLtz.fromEpochMillis(1698235273200L),
+                                    TimestampLtz.fromEpochMillis(1698235273200L, 5000),
+                                    TimestampNtz.fromMillis(1698235273201L),
+                                    TimestampNtz.fromMillis(1698235273201L, 6000),
+                                    new byte[] {1, 2, 3, 4},
+                                    null));
+        }
+
+        CloseableIterator<Row> actual =
+                streamTEnv.executeSql("select * from " + resultTableName).collect();
+        assertResultsExactOrder(actual, expectedRows, false);
+
+        // now, stop the job with save point
+        String savepointPath =
+                insertResult
+                        .getJobClient()
+                        .get()
+                        .stopWithSavepoint(
+                                false,
+                                savepointDir.getAbsolutePath(),
+                                SavepointFormatType.CANONICAL)
+                        .get();
+
+        // re buildSteamTEnv
+        streamTEnv = buildSteamTEnv(savepointPath);
+        insertResult =
+                streamTEnv.executeSql(
+                        "insert into " + resultTableName + " select * from " + tableName1);
+
+        // write some log data again
+        // write a row again
+        if (isPartitioned) {
+            Map<Long, String> partitionNameById = waitUntilPartitions(table1);
+            for (String partition : partitionNameById.values()) {
+                writeFullTypeRow(table1, partition);
+            }
+        } else {
+            writeFullTypeRow(table1, null);
+        }
+
+        // should generate -U & +U
+        List<Row> expectedRows2 = new ArrayList<>();
+        if (isPartitioned) {
+            for (String partition : waitUntilPartitions(table1).values()) {
+                expectedRows2.add(
+                        Row.ofKind(
+                                RowKind.UPDATE_BEFORE,
+                                true,
+                                (byte) 10,
+                                (short) 20,
+                                30,
+                                40L,
+                                50.1f,
+                                60.0d,
+                                "another_string",
+                                Decimal.fromUnscaledLong(90, 5, 2),
+                                Decimal.fromBigDecimal(new java.math.BigDecimal(100), 20, 0),
+                                TimestampLtz.fromEpochMillis(1698235273200L),
+                                TimestampLtz.fromEpochMillis(1698235273200L, 5000),
+                                TimestampNtz.fromMillis(1698235273201L),
+                                TimestampNtz.fromMillis(1698235273201L, 6000),
+                                new byte[] {1, 2, 3, 4},
+                                partition));
+                expectedRows2.add(
+                        Row.ofKind(
+                                RowKind.UPDATE_AFTER,
+                                true,
+                                (byte) 100,
+                                (short) 200,
+                                30,
+                                400L,
+                                500.1f,
+                                600.0d,
+                                "another_string_2",
+                                Decimal.fromUnscaledLong(900, 5, 2),
+                                Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                                TimestampLtz.fromEpochMillis(1698235273400L),
+                                TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                                TimestampNtz.fromMillis(1698235273501L),
+                                TimestampNtz.fromMillis(1698235273501L, 8000),
+                                new byte[] {5, 6, 7, 8},
+                                partition));
+            }
+        } else {
+            expectedRows2.add(
+                    Row.ofKind(
+                            RowKind.UPDATE_BEFORE,
+                            true,
+                            (byte) 10,
+                            (short) 20,
+                            30,
+                            40L,
+                            50.1f,
+                            60.0d,
+                            "another_string",
+                            Decimal.fromUnscaledLong(90, 5, 2),
+                            Decimal.fromBigDecimal(new java.math.BigDecimal(100), 20, 0),
+                            TimestampLtz.fromEpochMillis(1698235273200L),
+                            TimestampLtz.fromEpochMillis(1698235273200L, 5000),
+                            TimestampNtz.fromMillis(1698235273201L),
+                            TimestampNtz.fromMillis(1698235273201L, 6000),
+                            new byte[] {1, 2, 3, 4},
+                            null));
+            expectedRows2.add(
+                    Row.ofKind(
+                            RowKind.UPDATE_AFTER,
+                            true,
+                            (byte) 100,
+                            (short) 200,
+                            30,
+                            400L,
+                            500.1f,
+                            600.0d,
+                            "another_string_2",
+                            Decimal.fromUnscaledLong(900, 5, 2),
+                            Decimal.fromBigDecimal(new java.math.BigDecimal(1000), 20, 0),
+                            TimestampLtz.fromEpochMillis(1698235273400L),
+                            TimestampLtz.fromEpochMillis(1698235273400L, 7000),
+                            TimestampNtz.fromMillis(1698235273501L),
+                            TimestampNtz.fromMillis(1698235273501L, 8000),
+                            new byte[] {5, 6, 7, 8},
+                            null));
+        }
+
+        assertResultsExactOrder(actual, expectedRows2, true);
+
+        // cancel jobs
+        insertResult.getJobClient().get().cancel().get();
+        jobClient.cancel().get();
+    }
+
     private List<Row> sortedRows(List<Row> rows) {
         rows.sort(Comparator.comparing(Row::toString));
         return rows;
@@ -610,7 +854,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
             boolean isPartitioned,
             Map<TableBucket, Long> bucketLogEndOffset)
             throws Exception {
-        long tableId = createPkTableFullType(tablePath, bucketNum, isPartitioned);
+        long tableId = createPkTableFullType(tablePath, bucketNum, isPartitioned, true);
         if (isPartitioned) {
             Map<Long, String> partitionNameById = waitUntilPartitions(tablePath);
             for (String partition : partitionNameById.values()) {
@@ -684,7 +928,8 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         }
     }
 
-    protected long createPkTableFullType(TablePath tablePath, int bucketNum, boolean isPartitioned)
+    protected long createPkTableFullType(
+            TablePath tablePath, int bucketNum, boolean isPartitioned, boolean lakeEnabled)
             throws Exception {
         Schema.Builder schemaBuilder =
                 Schema.newBuilder()
@@ -705,11 +950,12 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         .column("c15", DataTypes.BINARY(4))
                         .column("c16", DataTypes.STRING());
 
-        TableDescriptor.Builder tableBuilder =
-                TableDescriptor.builder()
-                        .distributedBy(bucketNum)
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        TableDescriptor.Builder tableBuilder = TableDescriptor.builder().distributedBy(bucketNum);
+        if (lakeEnabled) {
+            tableBuilder
+                    .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        }
 
         if (isPartitioned) {
             tableBuilder.property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
