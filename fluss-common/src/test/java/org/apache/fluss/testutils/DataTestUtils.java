@@ -165,14 +165,7 @@ public class DataTestUtils {
 
     public static MemoryLogRecords genMemoryLogRecordsByObject(List<Object[]> objects)
             throws Exception {
-        return createRecordsWithoutBaseLogOffset(
-                DATA1_ROW_TYPE,
-                DEFAULT_SCHEMA_ID,
-                0,
-                System.currentTimeMillis(),
-                CURRENT_LOG_MAGIC_VALUE,
-                objects,
-                LogFormat.ARROW);
+        return genMemoryLogRecordsByObject(CURRENT_LOG_MAGIC_VALUE, objects);
     }
 
     public static MemoryLogRecords genMemoryLogRecordsWithWriterId(
@@ -528,7 +521,7 @@ public class DataTestUtils {
 
             ((DefaultLogRecordBatch) memoryLogRecords.batches().iterator().next())
                     .setCommitTimestamp(maxTimestamp);
-            memoryLogRecords.ensureValid(CURRENT_LOG_MAGIC_VALUE);
+            memoryLogRecords.ensureValid(magic);
             return memoryLogRecords;
         }
     }

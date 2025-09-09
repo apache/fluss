@@ -41,6 +41,7 @@ import org.apache.fluss.utils.ArrowUtils;
 import org.apache.fluss.utils.types.Tuple2;
 
 import java.io.ByteArrayOutputStream;
+import java.io.EOFException;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
@@ -54,16 +55,18 @@ import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.record.DefaultLogRecordBatch.APPEND_ONLY_FLAG_MASK;
-import static org.apache.fluss.record.LogRecordBatchFormat.HEADER_SIZE_UP_TO_MAGIC;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
 import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.V0_RECORD_BATCH_HEADER_SIZE;
+import static org.apache.fluss.record.LogRecordBatchFormat.V1_RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.attributeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordsCountOffset;
+import static org.apache.fluss.utils.FileUtils.readFully;
 import static org.apache.fluss.utils.FileUtils.readFullyOrFail;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -86,17 +89,11 @@ public class FileLogProjection {
     private final ByteArrayOutputStream outputStream;
     private final WriteChannel writeChannel;
 
-    /** Buffer to read log records batch header up to magic. */
-    private final ByteBuffer logHeaderUpToMagicBuffer =
-            ByteBuffer.allocate(HEADER_SIZE_UP_TO_MAGIC);
-
-    /** Buffer to read log records batch header for magic version 0. */
-    private final ByteBuffer logHeaderBufferForMagicV0 =
-            ByteBuffer.allocate(recordBatchHeaderSize(LOG_MAGIC_VALUE_V0));
-
-    /** Buffer to read log records batch header for magic version 1. */
-    private final ByteBuffer logHeaderBufferForMagicV1 =
-            ByteBuffer.allocate(recordBatchHeaderSize(LOG_MAGIC_VALUE_V1));
+    /**
+     * Buffer to read log records batch header. V1 is larger than V0, so use V1 head buffer can read
+     * V0 header even if there is no enough bytes in log file.
+     */
+    private final ByteBuffer logHeaderBuffer = ByteBuffer.allocate(V1_RECORD_BATCH_HEADER_SIZE);
 
     private final ByteBuffer arrowHeaderBuffer = ByteBuffer.allocate(ARROW_HEADER_SIZE);
     private ByteBuffer arrowMetadataBuffer;
@@ -105,9 +102,7 @@ public class FileLogProjection {
         this.outputStream = new ByteArrayOutputStream();
         this.writeChannel = new WriteChannel(Channels.newChannel(outputStream));
         // fluss use little endian for encoding log records batch
-        this.logHeaderUpToMagicBuffer.order(ByteOrder.LITTLE_ENDIAN);
-        this.logHeaderBufferForMagicV0.order(ByteOrder.LITTLE_ENDIAN);
-        this.logHeaderBufferForMagicV1.order(ByteOrder.LITTLE_ENDIAN);
+        this.logHeaderBuffer.order(ByteOrder.LITTLE_ENDIAN);
         // arrow force use little endian to encode int32 values
         this.arrowHeaderBuffer.order(ByteOrder.LITTLE_ENDIAN);
     }
@@ -181,32 +176,23 @@ public class FileLogProjection {
         checkNotNull(currentProjection, "There is no projection registered yet.");
         MultiBytesView.Builder builder = MultiBytesView.builder();
         int position = start;
-        while (maxBytes > HEADER_SIZE_UP_TO_MAGIC) {
-            if (position >= end - HEADER_SIZE_UP_TO_MAGIC) {
+
+        // The condition is an optimization to avoid read log header when there is no enough bytes,
+        // So we use V0 header size here for a conservative judgment. In the end, the condition
+        // of (position >= end - recordBatchHeaderSize) will ensure the final correctness.
+        while (maxBytes > V0_RECORD_BATCH_HEADER_SIZE) {
+            if (position >= end - V0_RECORD_BATCH_HEADER_SIZE) {
                 // the remaining bytes in the file are not enough to read a batch header up to
                 // magic.
                 return new BytesViewLogRecords(builder.build());
             }
-
-            // read log header up to magic
-            logHeaderUpToMagicBuffer.rewind();
-            readFullyOrFail(channel, logHeaderUpToMagicBuffer, position, "log header up to magic");
-
-            logHeaderUpToMagicBuffer.rewind();
-            byte magic = logHeaderUpToMagicBuffer.get(MAGIC_OFFSET);
-
-            int recordBatchHeaderSize = recordBatchHeaderSize(magic);
-            if (position >= end - recordBatchHeaderSize) {
-                // the remaining bytes in the file are not enough to read a batch header
-                return new BytesViewLogRecords(builder.build());
-            }
-
-            ByteBuffer logHeaderBuffer = getLogHeaderBuffer(magic);
             // read log header
             logHeaderBuffer.rewind();
-            readFullyOrFail(channel, logHeaderBuffer, position, "log header");
+            readLogHeaderFullyOrFail(channel, logHeaderBuffer, position);
 
             logHeaderBuffer.rewind();
+            byte magic = logHeaderBuffer.get(MAGIC_OFFSET);
+            int recordBatchHeaderSize = recordBatchHeaderSize(magic);
             int batchSizeInBytes = LOG_OVERHEAD + logHeaderBuffer.getInt(LENGTH_OFFSET);
             if (position > end - batchSizeInBytes) {
                 // the remaining bytes in the file are not enough to read a full batch
@@ -413,13 +399,39 @@ public class FileLogProjection {
         return bitset;
     }
 
-    @VisibleForTesting
-    ByteBuffer getLogHeaderBuffer(byte magic) {
-        if (magic == LOG_MAGIC_VALUE_V0) {
-            return logHeaderBufferForMagicV0;
-        } else {
-            return logHeaderBufferForMagicV1;
+    /**
+     * Read log header fully or fail with EOFException if there is no enough bytes to read a full
+     * log header. This handles different log header size for magic v0 and v1.
+     */
+    static void readLogHeaderFullyOrFail(FileChannel channel, ByteBuffer buffer, int position)
+            throws IOException {
+        if (position < 0) {
+            throw new IllegalArgumentException(
+                    "The file channel position cannot be negative, but it is " + position);
         }
+        readFully(channel, buffer, position);
+        if (buffer.hasRemaining()) {
+            int size = buffer.position();
+            byte magic = buffer.get(MAGIC_OFFSET);
+            if (magic == LOG_MAGIC_VALUE_V0 && size < V0_RECORD_BATCH_HEADER_SIZE) {
+                throw new EOFException(
+                        String.format(
+                                "Failed to read v0 log header from file channel `%s`. Expected to read %d bytes, "
+                                        + "but reached end of file after reading %d bytes. Started read from position %d.",
+                                channel, V0_RECORD_BATCH_HEADER_SIZE, size, position));
+            } else if (magic == LOG_MAGIC_VALUE_V1 && size < V1_RECORD_BATCH_HEADER_SIZE) {
+                throw new EOFException(
+                        String.format(
+                                "Failed to read v1 log header from file channel `%s`. Expected to read %d bytes, "
+                                        + "but reached end of file after reading %d bytes. Started read from position %d.",
+                                channel, V1_RECORD_BATCH_HEADER_SIZE, size, position));
+            }
+        }
+    }
+
+    @VisibleForTesting
+    ByteBuffer getLogHeaderBuffer() {
+        return logHeaderBuffer;
     }
 
     static final class ProjectionInfo {

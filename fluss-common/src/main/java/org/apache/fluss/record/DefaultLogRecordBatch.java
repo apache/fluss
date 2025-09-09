@@ -35,14 +35,15 @@ import java.nio.ByteBuffer;
 import java.util.NoSuchElementException;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.COMMIT_TIMESTAMP_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
 import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_LEADER_EPOCH;
 import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.attributeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.batchSequenceOffset;
-import static org.apache.fluss.record.LogRecordBatchFormat.commitTimestampOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.crcOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.lastOffsetDeltaOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.leaderEpochOffset;
@@ -75,10 +76,12 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     private MemorySegment segment;
     private int position;
+    private byte magic;
 
     public void pointTo(MemorySegment segment, int position) {
         this.segment = segment;
         this.position = position;
+        this.magic = segment.get(position + MAGIC_OFFSET);
     }
 
     public void setBaseLogOffset(long baseLogOffset) {
@@ -87,40 +90,41 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     @Override
     public byte magic() {
-        return segment.get(position + MAGIC_OFFSET);
+        return magic;
     }
 
     @Override
     public long commitTimestamp() {
-        return segment.getLong(position + commitTimestampOffset(magic()));
+        return segment.getLong(position + COMMIT_TIMESTAMP_OFFSET);
     }
 
     public void setCommitTimestamp(long timestamp) {
-        segment.putLong(position + commitTimestampOffset(magic()), timestamp);
+        segment.putLong(position + COMMIT_TIMESTAMP_OFFSET, timestamp);
     }
 
     public void setLeaderEpoch(int leaderEpoch) {
-        int leaderEpochOffset = leaderEpochOffset(magic());
-        if (leaderEpochOffset > 0) {
-            segment.putInt(position + leaderEpochOffset, leaderEpoch);
+        if (magic >= LOG_MAGIC_VALUE_V1) {
+            segment.putInt(position + leaderEpochOffset(magic), leaderEpoch);
+        } else {
+            throw new UnsupportedOperationException(
+                    "Set leader epoch is not supported for magic v" + magic + " record batch");
         }
     }
 
     @Override
     public long writerId() {
-        return segment.getLong(position + writeClientIdOffset(magic()));
+        return segment.getLong(position + writeClientIdOffset(magic));
     }
 
     @Override
     public int batchSequence() {
-        return segment.getInt(position + batchSequenceOffset(magic()));
+        return segment.getInt(position + batchSequenceOffset(magic));
     }
 
     @Override
     public int leaderEpoch() {
-        int leaderEpochOffset = leaderEpochOffset(magic());
-        if (leaderEpochOffset > 0) {
-            return segment.getInt(position + leaderEpochOffset);
+        if (magic >= LOG_MAGIC_VALUE_V1) {
+            return segment.getInt(position + leaderEpochOffset(magic));
         } else {
             return NO_LEADER_EPOCH;
         }
@@ -129,7 +133,6 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     @Override
     public void ensureValid() {
         int sizeInBytes = sizeInBytes();
-        byte magic = magic();
         if (sizeInBytes < recordBatchHeaderSize(magic)) {
             throw new CorruptMessageException(
                     "Record batch is corrupt (the size "
@@ -151,18 +154,18 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     @Override
     public boolean isValid() {
-        return sizeInBytes() >= recordBatchHeaderSize(magic()) && checksum() == computeChecksum();
+        return sizeInBytes() >= recordBatchHeaderSize(magic) && checksum() == computeChecksum();
     }
 
     private long computeChecksum() {
         ByteBuffer buffer = segment.wrap(position, sizeInBytes());
-        int schemaIdOffset = schemaIdOffset(magic());
+        int schemaIdOffset = schemaIdOffset(magic);
         return Crc32C.compute(buffer, schemaIdOffset, sizeInBytes() - schemaIdOffset);
     }
 
     private byte attributes() {
         // note we're not using the byte of attributes now.
-        return segment.get(attributeOffset(magic()) + position);
+        return segment.get(attributeOffset(magic) + position);
     }
 
     @Override
@@ -172,12 +175,12 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     @Override
     public long checksum() {
-        return segment.getUnsignedInt(crcOffset(magic()) + position);
+        return segment.getUnsignedInt(crcOffset(magic) + position);
     }
 
     @Override
     public short schemaId() {
-        return segment.getShort(schemaIdOffset(magic()) + position);
+        return segment.getShort(schemaIdOffset(magic) + position);
     }
 
     @Override
@@ -191,7 +194,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     }
 
     private int lastOffsetDelta() {
-        return segment.getInt(lastOffsetDeltaOffset(magic()) + position);
+        return segment.getInt(lastOffsetDeltaOffset(magic) + position);
     }
 
     @Override
@@ -201,7 +204,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     @Override
     public int getRecordCount() {
-        return segment.getInt(position + recordsCountOffset(magic()));
+        return segment.getInt(position + recordsCountOffset(magic));
     }
 
     @Override
@@ -252,7 +255,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     private CloseableIterator<LogRecord> rowRecordIterator(RowType rowType, long timestamp) {
         DataType[] fieldTypes = rowType.getChildren().toArray(new DataType[0]);
         return new LogRecordIterator() {
-            int position = DefaultLogRecordBatch.this.position + recordBatchHeaderSize(magic());
+            int position = DefaultLogRecordBatch.this.position + recordBatchHeaderSize(magic);
             int rowId = 0;
 
             @Override
@@ -278,7 +281,6 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     private CloseableIterator<LogRecord> columnRecordIterator(
             RowType rowType, VectorSchemaRoot root, BufferAllocator allocator, long timestamp) {
         boolean isAppendOnly = (attributes() & APPEND_ONLY_FLAG_MASK) > 0;
-        byte magic = magic();
         if (isAppendOnly) {
             // append only batch, no change type vector,
             // the start of the arrow data is the beginning of the batch records
@@ -370,7 +372,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
                         "Found invalid record count "
                                 + numRecords
                                 + " in magic v"
-                                + magic()
+                                + magic
                                 + " batch");
             }
             this.numRecords = numRecords;

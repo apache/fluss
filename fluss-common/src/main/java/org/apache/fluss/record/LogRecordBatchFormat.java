@@ -53,75 +53,9 @@ public class LogRecordBatchFormat {
     public static final int BASE_OFFSET_OFFSET = 0;
     public static final int LENGTH_OFFSET = BASE_OFFSET_OFFSET + BASE_OFFSET_LENGTH;
     public static final int MAGIC_OFFSET = LENGTH_OFFSET + LENGTH_LENGTH;
+    public static final int COMMIT_TIMESTAMP_OFFSET = MAGIC_OFFSET + MAGIC_LENGTH;
     public static final int LOG_OVERHEAD = LENGTH_OFFSET + LENGTH_LENGTH;
     public static final int HEADER_SIZE_UP_TO_MAGIC = MAGIC_OFFSET + MAGIC_LENGTH;
-
-    // ----------------------------------------------------------------------------------------
-    // Format of Magic Version: V0
-    // ----------------------------------------------------------------------------------------
-
-    /**
-     * LogRecordBatch implementation for magic 0 (V0). The schema of {@link LogRecordBatch} is given
-     * below:
-     *
-     * <ul>
-     *   RecordBatch =>
-     *   <li>BaseOffset => Int64
-     *   <li>Length => Int32
-     *   <li>Magic => Int8
-     *   <li>CommitTimestamp => Int64
-     *   <li>CRC => Uint32
-     *   <li>SchemaId => Int16
-     *   <li>Attributes => Int8
-     *   <li>LastOffsetDelta => Int32
-     *   <li>WriterID => Int64
-     *   <li>SequenceID => Int32
-     *   <li>RecordCount => Int32
-     *   <li>Records => [Record]
-     * </ul>
-     *
-     * <p>The CRC covers the data from the schemaId to the end of the batch (i.e. all the bytes that
-     * follow the CRC). It is located after the magic byte, which means that clients must parse the
-     * magic byte before deciding how to interpret the bytes between the batch length and the magic
-     * byte. The CRC-32C (Castagnoli) polynomial is used for the computation. CommitTimestamp is
-     * also located before the CRC, because it is determined in server side.
-     *
-     * <p>The field 'lastOffsetDelta is used to calculate the lastOffset of the current batch as:
-     * [lastOffset = baseOffset + LastOffsetDelta] instead of [lastOffset = baseOffset + recordCount
-     * - 1]. The reason for introducing this field is that there might be cases where the offset
-     * delta in batch does not match the recordCount. For example, when generating CDC logs for a kv
-     * table and sending a batch that only contains the deletion of non-existent kvs, no CDC logs
-     * would be generated. However, we need to increment the batchSequence for the corresponding
-     * writerId to make sure no {@link OutOfOrderSequenceException} will be thrown. In such a case,
-     * we would generate a logRecordBatch with a LastOffsetDelta of 0 but a recordCount of 0.
-     *
-     * <p>The current attributes are given below:
-     *
-     * <pre>
-     * ------------------------------------------
-     * |  Unused (1-7)   |  AppendOnly Flag (0) |
-     * ------------------------------------------
-     * </pre>
-     *
-     * @since 0.1
-     */
-    public static final byte LOG_MAGIC_VALUE_V0 = 0;
-
-    private static final int V0_COMMIT_TIMESTAMP_OFFSET = MAGIC_OFFSET + MAGIC_LENGTH;
-    private static final int V0_CRC_OFFSET = V0_COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH;
-    private static final int V0_SCHEMA_ID_OFFSET = V0_CRC_OFFSET + CRC_LENGTH;
-    private static final int V0_ATTRIBUTES_OFFSET = V0_SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
-    private static final int V0_LAST_OFFSET_DELTA_OFFSET = V0_ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
-    private static final int V0_WRITE_CLIENT_ID_OFFSET =
-            V0_LAST_OFFSET_DELTA_OFFSET + LAST_OFFSET_DELTA_LENGTH;
-    private static final int V0_BATCH_SEQUENCE_OFFSET =
-            V0_WRITE_CLIENT_ID_OFFSET + WRITE_CLIENT_ID_LENGTH;
-    private static final int V0_RECORDS_COUNT_OFFSET =
-            V0_BATCH_SEQUENCE_OFFSET + BATCH_SEQUENCE_LENGTH;
-    private static final int V0_RECORDS_OFFSET = V0_RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
-
-    private static final int V0_RECORD_BATCH_HEADER_SIZE = V0_RECORDS_OFFSET;
-    private static final int V0_ARROW_CHANGETYPE_OFFSET = V0_RECORD_BATCH_HEADER_SIZE;
 
     // ----------------------------------------------------------------------------------------
     // Format of Magic Version: V1
@@ -151,6 +85,21 @@ public class LogRecordBatchFormat {
      * <p>Newly added field in LogRecordBatch header of magic V1 is LeaderEpoch, which used to build
      * a consistent leaderEpoch cache across different tabletServers.
      *
+     * <p>The CRC covers the data from the schemaId to the end of the batch (i.e. all the bytes that
+     * follow the CRC). It is located after the magic byte, which means that clients must parse the
+     * magic byte before deciding how to interpret the bytes between the batch length and the magic
+     * byte. The CRC-32C (Castagnoli) polynomial is used for the computation. CommitTimestamp is
+     * also located before the CRC, because it is determined in server side.
+     *
+     * <p>The field 'lastOffsetDelta is used to calculate the lastOffset of the current batch as:
+     * [lastOffset = baseOffset + LastOffsetDelta] instead of [lastOffset = baseOffset + recordCount
+     * - 1]. The reason for introducing this field is that there might be cases where the offset
+     * delta in batch does not match the recordCount. For example, when generating CDC logs for a kv
+     * table and sending a batch that only contains the deletion of non-existent kvs, no CDC logs
+     * would be generated. However, we need to increment the batchSequence for the corresponding
+     * writerId to make sure no {@link OutOfOrderSequenceException} will be thrown. In such a case,
+     * we would generate a logRecordBatch with a LastOffsetDelta of 0 but a recordCount of 0.
+     *
      * <p>The current attributes are given below:
      *
      * <pre>
@@ -163,9 +112,8 @@ public class LogRecordBatchFormat {
      */
     public static final byte LOG_MAGIC_VALUE_V1 = 1;
 
-    private static final int V1_COMMIT_TIMESTAMP_OFFSET = MAGIC_OFFSET + MAGIC_LENGTH;
     private static final int V1_LEADER_EPOCH_OFFSET =
-            V1_COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH;
+            COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH;
     private static final int V1_CRC_OFFSET = V1_LEADER_EPOCH_OFFSET + LEADER_EPOCH_LENGTH;
     private static final int V1_SCHEMA_ID_OFFSET = V1_CRC_OFFSET + CRC_LENGTH;
     private static final int V1_ATTRIBUTES_OFFSET = V1_SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
@@ -178,42 +126,77 @@ public class LogRecordBatchFormat {
             V1_BATCH_SEQUENCE_OFFSET + BATCH_SEQUENCE_LENGTH;
     private static final int V1_RECORDS_OFFSET = V1_RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
 
-    private static final int V1_RECORD_BATCH_HEADER_SIZE = V1_RECORDS_OFFSET;
+    public static final int V1_RECORD_BATCH_HEADER_SIZE = V1_RECORDS_OFFSET;
     private static final int V1_ARROW_CHANGETYPE_OFFSET = V1_RECORD_BATCH_HEADER_SIZE;
+
+    // ----------------------------------------------------------------------------------------
+    // Format of Magic Version: V0
+    // ----------------------------------------------------------------------------------------
+
+    /**
+     * LogRecordBatch implementation for magic 0 (V0). The schema of {@link LogRecordBatch} is given
+     * below:
+     *
+     * <ul>
+     *   RecordBatch =>
+     *   <li>BaseOffset => Int64
+     *   <li>Length => Int32
+     *   <li>Magic => Int8
+     *   <li>CommitTimestamp => Int64
+     *   <li>CRC => Uint32
+     *   <li>SchemaId => Int16
+     *   <li>Attributes => Int8
+     *   <li>LastOffsetDelta => Int32
+     *   <li>WriterID => Int64
+     *   <li>SequenceID => Int32
+     *   <li>RecordCount => Int32
+     *   <li>Records => [Record]
+     * </ul>
+     *
+     * <p>The current attributes are given below:
+     *
+     * <pre>
+     * ------------------------------------------
+     * |  Unused (1-7)   |  AppendOnly Flag (0) |
+     * ------------------------------------------
+     * </pre>
+     *
+     * @since 0.1
+     */
+    public static final byte LOG_MAGIC_VALUE_V0 = 0;
+
+    private static final int V0_CRC_OFFSET = COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH;
+    private static final int V0_SCHEMA_ID_OFFSET = V0_CRC_OFFSET + CRC_LENGTH;
+    private static final int V0_ATTRIBUTES_OFFSET = V0_SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
+    private static final int V0_LAST_OFFSET_DELTA_OFFSET = V0_ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
+    private static final int V0_WRITE_CLIENT_ID_OFFSET =
+            V0_LAST_OFFSET_DELTA_OFFSET + LAST_OFFSET_DELTA_LENGTH;
+    private static final int V0_BATCH_SEQUENCE_OFFSET =
+            V0_WRITE_CLIENT_ID_OFFSET + WRITE_CLIENT_ID_LENGTH;
+    private static final int V0_RECORDS_COUNT_OFFSET =
+            V0_BATCH_SEQUENCE_OFFSET + BATCH_SEQUENCE_LENGTH;
+    private static final int V0_RECORDS_OFFSET = V0_RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
+
+    public static final int V0_RECORD_BATCH_HEADER_SIZE = V0_RECORDS_OFFSET;
+    private static final int V0_ARROW_CHANGETYPE_OFFSET = V0_RECORD_BATCH_HEADER_SIZE;
 
     // ----------------------------------------------------------------------------------------
     // Static Methods
     // ----------------------------------------------------------------------------------------
 
-    public static int commitTimestampOffset(byte magic) {
-        switch (magic) {
-            case LOG_MAGIC_VALUE_V0:
-                return V0_COMMIT_TIMESTAMP_OFFSET;
-            case LOG_MAGIC_VALUE_V1:
-                return V1_COMMIT_TIMESTAMP_OFFSET;
-            default:
-                throw new IllegalArgumentException("Unsupported magic value " + magic);
-        }
-    }
-
     public static int leaderEpochOffset(byte magic) {
-        switch (magic) {
-            case LOG_MAGIC_VALUE_V0:
-                // For V0, there is no leader epoch.
-                return NO_LEADER_EPOCH;
-            case LOG_MAGIC_VALUE_V1:
-                return V1_LEADER_EPOCH_OFFSET;
-            default:
-                throw new IllegalArgumentException("Unsupported magic value " + magic);
+        if (magic == LOG_MAGIC_VALUE_V1) {
+            return V1_LEADER_EPOCH_OFFSET;
         }
+        throw new IllegalArgumentException("Unsupported magic value " + magic);
     }
 
     public static int crcOffset(byte magic) {
         switch (magic) {
-            case LOG_MAGIC_VALUE_V0:
-                return V0_CRC_OFFSET;
             case LOG_MAGIC_VALUE_V1:
                 return V1_CRC_OFFSET;
+            case LOG_MAGIC_VALUE_V0:
+                return V0_CRC_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -221,10 +204,10 @@ public class LogRecordBatchFormat {
 
     public static int schemaIdOffset(byte magic) {
         switch (magic) {
-            case LOG_MAGIC_VALUE_V0:
-                return V0_SCHEMA_ID_OFFSET;
             case LOG_MAGIC_VALUE_V1:
                 return V1_SCHEMA_ID_OFFSET;
+            case LOG_MAGIC_VALUE_V0:
+                return V0_SCHEMA_ID_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -232,10 +215,10 @@ public class LogRecordBatchFormat {
 
     public static int attributeOffset(byte magic) {
         switch (magic) {
-            case LOG_MAGIC_VALUE_V0:
-                return V0_ATTRIBUTES_OFFSET;
             case LOG_MAGIC_VALUE_V1:
                 return V1_ATTRIBUTES_OFFSET;
+            case LOG_MAGIC_VALUE_V0:
+                return V0_ATTRIBUTES_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -243,10 +226,10 @@ public class LogRecordBatchFormat {
 
     public static int lastOffsetDeltaOffset(byte magic) {
         switch (magic) {
-            case LOG_MAGIC_VALUE_V0:
-                return V0_LAST_OFFSET_DELTA_OFFSET;
             case LOG_MAGIC_VALUE_V1:
                 return V1_LAST_OFFSET_DELTA_OFFSET;
+            case LOG_MAGIC_VALUE_V0:
+                return V0_LAST_OFFSET_DELTA_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -254,10 +237,10 @@ public class LogRecordBatchFormat {
 
     public static int writeClientIdOffset(byte magic) {
         switch (magic) {
-            case LOG_MAGIC_VALUE_V0:
-                return V0_WRITE_CLIENT_ID_OFFSET;
             case LOG_MAGIC_VALUE_V1:
                 return V1_WRITE_CLIENT_ID_OFFSET;
+            case LOG_MAGIC_VALUE_V0:
+                return V0_WRITE_CLIENT_ID_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -265,10 +248,10 @@ public class LogRecordBatchFormat {
 
     public static int batchSequenceOffset(byte magic) {
         switch (magic) {
-            case LOG_MAGIC_VALUE_V0:
-                return V0_BATCH_SEQUENCE_OFFSET;
             case LOG_MAGIC_VALUE_V1:
                 return V1_BATCH_SEQUENCE_OFFSET;
+            case LOG_MAGIC_VALUE_V0:
+                return V0_BATCH_SEQUENCE_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -276,10 +259,10 @@ public class LogRecordBatchFormat {
 
     public static int recordsCountOffset(byte magic) {
         switch (magic) {
-            case LOG_MAGIC_VALUE_V0:
-                return V0_RECORDS_COUNT_OFFSET;
             case LOG_MAGIC_VALUE_V1:
                 return V1_RECORDS_COUNT_OFFSET;
+            case LOG_MAGIC_VALUE_V0:
+                return V0_RECORDS_COUNT_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -287,10 +270,10 @@ public class LogRecordBatchFormat {
 
     public static int recordBatchHeaderSize(byte magic) {
         switch (magic) {
-            case LOG_MAGIC_VALUE_V0:
-                return V0_RECORD_BATCH_HEADER_SIZE;
             case LOG_MAGIC_VALUE_V1:
                 return V1_RECORD_BATCH_HEADER_SIZE;
+            case LOG_MAGIC_VALUE_V0:
+                return V0_RECORD_BATCH_HEADER_SIZE;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -298,10 +281,10 @@ public class LogRecordBatchFormat {
 
     public static int arrowChangeTypeOffset(byte magic) {
         switch (magic) {
-            case LOG_MAGIC_VALUE_V0:
-                return V0_ARROW_CHANGETYPE_OFFSET;
             case LOG_MAGIC_VALUE_V1:
                 return V1_ARROW_CHANGETYPE_OFFSET;
+            case LOG_MAGIC_VALUE_V0:
+                return V0_ARROW_CHANGETYPE_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }

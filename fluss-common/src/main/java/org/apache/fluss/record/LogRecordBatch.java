@@ -124,7 +124,7 @@ public interface LogRecordBatch {
     int batchSequence();
 
     /**
-     * Get leader epoch for this log record batch.
+     * Get leader epoch of this bucket for this log record batch.
      *
      * @return leader epoch
      */

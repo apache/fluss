@@ -27,7 +27,6 @@ import static org.apache.fluss.record.LogRecordBatchFormat.NO_LEADER_EPOCH;
 import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.attributeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.batchSequenceOffset;
-import static org.apache.fluss.record.LogRecordBatchFormat.commitTimestampOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.crcOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.lastOffsetDeltaOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.leaderEpochOffset;
@@ -51,7 +50,6 @@ public class LogRecordBatchFormatTest {
     @Test
     void testLogRecordBatchFormatForMagicV0() {
         byte magic = (byte) 0;
-        assertThat(commitTimestampOffset(magic)).isEqualTo(13);
         assertThat(leaderEpochOffset(magic)).isEqualTo(-1).isEqualTo(NO_LEADER_EPOCH);
         assertThat(crcOffset(magic)).isEqualTo(21);
         assertThat(schemaIdOffset(magic)).isEqualTo(25);
@@ -67,7 +65,6 @@ public class LogRecordBatchFormatTest {
     @Test
     void testLogRecordBatchFormatForMagicV1() {
         byte magic = (byte) 1;
-        assertThat(commitTimestampOffset(magic)).isEqualTo(13);
         assertThat(leaderEpochOffset(magic)).isEqualTo(21);
         assertThat(crcOffset(magic)).isEqualTo(25);
         assertThat(schemaIdOffset(magic)).isEqualTo(29);
