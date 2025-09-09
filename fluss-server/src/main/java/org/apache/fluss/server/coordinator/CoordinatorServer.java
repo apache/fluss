@@ -176,6 +176,16 @@ public class CoordinatorServer extends ServerBase {
             this.coordinatorContext = new CoordinatorContext();
             this.metadataCache = new CoordinatorMetadataCache();
 
+            coordinatorContext.setPartitionCountUpdateCallback(
+                    () -> {
+                        if (serverMetricGroup != null) {
+                            int totalPartitionCount = coordinatorContext.getTotalPartitionCount();
+                            ((CoordinatorMetricGroup.MutableGauge<Integer>)
+                                            serverMetricGroup.totalPartitionCount())
+                                    .setValue(totalPartitionCount);
+                        }
+                    });
+
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
             if (authorizer != null) {
                 authorizer.startup();

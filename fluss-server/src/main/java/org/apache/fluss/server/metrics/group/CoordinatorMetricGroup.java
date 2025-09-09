@@ -18,6 +18,8 @@
 package org.apache.fluss.server.metrics.group;
 
 import org.apache.fluss.metrics.CharacterFilter;
+import org.apache.fluss.metrics.Gauge;
+import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 
@@ -32,12 +34,17 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
     protected final String hostname;
     protected final String serverId;
 
+    private final MutableGauge<Integer> totalPartitionCount;
+
     public CoordinatorMetricGroup(
             MetricRegistry registry, String clusterId, String hostname, String serverId) {
         super(registry, new String[] {clusterId, hostname, NAME}, null);
         this.clusterId = clusterId;
         this.hostname = hostname;
         this.serverId = serverId;
+
+        this.totalPartitionCount = new MutableGauge<>(0);
+        gauge(MetricNames.TOTAL_PARTITION_COUNT, totalPartitionCount);
     }
 
     @Override
@@ -50,5 +57,26 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
         variables.put("cluster_id", clusterId);
         variables.put("host", hostname);
         variables.put("server_id", serverId);
+    }
+
+    public Gauge<Integer> totalPartitionCount() {
+        return totalPartitionCount;
+    }
+
+    public static class MutableGauge<T> implements Gauge<T> {
+        private volatile T value;
+
+        public MutableGauge(T initialValue) {
+            this.value = initialValue;
+        }
+
+        @Override
+        public T getValue() {
+            return value;
+        }
+
+        public void setValue(T value) {
+            this.value = value;
+        }
     }
 }
