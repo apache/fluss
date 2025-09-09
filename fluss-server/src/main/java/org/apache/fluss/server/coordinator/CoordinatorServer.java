@@ -183,7 +183,7 @@ public class CoordinatorServer extends ServerBase {
 
             this.lakeTableTieringManager = new LakeTableTieringManager();
 
-            MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+            MetadataManager metadataManager = new MetadataManager(zkClient, conf, ioExecutor);
             this.coordinatorService =
                     new CoordinatorService(
                             conf,
@@ -321,7 +321,7 @@ public class CoordinatorServer extends ServerBase {
     }
 
     private void createDefaultDatabase() {
-        MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+        MetadataManager metadataManager = new MetadataManager(zkClient, conf, ioExecutor);
         List<String> databases = metadataManager.listDatabases();
         if (databases.isEmpty()) {
             metadataManager.createDatabase(DEFAULT_DATABASE, DatabaseDescriptor.EMPTY, true);

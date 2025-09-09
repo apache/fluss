@@ -265,11 +265,7 @@ public class TableManager {
                         tablePartition.getTableId(), tablePartition.getPartitionId());
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NonExistentReplica);
         deleteRemoteDirectory(tablePartition);
-        try {
-            metadataManager.completeDeletePartition(tablePartition.getPartitionId());
-        } catch (Exception e) {
-            LOG.error("Fail to complete partition {} deletion.", tablePartition, e);
-        }
+        metadataManager.completeDeletePartition(tablePartition);
         coordinatorContext.removePartition(tablePartition);
     }
 
