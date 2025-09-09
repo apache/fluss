@@ -27,37 +27,50 @@ datalake.iceberg.type: hadoop
 datalake.iceberg.warehouse: /tmp/iceberg
 ```
 
-Fluss processes Iceberg configurations by removing the `datalake.iceberg.` prefix and then use the remaining configuration (without the prefix `datalake.iceberg.`) to create the Iceberg catalog. It 
-allows to pass other custom configurations to create the iceberg catalog.
-Checkout the [Iceberg Catalog Properties](https://iceberg.apache.org/docs/1.9.1/configuration/#catalog-properties) for more details on the available configurations of catalog.
+Fluss processes Iceberg configurations by stripping the `datalake.iceberg.` prefix and uses the stripped configurations (without the prefix `datalake.iceberg.`) to initialize the Iceberg catalog.
+It allows to pass other custom configurations to create the iceberg catalog.  Checkout the [Iceberg Catalog Properties](https://iceberg.apache.org/docs/1.9.1/configuration/#catalog-properties) for more details on the available configurations of catalog.
 
 Fluss supports all Iceberg catalog types that are compatible with Iceberg itself.
 For catalogs such as `hive`, `hadoop`, `rest`, `glue`, `nessie`, and `jdbc`, you can specify them using the configuration `datalake.iceberg.type` with the corresponding value (e.g., `hive`, `hadoop`, etc.).
-For other types of catalogs, you can use `datalake.iceberg.catalog-impl: <your_iceberg_impl_class_name>` to specify the catalog implementation.
+For other types of catalogs, you can use `datalake.iceberg.catalog-impl: <your_iceberg_catalog_impl_class_name>` to specify the catalog implementation.
 For example, configure with `datalake.iceberg.catalog-impl: org.apache.iceberg.snowflake.SnowflakeCatalog` to use Snowflake catalog.
 
-> **NOTE**:
-
+> **NOTE**:  
 > 1: Some catalog requires Hadoop related classes such as `hadoop`, `hive` catalog. Make sure hadoop related classes are in your classpath. You can either download from [pre-bundled Hadoop jar](https://repo.maven.apache.org/maven2/org/apache/flink/flink-shaded-hadoop-2-uber/2.8.3-10.0/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar)
-or [hadoop.tar.gz](https://archive.apache.org/dist/hadoop/common/hadoop-2.8.5/hadoop-2.8.5.tar.gz), and then put hadoop related class into `FLUSS_HOME/plugins/iceberg`
-
-> 2: Fluss only bundles the catalog implementation included in `iceberg-core` module. For any catalog implementation that not bundled in `iceberg-core` module, such as `hive`, please make sure put the catalog implementation jar into `FLUSS_HOME/plugins/iceberg`. 
+or [hadoop.tar.gz](https://archive.apache.org/dist/hadoop/common/hadoop-2.8.5/hadoop-2.8.5.tar.gz) which required to be unzipped. Then put hadoop related jars into `FLUSS_HOME/plugins/iceberg`.   
+> 2: Fluss only bundles the catalog implementation included in `iceberg-core` module. For any catalog implementation that not bundled in `iceberg-core` module, such as `hive`, please make sure put the catalog implementation jar into `FLUSS_HOME/plugins/iceberg`.   
+> 3: The version if Iceberg that Fluss bundles is based on `1.9.2`, please make sure the jars you put is compatible with `Iceberg-1.9.2`
 
 ### Start Tiering Service to Iceberg
 
 Then, you must start the datalake tiering service to tier Fluss's data to Iceberg. For guidance, you can refer to [Start The Datalake Tiering Service
-](maintenance/tiered-storage/lakehouse-storage.md#start-the-datalake-tiering-service). Although the example uses Paimon, the process is also applicable to Lance.
+](maintenance/tiered-storage/lakehouse-storage.md#start-the-datalake-tiering-service). Although the example uses Paimon, the process is also applicable to Iceberg.
 
+But in [Prepare required jars](maintenance/tiered-storage/lakehouse-storage.md#prepare-required-jars) step, you should follow this guidance:
+- Put [fluss-flink connector jar](/downloads) into `${FLINK_HOME}/lib`, you should choose a connector version matching your Flink version. If you're using Flink 1.20, please use [fluss-flink-1.20-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)
+- If you are using [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](maintenance/tiered-storage/remote-storage.md),
+  you should download the corresponding [Fluss filesystem jar](/downloads#filesystem-jars) and also put it into `${FLINK_HOME}/lib`
+- Put [fluss-lake-iceberg jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_VERSION$/fluss-lake-iceberg-$FLUSS_VERSION$.jar) into `${FLINK_HOME}/lib`
+- Put the jars required by Iceberg Catalog into `${FLINK_HOME}/lib`. For example, if you are using Hive catalog, you should put [iceberg-hive-metastore](https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-hive-metastore/1.9.2/iceberg-hive-metastore-1.9.2.jar), hadoop related jars, hive related jars into `${FLINK_HOME}/lib`
+- Put the jars required by Iceberg FileIO into `${FLINK_HOME}/lib`. For example, if your Iceberg is backed by S3, you should put [iceberg-aws-bundle](https://mvnrepository.com/artifact/org.apache.iceberg/iceberg-aws-bundle/1.9.2) into  `${FLINK_HOME}/lib`
+
+Additionally, when following the [Start Datalake Tiering Service](maintenance/tiered-storage/lakehouse-storage.md#start-datalake-tiering-service) guide, make sure to use Iceberg-specific configurations as parameters when starting the Flink tiering job:
+```shell
+<FLINK_HOME>/bin/flink run /path/to/fluss-flink-tiering-$FLUSS_VERSION$.jar \
+    --fluss.bootstrap.servers localhost:9123 \
+    --datalake.format iceberg \
+    --datalake.iceberg.type hadoop \
+    --datalake.iceberg.warehouse /tmp/iceberg
+```
 
 ## Table Mapping Between Fluss and Iceberg
 
+When a Fluss table is created or altered with the option `'table.datalake.enabled' = 'true'` and configured with Iceberg as the datalake format, Fluss will automatically create a corresponding Iceberg table with the same table path.
 
-## Introduction
-
-When a table is created or altered with the option `'table.datalake.enabled' = 'true'` and configured with Iceberg as the datalake format, Fluss will automatically create a corresponding Iceberg table with the same table path.
 The schema of the Iceberg table matches that of the Fluss table, except for the addition of three system columns at the end: `__bucket`, `__offset`, and `__timestamp`.  
 These system columns help Fluss clients consume data from Iceberg in a streaming fashion, such as seeking by a specific bucket using an offset or timestamp.
 
+Here is an example using Flink SQL to create a table with data lake enabled:
 ```sql title="Flink SQL"
 USE CATALOG fluss_catalog;
 
@@ -76,11 +89,8 @@ CREATE TABLE fluss_order_with_lake (
 );
 ```
 
-Then, the datalake tiering service continuously tiers data from Fluss to Iceberg. The parameter `table.datalake.freshness` controls the frequency that Fluss writes data to Iceberg tables. By default, the data freshness is 3 minutes.  
-For primary key tables, updates and deletes are handled using Iceberg's delete files (equality deletes and position deletes) with a merge-on-read (MOR) strategy for efficient change management.
-
-Since Fluss version 0.8, you can also specify Iceberg table properties when creating a datalake-enabled Fluss table by using the `iceberg.` prefix within the Fluss table properties clause.
-
+You can also specify Iceberg [table properties](https://iceberg.apache.org/docs/latest/configuration/#table-properties) when creating a datalake-enabled Fluss table by using the `iceberg.` prefix within the Fluss table properties clause. 
+Here is an example to change iceberg format to `orc` and set `commit.retry.num-retries` to `5`:
 ```sql title="Flink SQL"
 CREATE TABLE fluss_order_with_lake (
     `order_key` BIGINT,
@@ -95,29 +105,18 @@ CREATE TABLE fluss_order_with_lake (
      'table.datalake.enabled' = 'true',
      'table.datalake.freshness' = '30s',
      'table.datalake.auto-maintenance' = 'true',
-     'iceberg.write.format.default' = 'parquet',
+     'iceberg.write.format.default' = 'orc',
      'iceberg.commit.retry.num-retries' = '5'
 );
 ```
 
-For example, you can specify the Iceberg property `write.format.default` to change the file format of the Iceberg table, or set `commit.retry.num-retries` to configure retry behavior for commits. The `table.datalake.auto-maintenance` option (true by default) enables automatic maintenance tasks such as file compaction and snapshot expiration.
-
-## Table Types and Bucketing Strategy
-
-Fluss uses a special bucketing strategy when integrating with Iceberg to ensure data distribution consistency between Fluss and Iceberg layers. This enables efficient data access and future union read capabilities.
-
-### Bucket Strategy
-
-When Iceberg is configured as the datalake format, Fluss uses `IcebergBucketingFunction` to bucket data following Iceberg's bucketing strategy. This ensures:
-- **Data distribution consistency**: The same record goes to the same bucket in both Fluss and Iceberg
-- **Efficient data access**: You can quickly locate data for a specific Fluss bucket within Iceberg
 ### Primary Key Tables
 
 Primary key tables in Fluss are mapped to Iceberg tables with:
 - **Primary key constraints**: The Iceberg table maintains the same primary key definition
 - **Merge-on-read (MOR) strategy**: Updates and deletes are handled efficiently using Iceberg's MOR capabilities
-- **Required bucket keys**: Primary key tables must have exactly one bucket key defined
-- **Bucket partitioning**: Automatically partitioned by the bucket key using Iceberg's bucket transform
+- **Bucket partitioning**: Automatically partitioned by the primary key using Iceberg's bucket transform with the bucket num of Fluss to align with Fluss
+- **Sorted by system column `__offset`**: Sorted by the system column `__offset` derived from Fluss change log, which enables to map to the change log of Fluss with keeping the order
 
 ```sql title="Primary Key Table Example"
 CREATE TABLE user_profiles (
@@ -150,12 +149,14 @@ CREATE TABLE user_profiles (
 SORTED BY (__offset ASC);
 ```
 
-### Log Tables (Append-Only)
+### Log Tables
 
-Log tables support different bucketing configurations:
+The table mapping for Fluss log table are a little of different depending on whether the bucket key is specified or not.
 
 #### No Bucket Key
-For log tables without a configured bucket key, Iceberg uses identity partitioning on the `__bucket` system column:
+Log Table without bucket in Fluss are mapped to Iceberg tables with:
+- **Identity partitioning**: Using identity partitioning on the `__bucket` system column, which enables seek to the data files in iceberg if a specified Fluss bucket is given
+- **Sorted by system column `__offset`**: Sorted by the system column `__offset` derived from Fluss log, which enables to mapping to the log data of Fluss with keeping the order
 
 ```sql title="Log Table without Bucket Key"
 CREATE TABLE access_logs (
@@ -184,7 +185,9 @@ SORTED BY (__offset ASC);
 ```
 
 #### Single Bucket Key
-For log tables with one bucket key, Iceberg uses bucket partitioning:
+Log Table with one bucket key in Fluss are mapped to Iceberg tables with:
+- **Bucket partitioning**: Automatically partitioned by the bucket key using Iceberg's bucket transform with the bucket num of Fluss to align with Fluss
+- **Sorted by system column `__offset`**:  Sorted by the system column `__offset` derived from Fluss log, which enables to mapping to the log data of Fluss with keeping the order
 
 ```sql title="Log Table with Bucket Key"
 CREATE TABLE order_events (
@@ -215,7 +218,7 @@ SORTED BY (__offset ASC);
 
 ### Partitioned Tables
 
-For Fluss partitioned tables, Iceberg first partitions by Fluss partition keys, then by bucket keys:
+For Fluss partitioned tables, Iceberg first partitions by Fluss partition keys, then by following the above rules:
 
 ```sql title="Partitioned Table Example"
 CREATE TABLE daily_sales (
@@ -249,37 +252,9 @@ SORTED BY (__offset ASC);
 
 ## Read Tables
 
-### Reading with Apache Flink
-
-For a table with the option `'table.datalake.enabled' = 'true'` and Iceberg configured as the lakehouse storage, you can read data stored in Iceberg using the `$lake` suffix in the table name.
-
-#### Read Data Only in Iceberg
-
-To read only data stored in Iceberg, use the `$lake` suffix in the table name:
-
-```sql title="Flink SQL"
--- Read from Iceberg
-SELECT COUNT(*) FROM orders$lake;
-```
-
-```sql title="Flink SQL"
--- Query system tables
-SELECT * FROM orders$lake$snapshots;
-```
-
-When you specify the `$lake` suffix, the table behaves like a standard Iceberg table with full Iceberg capabilities including time travel, system tables, and more.
-
-#### Union Read Limitations
-
-**Important**: Iceberg does not currently support union read of data from both Fluss and Iceberg layers. You can only read data from:
-- **Fluss layer only**: Fluss layer only: Query the table directly without `$lake` suffix (reads all data from Fluss tablet servers - both historical and fresh data)
-- **Iceberg layer only**: Query the table with `$lake` suffix (reads only tiered historical data from lakehouse storage)
-
-Union read functionality will be added in future releases.
-
 ### Reading with other Engines
 
-Since data tiered to Iceberg from Fluss is stored as standard Iceberg tables, you can use any Iceberg-compatible engine. Below is an example using [StarRocks](https://docs.starrocks.io/docs/data_source/catalog/iceberg_catalog/):
+Since data tiered to Iceberg from Fluss is stored as standard Iceberg tables, you can use any Iceberg-compatible engine. Below is an example using [StarRocks](https://docs.starrocks.io/docs/data_source/catalog/iceberg/iceberg_catalog/):
 
 #### StarRocks with Hadoop Catalog
 
@@ -288,7 +263,7 @@ CREATE EXTERNAL CATALOG iceberg_catalog
 PROPERTIES (
     "type" = "iceberg",
     "iceberg.catalog.type" = "hadoop",
-    "iceberg.catalog.warehouse" = "/tmp/iceberg_data_warehouse"
+    "iceberg.catalog.warehouse" = "/tmp/iceberg"
 );
 ```
 
@@ -303,18 +278,6 @@ FOR SYSTEM_VERSION AS OF 123456789;
 -- Query with bucket filtering for efficiency
 SELECT * FROM iceberg_catalog.fluss.orders 
 WHERE __bucket = 1 AND __offset >= 100;
-```
-
-#### StarRocks with Hive Catalog
-
-```sql title="StarRocks SQL with Hive Catalog"
-CREATE EXTERNAL CATALOG iceberg_catalog
-PROPERTIES (
-    "type" = "iceberg",
-    "iceberg.catalog.type" = "hive",
-    "hive.metastore.uris" = "thrift://<hive-metastore-host>:<port>",
-    "iceberg.catalog.warehouse" = "hdfs:///path/to/warehouse"
-);
 ```
 
 > **NOTE**: The configuration values must match those used when configuring Iceberg as the lakehouse storage for Fluss in `server.yaml`.
@@ -347,17 +310,15 @@ When integrating with Iceberg, Fluss automatically converts between Fluss data t
 
 ### Auto Compaction
 
-The `table.datalake.auto-compaction` option (disabled by default) provides automatic compaction:
-
-- **File Compaction**: Small files are automatically compacted during tiering
-- **Per-bucket Compaction**: Compaction operates within individual buckets for efficiency
+The table option `table.datalake.auto-compaction` (disabled by default) provides per-table automatic compaction control. 
+When enabled for a specific table, compaction will be triggered automatically during tiering service write operations to that table.
 
 ### Snapshot Metadata
 
 Fluss adds specific metadata to Iceberg snapshots for traceability:
 
 - **commit-user**: Set to `__fluss_lake_tiering` to identify Fluss-generated snapshots
-- **fluss-bucket-offset**: JSON string containing the Fluss bucket offset mapping:
+- **fluss-bucket-offset**: JSON string containing the Fluss bucket offset mapping to track the tiering progress:
   ```json
   [
     {"bucket": 0, "offset": 1234},
@@ -370,12 +331,6 @@ Fluss adds specific metadata to Iceberg snapshots for traceability:
 
 When using Iceberg as lakehouse storage with Fluss, there are current limitations:
 
-### Current Limitations
 - **Union Read**: Union read of data from both Fluss and Iceberg layers is not supported
 - **Complex Types**: Array, Map, and Row types are not supported
 - **Multiple bucket keys**: Not supported until Iceberg implements multi-argument partition transforms
-
-### Unsupported Scenarios
-Tables with multiple bucket keys or unsupported bucket data types:
-- **Cannot enable datalake**: Throws UnsupportedOperationException when attempting to create lakehouse-enabled tables 
-- **Must be configured at table creation time**: Dynamic datalake enablement is not possible for these configurations
