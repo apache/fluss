@@ -24,15 +24,20 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 
 import org.apache.flink.core.execution.JobClient;
+import org.apache.flink.core.execution.SavepointFormatType;
+import org.apache.flink.table.api.TableResult;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.io.File;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -48,6 +53,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** The IT case for Flink union data in lake and fluss for log table. */
 class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
+
+    @TempDir public static File savepointDir;
 
     @BeforeAll
     protected static void beforeAll() {
@@ -167,6 +174,67 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         }
         assertResultsIgnoreOrder(
                 actual, writtenRows.stream().map(Row::toString).collect(Collectors.toList()), true);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testUnionReadLogTableFailover(boolean isPartitioned) throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName1 =
+                "restore_logTable_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String resultTableName =
+                "result_table" + (isPartitioned ? "partitioned" : "non_partitioned");
+
+        TablePath table1 = TablePath.of(DEFAULT_DB, tableName1);
+        TablePath resultTable = TablePath.of(DEFAULT_DB, resultTableName);
+        List<Row> writtenRows = new LinkedList<>();
+        long tableId = prepareLogTable(table1, DEFAULT_BUCKET_NUM, isPartitioned, writtenRows);
+        // wait until records has been synced
+        waitUntilBucketSynced(table1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
+
+        StreamTableEnvironment streamTEnv = buildSteamTEnv(null);
+        // now, start to read the log table, which will read paimon
+        // may read fluss or not, depends on the log offset of paimon snapshot
+        createFullTypeLogTable(resultTable, DEFAULT_BUCKET_NUM, isPartitioned, false);
+        TableResult insertResult =
+                streamTEnv.executeSql(
+                        "insert into " + resultTableName + " select * from " + tableName1);
+
+        CloseableIterator<Row> actual =
+                streamTEnv.executeSql("select * from " + resultTableName).collect();
+        assertResultsIgnoreOrder(
+                actual,
+                writtenRows.stream().map(Row::toString).collect(Collectors.toList()),
+                false);
+
+        // now, stop the job with save point
+        String savepointPath =
+                insertResult
+                        .getJobClient()
+                        .get()
+                        .stopWithSavepoint(
+                                false,
+                                savepointDir.getAbsolutePath(),
+                                SavepointFormatType.CANONICAL)
+                        .get();
+
+        // re buildSteamTEnv
+        streamTEnv = buildSteamTEnv(savepointPath);
+        insertResult =
+                streamTEnv.executeSql(
+                        "insert into " + resultTableName + " select * from " + tableName1);
+
+        // write some log data again
+        List<Row> rows = writeRows(table1, 3, isPartitioned);
+
+        assertResultsIgnoreOrder(
+                actual, rows.stream().map(Row::toString).collect(Collectors.toList()), true);
+
+        // cancel jobs
+        insertResult.getJobClient().get().cancel().get();
+        jobClient.cancel().get();
     }
 
     private long prepareLogTable(

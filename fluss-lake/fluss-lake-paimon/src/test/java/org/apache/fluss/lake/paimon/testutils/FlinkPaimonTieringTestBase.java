@@ -282,6 +282,12 @@ public abstract class FlinkPaimonTieringTestBase {
 
     protected long createFullTypeLogTable(TablePath tablePath, int bucketNum, boolean isPartitioned)
             throws Exception {
+        return createFullTypeLogTable(tablePath, bucketNum, isPartitioned, true);
+    }
+
+    protected long createFullTypeLogTable(
+            TablePath tablePath, int bucketNum, boolean isPartitioned, boolean lakeEnabled)
+            throws Exception {
         Schema.Builder schemaBuilder =
                 Schema.newBuilder()
                         .column("f_boolean", DataTypes.BOOLEAN())
@@ -301,10 +307,12 @@ public abstract class FlinkPaimonTieringTestBase {
                         .column("f_binary", DataTypes.BINARY(4));
 
         TableDescriptor.Builder tableBuilder =
-                TableDescriptor.builder()
-                        .distributedBy(bucketNum, "f_int")
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+                TableDescriptor.builder().distributedBy(bucketNum, "f_int");
+        if (lakeEnabled) {
+            tableBuilder
+                    .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        }
 
         if (isPartitioned) {
             schemaBuilder.column("p", DataTypes.STRING());

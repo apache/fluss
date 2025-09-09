@@ -21,11 +21,14 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
+import org.apache.flink.configuration.Configuration;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.RegisterExtension;
+
+import javax.annotation.Nullable;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 
@@ -60,7 +63,12 @@ public class FlinkUnionReadTestBase extends FlinkPaimonTieringTestBase {
         return FLUSS_CLUSTER_EXTENSION;
     }
 
-    private void buildStreamTEnv() {
+    protected StreamTableEnvironment buildSteamTEnv(@Nullable String savepointPath) {
+        Configuration conf = new Configuration();
+        if (savepointPath != null) {
+            conf.setString("execution.savepoint.path", savepointPath);
+            execEnv.configure(conf);
+        }
         String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
         // create table environment
         streamTEnv = StreamTableEnvironment.create(execEnv, EnvironmentSettings.inStreamingMode());
@@ -71,6 +79,11 @@ public class FlinkUnionReadTestBase extends FlinkPaimonTieringTestBase {
                         CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         streamTEnv.executeSql("use catalog " + CATALOG_NAME);
         streamTEnv.executeSql("use " + DEFAULT_DB);
+        return streamTEnv;
+    }
+
+    private void buildStreamTEnv() {
+        buildSteamTEnv(null);
     }
 
     public void buildBatchTEnv() {
