@@ -5,10 +5,52 @@ sidebar_position: 2
 
 # Iceberg
 
+## Introduction
+
 [Apache Iceberg](https://iceberg.apache.org/) is an open table format for huge analytic datasets. It provides ACID transactions, schema evolution, and efficient data organization for data lakes.
 To integrate Fluss with Iceberg, you must enable lakehouse storage and configure Iceberg as the lakehouse storage. For more details, see [Enable Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md#enable-lakehouse-storage).
 
-Supported Iceberg Versions: Fluss supports both Iceberg v1 and v2 table formats. Log tables (append-only) are compatible with v1 tables, while primary key tables leverage v2 features such as delete files and merge-on-read capabilities for efficient updates and deletes.
+> **NOTE**: Iceberg requires JDK11 or later. Please ensure that both your Fluss deployment and the Flink cluster used for tiering services are running on JDK11+.
+
+
+## Configure Iceberg as LakeHouse Storage
+
+### Configure Iceberg in Cluster Configurations
+
+To configure Iceberg as the lakehouse storage, you must configure the following configurations in `server.yaml`:
+```yaml
+# Iceberg configuration
+datalake.format: iceberg
+
+# the catalog config about Iceberg, assuming using Hadoop catalog,
+datalake.iceberg.type: hadoop
+datalake.iceberg.warehouse: /tmp/iceberg
+```
+
+Fluss processes Iceberg configurations by removing the `datalake.iceberg.` prefix and then use the remaining configuration (without the prefix `datalake.iceberg.`) to create the Iceberg catalog. It 
+allows to pass other custom configurations to create the iceberg catalog.
+Checkout the [Iceberg Catalog Properties](https://iceberg.apache.org/docs/1.9.1/configuration/#catalog-properties) for more details on the available configurations of catalog.
+
+Fluss supports all Iceberg catalog types that are compatible with Iceberg itself.
+For catalogs such as `hive`, `hadoop`, `rest`, `glue`, `nessie`, and `jdbc`, you can specify them using the configuration `datalake.iceberg.type` with the corresponding value (e.g., `hive`, `hadoop`, etc.).
+For other types of catalogs, you can use `datalake.iceberg.catalog-impl: <your_iceberg_impl_class_name>` to specify the catalog implementation.
+For example, configure with `datalake.iceberg.catalog-impl: org.apache.iceberg.snowflake.SnowflakeCatalog` to use Snowflake catalog.
+
+> **NOTE**:
+
+> 1: Some catalog requires Hadoop related classes such as `hadoop`, `hive` catalog. Make sure hadoop related classes are in your classpath. You can either download from [pre-bundled Hadoop jar](https://repo.maven.apache.org/maven2/org/apache/flink/flink-shaded-hadoop-2-uber/2.8.3-10.0/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar)
+or [hadoop.tar.gz](https://archive.apache.org/dist/hadoop/common/hadoop-2.8.5/hadoop-2.8.5.tar.gz), and then put hadoop related class into `FLUSS_HOME/plugins/iceberg`
+
+> 2: Fluss only bundles the catalog implementation included in `iceberg-core` module. For any catalog implementation that not bundled in `iceberg-core` module, such as `hive`, please make sure put the catalog implementation jar into `FLUSS_HOME/plugins/iceberg`. 
+
+### Start Tiering Service to Iceberg
+
+Then, you must start the datalake tiering service to tier Fluss's data to Iceberg. For guidance, you can refer to [Start The Datalake Tiering Service
+](maintenance/tiered-storage/lakehouse-storage.md#start-the-datalake-tiering-service). Although the example uses Paimon, the process is also applicable to Lance.
+
+
+## Table Mapping Between Fluss and Iceberg
+
 
 ## Introduction
 
