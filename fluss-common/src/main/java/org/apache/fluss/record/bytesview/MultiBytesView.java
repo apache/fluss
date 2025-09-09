@@ -105,6 +105,32 @@ public class MultiBytesView implements BytesView {
             return this;
         }
 
+        public Builder addBytes(BytesView bytesView) {
+            if (bytesView instanceof FileRegionBytesView) {
+                FileRegionBytesView fileRegionBytesView = (FileRegionBytesView) bytesView;
+                if (lastFileRegionView != null
+                        && lastFileRegionView.fileChannel == fileRegionBytesView.fileChannel
+                        && lastFileRegionView.position + lastFileRegionView.size
+                                == fileRegionBytesView.position) {
+                    // merge file region with previous one if they are continuous to improve
+                    // file read performance.
+                    lastFileRegionView =
+                            new FileRegionBytesView(
+                                    lastFileRegionView.fileChannel,
+                                    lastFileRegionView.position,
+                                    lastFileRegionView.size + fileRegionBytesView.size);
+                    views.set(views.size() - 1, lastFileRegionView);
+                } else {
+                    lastFileRegionView = fileRegionBytesView;
+                    views.add(fileRegionBytesView);
+                }
+            } else {
+                views.add(bytesView);
+                lastFileRegionView = null;
+            }
+            return this;
+        }
+
         /** Adds a bytes section from a range of {@link FileChannel}. */
         public Builder addBytes(FileChannel fileChannel, long position, int size) {
             if (lastFileRegionView != null
@@ -123,6 +149,10 @@ public class MultiBytesView implements BytesView {
                 views.add(lastFileRegionView);
             }
             return this;
+        }
+
+        public boolean isEmpty() {
+            return views.isEmpty();
         }
 
         /** Builds a {@link MultiBytesView}. */

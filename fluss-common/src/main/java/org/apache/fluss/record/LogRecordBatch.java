@@ -25,6 +25,10 @@ import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 
 import java.util.Iterator;
+import java.util.Optional;
+
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V2;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 
 /**
  * A record batch is a container for {@link LogRecord LogRecords}.
@@ -33,17 +37,8 @@ import java.util.Iterator;
  */
 @PublicEvolving
 public interface LogRecordBatch {
-
-    /** The "magic" values. */
-    byte LOG_MAGIC_VALUE_V0 = 0;
-
     /** The current "magic" value. */
-    byte CURRENT_LOG_MAGIC_VALUE = LOG_MAGIC_VALUE_V0;
-
-    /** Value used if non-idempotent. */
-    long NO_WRITER_ID = -1L;
-
-    int NO_BATCH_SEQUENCE = -1;
+    byte CURRENT_LOG_MAGIC_VALUE = LOG_MAGIC_VALUE_V2;
 
     /**
      * Check whether the checksum of this batch is correct.
@@ -51,6 +46,17 @@ public interface LogRecordBatch {
      * @return true If so, false otherwise
      */
     boolean isValid();
+
+    /**
+     * Get the statistics of this record batch using the provided read context.
+     *
+     * <p>This method can deserialize statistics when the read context provides the necessary schema
+     * information.
+     *
+     * @param context The read context that provides schema information
+     * @return Optional containing the statistics if available and valid
+     */
+    Optional<LogRecordBatchStatistics> getStatistics(ReadContext context);
 
     /** Raise an exception if the checksum is not valid. */
     void ensureValid();
@@ -128,6 +134,13 @@ public interface LogRecordBatch {
      * @return batch base sequence
      */
     int batchSequence();
+
+    /**
+     * Get leader epoch for this log record batch.
+     *
+     * @return leader epoch
+     */
+    int leaderEpoch();
 
     /**
      * Get the size in bytes of this batch, including the size of the record and the batch overhead.

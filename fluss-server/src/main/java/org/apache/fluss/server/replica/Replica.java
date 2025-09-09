@@ -43,6 +43,8 @@ import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
+import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.protocol.Errors;
@@ -169,7 +171,8 @@ public final class Replica {
 
     private final Schema schema;
     private final TableConfig tableConfig;
-    // logFormat and arrowCompressionInfo are used in hot-path, so cache them here.
+    private final TableInfo tableInfo;
+
     private final LogFormat logFormat;
     private final ArrowCompressionInfo arrowCompressionInfo;
     private final AtomicReference<Integer> leaderReplicaIdOpt = new AtomicReference<>();
@@ -234,6 +237,7 @@ public final class Replica {
         this.bucketMetricGroup = bucketMetricGroup;
         this.schema = tableInfo.getSchema();
         this.tableConfig = tableInfo.getTableConfig();
+        this.tableInfo = tableInfo;
         this.logFormat = tableConfig.getLogFormat();
         this.arrowCompressionInfo = tableConfig.getArrowCompressionInfo();
         this.snapshotContext = snapshotContext;
@@ -1196,6 +1200,8 @@ public final class Replica {
                                         Integer.MAX_VALUE,
                                         FetchIsolation.HIGH_WATERMARK,
                                         true,
+                                        null,
+                                        null,
                                         null);
                         return dataInfo.getRecords();
                     } catch (IOException e) {
@@ -1340,13 +1346,29 @@ public final class Replica {
 
         // todo validate fetched epoch.
 
+        // Create ReadContext for batch filtering if needed
+        LogRecordBatch.ReadContext readContext = null;
+        if (fetchParams.gatTableRecordBatchFilter(tableBucket.getTableId()) != null) {
+            if (logFormat == LogFormat.ARROW) {
+                readContext =
+                        LogRecordReadContext.createArrowReadContext(
+                                schema.getRowType(), tableInfo.getSchemaId());
+            } else if (logFormat == LogFormat.INDEXED) {
+                readContext =
+                        LogRecordReadContext.createIndexedReadContext(
+                                schema.getRowType(), tableInfo.getSchemaId());
+            }
+        }
+
         FetchDataInfo fetchDataInfo =
                 logTablet.read(
                         readOffset,
                         fetchParams.maxFetchBytes(),
                         fetchParams.isolation(),
                         fetchParams.minOneMessage(),
-                        fetchParams.projection());
+                        fetchParams.projection(),
+                        fetchParams.gatTableRecordBatchFilter(tableBucket.getTableId()),
+                        readContext);
         return new LogReadInfo(fetchDataInfo, initialHighWatermark, initialLogEndOffset);
     }
 

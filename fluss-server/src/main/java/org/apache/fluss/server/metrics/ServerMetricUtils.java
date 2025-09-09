@@ -48,6 +48,7 @@ import java.lang.management.MemoryUsage;
 import java.lang.management.ThreadMXBean;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Optional;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
@@ -69,6 +70,8 @@ public class ServerMetricUtils {
     static final String MEMORY_COMMITTED = "committed";
     static final String MEMORY_MAX = "max";
 
+    private static volatile TabletServerMetricGroup tabletServerMetricGroup = null;
+
     @VisibleForTesting static final String METRIC_GROUP_MEMORY = "memory";
 
     public static CoordinatorMetricGroup createCoordinatorGroup(
@@ -85,10 +88,14 @@ public class ServerMetricUtils {
             @Nullable String rack,
             String hostname,
             int serverId) {
-        TabletServerMetricGroup tabletServerMetricGroup =
+        tabletServerMetricGroup =
                 new TabletServerMetricGroup(registry, clusterId, rack, hostname, serverId);
         createAndInitializeStatusMetricGroup(tabletServerMetricGroup);
         return tabletServerMetricGroup;
+    }
+
+    public static Optional<TabletServerMetricGroup> getTabletServerMetricGroup() {
+        return Optional.ofNullable(tabletServerMetricGroup);
     }
 
     public static String validateAndGetClusterId(Configuration conf) {

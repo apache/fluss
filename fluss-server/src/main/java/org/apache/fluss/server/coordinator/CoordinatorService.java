@@ -255,6 +255,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // apply system defaults if the config is not set
         tableDescriptor = applySystemDefaults(tableDescriptor);
 
+        // validate statistics configuration
+        TableStatisticsConfigValidator.validateOrThrow(tableDescriptor);
+
         // the distribution and bucket count must be set now
         //noinspection OptionalGetWithoutIsPresent
         int bucketCount = tableDescriptor.getTableDistribution().get().getBucketCount().get();

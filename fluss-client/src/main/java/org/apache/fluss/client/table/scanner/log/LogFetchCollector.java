@@ -154,9 +154,12 @@ public class LogFetchCollector {
                     "Ignoring fetched records for {} at offset {} since the current offset is null which means the "
                             + "bucket has been unsubscribe.",
                     tb,
-                    nextInLineFetch.nextFetchOffset());
+                    nextInLineFetch.fetchOffset());
         } else {
-            if (nextInLineFetch.nextFetchOffset() == offset) {
+            // Accept non-continuous batches from server (e.g., due to filtering)
+            // The server may return batches with gaps, but we should process them
+            // and start the next fetch from the last batch's nextLogOffset
+            if (nextInLineFetch.fetchOffset() == offset) {
                 List<ScanRecord> records = nextInLineFetch.fetchRecords(maxRecords);
                 LOG.trace(
                         "Returning {} fetched records at offset {} for assigned bucket {}.",
@@ -180,7 +183,7 @@ public class LogFetchCollector {
                 LOG.warn(
                         "Ignoring fetched records for {} at offset {} since the current offset is {}",
                         nextInLineFetch.tableBucket,
-                        nextInLineFetch.nextFetchOffset(),
+                        nextInLineFetch.fetchOffset(),
                         offset);
             }
         }
@@ -215,7 +218,7 @@ public class LogFetchCollector {
 
     private @Nullable CompletedFetch handleInitializeSuccess(CompletedFetch completedFetch) {
         TableBucket tb = completedFetch.tableBucket;
-        long fetchOffset = completedFetch.nextFetchOffset();
+        long fetchOffset = completedFetch.fetchOffset();
 
         // we are interested in this fetch only if the beginning offset matches the
         // current consumed position.
@@ -249,7 +252,7 @@ public class LogFetchCollector {
     private void handleInitializeErrors(
             CompletedFetch completedFetch, Errors error, String errorMessage) {
         TableBucket tb = completedFetch.tableBucket;
-        long fetchOffset = completedFetch.nextFetchOffset();
+        long fetchOffset = completedFetch.fetchOffset();
         if (error == Errors.NOT_LEADER_OR_FOLLOWER
                 || error == Errors.LOG_STORAGE_EXCEPTION
                 || error == Errors.KV_STORAGE_EXCEPTION

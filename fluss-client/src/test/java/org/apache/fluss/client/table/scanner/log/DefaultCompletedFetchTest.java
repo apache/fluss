@@ -49,6 +49,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.TestData.DATA2;
 import static org.apache.fluss.record.TestData.DATA2_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA2_TABLE_ID;
@@ -227,7 +228,7 @@ public class DefaultCompletedFetchTest {
     private MemoryLogRecords createMemoryLogRecords(List<Object[]> objects, LogFormat logFormat)
             throws Exception {
         return createRecordsWithoutBaseLogOffset(
-                rowType, DEFAULT_SCHEMA_ID, 0L, 1000L, objects, logFormat);
+                rowType, DEFAULT_SCHEMA_ID, 0L, 1000L, CURRENT_LOG_MAGIC_VALUE, objects, logFormat);
     }
 
     private MemoryLogRecords genRecordsWithProjection(List<Object[]> objects, Projection projection)
@@ -236,7 +237,13 @@ public class DefaultCompletedFetchTest {
         FileLogRecords fileLogRecords = FileLogRecords.open(logFile, false, 1024 * 1024, false);
         fileLogRecords.append(
                 createRecordsWithoutBaseLogOffset(
-                        rowType, DEFAULT_SCHEMA_ID, 0L, 1000L, objects, LogFormat.ARROW));
+                        rowType,
+                        DEFAULT_SCHEMA_ID,
+                        0L,
+                        1000L,
+                        CURRENT_LOG_MAGIC_VALUE,
+                        objects,
+                        LogFormat.ARROW));
         fileLogRecords.flush();
 
         FileLogProjection fileLogProjection = new FileLogProjection();

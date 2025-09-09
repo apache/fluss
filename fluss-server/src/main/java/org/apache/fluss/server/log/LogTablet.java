@@ -39,6 +39,7 @@ import org.apache.fluss.record.FileLogRecords;
 import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.record.RecordBatchFilter;
 import org.apache.fluss.server.log.LocalLog.SegmentDeletionReason;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 import org.apache.fluss.utils.FlussPaths;
@@ -368,13 +369,14 @@ public final class LogTablet {
         return append(records, false);
     }
 
-    /** Read messages from the local log. */
     public FetchDataInfo read(
             long readOffset,
             int maxLength,
             FetchIsolation fetchIsolation,
             boolean minOneMessage,
-            @Nullable FileLogProjection projection)
+            @Nullable FileLogProjection projection,
+            @Nullable RecordBatchFilter recordBatchFilter,
+            @Nullable LogRecordBatch.ReadContext readContext)
             throws IOException {
         LogOffsetMetadata maxOffsetMetadata = null;
         if (fetchIsolation == FetchIsolation.LOG_END) {
@@ -383,7 +385,14 @@ public final class LogTablet {
             maxOffsetMetadata = fetchHighWatermarkMetadata();
         }
 
-        return localLog.read(readOffset, maxLength, minOneMessage, maxOffsetMetadata, projection);
+        return localLog.read(
+                readOffset,
+                maxLength,
+                minOneMessage,
+                maxOffsetMetadata,
+                projection,
+                recordBatchFilter,
+                readContext);
     }
 
     /**

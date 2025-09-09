@@ -57,8 +57,9 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
-import static org.apache.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
-import static org.apache.fluss.record.LogRecordBatch.NO_WRITER_ID;
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PK;
@@ -671,6 +672,7 @@ final class ReplicaTest extends ReplicaTestBase {
                 DEFAULT_SCHEMA_ID,
                 baseOffset,
                 -1L,
+                CURRENT_LOG_MAGIC_VALUE,
                 NO_WRITER_ID,
                 NO_BATCH_SEQUENCE,
                 changeTypes,

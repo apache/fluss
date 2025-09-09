@@ -34,6 +34,7 @@ import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
@@ -74,6 +75,8 @@ public class FlinkSource<OUT>
 
     private final @Nullable LakeSource<LakeSplit> lakeSource;
 
+    @Nullable private final Predicate logRecordBatchFilter;
+
     public FlinkSource(
             Configuration flussConf,
             TablePath tablePath,
@@ -81,6 +84,7 @@ public class FlinkSource<OUT>
             boolean isPartitioned,
             RowType sourceOutputType,
             @Nullable int[] projectedFields,
+            @Nullable Predicate logRecordBatchFilter,
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
@@ -93,6 +97,7 @@ public class FlinkSource<OUT>
                 isPartitioned,
                 sourceOutputType,
                 projectedFields,
+                logRecordBatchFilter,
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,
@@ -108,6 +113,7 @@ public class FlinkSource<OUT>
             boolean isPartitioned,
             RowType sourceOutputType,
             @Nullable int[] projectedFields,
+            @Nullable Predicate logRecordBatchFilter,
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
@@ -126,6 +132,7 @@ public class FlinkSource<OUT>
         this.streaming = streaming;
         this.partitionFilters = checkNotNull(partitionFilters);
         this.lakeSource = lakeSource;
+        this.logRecordBatchFilter = logRecordBatchFilter;
     }
 
     @Override
@@ -201,6 +208,7 @@ public class FlinkSource<OUT>
                 sourceOutputType,
                 context,
                 projectedFields,
+                logRecordBatchFilter,
                 flinkSourceReaderMetrics,
                 recordEmitter,
                 lakeSource);
