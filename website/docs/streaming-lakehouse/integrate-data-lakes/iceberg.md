@@ -30,8 +30,7 @@ datalake.iceberg.warehouse: /tmp/iceberg
 Fluss processes Iceberg configurations by stripping the `datalake.iceberg.` prefix and uses the stripped configurations (without the prefix `datalake.iceberg.`) to initialize the Iceberg catalog.
 This approach enables passing custom configurations for iceberg catalog initiation. Checkout the [Iceberg Catalog Properties](https://iceberg.apache.org/docs/1.9.1/configuration/#catalog-properties) for more details on the available configurations of catalog.
 
-Fluss supports all Iceberg catalog types that are compatible with Iceberg itself.
-For catalogs such as `hive`, `hadoop`, `rest`, `glue`, `nessie`, and `jdbc`, you can specify them using the configuration `datalake.iceberg.type` with the corresponding value (e.g., `hive`, `hadoop`, etc.).
+Fluss supports all Iceberg-compatible catalog types. For catalogs such as `hive`, `hadoop`, `rest`, `glue`, `nessie`, and `jdbc`, you can specify them using the configuration `datalake.iceberg.type` with the corresponding value (e.g., `hive`, `hadoop`, etc.).
 For other types of catalogs, you can use `datalake.iceberg.catalog-impl: <your_iceberg_catalog_impl_class_name>` to specify the catalog implementation.
 For example, configure with `datalake.iceberg.catalog-impl: org.apache.iceberg.snowflake.SnowflakeCatalog` to use Snowflake catalog.
 
@@ -155,7 +154,7 @@ The table mapping for Fluss log table are a little of different depending on whe
 
 #### No Bucket Key
 Log Table without bucket in Fluss are mapped to Iceberg tables with:
-- **Identity partitioning**: Using identity partitioning on the `__bucket` system column, which enables seek to the data files in iceberg if a specified Fluss bucket is given
+- **Identity partitioning**: Using identity partitioning on the `__bucket` system column, which enables to seek to the data files in iceberg if a specified Fluss bucket is given
 - **Sorted by system column `__offset`**: Sorted by the system column `__offset` (which is derived from the Fluss log data) to preserve the data order and facilitate mapping back to the original Fluss log data
 
 ```sql title="Log Table without Bucket Key"
