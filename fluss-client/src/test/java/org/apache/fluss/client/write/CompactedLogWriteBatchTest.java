@@ -39,7 +39,8 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
-import static org.apache.fluss.record.DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE;
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_ID;
@@ -70,7 +71,9 @@ public class CompactedLogWriteBatchTest {
                         writeLimit,
                         MemorySegment.allocateHeapMemory(writeLimit));
 
-        int maxRecordsPerBatch = (writeLimit - RECORD_BATCH_HEADER_SIZE) / estimatedSizeInBytes;
+        int maxRecordsPerBatch =
+                (writeLimit - recordBatchHeaderSize(CURRENT_LOG_MAGIC_VALUE))
+                        / estimatedSizeInBytes;
         for (int i = 0; i < maxRecordsPerBatch; i++) {
             boolean appendResult =
                     logProducerBatch.tryAppend(createWriteRecord(), newWriteCallback());
