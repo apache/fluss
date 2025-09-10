@@ -22,7 +22,6 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.record.CompactedLogRecord;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.DefaultKvRecord;
-import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.IndexedLogRecord;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.InternalRow;
