@@ -23,7 +23,6 @@ import static org.apache.fluss.record.LogRecordBatchFormat.HEADER_SIZE_UP_TO_MAG
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
 import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
-import static org.apache.fluss.record.LogRecordBatchFormat.NO_LEADER_EPOCH;
 import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.attributeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.batchSequenceOffset;
@@ -35,6 +34,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.recordsCountOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.schemaIdOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.writeClientIdOffset;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link LogRecordBatchFormat}. */
 public class LogRecordBatchFormatTest {
@@ -50,7 +50,9 @@ public class LogRecordBatchFormatTest {
     @Test
     void testLogRecordBatchFormatForMagicV0() {
         byte magic = (byte) 0;
-        assertThat(leaderEpochOffset(magic)).isEqualTo(-1).isEqualTo(NO_LEADER_EPOCH);
+        assertThatThrownBy(() -> leaderEpochOffset(magic))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Unsupported magic value 0");
         assertThat(crcOffset(magic)).isEqualTo(21);
         assertThat(schemaIdOffset(magic)).isEqualTo(25);
         assertThat(attributeOffset(magic)).isEqualTo(27);
