@@ -144,7 +144,9 @@ public class FlinkCatalog extends AbstractCatalog {
         admin = connection.getAdmin();
         if (!databaseExists(defaultDatabase)) {
             throw new CatalogException(
-                    String.format("Database %s does not exist in fluss server.", defaultDatabase));
+                    String.format(
+                            "The configured default-database '%s' does not exist in the Fluss cluster.",
+                            defaultDatabase));
         }
     }
 

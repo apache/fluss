@@ -659,7 +659,7 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
-    void createCatalogWithUnexistedDatabase() {
+    void testCreateCatalogWithUnexistedDatabase() {
         assertThatThrownBy(
                         () ->
                                 tEnv.executeSql(
@@ -669,7 +669,8 @@ abstract class FlinkCatalogITCase {
                                                 FLUSS_CLUSTER_EXTENSION.getBootstrapServers())))
                 .rootCause()
                 .isExactlyInstanceOf(CatalogException.class)
-                .hasMessage("Database non-exist does not exist in fluss server.");
+                .hasMessage(
+                        "The configured default-database 'non-exist' does not exist in the Fluss cluster.");
     }
 
     private static void assertOptionsEqual(
