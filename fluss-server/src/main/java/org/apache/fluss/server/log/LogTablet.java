@@ -640,7 +640,7 @@ public final class LogTablet {
             // now that we have valid records, offsets assigned, we need to validate the idempotent
             // state of the writers and collect some metadata.
             Either<WriterStateEntry.BatchMetadata, Collection<WriterAppendInfo>> validateResult =
-                    analyzeAndValidateWriterState(validRecords);
+                    analyzeAndValidateWriterState(validRecords, appendAsLeader);
 
             if (validateResult.isLeft()) {
                 // have duplicated batch metadata, skip the append and update append info.
@@ -1003,7 +1003,7 @@ public final class LogTablet {
 
     /** Returns either the duplicated batch metadata (left) or the updated writers (right). */
     private Either<WriterStateEntry.BatchMetadata, Collection<WriterAppendInfo>>
-            analyzeAndValidateWriterState(MemoryLogRecords records) {
+            analyzeAndValidateWriterState(MemoryLogRecords records, boolean isAppendAsLeader) {
         Map<Long, WriterAppendInfo> updatedWriters = new HashMap<>();
 
         for (LogRecordBatch batch : records.batches()) {
@@ -1020,14 +1020,15 @@ public final class LogTablet {
                 }
 
                 // update write append info.
-                updateWriterAppendInfo(writerStateManager, batch, updatedWriters);
+                updateWriterAppendInfo(writerStateManager, batch, updatedWriters, isAppendAsLeader);
             }
         }
 
         return Either.right(updatedWriters.values());
     }
 
-    void removeExpiredWriter(long currentTimeMs) {
+    @VisibleForTesting
+    public void removeExpiredWriter(long currentTimeMs) {
         synchronized (lock) {
             writerStateManager.removeExpiredWriters(currentTimeMs);
         }
@@ -1107,14 +1108,16 @@ public final class LogTablet {
     private static void updateWriterAppendInfo(
             WriterStateManager writerStateManager,
             LogRecordBatch batch,
-            Map<Long, WriterAppendInfo> writers) {
+            Map<Long, WriterAppendInfo> writers,
+            boolean isAppendAsLeader) {
         long writerId = batch.writerId();
         // update writers.
         WriterAppendInfo appendInfo =
                 writers.computeIfAbsent(writerId, id -> writerStateManager.prepareUpdate(writerId));
         appendInfo.append(
                 batch,
-                writerStateManager.isWriterInBatchExpired(System.currentTimeMillis(), batch));
+                writerStateManager.isWriterInBatchExpired(System.currentTimeMillis(), batch),
+                isAppendAsLeader);
     }
 
     static void rebuildWriterState(
@@ -1227,7 +1230,7 @@ public final class LogTablet {
         Map<Long, WriterAppendInfo> loadedWriters = new HashMap<>();
         for (LogRecordBatch batch : records.batches()) {
             if (batch.hasWriterId()) {
-                updateWriterAppendInfo(writerStateManager, batch, loadedWriters);
+                updateWriterAppendInfo(writerStateManager, batch, loadedWriters, true);
             }
         }
         loadedWriters.values().forEach(writerStateManager::update);
