@@ -17,33 +17,33 @@
 
 package org.apache.fluss.flink.source.enumerator;
 
-import org.apache.fluss.client.Connection;
-import org.apache.fluss.client.ConnectionFactory;
-import org.apache.fluss.client.admin.Admin;
-import org.apache.fluss.client.metadata.KvSnapshots;
-import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.Configuration;
-import org.apache.fluss.flink.lake.LakeSplitGenerator;
-import org.apache.fluss.flink.source.enumerator.initializer.BucketOffsetsRetrieverImpl;
-import org.apache.fluss.flink.source.enumerator.initializer.NoStoppingOffsetsInitializer;
-import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
-import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer.BucketOffsetsRetriever;
-import org.apache.fluss.flink.source.enumerator.initializer.SnapshotOffsetsInitializer;
-import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
-import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
-import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
-import org.apache.fluss.flink.source.split.LogSplit;
-import org.apache.fluss.flink.source.split.SourceSplitBase;
-import org.apache.fluss.flink.source.state.SourceEnumeratorState;
-import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
-import org.apache.fluss.lake.source.LakeSource;
-import org.apache.fluss.lake.source.LakeSplit;
-import org.apache.fluss.metadata.PartitionInfo;
-import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.types.DataField;
-import org.apache.fluss.utils.ExceptionUtils;
+import com.alibaba.fluss.client.Connection;
+import com.alibaba.fluss.client.ConnectionFactory;
+import com.alibaba.fluss.client.admin.Admin;
+import com.alibaba.fluss.client.metadata.KvSnapshots;
+import com.alibaba.fluss.config.ConfigOptions;
+import com.alibaba.fluss.config.Configuration;
+import com.alibaba.fluss.connector.flink.lakehouse.LakeSplitGenerator;
+import com.alibaba.fluss.connector.flink.source.enumerator.initializer.BucketOffsetsRetrieverImpl;
+import com.alibaba.fluss.connector.flink.source.enumerator.initializer.NoStoppingOffsetsInitializer;
+import com.alibaba.fluss.connector.flink.source.enumerator.initializer.OffsetsInitializer;
+import com.alibaba.fluss.connector.flink.source.enumerator.initializer.OffsetsInitializer.BucketOffsetsRetriever;
+import com.alibaba.fluss.connector.flink.source.enumerator.initializer.SnapshotOffsetsInitializer;
+import com.alibaba.fluss.connector.flink.source.event.PartitionBucketsUnsubscribedEvent;
+import com.alibaba.fluss.connector.flink.source.event.PartitionsRemovedEvent;
+import com.alibaba.fluss.connector.flink.source.split.HybridSnapshotLogSplit;
+import com.alibaba.fluss.connector.flink.source.split.LogSplit;
+import com.alibaba.fluss.connector.flink.source.split.SourceSplitBase;
+import com.alibaba.fluss.connector.flink.source.state.SourceEnumeratorState;
+import com.alibaba.fluss.metadata.PartitionInfo;
+import com.alibaba.fluss.metadata.TableBucket;
+import com.alibaba.fluss.metadata.TableInfo;
+import com.alibaba.fluss.metadata.TablePath;
+import com.alibaba.fluss.predicate.Predicate;
+import com.alibaba.fluss.row.BinaryString;
+import com.alibaba.fluss.row.GenericRow;
+import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.connector.source.SourceEvent;
@@ -131,11 +131,7 @@ public class FlinkSourceEnumerator
 
     private boolean lakeEnabled = false;
 
-    private volatile boolean closed = false;
-
-    private final List<FieldEqual> partitionFilters;
-
-    @Nullable private final LakeSource<LakeSplit> lakeSource;
+    private Predicate predicate;
 
     public FlinkSourceEnumerator(
             TablePath tablePath,
@@ -146,31 +142,7 @@ public class FlinkSourceEnumerator
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
-            List<FieldEqual> partitionFilters) {
-        this(
-                tablePath,
-                flussConf,
-                hasPrimaryKey,
-                isPartitioned,
-                context,
-                startingOffsetsInitializer,
-                scanPartitionDiscoveryIntervalMs,
-                streaming,
-                partitionFilters,
-                null);
-    }
-
-    public FlinkSourceEnumerator(
-            TablePath tablePath,
-            Configuration flussConf,
-            boolean hasPrimaryKey,
-            boolean isPartitioned,
-            SplitEnumeratorContext<SourceSplitBase> context,
-            OffsetsInitializer startingOffsetsInitializer,
-            long scanPartitionDiscoveryIntervalMs,
-            boolean streaming,
-            List<FieldEqual> partitionFilters,
-            @Nullable LakeSource<LakeSplit> lakeSource) {
+            Predicate predicate) {
         this(
                 tablePath,
                 flussConf,
@@ -183,8 +155,7 @@ public class FlinkSourceEnumerator
                 startingOffsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 streaming,
-                partitionFilters,
-                lakeSource);
+                predicate);
     }
 
     public FlinkSourceEnumerator(
@@ -198,9 +169,33 @@ public class FlinkSourceEnumerator
             List<SourceSplitBase> pendingHybridLakeFlussSplits,
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
+            boolean streaming) {
+        this(
+                tablePath,
+                flussConf,
+                isPartitioned,
+                hasPrimaryKey,
+                context,
+                assignedTableBuckets,
+                assignedPartitions,
+                startingOffsetsInitializer,
+                scanPartitionDiscoveryIntervalMs,
+                streaming,
+                null);
+    }
+
+    public FlinkSourceEnumerator(
+            TablePath tablePath,
+            Configuration flussConf,
+            boolean isPartitioned,
+            boolean hasPrimaryKey,
+            SplitEnumeratorContext<SourceSplitBase> context,
+            Set<TableBucket> assignedTableBuckets,
+            Map<Long, String> assignedPartitions,
+            OffsetsInitializer startingOffsetsInitializer,
+            long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
-            List<FieldEqual> partitionFilters,
-            @Nullable LakeSource<LakeSplit> lakeSource) {
+            Predicate predicate) {
         this.tablePath = checkNotNull(tablePath);
         this.flussConf = checkNotNull(flussConf);
         this.hasPrimaryKey = hasPrimaryKey;
@@ -219,7 +214,7 @@ public class FlinkSourceEnumerator
         this.partitionFilters = checkNotNull(partitionFilters);
         this.stoppingOffsetsInitializer =
                 streaming ? new NoStoppingOffsetsInitializer() : OffsetsInitializer.latest();
-        this.lakeSource = lakeSource;
+        this.predicate = predicate;
     }
 
     @Override
@@ -338,13 +333,27 @@ public class FlinkSourceEnumerator
     }
 
     private Set<PartitionInfo> listPartitions() {
-        if (closed) {
-            return Collections.emptySet();
-        }
+
         try {
             List<PartitionInfo> partitionInfos = flussAdmin.listPartitionInfos(tablePath).get();
-            partitionInfos = applyPartitionFilter(partitionInfos);
-            return new LinkedHashSet<>(partitionInfos);
+            if (predicate == null) {
+                return new HashSet<>(partitionInfos);
+            } else {
+                Set<PartitionInfo> filteredPartitionInfos =
+                        partitionInfos.stream()
+                                .filter(
+                                        partitionInfo ->
+                                                predicate.test(
+                                                        convertPartitionInfoToInternalRow(
+                                                                partitionInfo)))
+                                .collect(Collectors.toSet());
+                LOG.info(
+                        "Filtered partitions {} for table {} with predicate: {}",
+                        filteredPartitionInfos,
+                        tablePath,
+                        predicate);
+                return filteredPartitionInfos;
+            }
         } catch (Exception e) {
             throw new FlinkRuntimeException(
                     String.format("Failed to list partitions for %s", tablePath),
@@ -352,32 +361,8 @@ public class FlinkSourceEnumerator
         }
     }
 
-    /** Apply partition filter. */
-    private List<PartitionInfo> applyPartitionFilter(List<PartitionInfo> partitionInfos) {
-        if (!partitionFilters.isEmpty()) {
-            return partitionInfos.stream()
-                    .filter(
-                            partitionInfo -> {
-                                Map<String, String> specMap =
-                                        partitionInfo.getPartitionSpec().getSpecMap();
-                                // use getFields() instead of getFieldNames() to
-                                // avoid collection construction
-                                List<DataField> fields = tableInfo.getRowType().getFields();
-                                for (FieldEqual filter : partitionFilters) {
-                                    String fieldName = fields.get(filter.fieldIndex).getName();
-                                    String partitionValue = specMap.get(fieldName);
-                                    if (partitionValue == null
-                                            || !filter.equalValue
-                                                    .toString()
-                                                    .equals(partitionValue)) {
-                                        return false;
-                                    }
-                                }
-                                return true;
-                            })
-                    .collect(Collectors.toList());
-        }
-        return partitionInfos;
+    private InternalRow convertPartitionInfoToInternalRow(PartitionInfo partitionInfo) {
+        return GenericRow.of(BinaryString.fromString(partitionInfo.getPartitionName()));
     }
 
     /** Init the splits for Fluss. */

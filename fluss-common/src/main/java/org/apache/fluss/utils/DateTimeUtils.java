@@ -17,8 +17,8 @@
 
 package org.apache.fluss.utils;
 
-import org.apache.fluss.row.TimestampLtz;
-import org.apache.fluss.row.TimestampNtz;
+import com.alibaba.fluss.row.TimestampLtz;
+import com.alibaba.fluss.row.TimestampNtz;
 
 import java.time.DateTimeException;
 import java.time.LocalDate;
