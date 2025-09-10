@@ -68,7 +68,7 @@ public class LakeSplitReaderGenerator {
             LakeSnapshotScanner lakeSnapshotScanner =
                     new LakeSnapshotScanner(lakeSource, lakeSnapshotSplit);
             return new BoundedSplitReader(
-                    lakeSnapshotScanner, lakeSnapshotSplit.getRecordsToSplit());
+                    lakeSnapshotScanner, lakeSnapshotSplit.getRecordsToSkip());
         } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
             LakeSnapshotAndFlussLogSplit lakeSplit = (LakeSnapshotAndFlussLogSplit) split;
             return new BoundedSplitReader(getBatchScanner(lakeSplit), lakeSplit.getRecordsToSkip());

@@ -47,6 +47,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -195,7 +196,7 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         waitUntilBucketSynced(table1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
 
         StreamTableEnvironment streamTEnv = buildSteamTEnv(null);
-        // now, start to read the log table, which will read paimon
+        // now, start to read the log table to write to a fluss result table
         // may read fluss or not, depends on the log offset of paimon snapshot
         createFullTypeLogTable(resultTable, DEFAULT_BUCKET_NUM, isPartitioned, false);
         TableResult insertResult =
@@ -204,10 +205,7 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
 
         CloseableIterator<Row> actual =
                 streamTEnv.executeSql("select * from " + resultTableName).collect();
-        assertResultsIgnoreOrder(
-                actual,
-                writtenRows.stream().map(Row::toString).collect(Collectors.toList()),
-                false);
+        assertResultsExactOrder(actual, writtenRows, false);
 
         // now, stop the job with save point
         String savepointPath =
@@ -229,8 +227,7 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         // write some log data again
         List<Row> rows = writeRows(table1, 3, isPartitioned);
 
-        assertResultsIgnoreOrder(
-                actual, rows.stream().map(Row::toString).collect(Collectors.toList()), true);
+        assertResultsExactOrder(actual, rows, true);
 
         // cancel jobs
         insertResult.getJobClient().get().cancel().get();
