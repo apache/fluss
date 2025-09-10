@@ -168,7 +168,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                 coordinatorEventManager,
                                 coordinatorContext),
                         zooKeeperClient);
-        this.metadataManager = new MetadataManager(zooKeeperClient, conf, ioExecutor);
+        this.metadataManager = new MetadataManager(zooKeeperClient, conf);
 
         this.tableManager =
                 new TableManager(

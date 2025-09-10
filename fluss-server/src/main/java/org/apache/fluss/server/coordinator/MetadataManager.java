@@ -47,7 +47,6 @@ import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
-import org.apache.fluss.utils.concurrent.Executors;
 import org.apache.fluss.utils.function.RunnableWithException;
 import org.apache.fluss.utils.function.ThrowingRunnable;
 
@@ -61,7 +60,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
-import java.util.concurrent.Executor;
 
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
 
@@ -75,26 +73,17 @@ public class MetadataManager {
     private final int maxPartitionNum;
     private final int maxBucketNum;
 
-    private final Executor ioExecutor;
-
-    public MetadataManager(ZooKeeperClient zookeeperClient, Configuration conf) {
-        this(zookeeperClient, conf, Executors.directExecutor());
-    }
-
     /**
      * Creates a new metadata manager.
      *
      * @param zookeeperClient the zookeeper client
      * @param conf the cluster configuration
-     * @param ioExecutor the io executor
      */
-    public MetadataManager(
-            ZooKeeperClient zookeeperClient, Configuration conf, Executor ioExecutor) {
+    public MetadataManager(ZooKeeperClient zookeeperClient, Configuration conf) {
         this.zookeeperClient = zookeeperClient;
         this.defaultTableLakeOptions = LakeStorageUtils.generateDefaultTableLakeOptions(conf);
         this.maxPartitionNum = conf.get(ConfigOptions.MAX_PARTITION_NUM);
         this.maxBucketNum = conf.get(ConfigOptions.MAX_BUCKET_NUM);
-        this.ioExecutor = ioExecutor;
     }
 
     public void createDatabase(
@@ -243,18 +232,13 @@ public class MetadataManager {
                 String.format("Delete tablet assignment meta fail for table %s.", tableId));
     }
 
-    public void completeDeletePartition(TablePartition tablePartition) {
+    public void completeDeletePartition(long partitionId) {
         // final step for delete a partition.
         // delete partition assignments node, which will also delete the bucket state node,
         // so that all the zk nodes related to this partition are deleted.
-        ioExecutor.execute(
-                () -> {
-                    try {
-                        zookeeperClient.deletePartitionAssignment(tablePartition.getPartitionId());
-                    } catch (Exception e) {
-                        LOG.error("Fail to complete partition {} deletion.", tablePartition, e);
-                    }
-                });
+        rethrowIfIsNotNoNodeException(
+                () -> zookeeperClient.deletePartitionAssignment(partitionId),
+                String.format("Delete tablet assignment meta fail for partition %s.", partitionId));
     }
 
     /**
