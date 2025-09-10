@@ -44,13 +44,15 @@ public class WriterAppendInfo {
         return writerId;
     }
 
-    public void append(LogRecordBatch batch, boolean isWriterInBatchExpired) {
+    public void append(
+            LogRecordBatch batch, boolean isWriterInBatchExpired, boolean isAppendAsLeader) {
         LogOffsetMetadata firstOffsetMetadata = new LogOffsetMetadata(batch.baseLogOffset());
         appendDataBatch(
                 batch.batchSequence(),
                 firstOffsetMetadata,
                 batch.lastLogOffset(),
                 isWriterInBatchExpired,
+                isAppendAsLeader,
                 batch.commitTimestamp());
     }
 
@@ -59,8 +61,9 @@ public class WriterAppendInfo {
             LogOffsetMetadata firstOffsetMetadata,
             long lastOffset,
             boolean isWriterInBatchExpired,
+            boolean isAppendAsLeader,
             long batchTimestamp) {
-        maybeValidateDataBatch(batchSequence, isWriterInBatchExpired, lastOffset);
+        maybeValidateDataBatch(batchSequence, isWriterInBatchExpired, lastOffset, isAppendAsLeader);
         updatedEntry.addBath(
                 batchSequence,
                 lastOffset,
@@ -69,13 +72,16 @@ public class WriterAppendInfo {
     }
 
     private void maybeValidateDataBatch(
-            int appendFirstSeq, boolean isWriterInBatchExpired, long lastOffset) {
+            int appendFirstSeq,
+            boolean isWriterInBatchExpired,
+            long lastOffset,
+            boolean isAppendAsLeader) {
         int currentLastSeq =
                 !updatedEntry.isEmpty()
                         ? updatedEntry.lastBatchSequence()
                         : currentEntry.lastBatchSequence();
         // must be in sequence, even for the first batch should start from 0
-        if (!inSequence(currentLastSeq, appendFirstSeq, isWriterInBatchExpired)) {
+        if (!inSequence(currentLastSeq, appendFirstSeq, isWriterInBatchExpired, isAppendAsLeader)) {
             throw new OutOfOrderSequenceException(
                     String.format(
                             "Out of order batch sequence for writer %s at offset %s in "
@@ -93,16 +99,53 @@ public class WriterAppendInfo {
      * three scenarios will be judged as in sequence:
      *
      * <ul>
-     *   <li>If lastBatchSeq equals NO_BATCH_SEQUENCE, we need to check whether the committed
-     *       timestamp of the next batch under the current writerId has expired. If it has expired,
-     *       we consider this a special case caused by writerId expiration, for this case, to ensure
-     *       the correctness of follower sync, we still treat it as in sequence.
-     *   <li>nextBatchSeq == lastBatchSeq + 1L
-     *   <li>lastBatchSeq reaches its maximum value
+     *   <li>1. If lastBatchSeq equals NO_BATCH_SEQUENCE, the following two scenarios will be judged
+     *       as in sequence:
+     *       <ul>
+     *         <li>1.1 If the committed timestamp of the next batch under the current writerId has
+     *             expired, we consider this a special case caused by writerId expiration, for this
+     *             case, to ensure the correctness of follower sync, we still treat it as in
+     *             sequence.
+     *         <li>1.2 If the append request is from the follower, we consider this is a special
+     *             case caused by inconsistent expiration of writerId between the leader and
+     *             follower. To prevent continuous fetch failures on the follower side, we still
+     *             treat it as in sequence.
+     *       </ul>
+     *   <li>2. nextBatchSeq == lastBatchSeq + 1L
+     *   <li>3. lastBatchSeq reaches its maximum value
      * </ul>
+     *
+     * <p>For case 1.2, here is a detailed example: The expiration of a writer is triggered
+     * asynchronously by the {@code PeriodicWriterIdExpirationCheck} thread at intervals defined by
+     * {@code server.writer-id.expiration-check-interval}, which can result in slight differences in
+     * the actual expiration times of the same writer on the leader replica and follower replicas.
+     * This slight difference leads to a dreadful corner case. Imagine the following scenario(set
+     * {@code server.writer-id.expiration-check-interval}: 10min, {@code
+     * server.writer-id.expiration-time}: 12h):
+     *
+     * <pre>{@code
+     * Step     Time         Action of Leader                  Action of Follower
+     * 1        00:03:38     receive batch 0 of writer 101
+     * 2        00:03:38                                       fetch batch 0 of writer 101
+     * 3        12:05:00                                       remove state of writer 101
+     * 4        12:10:02     receive batch 1 of writer 101
+     * 5        12:10:02                                       fetch batch 0 of writer 101
+     * 6        12:11:00     remove state of writer 101
+     * }</pre>
+     *
+     * <p>In step 3, the follower removes the state of writer 101 first, since it has been more than
+     * 12 hours since writer 101's last batch write, making it safe to remove. However, since the
+     * expiration of writer 101 has not yet occurred on the leader, and a new batch 1 is received at
+     * this time, it is successfully written on the leader. At this point, the fetcher pulls batch 1
+     * from the leader, but since the state of writer 101 has already been cleaned up, an {@link
+     * OutOfOrderSequenceException} will occur during to write if we don't treat it as in sequence.
      */
-    private boolean inSequence(int lastBatchSeq, int nextBatchSeq, boolean isWriterInBatchExpired) {
-        return (lastBatchSeq == NO_BATCH_SEQUENCE && isWriterInBatchExpired)
+    private boolean inSequence(
+            int lastBatchSeq,
+            int nextBatchSeq,
+            boolean isWriterInBatchExpired,
+            boolean isAppendAsLeader) {
+        return (lastBatchSeq == NO_BATCH_SEQUENCE && (isWriterInBatchExpired || !isAppendAsLeader))
                 || nextBatchSeq == lastBatchSeq + 1L
                 || (nextBatchSeq == 0 && lastBatchSeq == Integer.MAX_VALUE);
     }
