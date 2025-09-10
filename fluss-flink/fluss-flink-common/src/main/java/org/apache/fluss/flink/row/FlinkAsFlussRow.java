@@ -17,15 +17,18 @@
 
 package org.apache.fluss.flink.row;
 
-import org.apache.fluss.row.BinaryString;
-import org.apache.fluss.row.Decimal;
-import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.row.TimestampLtz;
-import org.apache.fluss.row.TimestampNtz;
+import com.alibaba.fluss.flink.utils.FlinkConversions;
+import com.alibaba.fluss.row.BinaryString;
+import com.alibaba.fluss.row.Decimal;
+import com.alibaba.fluss.row.InternalRow;
+import com.alibaba.fluss.row.TimestampLtz;
+import com.alibaba.fluss.row.TimestampNtz;
 
 import org.apache.flink.table.data.DecimalData;
+import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.data.TimestampData;
+import org.apache.flink.table.types.DataType;
 
 /** Wraps a Flink {@link RowData} as a Fluss {@link InternalRow}. */
 public class FlinkAsFlussRow implements InternalRow {
@@ -131,5 +134,13 @@ public class FlinkAsFlussRow implements InternalRow {
     @Override
     public byte[] getBytes(int pos) {
         return flinkRow.getBinary(pos);
+    }
+
+    public static Object fromFlinkObject(Object o, DataType type) {
+        if (o == null) {
+            return null;
+        }
+        return InternalRow.createFieldGetter(FlinkConversions.toFlussType(type), 0)
+                .getFieldOrNull((new FlinkAsFlussRow()).replace(GenericRowData.of(o)));
     }
 }

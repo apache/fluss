@@ -1067,7 +1067,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     }
 
     @Test
-    void testStreamingReadWithCombinedFilters() throws Exception {
+    void testStreamingReadWithCombinedFilters1() throws Exception {
         tEnv.executeSql(
                 "create table combined_filters_table"
                         + " (a int not null, b varchar, c string, d int, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
@@ -1106,6 +1106,51 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         org.apache.flink.util.CloseableIterator<Row> rowIter =
                 tEnv.executeSql(
                                 "select a,c,d from combined_filters_table where c ='2025' and d % 200 = 0")
+                        .collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    @Test
+    void testStreamingReadWithCombinedFilters2() throws Exception {
+        tEnv.executeSql(
+                "create table combined_filters_table"
+                        + " (a int not null, b varchar, c string, d int, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "combined_filters_table");
+        tEnv.executeSql("alter table combined_filters_table add partition (c=2025)");
+        tEnv.executeSql("alter table combined_filters_table add partition (c=2026)");
+
+        List<InternalRow> rows = new ArrayList<>();
+        List<String> expectedRowValues = new ArrayList<>();
+
+        for (int i = 0; i < 10; i++) {
+            rows.add(row(i, "v" + i, "2025", i * 100));
+            if (i == 2) {
+                expectedRowValues.add(String.format("+I[%d, 2025, %d]", i, i * 100));
+            }
+        }
+        writeRows(conn, tablePath, rows, false);
+
+        for (int i = 0; i < 10; i++) {
+            rows.add(row(i, "v" + i, "2026", i * 100));
+        }
+
+        writeRows(conn, tablePath, rows, false);
+        waitUtilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026"));
+
+        String plan =
+                tEnv.explainSql(
+                        "select a,c,d from combined_filters_table where c ='2025' and d = 200");
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table, "
+                                + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
+                                + "project=[a, d]]], fields=[a, d])");
+
+        // test column filter、partition filter and flink runtime filter
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql(
+                                "select a,c,d from combined_filters_table where c ='2025' and d = 200")
                         .collect();
 
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
@@ -1247,6 +1292,64 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 tEnv.executeSql(
                                 "select a,c,d from combined_filters_table_in where (c ='2025' or  c ='2026') "
                                         + "and d % 200 = 0")
+                        .collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    @Test
+    void testStreamingReadPartitionPushDownWithLikeExpr() throws Exception {
+
+        tEnv.executeSql(
+                "create table partitioned_table_like"
+                        + " (a int not null, b varchar, c string, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "partitioned_table_like");
+        tEnv.executeSql("alter table partitioned_table_like add partition (c=2025)");
+        tEnv.executeSql("alter table partitioned_table_like add partition (c=2026)");
+        tEnv.executeSql("alter table partitioned_table_like add partition (c=3026)");
+
+        List<String> allData =
+                writeRowsToPartition(conn, tablePath, Arrays.asList("2025", "2026", "3026"));
+        List<String> expectedRowValues =
+                allData.stream()
+                        .filter(s -> s.contains("2025") || s.contains("2026"))
+                        .collect(Collectors.toList());
+        waitUtilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "3026"));
+
+        String plan = tEnv.explainSql("select * from partitioned_table_like where c like '202%'");
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_like, filter=[LIKE(c, _UTF-16LE'202%')]]], fields=[a, b, c])");
+
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from partitioned_table_like where c like '202%'")
+                        .collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+        expectedRowValues =
+                allData.stream()
+                        .filter(s -> s.contains("2026") || s.contains("3026"))
+                        .collect(Collectors.toList());
+        plan = tEnv.explainSql("select * from partitioned_table_like where c like '%026'");
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_like, filter=[LIKE(c, _UTF-16LE'%026')]]], fields=[a, b, c])");
+
+        rowIter =
+                tEnv.executeSql("select * from partitioned_table_like where c like '%026'")
+                        .collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+
+        expectedRowValues =
+                allData.stream().filter(s -> s.contains("3026")).collect(Collectors.toList());
+        plan = tEnv.explainSql("select * from partitioned_table_like where c like '%3026%'");
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_like, filter=[LIKE(c, _UTF-16LE'%3026%')]]], fields=[a, b, c])");
+
+        rowIter =
+                tEnv.executeSql("select * from partitioned_table_like where c like '%3026%'")
                         .collect();
 
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);

@@ -134,7 +134,7 @@ public class FlinkTableSource
 
     private long limit = -1;
 
-    @Nullable protected Predicate predicate;
+    @Nullable protected Predicate partitionFilters;
 
     public FlinkTableSource(
             TablePath tablePath,
@@ -295,7 +295,7 @@ public class FlinkTableSource
                         offsetsInitializer,
                         scanPartitionDiscoveryIntervalMs,
                         streaming,
-                        predicate);
+                        partitionFilters);
 
         if (!streaming) {
             // return a bounded source provide to make planner happy,
@@ -420,7 +420,7 @@ public class FlinkTableSource
         source.projectedFields = projectedFields;
         source.singleRowFilter = singleRowFilter;
         source.modificationScanType = modificationScanType;
-        source.predicate = predicate;
+        source.partitionFilters = partitionFilters;
         return source;
     }
 
@@ -520,7 +520,7 @@ public class FlinkTableSource
                     converted.add(p);
                 }
             }
-            predicate = converted.isEmpty() ? null : PredicateBuilder.and(converted);
+            partitionFilters = converted.isEmpty() ? null : PredicateBuilder.and(converted);
             return Result.of(acceptedFilters, remainingFilters);
         }
 
