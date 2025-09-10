@@ -46,7 +46,7 @@ import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 /** A Paimon implementation of {@link LakeCatalog}. */
 public class PaimonLakeCatalog implements LakeCatalog {
 
-    private static final LinkedHashMap<String, DataType> SYSTEM_COLUMNS = new LinkedHashMap<>();
+    public static final LinkedHashMap<String, DataType> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
     static {
         // We need __bucket system column to filter out the given bucket

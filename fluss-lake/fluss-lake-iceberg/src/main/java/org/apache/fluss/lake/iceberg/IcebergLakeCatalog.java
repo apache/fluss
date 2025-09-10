@@ -56,7 +56,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
 
     public static final String ICEBERG_CATALOG_DEFAULT_NAME = "fluss-iceberg-catalog";
 
-    private static final LinkedHashMap<String, Type> SYSTEM_COLUMNS = new LinkedHashMap<>();
+    public static final LinkedHashMap<String, Type> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
     static {
         // We need __bucket system column to filter out the given bucket
