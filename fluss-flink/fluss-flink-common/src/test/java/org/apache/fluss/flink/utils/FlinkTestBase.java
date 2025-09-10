@@ -257,11 +257,11 @@ public class FlinkTestBase extends AbstractTestBase {
     }
 
     public static List<String> writeRowsToPartition(
-            Connection connection, TablePath tablePath, Collection<String> partitions)
+            Connection connection, TablePath tablePath, Collection<Object> partitions)
             throws Exception {
         List<InternalRow> rows = new ArrayList<>();
         List<String> expectedRowValues = new ArrayList<>();
-        for (String partition : partitions) {
+        for (Object partition : partitions) {
             for (int i = 0; i < 10; i++) {
                 rows.add(row(i, "v1", partition));
                 expectedRowValues.add(String.format("+I[%d, v1, %s]", i, partition));

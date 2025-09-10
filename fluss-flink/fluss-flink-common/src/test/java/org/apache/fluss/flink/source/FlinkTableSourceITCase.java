@@ -25,9 +25,12 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.utils.clock.ManualClock;
 
@@ -604,7 +607,8 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         }
 
         List<String> expectedRowValues =
-                writeRowsToPartition(conn, tablePath, partitionNameById.values());
+                writeRowsToPartition(
+                        conn, tablePath, Collections.singleton(partitionNameById.values()));
         waitUntilAllBucketFinishSnapshot(admin, tablePath, partitionNameById.values());
 
         org.apache.flink.util.CloseableIterator<Row> rowIter =
@@ -962,6 +966,262 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     }
 
     @Test
+    void testStreamingReadDatePartitionTypePushDown() throws Exception {
+        tEnv.executeSql(
+                "create table partitioned_table_long"
+                        + " (a int not null, b varchar, c date, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "partitioned_table_long");
+        tEnv.executeSql("alter table partitioned_table_long add partition (c=4)");
+        tEnv.executeSql("alter table partitioned_table_long add partition (c=5)");
+
+        List<String> expectedRowValues =
+                writeRowsToPartition(conn, tablePath, Arrays.asList(4, 5)).stream()
+                        .filter(s -> s.endsWith("4]"))
+                        .map(s -> s.replace("4]", "1970-01-05]"))
+                        .collect(Collectors.toList());
+        waitUntilAllBucketFinishSnapshot(
+                admin, tablePath, Arrays.asList("1970-01-05", "1970-01-06"));
+
+        String plan =
+                tEnv.explainSql("select * from partitioned_table_long where c =DATE'1970-01-05'");
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_long, filter=[=(c, 1970-01-05)], project=[a, b]]], fields=[a, b])");
+
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from partitioned_table_long where c =DATE'1970-01-05'")
+                        .collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    @Test
+    void testStreamingReadTimestampPartitionTypePushDown() throws Exception {
+        // Add partitions with timestamp values (using epoch milliseconds)
+        long timestamp1Millis = 1609459200000L; // 2021-01-01 00:00:00 UTC
+        long timestamp2Millis = 1609545600000L; // 2021-01-02 00:00:00 UTC
+        TimestampLtz timestamp1 = TimestampLtz.fromEpochMillis(timestamp1Millis);
+        TimestampLtz timestamp2 = TimestampLtz.fromEpochMillis(timestamp2Millis);
+
+        // Test TIMESTAMP partition type
+        tEnv.executeSql(
+                "create table partitioned_table_timestamp"
+                        + " (a int not null, b varchar, c timestamp(3), primary key (a, c) NOT ENFORCED) partitioned by (c) ");
+        TablePath tablePath2 = TablePath.of(DEFAULT_DB, "partitioned_table_timestamp");
+
+        // Add partitions with timestamp values
+        TimestampNtz timestampNtz1 = TimestampNtz.fromMillis(timestamp1Millis);
+        TimestampNtz timestampNtz2 = TimestampNtz.fromMillis(timestamp2Millis);
+
+        tEnv.executeSql(
+                String.format(
+                        "alter table partitioned_table_timestamp add partition (c=%d)",
+                        timestamp1Millis));
+        tEnv.executeSql(
+                String.format(
+                        "alter table partitioned_table_timestamp add partition (c=%d)",
+                        timestamp2Millis));
+
+        // Write test data manually for timestamp partitions
+        List<InternalRow> rows2 = new ArrayList<>();
+        List<String> expectedRowValues2 = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            rows2.add(row(i, "v1", timestampNtz1));
+            expectedRowValues2.add(String.format("+I[%d, v1, 2021-01-01T00:00]", i));
+        }
+        for (int i = 0; i < 10; i++) {
+            rows2.add(row(i, "v1", timestampNtz2));
+        }
+        writeRows(conn, tablePath2, rows2, false);
+        waitUntilAllBucketFinishSnapshot(
+                admin, tablePath2, Arrays.asList("2021-01-01-00-00-00_", "2021-01-02-00-00-00_"));
+
+        // Test query with TIMESTAMP literal
+        String plan2 =
+                tEnv.explainSql(
+                        "select * from partitioned_table_timestamp where c = TIMESTAMP '2021-01-01 00:00:00'");
+        assertThat(plan2)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_timestamp, filter=[=(c, 2021-01-01 00:00:00:TIMESTAMP(3))], project=[a, b]]], fields=[a, b])");
+
+        org.apache.flink.util.CloseableIterator<Row> rowIter2 =
+                tEnv.executeSql(
+                                "select * from partitioned_table_timestamp where c = TIMESTAMP '2021-01-01 00:00:00'")
+                        .collect();
+        assertResultsIgnoreOrder(rowIter2, expectedRowValues2, true);
+
+        // Test TIMESTAMP_LTZ partition type
+        tEnv.executeSql(
+                "create table partitioned_table_timestamp_ltz"
+                        + " (a int not null, b varchar, c timestamp_ltz(3), primary key (a, c) NOT ENFORCED) partitioned by (c) ");
+        TablePath tablePath1 = TablePath.of(DEFAULT_DB, "partitioned_table_timestamp_ltz");
+
+        tEnv.executeSql(
+                String.format(
+                        "alter table partitioned_table_timestamp_ltz add partition (c=%d)",
+                        timestamp1Millis));
+        tEnv.executeSql(
+                String.format(
+                        "alter table partitioned_table_timestamp_ltz add partition (c=%d)",
+                        timestamp2Millis));
+
+        // Write test data manually for timestamp_ltz partitions
+        List<InternalRow> rows1 = new ArrayList<>();
+        List<String> expectedRowValues1 = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            rows1.add(row(i, "v1", timestamp1));
+            expectedRowValues1.add(String.format("+I[%d, v1, 2021-01-01T00:00:00Z]", i));
+        }
+        for (int i = 0; i < 10; i++) {
+            rows1.add(row(i, "v1", timestamp2));
+        }
+        writeRows(conn, tablePath1, rows1, false);
+        waitUntilAllBucketFinishSnapshot(
+                admin, tablePath1, Arrays.asList("2021-01-01-00-00-00_", "2021-01-02-00-00-00_"));
+
+        // TODO add test for timestamp_ltz
+        // Test query with TIMESTAMP_LTZ literal
+        String plan1 =
+                tEnv.explainSql(
+                        "select * from partitioned_table_timestamp_ltz where c = cast(TIMESTAMP'2021-01-01 08:00:00' as timestamp_ltz(3)) ");
+        CloseableIterator<Row> collect =
+                tEnv.executeSql("select cast(TIMESTAMP'2021-01-01 08:00:00' as timestamp_ltz(3))")
+                        .collect();
+        org.apache.flink.util.CloseableIterator<Row> rowIter1 =
+                tEnv.executeSql(
+                                "select * from partitioned_table_timestamp_ltz where c = cast(TIMESTAMP'2021-01-01 08:00:00' as timestamp_ltz(3))")
+                        .collect();
+        assertResultsIgnoreOrder(rowIter1, expectedRowValues1, true);
+    }
+
+    @Test
+    void testStreamingReadMultiTypePartitionPushDown() throws Exception {
+        // Create a table with multiple partition fields of different types
+        tEnv.executeSql(
+                "create table multi_type_partitioned_table"
+                        + " (id int not null, name varchar, year_val int, month_val varchar, day_val bigint, is_active boolean, "
+                        + "primary key (id, year_val, month_val, day_val, is_active) NOT ENFORCED) "
+                        + "partitioned by (year_val, month_val, day_val, is_active) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "multi_type_partitioned_table");
+
+        // Add partitions with different types
+        tEnv.executeSql(
+                "alter table multi_type_partitioned_table add partition (year_val=2025, month_val='01', day_val=15, is_active='true')");
+        tEnv.executeSql(
+                "alter table multi_type_partitioned_table add partition (year_val=2025, month_val='02', day_val=20, is_active='false')");
+        tEnv.executeSql(
+                "alter table multi_type_partitioned_table add partition (year_val=2026, month_val='01', day_val=10, is_active='true')");
+
+        // Write test data to partitions
+        List<InternalRow> rows = new ArrayList<>();
+        List<String> expectedRowValues = new ArrayList<>();
+
+        // Data for partition (2025, '01', 15, true)
+        for (int i = 1; i <= 3; i++) {
+            rows.add(row(i, "name" + i, 2025, "01", 15L, true));
+            expectedRowValues.add(String.format("+I[%d, name%d, 2025, 01, 15, true]", i, i));
+        }
+
+        // Data for partition (2025, '02', 20, false)
+        for (int i = 4; i <= 6; i++) {
+            rows.add(row(i, "name" + i, 2025, "02", 20L, false));
+        }
+
+        // Data for partition (2026, '01', 10, true)
+        for (int i = 7; i <= 9; i++) {
+            rows.add(row(i, "name" + i, 2026, "01", 10L, true));
+        }
+
+        writeRows(conn, tablePath, rows, false);
+        waitUntilAllBucketFinishSnapshot(
+                admin,
+                tablePath,
+                Arrays.asList("2025$01$15$true", "2025$02$20$false", "2026$01$10$true"));
+
+        // Test 1: Filter by integer partition field
+        String plan1 =
+                tEnv.explainSql("select * from multi_type_partitioned_table where year_val = 2025");
+        assertThat(plan1)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, multi_type_partitioned_table, filter=[=(year_val, 2025)], project=[id, name, month_val, day_val, is_active]]], fields=[id, name, month_val, day_val, is_active])");
+
+        org.apache.flink.util.CloseableIterator<Row> rowIter1 =
+                tEnv.executeSql("select * from multi_type_partitioned_table where year_val = 2025")
+                        .collect();
+
+        List<String> expected1 = new ArrayList<>();
+        expected1.addAll(expectedRowValues); // Data from (2025, '01', 15, true)
+        for (int i = 4; i <= 6; i++) {
+            expected1.add(String.format("+I[%d, name%d, 2025, 02, 20, false]", i, i));
+        }
+        assertResultsIgnoreOrder(rowIter1, expected1, true);
+
+        // Test 2: Filter by string partition field
+        String plan2 =
+                tEnv.explainSql(
+                        "select * from multi_type_partitioned_table where month_val = '01'");
+        assertThat(plan2)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, multi_type_partitioned_table, filter=[=(month_val, _UTF-16LE'01':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], project=[id, name, year_val, day_val, is_active]]], fields=[id, name, year_val, day_val, is_active])");
+
+        org.apache.flink.util.CloseableIterator<Row> rowIter2 =
+                tEnv.executeSql("select * from multi_type_partitioned_table where month_val = '01'")
+                        .collect();
+
+        List<String> expected2 = new ArrayList<>();
+        expected2.addAll(expectedRowValues); // Data from (2025, '01', 15, true)
+        for (int i = 7; i <= 9; i++) {
+            expected2.add(String.format("+I[%d, name%d, 2026, 01, 10, true]", i, i));
+        }
+        assertResultsIgnoreOrder(rowIter2, expected2, true);
+
+        // Test 3: Filter by bigint partition field
+        String plan3 =
+                tEnv.explainSql("select * from multi_type_partitioned_table where day_val = 15");
+        assertThat(plan3)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, multi_type_partitioned_table, filter=[=(day_val, 15:BIGINT)], project=[id, name, year_val, month_val, is_active]]], fields=[id, name, year_val, month_val, is_active])");
+
+        org.apache.flink.util.CloseableIterator<Row> rowIter3 =
+                tEnv.executeSql("select * from multi_type_partitioned_table where day_val = 15")
+                        .collect();
+        assertResultsIgnoreOrder(rowIter3, expectedRowValues, true);
+
+        // Test 4: Filter by boolean partition field
+        String plan4 =
+                tEnv.explainSql(
+                        "select * from multi_type_partitioned_table where is_active is true");
+        assertThat(plan4)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, multi_type_partitioned_table, filter=[is_active]]], fields=[id, name, year_val, month_val, day_val, is_active]");
+
+        org.apache.flink.util.CloseableIterator<Row> rowIter4 =
+                tEnv.executeSql("select * from multi_type_partitioned_table where is_active = true")
+                        .collect();
+
+        List<String> expected4 = new ArrayList<>();
+        expected4.addAll(expectedRowValues); // Data from (2025, '01', 15, true)
+        for (int i = 7; i <= 9; i++) {
+            expected4.add(String.format("+I[%d, name%d, 2026, 01, 10, true]", i, i));
+        }
+        assertResultsIgnoreOrder(rowIter4, expected4, true);
+
+        // Test 5: Complex filter with multiple partition fields
+        String plan5 =
+                tEnv.explainSql(
+                        "select * from multi_type_partitioned_table where year_val = 2025 and month_val = '01' and is_active = true");
+        assertThat(plan5)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, multi_type_partitioned_table, filter=[and(and(=(year_val, 2025), =(month_val, _UTF-16LE'01':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")), is_active)], project=[id, name, day_val, is_active]]], fields=[id, name, day_val, is_active])");
+
+        org.apache.flink.util.CloseableIterator<Row> rowIter5 =
+                tEnv.executeSql(
+                                "select * from multi_type_partitioned_table where year_val = 2025 and month_val = '01' and is_active = true")
+                        .collect();
+        assertResultsIgnoreOrder(rowIter5, expectedRowValues, true);
+    }
+
+    @Test
     void testStreamingReadMultiPartitionPushDown() throws Exception {
         tEnv.executeSql(
                 "create table multi_partitioned_table"
@@ -979,7 +1239,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         .filter(s -> s.contains("2025"))
                         .collect(Collectors.toList());
         waitUntilAllBucketFinishSnapshot(
-                admin, tablePath, Arrays.asList("2025$1", "2025$2", "2025$2"));
+                admin, tablePath, Arrays.asList("2025$1", "2025$2", "2026$1"));
 
         String plan = tEnv.explainSql("select * from multi_partitioned_table where c ='2025'");
         assertThat(plan)
@@ -1021,7 +1281,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     }
 
     @Test
-    void testStreamingReadWithCombinedFilters() throws Exception {
+    void testStreamingReadWithCombinedFilters1() throws Exception {
         tEnv.executeSql(
                 "create table combined_filters_table"
                         + " (a int not null, b varchar, c string, d int, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
@@ -1030,12 +1290,16 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         tEnv.executeSql("alter table combined_filters_table add partition (c=2026)");
 
         List<InternalRow> rows = new ArrayList<>();
-        List<String> expectedRowValues = new ArrayList<>();
+        List<String> expectedRowValues1 = new ArrayList<>();
+        List<String> expectedRowValues2 = new ArrayList<>();
 
         for (int i = 0; i < 10; i++) {
             rows.add(row(i, "v" + i, "2025", i * 100));
             if (i % 2 == 0) {
-                expectedRowValues.add(String.format("+I[%d, 2025, %d]", i, i * 100));
+                expectedRowValues1.add(String.format("+I[%d, 2025, %d]", i, i * 100));
+            }
+            if (i == 2) {
+                expectedRowValues2.add(String.format("+I[%d, 2025, %d]", i, i * 100));
             }
         }
         writeRows(conn, tablePath, rows, false);
@@ -1062,7 +1326,24 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                                 "select a,c,d from combined_filters_table where c ='2025' and d % 200 = 0")
                         .collect();
 
-        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+        assertResultsIgnoreOrder(rowIter, expectedRowValues1, true);
+
+        plan =
+                tEnv.explainSql(
+                        "select a,c,d from combined_filters_table where c ='2025' and d = 200");
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table, "
+                                + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
+                                + "project=[a, d]]], fields=[a, d])");
+
+        // test column filter、partition filter and flink runtime filter
+        rowIter =
+                tEnv.executeSql(
+                                "select a,c,d from combined_filters_table where c ='2025' and d = 200")
+                        .collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues2, true);
     }
 
     @Test
@@ -1095,14 +1376,192 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
             values[1] = keyValuePairs[1].split("=")[1];
 
             for (int i = 0; i < 10; i++) {
-                rows.add(row(i, "v1", values[0], values[1]));
-                expectedRowValues.add(String.format("+I[%d, v1, %s, %s]", i, values[0], values[1]));
+                rows.add(row(i, "v" + i, values[0], values[1]));
+                expectedRowValues.add(
+                        String.format("+I[%d, v%d, %s, %s]", i, i, values[0], values[1]));
             }
         }
 
         writeRows(conn, tablePath, rows, false);
 
         return expectedRowValues;
+    }
+
+    @Test
+    void testStreamingReadPartitionPushDownWithInExpr() throws Exception {
+
+        tEnv.executeSql(
+                "create table partitioned_table_in"
+                        + " (a int not null, b varchar, c string, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "partitioned_table_in");
+        tEnv.executeSql("alter table partitioned_table_in add partition (c=2025)");
+        tEnv.executeSql("alter table partitioned_table_in add partition (c=2026)");
+        tEnv.executeSql("alter table partitioned_table_in add partition (c=2027)");
+
+        List<String> expectedRowValues =
+                writeRowsToPartition(conn, tablePath, Arrays.asList("2025", "2026", "2027"))
+                        .stream()
+                        .filter(s -> s.contains("2025") || s.contains("2026"))
+                        .collect(Collectors.toList());
+        waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "2027"));
+
+        String query1 = "select * from partitioned_table_in where c in ('2025','2026')";
+        String plan = tEnv.explainSql(query1);
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_in, filter=[OR(=(c, _UTF-16LE'2025'), =(c, _UTF-16LE'2026'))]]], fields=[a, b, c])");
+
+        org.apache.flink.util.CloseableIterator<Row> rowIter = tEnv.executeSql(query1).collect();
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+
+        String query2 = "select * from partitioned_table_in where c ='2025' or  c ='2026'";
+        plan = tEnv.explainSql(query2);
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_in, filter=[OR(=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"), =(c, _UTF-16LE'2026':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))]]], fields=[a, b, c])");
+        rowIter = tEnv.executeSql(query2).collect();
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    @Test
+    void testStreamingReadWithCombinedFiltersAndInExpr() throws Exception {
+        tEnv.executeSql(
+                "create table combined_filters_table_in"
+                        + " (a int not null, b varchar, c string, d int, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "combined_filters_table_in");
+        tEnv.executeSql("alter table combined_filters_table_in add partition (c=2025)");
+        tEnv.executeSql("alter table combined_filters_table_in add partition (c=2026)");
+        tEnv.executeSql("alter table combined_filters_table_in add partition (c=2027)");
+
+        List<InternalRow> rows = new ArrayList<>();
+        List<String> expectedRowValues = new ArrayList<>();
+
+        for (int i = 0; i < 10; i++) {
+            rows.add(row(i, "v" + i, "2025", i * 100));
+            if (i % 2 == 0) {
+                expectedRowValues.add(String.format("+I[%d, 2025, %d]", i, i * 100));
+            }
+        }
+        for (int i = 0; i < 10; i++) {
+            rows.add(row(i, "v" + i, "2026", i * 100));
+            if (i % 2 == 0) {
+                expectedRowValues.add(String.format("+I[%d, 2026, %d]", i, i * 100));
+            }
+        }
+
+        for (int i = 0; i < 10; i++) {
+            rows.add(row(i, "v" + i, "2027", i * 100));
+        }
+
+        writeRows(conn, tablePath, rows, false);
+        waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "2027"));
+
+        String query1 =
+                "select a,c,d from combined_filters_table_in where c in ('2025','2026') and d % 200 = 0";
+        String plan = tEnv.explainSql(query1);
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table_in, filter=[OR(=(c, _UTF-16LE'2025'), =(c, _UTF-16LE'2026'))], project=[a, c, d]]], fields=[a, c, d])");
+
+        // test column filter、partition filter and flink runtime filter
+        org.apache.flink.util.CloseableIterator<Row> rowIter = tEnv.executeSql(query1).collect();
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+
+        rowIter =
+                tEnv.executeSql(
+                                "select a,c,d from combined_filters_table_in where (c ='2025' or  c ='2026') "
+                                        + "and d % 200 = 0")
+                        .collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    @Test
+    void testStreamingReadPartitionPushDownWithLikeExpr() throws Exception {
+
+        tEnv.executeSql(
+                "create table partitioned_table_like"
+                        + " (a int not null, b varchar, c string, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "partitioned_table_like");
+        tEnv.executeSql("alter table partitioned_table_like add partition (c=2025)");
+        tEnv.executeSql("alter table partitioned_table_like add partition (c=2026)");
+        tEnv.executeSql("alter table partitioned_table_like add partition (c=3026)");
+
+        List<String> allData =
+                writeRowsToPartition(conn, tablePath, Arrays.asList("2025", "2026", "3026"));
+        List<String> expectedRowValues =
+                allData.stream()
+                        .filter(s -> s.contains("2025") || s.contains("2026"))
+                        .collect(Collectors.toList());
+        waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "3026"));
+
+        String query1 = "select * from partitioned_table_like where c like '202%'";
+        String plan = tEnv.explainSql(query1);
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_like, filter=[LIKE(c, _UTF-16LE'202%')]]], fields=[a, b, c])");
+
+        org.apache.flink.util.CloseableIterator<Row> rowIter = tEnv.executeSql(query1).collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+        expectedRowValues =
+                allData.stream()
+                        .filter(s -> s.contains("2026") || s.contains("3026"))
+                        .collect(Collectors.toList());
+        String query2 = "select * from partitioned_table_like where c like '%026'";
+        plan = tEnv.explainSql(query2);
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_like, filter=[LIKE(c, _UTF-16LE'%026')]]], fields=[a, b, c])");
+        rowIter = tEnv.executeSql(query2).collect();
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+
+        expectedRowValues =
+                allData.stream().filter(s -> s.contains("3026")).collect(Collectors.toList());
+        String query3 = "select * from partitioned_table_like where c like '%3026%'";
+        plan = tEnv.explainSql(query3);
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_like, filter=[LIKE(c, _UTF-16LE'%3026%')]]], fields=[a, b, c])");
+        rowIter = tEnv.executeSql(query3).collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+    }
+
+    @Test
+    void testStreamingReadPartitionComplexPushDown() throws Exception {
+
+        tEnv.executeSql(
+                "create table partitioned_table_complex"
+                        + " (a int not null, b varchar, c string,d string, primary key (a, c, d) NOT ENFORCED) partitioned by (c,d) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "partitioned_table_complex");
+        tEnv.executeSql("alter table partitioned_table_complex add partition (c=2025,d=1)");
+        tEnv.executeSql("alter table partitioned_table_complex add partition (c=2025,d=2)");
+        tEnv.executeSql("alter table partitioned_table_complex add partition (c=2026,d=1)");
+
+        List<String> allData =
+                writeRowsToTwoPartition(
+                        tablePath, Arrays.asList("c=2025,d=1", "c=2025,d=2", "c=2026,d=1"));
+        List<String> expectedRowValues =
+                allData.stream()
+                        .filter(s -> s.contains("v3") && !s.contains("2025, 2"))
+                        .collect(Collectors.toList());
+        waitUntilAllBucketFinishSnapshot(
+                admin, tablePath, Arrays.asList("2025$1", "2025$2", "2026$1"));
+
+        String query =
+                "select * from partitioned_table_complex where  a = 3\n"
+                        + "    and (c in ('2026')  or d like '%1%') "
+                        + "    and     b like '%v3%'";
+        String plan = tEnv.explainSql(query);
+        assertThat(plan)
+                .contains(
+                        "Calc(select=[3 AS a, b, c, d], where=[((a = 3) AND LIKE(b, '%v3%'))])\n"
+                                + "+- TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_complex, filter=[OR(=(c, _UTF-16LE'2026'), LIKE(d, _UTF-16LE'%1%'))]]], fields=[a, b, c, d])");
+
+        org.apache.flink.util.CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }
 
     private enum Caching {
@@ -1261,6 +1720,8 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                     for (String partition : partitions) {
                         KvSnapshots snapshots =
                                 admin.getLatestKvSnapshots(tablePath, partition).get();
+                        List<PartitionInfo> partitionInfos =
+                                admin.listPartitionInfos(tablePath).get();
                         for (int bucketId : snapshots.getBucketIds()) {
                             if (!snapshots.getSnapshotId(bucketId).isPresent()) {
                                 return false;

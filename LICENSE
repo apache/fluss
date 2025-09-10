@@ -361,6 +361,7 @@ Apache Kafka
 ./fluss-server/src/main/java/org/apache/fluss/server/utils/timer/TimingWheel.java
 
 Apache Paimon
+./fluss-common/src/main/java/org/apache/fluss/flink/utils/PredicateConverter.java
 ./fluss-common/src/main/java/org/apache/fluss/predicate/And.java
 ./fluss-common/src/main/java/org/apache/fluss/predicate/CompareUtils.java
 ./fluss-common/src/main/java/org/apache/fluss/predicate/CompoundPredicate.java

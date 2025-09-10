@@ -34,6 +34,7 @@
     <properties>
         <flink.major.version>1.20</flink.major.version>
         <flink.minor.version>1.20.1</flink.minor.version>
+        <scala.binary.version>2.12</scala.binary.version>
     </properties>
 
     <dependencies>
@@ -123,6 +124,21 @@
             <artifactId>flink-connector-base</artifactId>
             <version>${flink.minor.version}</version>
             <type>test-jar</type>
+            <scope>test</scope>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-table-planner_${scala.binary.version}</artifactId>
+            <version>${flink.minor.version}</version>
+            <scope>test</scope>
+            <type>test-jar</type>
+        </dependency>
+
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-table-planner_${scala.binary.version}</artifactId>
+            <version>${flink.minor.version}</version>
             <scope>test</scope>
         </dependency>
 
