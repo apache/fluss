@@ -85,7 +85,7 @@ public class LogRecordReadContext implements LogRecordBatch.ReadContext, AutoClo
                 throw new IllegalArgumentException(
                         "Projection is not supported for COMPACTED log format. Please remove projection.");
             }
-            }
+        }
 
         if (logFormat == LogFormat.ARROW) {
             if (readFromRemote) {
