@@ -32,6 +32,8 @@ import java.util.Objects;
  */
 public class HybridSnapshotLogSplit extends SnapshotSplit {
 
+    private static final long serialVersionUID = 1L;
+
     private static final String HYBRID_SPLIT_PREFIX = "hybrid-snapshot-log-";
     private final boolean isSnapshotFinished;
     private final long logStartingOffset;

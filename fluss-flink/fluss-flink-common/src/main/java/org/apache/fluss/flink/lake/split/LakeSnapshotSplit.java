@@ -26,6 +26,8 @@ import javax.annotation.Nullable;
 /** A split for reading a snapshot of lake. */
 public class LakeSnapshotSplit extends SourceSplitBase {
 
+    private static final long serialVersionUID = 1L;
+
     public static final byte LAKE_SNAPSHOT_SPLIT_KIND = -1;
 
     private final LakeSplit lakeSplit;

@@ -23,10 +23,11 @@ import org.apache.flink.api.connector.source.SourceSplit;
 
 import javax.annotation.Nullable;
 
+import java.io.Serializable;
 import java.util.Objects;
 
 /** A base source split for {@link SnapshotSplit} and {@link LogSplit}. . */
-public abstract class SourceSplitBase implements SourceSplit {
+public abstract class SourceSplitBase implements SourceSplit, Serializable {
 
     public static final byte HYBRID_SNAPSHOT_SPLIT_FLAG = 1;
     public static final byte LOG_SPLIT_FLAG = 2;

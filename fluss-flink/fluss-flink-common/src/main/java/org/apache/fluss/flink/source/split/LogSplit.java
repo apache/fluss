@@ -27,6 +27,8 @@ import java.util.Optional;
 /** The split for log. It's used to describe the log data of a table bucket. */
 public class LogSplit extends SourceSplitBase {
 
+    private static final long serialVersionUID = 1L;
+
     public static final long NO_STOPPING_OFFSET = Long.MIN_VALUE;
 
     private static final String LOG_SPLIT_PREFIX = "log-";

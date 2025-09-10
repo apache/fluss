@@ -30,6 +30,8 @@ import java.util.Optional;
 /** A split mixing Lake snapshot and Fluss log. */
 public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
 
+    private static final long serialVersionUID = 1L;
+
     public static final byte LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND = -2;
 
     // may be null when no lake snapshot data for the bucket
