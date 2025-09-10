@@ -28,7 +28,7 @@ datalake.iceberg.warehouse: /tmp/iceberg
 ```
 
 Fluss processes Iceberg configurations by stripping the `datalake.iceberg.` prefix and uses the stripped configurations (without the prefix `datalake.iceberg.`) to initialize the Iceberg catalog.
-It allows to pass other custom configurations to create the iceberg catalog.  Checkout the [Iceberg Catalog Properties](https://iceberg.apache.org/docs/1.9.1/configuration/#catalog-properties) for more details on the available configurations of catalog.
+This approach enables passing custom configurations for iceberg catalog initiation. Checkout the [Iceberg Catalog Properties](https://iceberg.apache.org/docs/1.9.1/configuration/#catalog-properties) for more details on the available configurations of catalog.
 
 Fluss supports all Iceberg catalog types that are compatible with Iceberg itself.
 For catalogs such as `hive`, `hadoop`, `rest`, `glue`, `nessie`, and `jdbc`, you can specify them using the configuration `datalake.iceberg.type` with the corresponding value (e.g., `hive`, `hadoop`, etc.).
@@ -38,7 +38,7 @@ For example, configure with `datalake.iceberg.catalog-impl: org.apache.iceberg.s
 > **NOTE**:  
 > 1: Some catalog requires Hadoop related classes such as `hadoop`, `hive` catalog. Make sure hadoop related classes are in your classpath. You can either download from [pre-bundled Hadoop jar](https://repo.maven.apache.org/maven2/org/apache/flink/flink-shaded-hadoop-2-uber/2.8.3-10.0/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar)
 or [hadoop.tar.gz](https://archive.apache.org/dist/hadoop/common/hadoop-2.8.5/hadoop-2.8.5.tar.gz) which required to be unzipped. Then put hadoop related jars into `FLUSS_HOME/plugins/iceberg`.   
-> 2: Fluss only bundles the catalog implementation included in `iceberg-core` module. For any catalog implementation that not bundled in `iceberg-core` module, such as `hive`, please make sure put the catalog implementation jar into `FLUSS_HOME/plugins/iceberg`.   
+> 2: Fluss only bundles the catalog implementation included in `iceberg-core` module. For any other catalog implementations not bundled within `iceberg-core` module (e.g., Hive Catalog), you must place the corresponding JAR file into the into `FLUSS_HOME/plugins/iceberg`.   
 > 3: The version if Iceberg that Fluss bundles is based on `1.9.2`, please make sure the jars you put is compatible with `Iceberg-1.9.2`
 
 ### Start Tiering Service to Iceberg
@@ -46,7 +46,7 @@ or [hadoop.tar.gz](https://archive.apache.org/dist/hadoop/common/hadoop-2.8.5/ha
 Then, you must start the datalake tiering service to tier Fluss's data to Iceberg. For guidance, you can refer to [Start The Datalake Tiering Service
 ](maintenance/tiered-storage/lakehouse-storage.md#start-the-datalake-tiering-service). Although the example uses Paimon, the process is also applicable to Iceberg.
 
-But in [Prepare required jars](maintenance/tiered-storage/lakehouse-storage.md#prepare-required-jars) step, you should follow this guidance:
+However, for the [Prepare required jars](maintenance/tiered-storage/lakehouse-storage.md#prepare-required-jars) step, adhere to the dependency management guidelines listed below:
 - Put [fluss-flink connector jar](/downloads) into `${FLINK_HOME}/lib`, you should choose a connector version matching your Flink version. If you're using Flink 1.20, please use [fluss-flink-1.20-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/$FLUSS_VERSION$/fluss-flink-1.20-$FLUSS_VERSION$.jar)
 - If you are using [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](maintenance/tiered-storage/remote-storage.md),
   you should download the corresponding [Fluss filesystem jar](/downloads#filesystem-jars) and also put it into `${FLINK_HOME}/lib`
@@ -116,7 +116,7 @@ Primary key tables in Fluss are mapped to Iceberg tables with:
 - **Primary key constraints**: The Iceberg table maintains the same primary key definition
 - **Merge-on-read (MOR) strategy**: Updates and deletes are handled efficiently using Iceberg's MOR capabilities
 - **Bucket partitioning**: Automatically partitioned by the primary key using Iceberg's bucket transform with the bucket num of Fluss to align with Fluss
-- **Sorted by system column `__offset`**: Sorted by the system column `__offset` derived from Fluss change log, which enables to map to the change log of Fluss with keeping the order
+- **Sorted by system column `__offset`**: Sorted by the system column `__offset` (which is derived from the Fluss change log) to preserve the data order and facilitate mapping back to the original Fluss change log
 
 ```sql title="Primary Key Table Example"
 CREATE TABLE user_profiles (
@@ -156,7 +156,7 @@ The table mapping for Fluss log table are a little of different depending on whe
 #### No Bucket Key
 Log Table without bucket in Fluss are mapped to Iceberg tables with:
 - **Identity partitioning**: Using identity partitioning on the `__bucket` system column, which enables seek to the data files in iceberg if a specified Fluss bucket is given
-- **Sorted by system column `__offset`**: Sorted by the system column `__offset` derived from Fluss log, which enables to mapping to the log data of Fluss with keeping the order
+- **Sorted by system column `__offset`**: Sorted by the system column `__offset` (which is derived from the Fluss log data) to preserve the data order and facilitate mapping back to the original Fluss log data
 
 ```sql title="Log Table without Bucket Key"
 CREATE TABLE access_logs (
@@ -187,7 +187,7 @@ SORTED BY (__offset ASC);
 #### Single Bucket Key
 Log Table with one bucket key in Fluss are mapped to Iceberg tables with:
 - **Bucket partitioning**: Automatically partitioned by the bucket key using Iceberg's bucket transform with the bucket num of Fluss to align with Fluss
-- **Sorted by system column `__offset`**:  Sorted by the system column `__offset` derived from Fluss log, which enables to mapping to the log data of Fluss with keeping the order
+- **Sorted by system column `__offset`**: Sorted by the system column `__offset` (which is derived from the Fluss log data) to preserve the data order and facilitate mapping back to the original Fluss log data
 
 ```sql title="Log Table with Bucket Key"
 CREATE TABLE order_events (
@@ -310,8 +310,8 @@ When integrating with Iceberg, Fluss automatically converts between Fluss data t
 
 ### Auto Compaction
 
-The table option `table.datalake.auto-compaction` (disabled by default) provides per-table automatic compaction control. 
-When enabled for a specific table, compaction will be triggered automatically during tiering service write operations to that table.
+The table option `table.datalake.auto-compaction` (disabled by default) provides per-table control over automatic compaction. 
+When enabled for a specific table, compaction is automatically triggered during write operations to that table by the tiering service.
 
 ### Snapshot Metadata
 
@@ -329,7 +329,7 @@ Fluss adds specific metadata to Iceberg snapshots for traceability:
 
 ## Limitations
 
-When using Iceberg as lakehouse storage with Fluss, there are current limitations:
+When using Iceberg as the lakehouse storage layer with Fluss, the following limitations currently exist:
 
 - **Union Read**: Union read of data from both Fluss and Iceberg layers is not supported
 - **Complex Types**: Array, Map, and Row types are not supported
