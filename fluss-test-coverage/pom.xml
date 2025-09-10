@@ -368,13 +368,54 @@
                                         <!-- start exclude for metric -->
                                         <exclude>org.apache.fluss.metrics.*</exclude>
                                         <!-- end exclude for metric -->
-                                        <!-- start exclude for lakehouse-paimon -->
-                                        <exclude>com.alibaba.fluss.lakehouse.*</exclude>
-                                        <exclude>com.alibaba.fluss.connector.flink.lakehouse.*</exclude>
-                                        <!-- end exclude for lakehouse-paimon -->
-                                        <exclude>com.alibaba.fluss.lakehouse.cli.*</exclude>
+                                        <exclude>org.apache.fluss.flink.lake.*</exclude>
+                                        <exclude>org.apache.fluss.kafka.*</exclude>
+                                        <!-- exclude for fluss-ci-tools -->
+                                        <exclude>org.apache.fluss.tools.ci.*</exclude>
                                         <!-- end exclude for predicate -->
-                                        <exclude>com.alibaba.fluss.predicate.*</exclude>
+                                        <exclude>org.apache.fluss.predicate.*</exclude>
+                                        <!-- end exclude for lake source -->
+                                        <exclude>org.apache.fluss.lake.source.*</exclude>
+                                        <!-- exclude for dummy class -->
+                                        <exclude>org.apache.fluss.dist.DummyClass</exclude>
+                                        <exclude>org.apache.fluss.flink.DummyClass120</exclude>
+                                        <exclude>org.apache.fluss.lake.batch.ArrowRecordBatch</exclude>
+                                        <exclude>org.apache.fluss.lake.committer.CommittedLakeSnapshot</exclude>
+                                        <exclude>org.apache.fluss.lake.paimon.FlussDataTypeToPaimonDataType</exclude>
+                                        <!-- start exclude for lake lance -->
+                                        <exclude>org.apache.fluss.lake.lance.*</exclude>
+                                        <!-- temporarily exclude iceberg -->
+                                        <exclude>org.apache.fluss.lake.iceberg.*</exclude>
+                                        <exclude>org.apache.fluss.row.encode.iceberg.*</exclude>
+                                        <exclude>org.apache.fluss.bucketing.IcebergBucketingFunction</exclude>
+                                        <!-- start exclude for flink tiering service -->
+                                        <exclude>org.apache.fluss.flink.tiering.source.TieringSourceOptions</exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.source.TieringSource.Builder</exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.source.TieringSource</exclude>
+                                        <exclude>
+                                            org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator
+                                        </exclude>
+                                        <exclude>
+                                            org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator.HeartBeatHelper
+                                        </exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.source.TieringWriterInitContext
+                                        </exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.source.TieringSourceReader</exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.source.TableBucketWriteResultEmitter
+                                        </exclude>
+                                        <exclude>
+                                            org.apache.fluss.flink.tiering.source.TableBucketWriteResultTypeInfo*
+                                        </exclude>
+                                        <exclude>
+                                            org.apache.fluss.flink.tiering.committer.TieringCommitOperatorFactory
+                                        </exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.committer.CommittableMessageTypeInfo*
+                                        </exclude>
+                                        <exclude>
+                                            org.apache.fluss.flink.tiering.LakeTieringJobBuilder
+                                        </exclude>
+                                        <exclude>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
+                                        <!-- end exclude for flink tiering service -->
                                     </excludes>
                                 </rule>
                             </rules>

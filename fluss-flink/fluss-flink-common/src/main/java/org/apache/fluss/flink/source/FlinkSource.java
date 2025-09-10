@@ -17,22 +17,24 @@
 
 package org.apache.fluss.flink.source;
 
-import com.alibaba.fluss.config.Configuration;
-import com.alibaba.fluss.flink.source.deserializer.DeserializerInitContextImpl;
-import com.alibaba.fluss.flink.source.deserializer.FlussDeserializationSchema;
-import com.alibaba.fluss.flink.source.emitter.FlinkRecordEmitter;
-import com.alibaba.fluss.flink.source.enumerator.FlinkSourceEnumerator;
-import com.alibaba.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
-import com.alibaba.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
-import com.alibaba.fluss.flink.source.reader.FlinkSourceReader;
-import com.alibaba.fluss.flink.source.reader.RecordAndPos;
-import com.alibaba.fluss.flink.source.split.SourceSplitBase;
-import com.alibaba.fluss.flink.source.split.SourceSplitSerializer;
-import com.alibaba.fluss.flink.source.state.FlussSourceEnumeratorStateSerializer;
-import com.alibaba.fluss.flink.source.state.SourceEnumeratorState;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.predicate.Predicate;
-import com.alibaba.fluss.types.RowType;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.flink.source.deserializer.DeserializerInitContextImpl;
+import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
+import org.apache.fluss.flink.source.emitter.FlinkRecordEmitter;
+import org.apache.fluss.flink.source.enumerator.FlinkSourceEnumerator;
+import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
+import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
+import org.apache.fluss.flink.source.reader.FlinkSourceReader;
+import org.apache.fluss.flink.source.reader.RecordAndPos;
+import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.flink.source.split.SourceSplitSerializer;
+import org.apache.fluss.flink.source.state.FlussSourceEnumeratorStateSerializer;
+import org.apache.fluss.flink.source.state.SourceEnumeratorState;
+import org.apache.fluss.lake.source.LakeSource;
+import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
+import org.apache.fluss.types.RowType;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.connector.source.Boundedness;
@@ -66,6 +68,8 @@ public class FlinkSource<OUT>
 
     private Predicate partitionFilters;
 
+    private final @Nullable LakeSource<LakeSplit> lakeSource;
+
     public FlinkSource(
             Configuration flussConf,
             TablePath tablePath,
@@ -78,6 +82,34 @@ public class FlinkSource<OUT>
             FlussDeserializationSchema<OUT> deserializationSchema,
             boolean streaming,
             Predicate partitionFilters) {
+        this(
+                flussConf,
+                tablePath,
+                hasPrimaryKey,
+                isPartitioned,
+                sourceOutputType,
+                projectedFields,
+                offsetsInitializer,
+                scanPartitionDiscoveryIntervalMs,
+                deserializationSchema,
+                streaming,
+                partitionFilters,
+                null);
+    }
+
+    public FlinkSource(
+            Configuration flussConf,
+            TablePath tablePath,
+            boolean hasPrimaryKey,
+            boolean isPartitioned,
+            RowType sourceOutputType,
+            @Nullable int[] projectedFields,
+            OffsetsInitializer offsetsInitializer,
+            long scanPartitionDiscoveryIntervalMs,
+            FlussDeserializationSchema<OUT> deserializationSchema,
+            boolean streaming,
+            Predicate partitionFilters,
+            LakeSource<LakeSplit> lakeSource) {
         this.flussConf = flussConf;
         this.tablePath = tablePath;
         this.hasPrimaryKey = hasPrimaryKey;
@@ -89,6 +121,7 @@ public class FlinkSource<OUT>
         this.deserializationSchema = deserializationSchema;
         this.streaming = streaming;
         this.partitionFilters = partitionFilters;
+        this.lakeSource = lakeSource;
     }
 
     @Override
@@ -108,7 +141,8 @@ public class FlinkSource<OUT>
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 streaming,
-                partitionFilters);
+                partitionFilters,
+                lakeSource);
     }
 
     @Override
@@ -127,7 +161,8 @@ public class FlinkSource<OUT>
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 streaming,
-                partitionFilters);
+                partitionFilters,
+                lakeSource);
     }
 
     @Override
