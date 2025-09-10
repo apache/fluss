@@ -23,62 +23,55 @@ import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
 
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 import java.util.function.BiConsumer;
 
 /**
- * A worker executor that is used to schedule asynchronous tasks to extend {@link
- * SplitEnumeratorContext} with fixed delay capabilities. This class serves as a workaround until
- * {@link SplitEnumeratorContext} natively supports asynchronous calls with fixed delay scheduling.
+ * A worker executor that extends {@link SplitEnumeratorContext} with fixed delay scheduling
+ * capabilities for asynchronous tasks.
+ *
+ * <p>{@link SplitEnumeratorContext} natively only supports fixed rate scheduling for asynchronous
+ * calls, which can lead to task accumulation if individual calls take too long to complete.
  *
  * <p>This executor wraps a single-threaded {@link ScheduledExecutorService} to handle async
  * operations and route their results back to the coordinator thread through the {@link
  * SplitEnumeratorContext#callAsync} methods.
+ *
+ * <p>TODO: This class is a workaround and should be removed once FLINK-38335 is completed.
  */
 @Internal
 public class WorkerExecutor {
     protected final SplitEnumeratorContext<SourceSplitBase> context;
-    private final ScheduledExecutorService workerExecutor;
+    private final ScheduledExecutorService scheduledExecutor;
 
     public WorkerExecutor(SplitEnumeratorContext<SourceSplitBase> context) {
         this.context = context;
-        this.workerExecutor = Executors.newScheduledThreadPool(1);
+        this.scheduledExecutor = Executors.newScheduledThreadPool(1);
     }
 
     public <T> void callAsync(Callable<T> callable, BiConsumer<T, Throwable> handler) {
-        workerExecutor.execute(
-                () -> {
-                    try {
-                        T result = callable.call();
-                        // reuse the context async call to notify coordinator thread.
-                        context.callAsync(() -> result, handler);
-                    } catch (Throwable t) {
-                        context.callAsync(
-                                () -> {
-                                    throw t;
-                                },
-                                handler);
-                    }
-                });
+        context.callAsync(callable, handler);
     }
 
     public <T> void callAsyncAtFixedDelay(
             Callable<T> callable, BiConsumer<T, Throwable> handler, long initialDelay, long delay) {
-        workerExecutor.scheduleWithFixedDelay(
+        scheduledExecutor.scheduleWithFixedDelay(
                 () -> {
-                    try {
-                        T result = callable.call();
-                        // reuse the context async call to notify coordinator thread.
-                        context.callAsync(() -> result, handler);
-                    } catch (Throwable t) {
-                        context.callAsync(
-                                () -> {
-                                    throw t;
-                                },
-                                handler);
-                    }
+                    CountDownLatch latch = new CountDownLatch(1);
+                    context.callAsync(
+                            () -> {
+                                try {
+                                    return callable.call();
+                                } finally {
+                                    latch.countDown();
+                                }
+                            },
+                            handler);
+                    // wait for the call to complete
+                    latch.countDown();
                 },
                 initialDelay,
                 delay,

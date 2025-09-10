@@ -91,7 +91,6 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 @Internal
 public class FlinkSourceEnumerator
         implements SplitEnumerator<SourceSplitBase, SourceEnumeratorState> {
-    // TODO: remove it until SplitEnumeratorContext.callAsync supports fixed delay.
 
     private static final Logger LOG = LoggerFactory.getLogger(FlinkSourceEnumerator.class);
 

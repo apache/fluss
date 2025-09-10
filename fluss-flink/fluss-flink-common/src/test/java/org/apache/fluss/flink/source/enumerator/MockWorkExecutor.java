@@ -23,72 +23,57 @@ import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
 
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.Future;
 import java.util.function.BiConsumer;
 
 /** A mock implementation of WorkerExecutor which separate task submit and run. */
 public class MockWorkExecutor extends WorkerExecutor implements AutoCloseable {
-    private final List<Callable<Void>> periodicCallables;
-    private final BlockingQueue<Callable<Future<?>>> oneTimeCallables;
+    private final List<Callable<?>> periodicCallables;
 
     public MockWorkExecutor(MockSplitEnumeratorContext<SourceSplitBase> context) {
         super(context);
         this.periodicCallables = new ArrayList<>();
-        this.oneTimeCallables = new ArrayBlockingQueue<>(100);
-    }
-
-    @Override
-    public <T> void callAsync(Callable<T> callable, BiConsumer<T, Throwable> handler) {
-        this.oneTimeCallables.add(
-                () -> {
-                    try {
-                        T result = callable.call();
-                        context.callAsync(() -> result, handler);
-                    } catch (Throwable t) {
-                        context.callAsync(
-                                () -> {
-                                    throw t;
-                                },
-                                handler);
-                    }
-                    return null;
-                });
     }
 
     @Override
     public <T> void callAsyncAtFixedDelay(
             Callable<T> callable, BiConsumer<T, Throwable> handler, long initialDelay, long delay) {
-        this.periodicCallables.add(
+        periodicCallables.add(
                 () -> {
+                    CountDownLatch latch = new CountDownLatch(1);
+                    context.callAsync(
+                            () -> {
+                                try {
+                                    return callable.call();
+                                } finally {
+                                    latch.countDown();
+                                }
+                            },
+                            handler);
                     try {
-                        T result = callable.call();
-                        context.callAsync(() -> result, handler);
-                    } catch (Throwable t) {
-                        context.callAsync(
-                                () -> {
-                                    throw t;
-                                },
-                                handler);
+                        ((MockSplitEnumeratorContext<?>) context).runNextOneTimeCallable();
+                    } catch (Throwable e) {
+                        throw new RuntimeException(e);
                     }
+                    // wait for the call to complete
+                    latch.countDown();
                     return null;
                 });
     }
 
     public void runPeriodicCallable(int index) throws Throwable {
-        this.periodicCallables.get(index).call();
-        ((MockSplitEnumeratorContext<?>) context).runNextOneTimeCallable();
+        periodicCallables.get(index).call();
     }
 
     public void runNextOneTimeCallable() throws Throwable {
-        this.oneTimeCallables.take().call();
         ((MockSplitEnumeratorContext<?>) context).runNextOneTimeCallable();
     }
 
     public BlockingQueue<Callable<Future<?>>> getOneTimeCallables() {
-        return oneTimeCallables;
+        return ((MockSplitEnumeratorContext<?>) context).getOneTimeCallables();
     }
 
     @Override
