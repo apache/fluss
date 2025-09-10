@@ -115,7 +115,10 @@ public class MemoryLogRecordsCompactedBuilderTest {
         // base offset 0
         MemoryLogRecordsCompactedBuilder builder = createBuilder(0, 1, 1024);
         MemoryLogRecords records = MemoryLogRecords.pointToBytesView(builder.build());
-        assertThat(records.sizeInBytes()).isEqualTo(48); // only batch header
+        assertThat(records.sizeInBytes())
+                .isEqualTo(
+                        LogRecordBatchFormat.recordBatchHeaderSize(
+                                DEFAULT_MAGIC)); // only batch header
         LogRecordBatch batch = records.batches().iterator().next();
         batch.ensureValid();
         assertThat(batch.getRecordCount()).isEqualTo(0);
@@ -132,7 +135,8 @@ public class MemoryLogRecordsCompactedBuilderTest {
         // base offset 100
         builder = createBuilder(100, 1, 1024);
         records = MemoryLogRecords.pointToBytesView(builder.build());
-        assertThat(records.sizeInBytes()).isEqualTo(48);
+        assertThat(records.sizeInBytes())
+                .isEqualTo(LogRecordBatchFormat.recordBatchHeaderSize(DEFAULT_MAGIC));
         batch = records.batches().iterator().next();
         batch.ensureValid();
         assertThat(batch.getRecordCount()).isEqualTo(0);

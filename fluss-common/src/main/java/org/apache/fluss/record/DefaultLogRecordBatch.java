@@ -38,7 +38,6 @@ import javax.annotation.Nullable;
 import java.nio.ByteBuffer;
 import java.util.NoSuchElementException;
 
-import static org.apache.fluss.record.DefaultValueRecordBatch.RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.COMMIT_TIMESTAMP_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;

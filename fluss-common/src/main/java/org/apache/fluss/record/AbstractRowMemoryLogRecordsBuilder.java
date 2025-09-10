@@ -26,7 +26,6 @@ import org.apache.fluss.utils.crc.Crc32C;
 
 import java.io.IOException;
 
-import static org.apache.fluss.record.DefaultValueRecordBatch.RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_LENGTH;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_LENGTH;
@@ -36,6 +35,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.NO_LEADER_EPOCH;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.LogRecordBatchFormat.crcOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.lastOffsetDeltaOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.record.LogRecordBatchFormat.schemaIdOffset;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
