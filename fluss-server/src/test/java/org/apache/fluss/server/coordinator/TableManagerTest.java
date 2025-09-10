@@ -129,7 +129,8 @@ class TableManagerTest {
                         coordinatorContext,
                         replicaStateMachine,
                         tableBucketStateMachine,
-                        new RemoteStorageCleaner(conf, ioExecutor));
+                        new RemoteStorageCleaner(conf, ioExecutor),
+                        ioExecutor);
         tableManager.startup();
 
         coordinatorContext.setLiveTabletServers(

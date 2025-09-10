@@ -176,7 +176,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         coordinatorContext,
                         replicaStateMachine,
                         tableBucketStateMachine,
-                        new RemoteStorageCleaner(conf, ioExecutor));
+                        new RemoteStorageCleaner(conf, ioExecutor),
+                        ioExecutor);
         this.tableChangeWatcher = new TableChangeWatcher(zooKeeperClient, coordinatorEventManager);
         this.tabletServerChangeWatcher =
                 new TabletServerChangeWatcher(zooKeeperClient, coordinatorEventManager);
