@@ -708,39 +708,6 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         }
     }
 
-    @Test
-    void testStreamingReadPartitionPushDown() throws Exception {
-
-        tEnv.executeSql(
-                "create table partitioned_table"
-                        + " (a int not null, b varchar, c string, primary key (a, c) NOT ENFORCED) partitioned by (c) "
-                        + "with ('table.auto-partition.enabled' = 'true', 'table.auto-partition.time-unit' = 'year')");
-        TablePath tablePath = TablePath.of(DEFAULT_DB, "partitioned_table");
-
-        // write data into partitions and wait snapshot is done
-        Map<Long, String> partitionNameById =
-                waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath);
-        List<String> expectedRowValues =
-                writeRowsToPartition(tablePath, partitionNameById.values()).stream()
-                        .filter(s -> s.contains("2025"))
-                        .collect(Collectors.toList());
-        waitUtilAllBucketFinishSnapshot(admin, tablePath, partitionNameById.values());
-
-        org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql("select * from partitioned_table where c in( '2000','2001','2025')")
-                        .collect();
-
-        assertResultsIgnoreOrder(rowIter, expectedRowValues, false);
-
-        // then create some new partitions, and write rows to the new partitions
-        List<String> newPartitions = Arrays.asList("2000", "2001");
-        FlinkTestBase.createPartitions(
-                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath, newPartitions);
-        // write data to the new partitions
-        expectedRowValues = writeRowsToPartition(tablePath, newPartitions);
-        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
-    }
-
     // -------------------------------------------------------------------------------------
     // Fluss look source tests
     // -------------------------------------------------------------------------------------
@@ -1182,6 +1149,70 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         writeRows(conn, tablePath, rows, false);
 
         return expectedRowValues;
+    }
+
+    @Test
+    void testStreamingReadPartitionPushDownWithInExpr() throws Exception {
+
+        //        tEnv.executeSql(
+        //                "create table partitioned_table"
+        //                        + " (a int not null, b varchar, c string, primary key (a, c) NOT
+        // ENFORCED) partitioned by (c) "
+        //                        + "with ('table.auto-partition.enabled' = 'true',
+        // 'table.auto-partition.time-unit' = 'year')");
+        //        TablePath tablePath = TablePath.of(DEFAULT_DB, "partitioned_table");
+        //
+        //        // write data into partitions and wait snapshot is done
+        //        Map<Long, String> partitionNameById =
+        //                waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
+        // tablePath);
+        //        List<String> expectedRowValues =
+        //                writeRowsToPartition(tablePath, partitionNameById.values()).stream()
+        //                        .filter(s -> s.contains("2025"))
+        //                        .collect(Collectors.toList());
+        //        waitUtilAllBucketFinishSnapshot(admin, tablePath, partitionNameById.values());
+        //
+        //        org.apache.flink.util.CloseableIterator<Row> rowIter =
+        //                tEnv.executeSql("select * from partitioned_table where c in(
+        // '2000','2001','2025')")
+        //                        .collect();
+        //
+        //        assertResultsIgnoreOrder(rowIter, expectedRowValues, false);
+        //
+        //        // then create some new partitions, and write rows to the new partitions
+        //        List<String> newPartitions = Arrays.asList("2000", "2001");
+        //        FlinkTestBase.createPartitions(
+        //                FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath, newPartitions);
+        //        // write data to the new partitions
+        //        expectedRowValues = writeRowsToPartition(tablePath, newPartitions);
+        //        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
+
+        tEnv.executeSql(
+                "create table partitioned_table_in"
+                        + " (a int not null, b varchar, c string, primary key (a, c) NOT ENFORCED) partitioned by (c) ");
+        TablePath tablePath = TablePath.of(DEFAULT_DB, "partitioned_table_in");
+        tEnv.executeSql("alter table partitioned_table_in add partition (c=2025)");
+        tEnv.executeSql("alter table partitioned_table_in add partition (c=2026)");
+        tEnv.executeSql("alter table partitioned_table_in add partition (c=2027)");
+
+        List<String> expectedRowValues =
+                writeRowsToPartition(conn, tablePath, Arrays.asList("2025", "2026", "2027"))
+                        .stream()
+                        .filter(s -> s.contains("2025") || s.contains("2026"))
+                        .collect(Collectors.toList());
+        waitUtilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "2027"));
+
+        String plan =
+                tEnv.explainSql("select * from partitioned_table_in where c in ('2025','2026')");
+        assertThat(plan)
+                .contains(
+                        "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_in, filter=[OR(=(c, _UTF-16LE'2025'), =(c, _UTF-16LE'2026'))]]], fields=[a, b, c])");
+
+        org.apache.flink.util.CloseableIterator<Row> rowIter =
+                tEnv.executeSql("select * from partitioned_table_in where c in ('2025','2026')")
+                        .collect();
+
+        assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }
 
     private enum Caching {

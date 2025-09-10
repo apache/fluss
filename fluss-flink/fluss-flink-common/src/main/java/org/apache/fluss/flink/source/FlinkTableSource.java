@@ -82,13 +82,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.stream.Collectors;
 
-import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
-import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
-import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLUSS_INTERNAL_VALUE;
-import static org.apache.fluss.flink.utils.PushdownUtils.extractFieldEquals;
-import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
-import static org.apache.fluss.utils.Preconditions.checkState;
+import static com.alibaba.fluss.utils.Preconditions.checkNotNull;
 
 /** Flink table source to scan Fluss data. */
 public class FlinkTableSource
@@ -426,8 +420,6 @@ public class FlinkTableSource
         source.projectedFields = projectedFields;
         source.singleRowFilter = singleRowFilter;
         source.modificationScanType = modificationScanType;
-        source.partitionFilters = partitionFilters;
-        source.lakeSource = lakeSource;
         return source;
     }
 
@@ -473,7 +465,7 @@ public class FlinkTableSource
                             primaryKeyTypes,
                             acceptedFilters,
                             remainingFilters,
-                            ValueConversion.FLINK_INTERNAL_VALUE);
+                            PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE);
             int[] keyRowProjection = getKeyRowProjection();
             HashSet<Integer> visitedPkFields = new HashSet<>();
             GenericRowData lookupRow = new GenericRowData(primaryKeyIndexes.length);
