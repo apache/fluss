@@ -49,6 +49,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertRowResultsIgnoreOrder;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -205,7 +206,11 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
 
         CloseableIterator<Row> actual =
                 streamTEnv.executeSql("select * from " + resultTableName).collect();
-        assertResultsExactOrder(actual, writtenRows, false);
+        if (isPartitioned) {
+            assertRowResultsIgnoreOrder(actual, writtenRows, false);
+        } else {
+            assertResultsExactOrder(actual, writtenRows, false);
+        }
 
         // now, stop the job with save point
         String savepointPath =
@@ -226,8 +231,11 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
 
         // write some log data again
         List<Row> rows = writeRows(table1, 3, isPartitioned);
-
-        assertResultsExactOrder(actual, rows, true);
+        if (isPartitioned) {
+            assertRowResultsIgnoreOrder(actual, rows, true);
+        } else {
+            assertResultsExactOrder(actual, rows, true);
+        }
 
         // cancel jobs
         insertResult.getJobClient().get().cancel().get();
