@@ -30,6 +30,7 @@ import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.TabletManagerBase;
@@ -154,7 +155,8 @@ public final class KvManager extends TabletManagerBase {
             KvFormat kvFormat,
             Schema schema,
             TableConfig tableConfig,
-            ArrowCompressionInfo arrowCompressionInfo)
+            ArrowCompressionInfo arrowCompressionInfo,
+            Map<String, String> tableProperties)
             throws Exception {
         return inLock(
                 tabletCreationOrDeletionLock,
@@ -176,7 +178,8 @@ public final class KvManager extends TabletManagerBase {
                                     kvFormat,
                                     schema,
                                     merger,
-                                    arrowCompressionInfo);
+                                    arrowCompressionInfo,
+                                    tableProperties);
                     currentKvs.put(tableBucket, tablet);
 
                     LOG.info(
@@ -267,6 +270,7 @@ public final class KvManager extends TabletManagerBase {
         // TODO: we should support recover schema from disk to decouple put and schema.
         TablePath tablePath = physicalTablePath.getTablePath();
         TableInfo tableInfo = getTableInfo(zkClient, tablePath);
+        TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
         RowMerger rowMerger =
                 RowMerger.create(
                         tableInfo.getTableConfig(),
@@ -284,7 +288,8 @@ public final class KvManager extends TabletManagerBase {
                         tableInfo.getTableConfig().getKvFormat(),
                         tableInfo.getSchema(),
                         rowMerger,
-                        tableInfo.getTableConfig().getArrowCompressionInfo());
+                        tableInfo.getTableConfig().getArrowCompressionInfo(),
+                        tableDescriptor.getProperties());
         if (this.currentKvs.containsKey(tableBucket)) {
             throw new IllegalStateException(
                     String.format(

@@ -17,16 +17,20 @@
 
 package org.apache.fluss.server.kv;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
+import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.FileLogProjection;
@@ -40,15 +44,21 @@ import org.apache.fluss.record.TestData;
 import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.KvEntry;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Value;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.LogAppendInfo;
+import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.log.LogTestUtils;
+import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
+import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.StringType;
@@ -56,8 +66,10 @@ import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 
 import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
@@ -65,6 +77,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import javax.annotation.Nullable;
 
 import java.io.File;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -84,6 +97,7 @@ import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DATA2_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA3_SCHEMA_PK;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
+import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecords;
 import static org.apache.fluss.testutils.LogRecordsAssert.assertThatLogRecords;
@@ -94,6 +108,12 @@ import static org.assertj.core.api.Fail.fail;
 /** Test for {@link KvTablet}. */
 class KvTabletTest {
 
+    @RegisterExtension
+    public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
+            new AllCallbackWrapper<>(new ZooKeeperExtension());
+
+    private LogManager logManager;
+    private KvManager kvManager;
     private static final short schemaId = 1;
     private final Configuration conf = new Configuration();
     private final RowType baseRowType = TestData.DATA1_ROW_TYPE;
@@ -108,10 +128,45 @@ class KvTabletTest {
     private LogTablet logTablet;
     private KvTablet kvTablet;
     private ExecutorService executor;
+    private static ZooKeeperClient zkClient;
+    private TablePath tablePath;
+
+    @BeforeAll
+    static void baseBeforeAll() {
+        zkClient =
+                ZOO_KEEPER_EXTENSION_WRAPPER
+                        .getCustomExtension()
+                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+    }
 
     @BeforeEach
     void beforeEach() {
         executor = Executors.newFixedThreadPool(2);
+    }
+
+    @BeforeEach
+    void setup() throws Exception {
+        MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+
+        Map<String, String> props = new HashMap<>();
+
+        props.put("kv.rocksdb.thread.num", "2");
+        metadataManager.createDatabase("testDb", DatabaseDescriptor.EMPTY, true);
+
+        logManager =
+                LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
+        kvManager = KvManager.create(conf, zkClient, logManager);
+        kvManager.startup();
+    }
+
+    @AfterEach
+    void tearDown() throws Exception {
+        if (kvManager != null) {
+            kvManager.shutdown();
+        }
+        if (logManager != null) {
+            logManager.shutdown();
+        }
     }
 
     @AfterEach
@@ -123,7 +178,7 @@ class KvTabletTest {
 
     private void initLogTabletAndKvTablet(Schema schema, Map<String, String> tableConfig)
             throws Exception {
-        initLogTabletAndKvTablet(TablePath.of("testDb", "t1"), schema, tableConfig);
+        initLogTabletAndKvTablet(tablePath, schema, tableConfig);
     }
 
     private void initLogTabletAndKvTablet(
@@ -162,6 +217,10 @@ class KvTabletTest {
             Schema schema,
             Map<String, String> tableConfig)
             throws Exception {
+
+        TableInfo tableInfo = getTableInfo(zkClient, tablePath.getTablePath());
+        TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
+        Map<String, String> tableProperties = tableDescriptor.getProperties();
         RowMerger rowMerger =
                 RowMerger.create(
                         new TableConfig(Configuration.fromMap(tableConfig)),
@@ -178,13 +237,30 @@ class KvTabletTest {
                 KvFormat.COMPACTED,
                 schema,
                 rowMerger,
-                DEFAULT_COMPRESSION);
+                DEFAULT_COMPRESSION,
+                tableProperties);
     }
 
     @Test
     void testInvalidPartialUpdate1() throws Exception {
         final Schema schema1 = DATA2_SCHEMA;
-        initLogTabletAndKvTablet(schema1, new HashMap<>());
+        tablePath = TablePath.of("testDb", "t1");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA2_SCHEMA)
+                        .comment("test table")
+                        .distributedBy(3, "a")
+                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(1))
+                        .customProperty("connector", "fluss")
+                        .build();
+
+        MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+
+        metadataManager.createTable(
+                tablePath, tableDescriptor.withReplicationFactor(1), null, true);
+
+        initLogTabletAndKvTablet(DATA2_SCHEMA, new HashMap<>());
+
         KvRecordTestUtils.KvRecordFactory data2kvRecordFactory =
                 KvRecordTestUtils.KvRecordFactory.of(schema1.getRowType());
         KvRecordBatch kvRecordBatch =
@@ -201,6 +277,9 @@ class KvTabletTest {
 
     @Test
     void testInvalidPartialUpdate2() throws Exception {
+
+        tablePath = TablePath.of("testDb", "t1");
+
         // the column not in target columns is not null
         final Schema schema2 =
                 Schema.newBuilder()
@@ -209,6 +288,21 @@ class KvTabletTest {
                         .column("c", new StringType(false))
                         .primaryKey("a")
                         .build();
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(schema2)
+                        .comment("test table")
+                        .distributedBy(3, "a")
+                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(1))
+                        .customProperty("connector", "fluss")
+                        .build();
+
+        MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+
+        metadataManager.createTable(
+                tablePath, tableDescriptor.withReplicationFactor(1), null, true);
+
         initLogTabletAndKvTablet(schema2, new HashMap<>());
         KvRecordTestUtils.KvRecordFactory data2kvRecordFactory =
                 KvRecordTestUtils.KvRecordFactory.of(schema2.getRowType());
@@ -229,6 +323,22 @@ class KvTabletTest {
 
     @Test
     void testPartialUpdateAndDelete() throws Exception {
+        tablePath = TablePath.of("testDb", "t1");
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA2_SCHEMA)
+                        .comment("test table")
+                        .distributedBy(3, "a")
+                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(1))
+                        .customProperty("connector", "fluss")
+                        .build();
+
+        MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+
+        metadataManager.createTable(
+                tablePath, tableDescriptor.withReplicationFactor(1), null, true);
+
         initLogTabletAndKvTablet(DATA2_SCHEMA, new HashMap<>());
         RowType rowType = DATA2_SCHEMA.getRowType();
         KvRecordTestUtils.KvRecordFactory data2kvRecordFactory =
@@ -404,6 +514,23 @@ class KvTabletTest {
 
     @Test
     void testPutWithMultiThread() throws Exception {
+
+        tablePath = TablePath.of("testDb", "t1");
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA_PK)
+                        .comment("test table")
+                        .distributedBy(3, "a")
+                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(1))
+                        .customProperty("connector", "fluss")
+                        .build();
+
+        MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+
+        metadataManager.createTable(
+                tablePath, tableDescriptor.withReplicationFactor(1), null, true);
+
         initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
         // create two kv batches
         KvRecordBatch kvRecordBatch1 =
@@ -544,6 +671,22 @@ class KvTabletTest {
 
     @Test
     void testPutAsLeaderWithOutOfOrderSequenceException() throws Exception {
+        tablePath = TablePath.of("testDb", "t1");
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA_PK)
+                        .comment("test table")
+                        .distributedBy(3, "a")
+                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(1))
+                        .customProperty("connector", "fluss")
+                        .build();
+
+        MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+
+        metadataManager.createTable(
+                tablePath, tableDescriptor.withReplicationFactor(1), null, true);
+
         initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
         long writeId = 100L;
         List<KvRecord> kvData1 =
@@ -605,6 +748,22 @@ class KvTabletTest {
         String tableName =
                 "test_first_row_merge_engine_" + (doProjection ? "projection" : "no_projection");
         TablePath tablePath = TablePath.of("testDb", tableName);
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA_PK)
+                        .comment("test table")
+                        .distributedBy(3, "a")
+                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(1))
+                        .customProperty("connector", "fluss")
+                        .build();
+
+        MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+
+        metadataManager.createDatabase("testDb", DatabaseDescriptor.EMPTY, true);
+        metadataManager.createTable(
+                tablePath, tableDescriptor.withReplicationFactor(1), null, true);
+
         initLogTabletAndKvTablet(tablePath, DATA1_SCHEMA_PK, config);
         RowType rowType = DATA1_SCHEMA_PK.getRowType();
         FileLogProjection logProjection = null;
@@ -711,6 +870,21 @@ class KvTabletTest {
                 "test_versioned_row_merge_engine_"
                         + (doProjection ? "projection" : "no_projection");
         TablePath tablePath = TablePath.of("testDb", tableName);
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA3_SCHEMA_PK)
+                        .comment("test table")
+                        .distributedBy(3, "a")
+                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(1))
+                        .customProperty("connector", "fluss")
+                        .build();
+
+        MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+
+        metadataManager.createTable(
+                tablePath, tableDescriptor.withReplicationFactor(1), null, true);
+
         initLogTabletAndKvTablet(tablePath, DATA3_SCHEMA_PK, config);
         RowType rowType = DATA3_SCHEMA_PK.getRowType();
         KvRecordTestUtils.KvRecordFactory kvRecordFactory =
@@ -833,6 +1007,22 @@ class KvTabletTest {
 
     @Test
     void testAppendDuplicatedKvBatch() throws Exception {
+        tablePath = TablePath.of("testDb", "t1");
+
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA_PK)
+                        .comment("test table")
+                        .distributedBy(3, "a")
+                        .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(1))
+                        .customProperty("connector", "fluss")
+                        .build();
+
+        MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+
+        metadataManager.createTable(
+                tablePath, tableDescriptor.withReplicationFactor(1), null, true);
+
         initLogTabletAndKvTablet(DATA1_SCHEMA_PK, new HashMap<>());
         long writeId = 100L;
         List<KvRecord> kvData1 =

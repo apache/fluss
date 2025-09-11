@@ -35,6 +35,7 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Counter;
@@ -124,6 +125,7 @@ import java.util.concurrent.locks.ReentrantReadWriteLock;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
@@ -626,6 +628,10 @@ public final class Replica {
                 LOG.info("No snapshot found, restore from log.");
                 // actually, kv manager always create a kv tablet since we will drop the kv
                 // if it exists before init kv tablet
+                TablePath tablePath = physicalPath.getTablePath();
+                TableInfo tableInfo = getTableInfo(snapshotContext.getZooKeeperClient(), tablePath);
+                TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
+
                 kvTablet =
                         kvManager.getOrCreateKv(
                                 physicalPath,
@@ -634,7 +640,8 @@ public final class Replica {
                                 tableConfig.getKvFormat(),
                                 schema,
                                 tableConfig,
-                                arrowCompressionInfo);
+                                arrowCompressionInfo,
+                                tableDescriptor.getProperties());
             }
 
             kvTablet.registerMetrics(bucketMetricGroup);

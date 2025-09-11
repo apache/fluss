@@ -20,22 +20,28 @@ package org.apache.fluss.server.kv;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.KvRecordTestUtils;
 import org.apache.fluss.record.TestData;
 import org.apache.fluss.row.encode.ValueEncoder;
+import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
+import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.clock.SystemClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
@@ -53,14 +59,18 @@ import javax.annotation.Nullable;
 
 import java.io.File;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA_PK;
+import static org.apache.fluss.server.TabletManagerBase.getTableInfo;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link KvManager} . */
@@ -86,9 +96,28 @@ final class KvManagerTest {
     private TableBucket tableBucket1;
     private TableBucket tableBucket2;
 
+    private MetadataManager metadataManager;
     private LogManager logManager;
     private KvManager kvManager;
     private Configuration conf;
+    protected static final Schema DEFAULT_SCHEMA =
+            Schema.newBuilder()
+                    .primaryKey("id")
+                    .column("id", DataTypes.INT())
+                    .withComment("person id")
+                    .column("name", DataTypes.STRING())
+                    .withComment("person name")
+                    .column("age", DataTypes.INT())
+                    .withComment("person age")
+                    .build();
+    protected static final TableDescriptor DEFAULT_TABLE_DESCRIPTOR =
+            TableDescriptor.builder()
+                    .schema(DEFAULT_SCHEMA)
+                    .comment("test table")
+                    .distributedBy(3, "id")
+                    .property(ConfigOptions.TABLE_LOG_TTL, Duration.ofDays(1))
+                    .customProperty("connector", "fluss")
+                    .build();
 
     @BeforeAll
     static void baseBeforeAll() {
@@ -103,11 +132,26 @@ final class KvManagerTest {
         conf = new Configuration();
         conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath());
 
-        String dbName = "db1";
-        tablePath1 = TablePath.of(dbName, "t1");
-        tablePath2 = TablePath.of(dbName, "t2");
+        String dbName1 = "db1";
+        String dbName2 = "db2";
+
+        tablePath1 = TablePath.of(dbName1, "t1");
+        tablePath2 = TablePath.of(dbName2, "t1");
 
         // we need a log manager for kv manager
+
+        metadataManager = new MetadataManager(zkClient, conf);
+
+        Map<String, String> props = new HashMap<>();
+        props.put("kv.rocksdb.thread.num", "2");
+        //        DEFAULT_TABLE_DESCRIPTOR
+        metadataManager.createDatabase(dbName1, DatabaseDescriptor.EMPTY, true);
+        metadataManager.createDatabase(dbName2, DatabaseDescriptor.EMPTY, true);
+
+        metadataManager.createTable(
+                tablePath1, DEFAULT_TABLE_DESCRIPTOR.withReplicationFactor(1), null, true);
+        metadataManager.createTable(
+                tablePath2, DEFAULT_TABLE_DESCRIPTOR.withReplicationFactor(1), null, true);
 
         logManager =
                 LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
@@ -260,6 +304,11 @@ final class KvManagerTest {
         PhysicalTablePath physicalTablePath =
                 PhysicalTablePath.of(
                         tablePath.getDatabaseName(), tablePath.getTableName(), partitionName);
+
+        TableInfo tableInfo = getTableInfo(zkClient, physicalTablePath.getTablePath());
+        TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
+        Map<String, String> tableProperties = tableDescriptor.getProperties();
+
         LogTablet logTablet =
                 logManager.getOrCreateLog(physicalTablePath, tableBucket, LogFormat.ARROW, 1, true);
         return kvManager.getOrCreateKv(
@@ -269,7 +318,8 @@ final class KvManagerTest {
                 KvFormat.COMPACTED,
                 DATA1_SCHEMA_PK,
                 new TableConfig(new Configuration()),
-                DEFAULT_COMPRESSION);
+                DEFAULT_COMPRESSION,
+                tableProperties);
     }
 
     private byte[] valueOf(KvRecord kvRecord) {
