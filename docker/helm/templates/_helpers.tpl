@@ -46,4 +46,3 @@ Selector labels
 app.kubernetes.io/name: {{ include "fluss.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
-

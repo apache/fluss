@@ -15,3 +15,4 @@ spec:
   type: ClusterIP
   selector:
     {{- include "fluss.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
