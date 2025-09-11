@@ -117,7 +117,8 @@ We have listed them in the table below the figure.
             </td>
             <td>
             <li>[Paimon](maintenance/tiered-storage/lakehouse-storage.md)</li>
-            <li>[Iceberg (Roadmap)](/roadmap/)</li>
+            <li>[Iceberg](maintenance/tiered-storage/lakehouse-storage.md)</li>
+            <li>[Lance](maintenance/tiered-storage/lakehouse-storage.md)</li>
             </td>
         </tr>
         <tr>
