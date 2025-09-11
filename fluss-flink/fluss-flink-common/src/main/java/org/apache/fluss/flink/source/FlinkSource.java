@@ -30,10 +30,10 @@ import org.apache.fluss.flink.source.split.SourceSplitBase;
 import org.apache.fluss.flink.source.split.SourceSplitSerializer;
 import org.apache.fluss.flink.source.state.FlussSourceEnumeratorStateSerializer;
 import org.apache.fluss.flink.source.state.SourceEnumeratorState;
-import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
 import org.apache.flink.api.common.typeinfo.TypeInformation;
@@ -49,10 +49,6 @@ import org.apache.flink.connector.base.source.reader.synchronization.FutureCompl
 import org.apache.flink.core.io.SimpleVersionedSerializer;
 
 import javax.annotation.Nullable;
-
-import java.util.List;
-
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** Flink source for Fluss. */
 public class FlinkSource<OUT>
@@ -70,7 +66,7 @@ public class FlinkSource<OUT>
     private final boolean streaming;
     private final FlussDeserializationSchema<OUT> deserializationSchema;
 
-    private final List<FieldEqual> partitionFilters;
+    private Predicate partitionFilters;
 
     private final @Nullable LakeSource<LakeSplit> lakeSource;
 
@@ -85,7 +81,7 @@ public class FlinkSource<OUT>
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
             boolean streaming,
-            List<FieldEqual> partitionFilters) {
+            Predicate partitionFilters) {
         this(
                 flussConf,
                 tablePath,
@@ -112,7 +108,7 @@ public class FlinkSource<OUT>
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
             boolean streaming,
-            List<FieldEqual> partitionFilters,
+            Predicate partitionFilters,
             LakeSource<LakeSplit> lakeSource) {
         this.flussConf = flussConf;
         this.tablePath = tablePath;
@@ -124,7 +120,7 @@ public class FlinkSource<OUT>
         this.scanPartitionDiscoveryIntervalMs = scanPartitionDiscoveryIntervalMs;
         this.deserializationSchema = deserializationSchema;
         this.streaming = streaming;
-        this.partitionFilters = checkNotNull(partitionFilters);
+        this.partitionFilters = partitionFilters;
         this.lakeSource = lakeSource;
     }
 
