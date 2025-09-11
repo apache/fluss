@@ -61,15 +61,19 @@ public class LakeSourceUtils {
             lakeStoragePlugin = LakeStoragePluginSetUp.fromDataLakeFormat(dataLake, null);
         } catch (UnsupportedOperationException e) {
             throw new UnsupportedOperationException(
-                    "No LakeStoragePlugin can be found for datalake format: " + dataLake);
+                    String.format(
+                            "No LakeStoragePlugin available for data lake format: %s. "
+                                    + "To resolve this, ensure fluss-lake-%s.jar is in the classpath.",
+                            dataLake, dataLake.toLowerCase()));
         }
         LakeStorage lakeStorage = checkNotNull(lakeStoragePlugin).createLakeStorage(lakeConfig);
         try {
             return (LakeSource<LakeSplit>) lakeStorage.createLakeSource(tablePath);
         } catch (UnsupportedOperationException e) {
             throw new UnsupportedOperationException(
-                    "method createLakeSource throw UnsupportedOperationException for datalake format "
-                            + dataLake);
+                    String.format(
+                            "Table using '%s' data lake format cannot be used as historical data in Fluss.",
+                            dataLake));
         }
     }
 }

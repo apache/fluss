@@ -571,6 +571,9 @@ public class FlinkTableSource
                 || hasPrimaryKey()
                 || groupingSets.size() > 1
                 || (groupingSets.size() == 1 && groupingSets.get(0).length > 0)
+                // The count pushdown feature is not supported when the data lake is enabled.
+                // Otherwise, it'll cause miss count data in lake. But In the future, we can push
+                // down count into lake.
                 || isDataLakeEnabled) {
             return false;
         }
