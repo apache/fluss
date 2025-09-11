@@ -66,6 +66,10 @@ public class RebalanceResultForBucket {
         return targetReplicas;
     }
 
+    public RebalanceStatusForBucket status() {
+        return rebalanceStatusForBucket;
+    }
+
     public RebalanceResultForBucket markFailed() {
         this.rebalanceStatusForBucket = FAILED;
         return this;

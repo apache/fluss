@@ -26,6 +26,8 @@ import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
 import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceStatusForBucket;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
@@ -42,6 +44,7 @@ import org.apache.fluss.rpc.messages.GetLatestKvSnapshotsResponse;
 import org.apache.fluss.rpc.messages.GetLatestLakeSnapshotResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
+import org.apache.fluss.rpc.messages.ListRebalanceProcessResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.PbKeyValue;
@@ -55,6 +58,9 @@ import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForPartition;
 import org.apache.fluss.rpc.messages.PbRebalancePlanForTable;
+import org.apache.fluss.rpc.messages.PbRebalanceProcessForBucket;
+import org.apache.fluss.rpc.messages.PbRebalanceProcessForPartition;
+import org.apache.fluss.rpc.messages.PbRebalanceProcessForTable;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PrefixLookupRequest;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
@@ -368,6 +374,53 @@ public class ClientRpcMessageUtils {
                 pbBucket.getNewLeader(),
                 Arrays.stream(pbBucket.getOriginalReplicas()).boxed().collect(Collectors.toList()),
                 Arrays.stream(pbBucket.getNewReplicas()).boxed().collect(Collectors.toList()));
+    }
+
+    public static Map<TableBucket, RebalanceResultForBucket> toRebalanceProcess(
+            ListRebalanceProcessResponse response) {
+        Map<TableBucket, RebalanceResultForBucket> rebalanceProcess = new HashMap<>();
+
+        for (PbRebalanceProcessForTable pbRebalanceProcessForTable :
+                response.getProcessForTablesList()) {
+            long tableId = pbRebalanceProcessForTable.getTableId();
+
+            for (PbRebalanceProcessForPartition pbRebalanceProcessForPartition :
+                    pbRebalanceProcessForTable.getPartitionsProcessesList()) {
+                long partitionId = pbRebalanceProcessForPartition.getPartitionId();
+
+                for (PbRebalanceProcessForBucket pbRebalanceProcessForBucket :
+                        pbRebalanceProcessForPartition.getBucketsProcessesList()) {
+                    int bucketId = pbRebalanceProcessForBucket.getBucketId();
+                    rebalanceProcess.put(
+                            new TableBucket(tableId, partitionId, bucketId),
+                            toRebalanceResultForBucket(pbRebalanceProcessForBucket));
+                }
+            }
+
+            for (PbRebalanceProcessForBucket pbRebalanceProcessForBucket :
+                    pbRebalanceProcessForTable.getBucketsProcessesList()) {
+                int bucketId = pbRebalanceProcessForBucket.getBucketId();
+                rebalanceProcess.put(
+                        new TableBucket(tableId, null, bucketId),
+                        toRebalanceResultForBucket(pbRebalanceProcessForBucket));
+            }
+        }
+
+        return rebalanceProcess;
+    }
+
+    private static RebalanceResultForBucket toRebalanceResultForBucket(
+            PbRebalanceProcessForBucket pbRebalanceProcessForBucket) {
+        return new RebalanceResultForBucket(
+                pbRebalanceProcessForBucket.getOriginalReplicas()[0],
+                pbRebalanceProcessForBucket.getNewReplicas()[0],
+                Arrays.stream(pbRebalanceProcessForBucket.getOriginalReplicas())
+                        .boxed()
+                        .collect(Collectors.toList()),
+                Arrays.stream(pbRebalanceProcessForBucket.getNewReplicas())
+                        .boxed()
+                        .collect(Collectors.toList()),
+                RebalanceStatusForBucket.of(pbRebalanceProcessForBucket.getRebalanceStatus()));
     }
 
     public static List<PartitionInfo> toPartitionInfos(ListPartitionInfosResponse response) {
