@@ -40,8 +40,11 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
      * lake split via this lake split index.
      */
     private int currentLakeSplitIndex;
-    /** The records to skip when reading a split. */
-    private long recordOffset;
+    /** The records to skip when reading a lake split. */
+    private long recordToSkip;
+
+    /** Whether the lake split has been finished. */
+    private boolean isLakeSplitFinished;
 
     private long startingOffset;
     private final long stoppingOffset;
@@ -52,7 +55,16 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
             @Nullable List<LakeSplit> snapshotSplits,
             long startingOffset,
             long stoppingOffset) {
-        this(tableBucket, partitionName, snapshotSplits, startingOffset, stoppingOffset, 0, 0);
+        this(
+                tableBucket,
+                partitionName,
+                snapshotSplits,
+                startingOffset,
+                stoppingOffset,
+                0,
+                0,
+                // if lake splits is null, no lake splits, also means LakeSplitFinished
+                snapshotSplits == null);
     }
 
     public LakeSnapshotAndFlussLogSplit(
@@ -62,17 +74,19 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
             long startingOffset,
             long stoppingOffset,
             long recordsToSkip,
-            int currentLakeSplitIndex) {
+            int currentLakeSplitIndex,
+            boolean isLakeSplitFinished) {
         super(tableBucket, partitionName);
         this.lakeSnapshotSplits = snapshotSplits;
         this.startingOffset = startingOffset;
         this.stoppingOffset = stoppingOffset;
-        this.recordOffset = recordsToSkip;
+        this.recordToSkip = recordsToSkip;
         this.currentLakeSplitIndex = currentLakeSplitIndex;
+        this.isLakeSplitFinished = isLakeSplitFinished;
     }
 
     public LakeSnapshotAndFlussLogSplit updateWithRecordsToSkip(long recordsToSkip) {
-        this.recordOffset = recordsToSkip;
+        this.recordToSkip = recordsToSkip;
         return this;
     }
 
@@ -86,12 +100,21 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
         return this;
     }
 
+    public LakeSnapshotAndFlussLogSplit updateWithLakeSplitFinished(boolean isLakeSplitFinished) {
+        this.isLakeSplitFinished = isLakeSplitFinished;
+        return this;
+    }
+
     public long getRecordsToSkip() {
-        return recordOffset;
+        return recordToSkip;
     }
 
     public long getStartingOffset() {
         return startingOffset;
+    }
+
+    public boolean isLakeSplitFinished() {
+        return isLakeSplitFinished;
     }
 
     public Optional<Long> getStoppingOffset() {
@@ -130,8 +153,8 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
         return "LakeSnapshotAndFlussLogSplit{"
                 + "lakeSnapshotSplits="
                 + lakeSnapshotSplits
-                + ", recordOffset="
-                + recordOffset
+                + ", recordToSkip="
+                + recordToSkip
                 + ", currentLakeSplitIndex="
                 + currentLakeSplitIndex
                 + ", startingOffset="

@@ -54,6 +54,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
@@ -614,11 +615,17 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
 
         // create table and write data
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+        Function<String, List<InternalRow>> rowGenerator =
+                (partition) ->
+                        Arrays.asList(
+                                row(3, "string", partition), row(30, "another_string", partition));
         long tableId =
-                prepareSimplePKTable(table1, DEFAULT_BUCKET_NUM, isPartitioned, bucketLogEndOffset);
-
-        // wait until records has been synced
-        waitUntilBucketSynced(table1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
+                prepareSimplePKTable(
+                        table1,
+                        DEFAULT_BUCKET_NUM,
+                        isPartitioned,
+                        rowGenerator,
+                        bucketLogEndOffset);
 
         // check the status of replica after synced
         assertReplicaStatus(table1, tableId, DEFAULT_BUCKET_NUM, isPartitioned, bucketLogEndOffset);
@@ -626,7 +633,6 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         // create result table
         createSimplePkTable(resultTable, DEFAULT_BUCKET_NUM, isPartitioned, false);
         // union read lake data
-        // TODO should add a case, stop job and restorewhen read lake data break in lake read
         StreamTableEnvironment streamTEnv = buildSteamTEnv(null);
         TableResult insertResult =
                 streamTEnv.executeSql(
@@ -755,6 +761,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
             TablePath tablePath,
             int bucketNum,
             boolean isPartitioned,
+            Function<String, List<InternalRow>> rowGenerator,
             Map<TableBucket, Long> bucketLogEndOffset)
             throws Exception {
         long tableId = createSimplePkTable(tablePath, bucketNum, isPartitioned, true);
@@ -762,7 +769,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
             Map<Long, String> partitionNameById = waitUntilPartitions(tablePath);
             for (String partition : partitionNameById.values()) {
                 for (int i = 0; i < 2; i++) {
-                    List<InternalRow> rows = generateSimpleKvRows(partition);
+                    List<InternalRow> rows = rowGenerator.apply(partition);
                     // write records
                     writeRows(tablePath, rows, false);
                 }
@@ -772,7 +779,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
             }
         } else {
             for (int i = 0; i < 2; i++) {
-                List<InternalRow> rows = generateSimpleKvRows(null);
+                List<InternalRow> rows = rowGenerator.apply(null);
                 // write records
                 writeRows(tablePath, rows, false);
             }
@@ -957,9 +964,5 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         TimestampNtz.fromMillis(1698235273201L, 6000),
                         new byte[] {1, 2, 3, 4},
                         partition));
-    }
-
-    private List<InternalRow> generateSimpleKvRows(@Nullable String partition) {
-        return Arrays.asList(row(3, "string", partition), row(30, "another_string", partition));
     }
 }

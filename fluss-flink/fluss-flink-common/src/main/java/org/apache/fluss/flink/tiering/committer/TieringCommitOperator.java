@@ -44,11 +44,13 @@ import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
 
 import org.apache.flink.runtime.operators.coordination.OperatorEventGateway;
 import org.apache.flink.runtime.source.event.SourceEventWrapper;
-import org.apache.flink.runtime.state.StateInitializationContext;
+import org.apache.flink.streaming.api.graph.StreamConfig;
 import org.apache.flink.streaming.api.operators.AbstractStreamOperator;
 import org.apache.flink.streaming.api.operators.OneInputStreamOperator;
+import org.apache.flink.streaming.api.operators.Output;
 import org.apache.flink.streaming.api.operators.StreamOperatorParameters;
 import org.apache.flink.streaming.runtime.streamrecord.StreamRecord;
+import org.apache.flink.streaming.runtime.tasks.StreamTask;
 
 import javax.annotation.Nullable;
 
@@ -109,14 +111,29 @@ public class TieringCommitOperator<WriteResult, Committable>
         this.flussTableLakeSnapshotCommitter = new FlussTableLakeSnapshotCommitter(flussConf);
         this.collectedTableBucketWriteResults = new HashMap<>();
         this.flussConfig = flussConf;
+        this.operatorEventGateway =
+                parameters
+                        .getOperatorEventDispatcher()
+                        .getOperatorEventGateway(TieringSource.TIERING_SOURCE_OPERATOR_UID);
         this.setup(
                 parameters.getContainingTask(),
                 parameters.getStreamConfig(),
                 parameters.getOutput());
-        operatorEventGateway =
-                parameters
-                        .getOperatorEventDispatcher()
-                        .getOperatorEventGateway(TieringSource.TIERING_SOURCE_OPERATOR_UID);
+    }
+
+    @Override
+    public void setup(
+            StreamTask<?, ?> containingTask,
+            StreamConfig config,
+            Output<StreamRecord<CommittableMessage<Committable>>> output) {
+        super.setup(containingTask, config, output);
+        int attemptNumber = getRuntimeContext().getAttemptNumber();
+        if (attemptNumber > 0) {
+            LOG.info("Send TieringRestoreEvent");
+            // attempt number is greater than zero, the job must failover
+            operatorEventGateway.sendEventToCoordinator(
+                    new SourceEventWrapper(new TieringRestoreEvent()));
+        }
     }
 
     @Override
@@ -124,17 +141,6 @@ public class TieringCommitOperator<WriteResult, Committable>
         flussTableLakeSnapshotCommitter.open();
         connection = ConnectionFactory.createConnection(flussConfig);
         admin = connection.getAdmin();
-    }
-
-    @Override
-    public void initializeState(StateInitializationContext context) throws Exception {
-        super.initializeState(context);
-        int attemptNumber = getRuntimeContext().getAttemptNumber();
-        if (attemptNumber > 0) {
-            // attempt number is greater than zero, the job must failover
-            operatorEventGateway.sendEventToCoordinator(
-                    new SourceEventWrapper(new TieringRestoreEvent()));
-        }
     }
 
     @Override

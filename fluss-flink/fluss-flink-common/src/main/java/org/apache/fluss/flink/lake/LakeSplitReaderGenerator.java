@@ -55,7 +55,10 @@ public class LakeSplitReaderGenerator {
         if (split instanceof LakeSnapshotSplit) {
             boundedSplits.add(split);
         } else if (split instanceof LakeSnapshotAndFlussLogSplit) {
-            boundedSplits.add(split);
+            // lake split not finished, add to it
+            if (!((LakeSnapshotAndFlussLogSplit) split).isLakeSplitFinished()) {
+                boundedSplits.add(split);
+            }
         } else {
             throw new UnsupportedOperationException(
                     String.format("The split type of %s is not supported.", split.getClass()));

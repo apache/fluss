@@ -90,7 +90,10 @@ class LakeSplitSerializerTest {
                         "2025-08-18",
                         Collections.singletonList(LAKE_SPLIT),
                         EARLIEST_OFFSET,
-                        STOPPING_OFFSET);
+                        STOPPING_OFFSET,
+                        2,
+                        1,
+                        true);
 
         DataOutputSerializer output = new DataOutputSerializer(STOPPING_OFFSET);
         serializer.serialize(output, originalSplit);
@@ -105,11 +108,14 @@ class LakeSplitSerializerTest {
         assertThat(deserializedSplit instanceof LakeSnapshotAndFlussLogSplit).isTrue();
         LakeSnapshotAndFlussLogSplit result = (LakeSnapshotAndFlussLogSplit) deserializedSplit;
 
-        assertThat(tableBucket).isEqualTo(result.getTableBucket());
-        assertThat("2025-08-18").isEqualTo(result.getPartitionName());
-        assertThat(Collections.singletonList(LAKE_SPLIT)).isEqualTo(result.getLakeSplits());
-        assertThat(EARLIEST_OFFSET).isEqualTo(result.getStartingOffset());
-        assertThat((long) STOPPING_OFFSET).isEqualTo(result.getStoppingOffset().get());
+        assertThat(result.getTableBucket()).isEqualTo(tableBucket);
+        assertThat(result.getPartitionName()).isEqualTo("2025-08-18");
+        assertThat(result.getLakeSplits()).isEqualTo(Collections.singletonList(LAKE_SPLIT));
+        assertThat(result.getStartingOffset()).isEqualTo(EARLIEST_OFFSET);
+        assertThat(result.getStoppingOffset().get()).isEqualTo(STOPPING_OFFSET);
+        assertThat(result.getCurrentLakeSplitIndex()).isEqualTo(1);
+        assertThat(result.getRecordsToSkip()).isEqualTo(2);
+        assertThat(result.isLakeSplitFinished()).isEqualTo(true);
     }
 
     @Test
@@ -149,8 +155,8 @@ class LakeSplitSerializerTest {
 
     private static class TestLakeSplit implements LakeSplit {
 
-        private int bucket;
-        private List<String> partition;
+        private final int bucket;
+        private final List<String> partition;
 
         public TestLakeSplit(int bucket, List<String> partition) {
             this.bucket = bucket;

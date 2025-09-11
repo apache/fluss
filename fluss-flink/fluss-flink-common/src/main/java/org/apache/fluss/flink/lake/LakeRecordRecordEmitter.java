@@ -57,8 +57,6 @@ public class LakeRecordRecordEmitter<OUT> {
             }
 
             ScanRecord scanRecord = recordAndPos.record();
-            // todo: may need a state to mark snapshot phase is finished
-            // just like what we do for HybridSnapshotLogSplitState
             if (scanRecord.logOffset() >= 0) {
                 // record is with a valid offset, means it's in incremental phase,
                 // update the log offset
