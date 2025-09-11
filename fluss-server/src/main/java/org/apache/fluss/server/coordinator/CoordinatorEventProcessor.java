@@ -227,7 +227,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
         HashSet<ServerInfo> tabletServerInfoList =
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values());
         serverMetadataCache.updateMetadata(
-                coordinatorContext.getCoordinatorServerInfo(), tabletServerInfoList);
+                coordinatorContext.getCoordinatorServerInfo(),
+                tabletServerInfoList,
+                coordinatorContext.getServerTags());
         updateTabletServerMetadataCacheWhenStartup(tabletServerInfoList);
 
         // start table manager
@@ -761,7 +763,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // update coordinatorServer metadata cache for the new added table server.
         serverMetadataCache.updateMetadata(
                 coordinatorContext.getCoordinatorServerInfo(),
-                new HashSet<>(coordinatorContext.getLiveTabletServers().values()));
+                new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
+                coordinatorContext.getServerTags());
         // update server info for all tablet servers.
         updateTabletServerMetadataCache(
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
@@ -817,7 +820,9 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 new HashSet<>(coordinatorContext.getLiveTabletServers().values());
         // update coordinatorServer metadata cache.
         serverMetadataCache.updateMetadata(
-                coordinatorContext.getCoordinatorServerInfo(), serverInfos);
+                coordinatorContext.getCoordinatorServerInfo(),
+                serverInfos,
+                coordinatorContext.getServerTags());
         updateTabletServerMetadataCache(serverInfos, null, null, Collections.emptySet());
 
         TableBucketStateMachine tableBucketStateMachine = tableManager.getTableBucketStateMachine();
@@ -890,6 +895,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // Then update coordinatorContext.
         serverIds.forEach(serverId -> coordinatorContext.putServerTag(serverId, serverTag));
+        // update coordinatorServer metadata cache for the new added serverTag
+        serverMetadataCache.updateMetadata(
+                coordinatorContext.getCoordinatorServerInfo(),
+                new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
+                coordinatorContext.getServerTags());
 
         return addServerTagResponse;
     }
@@ -932,6 +942,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // Then update coordinatorContext.
         serverIds.forEach(coordinatorContext::removeServerTag);
+        // update coordinatorServer metadata cache for the new removed serverTag
+        serverMetadataCache.updateMetadata(
+                coordinatorContext.getCoordinatorServerInfo(),
+                new HashSet<>(coordinatorContext.getLiveTabletServers().values()),
+                coordinatorContext.getServerTags());
 
         return removeServerTagResponse;
     }
