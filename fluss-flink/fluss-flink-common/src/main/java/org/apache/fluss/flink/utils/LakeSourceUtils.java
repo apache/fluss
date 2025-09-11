@@ -60,19 +60,16 @@ public class LakeSourceUtils {
         try {
             lakeStoragePlugin = LakeStoragePluginSetUp.fromDataLakeFormat(dataLake, null);
         } catch (UnsupportedOperationException e) {
-            LOG.info(
-                    "No LakeStoragePlugin can be found for datalake format: {}, return null to disable reading from lake source.",
-                    dataLake);
-            return null;
+            throw new UnsupportedOperationException(
+                    "No LakeStoragePlugin can be found for datalake format: " + dataLake);
         }
         LakeStorage lakeStorage = checkNotNull(lakeStoragePlugin).createLakeStorage(lakeConfig);
         try {
             return (LakeSource<LakeSplit>) lakeStorage.createLakeSource(tablePath);
         } catch (UnsupportedOperationException e) {
-            LOG.info(
-                    "method createLakeSource throw UnsupportedOperationException for datalake format {}, return null as lakeSource to disable reading from lake source.",
-                    dataLake);
-            return null;
+            throw new UnsupportedOperationException(
+                    "method createLakeSource throw UnsupportedOperationException for datalake format "
+                            + dataLake);
         }
     }
 }
