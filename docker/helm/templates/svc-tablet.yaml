@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: fluss-tablet-hs
+spec:
+  clusterIP: None
+  type: ClusterIP
+  ports:
+    - name: internal
+      protocol: TCP
+      port: {{ .Values.appConfig.internalPort }}
+      targetPort: {{ .Values.appConfig.internalPort }}
+    - name: client
+      protocol: TCP
+      port: {{ .Values.appConfig.externalPort }}
+      targetPort: {{ .Values.appConfig.externalPort }}
+  selector:
+    {{- include "fluss.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: tablet
