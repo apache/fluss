@@ -18,6 +18,7 @@
 package org.apache.fluss.server.replica;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -48,6 +49,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -76,10 +78,12 @@ import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecor
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
+import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.apache.fluss.testutils.DataTestUtils.getKeyValuePairs;
 import static org.apache.fluss.testutils.LogRecordsAssert.assertThatLogRecords;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link Replica}. */
 final class ReplicaTest extends ReplicaTestBase {
@@ -128,6 +132,40 @@ final class ReplicaTest extends ReplicaTestBase {
                 DATA1_TABLE_ID, 0, Integer.MAX_VALUE, DATA1_ROW_TYPE, DEFAULT_COMPRESSION, null);
         LogReadInfo logReadInfo = logReplica.fetchRecords(fetchParams);
         assertLogRecordsEquals(DATA1_ROW_TYPE, logReadInfo.getFetchedData().getRecords(), DATA1);
+    }
+
+    @Test
+    void testAppendRecordsWithOutOfOrderBatchSequence() throws Exception {
+        Replica logReplica =
+                makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
+        makeLogReplicaAsLeader(logReplica);
+
+        long writerId = 101L;
+
+        // 1. append a batch with batchSequence = 0
+        logReplica.appendRecordsToLeader(genMemoryLogRecordsWithWriterId(DATA1, writerId, 0, 0), 0);
+
+        // manual advance time and remove expired writer, the state of writer 101 will be removed
+        manualClock.advanceTime(Duration.ofHours(12));
+        manualClock.advanceTime(Duration.ofSeconds(1));
+        assertThat(logReplica.getLogTablet().writerStateManager().activeWriters().size())
+                .isEqualTo(1);
+        logReplica.getLogTablet().removeExpiredWriter(manualClock.milliseconds());
+        assertThat(logReplica.getLogTablet().writerStateManager().activeWriters().size())
+                .isEqualTo(0);
+
+        // 2. try to append an out of ordered batch as leader, will throw
+        // OutOfOrderSequenceException
+        assertThatThrownBy(
+                        () ->
+                                logReplica.appendRecordsToLeader(
+                                        genMemoryLogRecordsWithWriterId(DATA1, writerId, 2, 10), 0))
+                .isInstanceOf(OutOfOrderSequenceException.class);
+        assertThat(logReplica.getLocalLogEndOffset()).isEqualTo(10);
+
+        // 3. try to append an out of ordered batch as follower
+        logReplica.appendRecordsToFollower(genMemoryLogRecordsWithWriterId(DATA1, writerId, 2, 10));
+        assertThat(logReplica.getLocalLogEndOffset()).isEqualTo(20);
     }
 
     @Test

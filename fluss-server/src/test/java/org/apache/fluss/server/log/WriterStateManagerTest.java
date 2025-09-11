@@ -126,14 +126,14 @@ public class WriterStateManagerTest {
     void testPrepareUpdateDoesNotMutate() {
         WriterAppendInfo appendInfo = stateManager.prepareUpdate(writerId);
         appendInfo.appendDataBatch(
-                0, new LogOffsetMetadata(15L), 20L, false, System.currentTimeMillis());
+                0, new LogOffsetMetadata(15L), 20L, false, true, System.currentTimeMillis());
         assertThat(stateManager.lastEntry(writerId)).isNotPresent();
         stateManager.update(appendInfo);
         assertThat(stateManager.lastEntry(writerId)).isPresent();
 
         WriterAppendInfo nextAppendInfo = stateManager.prepareUpdate(writerId);
         nextAppendInfo.appendDataBatch(
-                1, new LogOffsetMetadata(26L), 30L, false, System.currentTimeMillis());
+                1, new LogOffsetMetadata(26L), 30L, false, true, System.currentTimeMillis());
         assertThat(stateManager.lastEntry(writerId)).isPresent();
 
         WriterStateEntry lastEntry = stateManager.lastEntry(writerId).get();
@@ -521,6 +521,7 @@ public class WriterStateManagerTest {
                 new LogOffsetMetadata(offset),
                 offset,
                 isWriterInBatchExpired,
+                true,
                 lastTimestamp);
         stateManager.update(appendInfo);
         stateManager.updateMapEndOffset(offset + 1);
