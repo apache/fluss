@@ -20,6 +20,8 @@ package org.apache.fluss.rpc.gateway;
 import org.apache.fluss.rpc.RpcGateway;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
+import org.apache.fluss.rpc.messages.DescribeClusterRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -187,4 +189,13 @@ public interface AdminReadOnlyGateway extends RpcGateway {
      */
     @RPC(api = ApiKeys.LIST_ACLS)
     CompletableFuture<ListAclsResponse> listAcls(ListAclsRequest request);
+
+    /**
+     * Get the server node information of the current cluster.
+     *
+     * @param request Describe cluster request
+     * @return a future returns server node
+     */
+    @RPC(api = ApiKeys.DESCRIBE_CLUSTER)
+    CompletableFuture<DescribeClusterResponse> describeCluster(DescribeClusterRequest request);
 }

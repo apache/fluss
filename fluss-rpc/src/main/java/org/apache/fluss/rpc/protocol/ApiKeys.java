@@ -75,7 +75,8 @@ public enum ApiKeys {
     REMOVE_SERVER_TAG(1044, 0, 0, PUBLIC),
     REBALANCE(1045, 0, 0, PUBLIC),
     LIST_REBALANCE_PROCESS(1046, 0, 0, PUBLIC),
-    CANCEL_REBALANCE(1047, 0, 0, PUBLIC);
+    CANCEL_REBALANCE(1047, 0, 0, PUBLIC),
+    DESCRIBE_CLUSTER(1048, 0, 0, PUBLIC);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())

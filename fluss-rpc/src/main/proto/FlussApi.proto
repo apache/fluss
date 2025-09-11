@@ -178,6 +178,15 @@ message UpdateMetadataRequest {
 message UpdateMetadataResponse {
 }
 
+// describe cluster request and response
+message DescribeClusterRequest {
+}
+
+message DescribeClusterResponse {
+  optional PbServerNode coordinator_server = 1;
+  repeated PbServerNode tablet_servers = 2;
+}
+
 // produce log request and response
 message ProduceLogRequest {
   required int32 acks = 1;
@@ -591,12 +600,14 @@ message PbPhysicalTablePath {
 //   * versions <= 0.6: host and port are used.
 //   * versions >= 0.7: listeners is used to replace host and port.
 // For MetadataResponse and UpdateMetadataRequest: Fluss versions >= 0.7: we add rack for each tabletServer
+// For DescribeClusterResponse: Fluss version >= 0.8: we add server_tag for each tabletServer
 message PbServerNode {
   required int32 node_id = 1;
   required string host = 2;
   required int32 port = 3;
   optional string listeners = 4;
   optional string rack = 5;
+  optional int32 server_tag = 6;
 }
 
 message PbTableMetadata {

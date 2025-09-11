@@ -71,6 +71,7 @@ import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
+import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
@@ -479,5 +480,10 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
                                             Resource.table(tablePathOpt.get()));
                         })
                 .collect(Collectors.toSet());
+    }
+
+    @Override
+    protected ServerMetadataCache getServerMetadataCache() {
+        return metadataCache;
     }
 }

@@ -21,6 +21,7 @@ import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.StaleMetadataException;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -31,6 +32,8 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
+import org.apache.fluss.rpc.messages.DescribeClusterRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
@@ -165,6 +168,22 @@ public class MetadataUtils {
         // time out here
     }
 
+    public static List<ServerNode> sendDescribeClusterRequest(AdminReadOnlyGateway gateway)
+            throws ExecutionException, InterruptedException, TimeoutException {
+        DescribeClusterRequest describeClusterRequest = new DescribeClusterRequest();
+        return gateway.describeCluster(describeClusterRequest)
+                .thenApply(
+                        response -> {
+                            List<ServerNode> serverNodes = new ArrayList<>();
+                            serverNodes.add(getCoordinatorServer(response));
+                            serverNodes.addAll(getAliveTabletServers(response));
+                            return serverNodes;
+                        })
+                .get(30, TimeUnit.SECONDS); // TODO currently, we don't have timeout logic in
+        // RpcClient, it will let the get() block forever. So we
+        // time out here
+    }
+
     private static NewTableMetadata getTableMetadataToUpdate(
             Cluster cluster, MetadataResponse metadataResponse) {
         Map<TablePath, Long> newTablePathToTableId = new HashMap<>();
@@ -277,6 +296,19 @@ public class MetadataUtils {
         }
     }
 
+    private static ServerNode getCoordinatorServer(DescribeClusterResponse response) {
+        if (!response.hasCoordinatorServer()) {
+            return null;
+        } else {
+            PbServerNode protoServerNode = response.getCoordinatorServer();
+            return new ServerNode(
+                    protoServerNode.getNodeId(),
+                    protoServerNode.getHost(),
+                    protoServerNode.getPort(),
+                    ServerType.COORDINATOR);
+        }
+    }
+
     private static Map<Integer, ServerNode> getAliveTabletServers(MetadataResponse response) {
         Map<Integer, ServerNode> aliveTabletServers = new HashMap<>();
         response.getTabletServersList()
@@ -291,6 +323,25 @@ public class MetadataUtils {
                                             serverNode.getPort(),
                                             ServerType.TABLET_SERVER,
                                             serverNode.hasRack() ? serverNode.getRack() : null));
+                        });
+        return aliveTabletServers;
+    }
+
+    public static List<ServerNode> getAliveTabletServers(DescribeClusterResponse response) {
+        List<ServerNode> aliveTabletServers = new ArrayList<>();
+        response.getTabletServersList()
+                .forEach(
+                        serverNode -> {
+                            aliveTabletServers.add(
+                                    new ServerNode(
+                                            serverNode.getNodeId(),
+                                            serverNode.getHost(),
+                                            serverNode.getPort(),
+                                            ServerType.TABLET_SERVER,
+                                            serverNode.hasRack() ? serverNode.getRack() : null,
+                                            serverNode.hasServerTag()
+                                                    ? ServerTag.valueOf(serverNode.getServerTag())
+                                                    : null));
                         });
         return aliveTabletServers;
     }

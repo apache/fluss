@@ -44,6 +44,8 @@ import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.CreateTableResponse;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
+import org.apache.fluss.rpc.messages.DescribeClusterRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterResponse;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
@@ -336,6 +338,12 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
 
     @Override
     public CompletableFuture<ListAclsResponse> listAcls(ListAclsRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<DescribeClusterResponse> describeCluster(
+            DescribeClusterRequest request) {
         throw new UnsupportedOperationException();
     }
 

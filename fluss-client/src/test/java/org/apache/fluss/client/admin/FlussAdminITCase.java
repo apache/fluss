@@ -1072,11 +1072,10 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         // 2.add server tag for server 0,1.
         admin.addServerTag(Arrays.asList(0, 1), ServerTag.PERMANENT_OFFLINE).get();
-        // TODO use api to get serverTags instead of getting from zk directly
-        assertThat(zkClient.getServerTags()).isPresent();
-        assertThat(zkClient.getServerTags().get().getServerTags())
-                .containsEntry(0, ServerTag.PERMANENT_OFFLINE)
-                .containsEntry(1, ServerTag.PERMANENT_OFFLINE);
+        assertThat(admin.getServerNodes().get())
+                .filteredOn(serverNode -> serverNode.serverTag() != null)
+                .extracting(ServerNode::id)
+                .containsExactlyInAnyOrder(0, 1);
 
         // 3.add server tag for server 0,2. error will be thrown and tag for 2 will not be added.
         assertThatThrownBy(
@@ -1100,8 +1099,10 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
 
         // 5.remove server tag for server 0,1.
         admin.removeServerTag(Arrays.asList(0, 1), ServerTag.PERMANENT_OFFLINE).get();
-        assertThat(zkClient.getServerTags()).isPresent();
-        assertThat(zkClient.getServerTags().get().getServerTags()).isEmpty();
+        assertThat(admin.getServerNodes().get())
+                .filteredOn(serverNode -> serverNode.serverTag() != null)
+                .extracting(ServerNode::id)
+                .isEmpty();
 
         // 6.remove server tag for server 2. error will be thrown and tag for 2 will not be removed.
         assertThatThrownBy(
