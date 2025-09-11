@@ -55,6 +55,8 @@ import org.slf4j.LoggerFactory;
 
 import javax.annotation.Nullable;
 
+import java.util.Collection;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -314,6 +316,29 @@ public class MetadataManager {
         TableRegistration tableReg = optionalTable.get();
         SchemaInfo schemaInfo = getLatestSchema(tablePath);
         return tableReg.toTableInfo(tablePath, schemaInfo, defaultTableLakeOptions);
+    }
+
+    public Map<TablePath, TableInfo> getTables(Collection<TablePath> tablePaths)
+            throws TableNotExistException {
+        Map<TablePath, TableInfo> result = new HashMap<>();
+        try {
+            Map<TablePath, TableRegistration> tablePath2TableRegistrations =
+                    zookeeperClient.getTables(tablePaths);
+            for (TablePath tablePath : tablePaths) {
+                if (!tablePath2TableRegistrations.containsKey(tablePath)) {
+                    throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
+                }
+                TableRegistration tableReg = tablePath2TableRegistrations.get(tablePath);
+                SchemaInfo schemaInfo = getLatestSchema(tablePath);
+                result.put(
+                        tablePath,
+                        tableReg.toTableInfo(tablePath, schemaInfo, defaultTableLakeOptions));
+            }
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    String.format("Failed to get tables '%s'.", tablePaths), e);
+        }
+        return result;
     }
 
     public TableRegistration getTableRegistration(TablePath tablePath) {
