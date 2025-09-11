@@ -172,7 +172,7 @@ public class ProtobufMessage {
         w.format("        public boolean isLazilyParsed() {\n");
         w.format(
                 "            return %s;\n",
-                RecordsFieldFinder.hasRecordsField(message) ? "true" : "false");
+                new RecordsFieldFinder().hasRecordsField(message) ? "true" : "false");
         w.format("        }\n");
     }
 
