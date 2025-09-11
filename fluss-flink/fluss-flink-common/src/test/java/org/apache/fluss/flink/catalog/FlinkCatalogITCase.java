@@ -184,6 +184,41 @@ abstract class FlinkCatalogITCase {
     }
 
     @Test
+    void testAlterTable() throws Exception {
+        String ddl =
+                "create table test_alter_table_append_only ("
+                        + "a string, "
+                        + "b int) "
+                        + "with ('bucket.num' = '5')";
+        tEnv.executeSql(ddl);
+        Schema.Builder schemaBuilder = Schema.newBuilder();
+        schemaBuilder.column("a", DataTypes.STRING()).column("b", DataTypes.INT());
+        Schema expectedSchema = schemaBuilder.build();
+        CatalogTable table =
+                (CatalogTable)
+                        catalog.getTable(
+                                new ObjectPath(DEFAULT_DB, "test_alter_table_append_only"));
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
+        Map<String, String> expectedOptions = new HashMap<>();
+        expectedOptions.put("bucket.num", "5");
+        assertOptionsEqual(table.getOptions(), expectedOptions);
+
+        // alter table
+        String dml =
+                "alter table test_alter_table_append_only set ('table.datalake.enabled' = 'true', 'bucket.num' = '10')";
+        tEnv.executeSql(dml);
+        table =
+                (CatalogTable)
+                        catalog.getTable(
+                                new ObjectPath(DEFAULT_DB, "test_alter_table_append_only"));
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
+        expectedOptions = new HashMap<>();
+        expectedOptions.put("bucket.num", "5"); // unchanged
+        expectedOptions.put("table.datalake.enabled", "true"); // updated
+        assertOptionsEqual(table.getOptions(), expectedOptions);
+    }
+
+    @Test
     void testCreateUnSupportedTable() {
         // test invalid property
         assertThatThrownBy(
