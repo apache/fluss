@@ -307,6 +307,11 @@ public class TabletServerMetadataCacheTest {
             List<BucketMetadata> expectedBucketMetadataList) {
         TablePath tablePath = serverMetadataCache.getTablePath(tableId).get();
         TableMetadata tableMetadata = serverMetadataCache.getTableMetadata(tablePath);
+        assertThat(tableMetadata.getTableId()).isEqualTo(expectedTableInfo.getTableId());
+        assertThat(tableMetadata.getSchemaId()).isEqualTo(expectedTableInfo.getSchemaId());
+        assertThat(tableMetadata.getCreatedTime()).isEqualTo(expectedTableInfo.getCreatedTime());
+        assertThat(tableMetadata.getModifiedTime()).isEqualTo(expectedTableInfo.getModifiedTime());
+        assertThat(tableMetadata.getTablePath()).isEqualTo(expectedTableInfo.getTablePath());
         assertThat(tableMetadata.getTableInfo()).isEqualTo(expectedTableInfo);
         assertThat(tableMetadata.getBucketMetadataList())
                 .hasSameElementsAs(expectedBucketMetadataList);

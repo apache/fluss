@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.DefaultKvRecordBatch;
 import org.apache.fluss.record.DefaultValueRecordBatch;
@@ -35,6 +36,7 @@ import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.InitWriterRequest;
 import org.apache.fluss.rpc.messages.InitWriterResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
+import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrRequest;
 import org.apache.fluss.rpc.messages.NotifyLeaderAndIsrResponse;
 import org.apache.fluss.rpc.messages.PbFetchLogRespForBucket;
@@ -44,13 +46,18 @@ import org.apache.fluss.rpc.messages.PbLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbNotifyLeaderAndIsrReqForBucket;
 import org.apache.fluss.rpc.messages.PbPrefixLookupRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
+import org.apache.fluss.rpc.messages.PbTableMetadata;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.log.ListOffsetsParam;
+import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.ServerInfo;
+import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -108,6 +115,7 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newPutKvRequ
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getNotifyLeaderAndIsrResponseData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeNotifyBucketLeaderAndIsr;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeUpdateMetadataRequest;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPbBucketMetadata;
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
@@ -906,6 +914,74 @@ public class TabletServiceITCase {
         assertThat(result.get(0).getError().error()).isEqualTo(Errors.NONE);
     }
 
+    @Test
+    void testUpdateMetadataCapabilities() throws Exception {
+        long tableId =
+                createTable(FLUSS_CLUSTER_EXTENSION, DATA1_TABLE_PATH, DATA1_TABLE_DESCRIPTOR);
+        TableBucket tb = new TableBucket(tableId, 0);
+        FLUSS_CLUSTER_EXTENSION.waitUntilAllReplicaReady(tb);
+
+        int leader = FLUSS_CLUSTER_EXTENSION.waitAndGetLeader(tb);
+        TabletServerGateway leaderGateWay =
+                FLUSS_CLUSTER_EXTENSION.newTabletServerClientForNode(leader);
+
+        TabletServerMetadataCache metadataCache =
+                FLUSS_CLUSTER_EXTENSION.getTabletServerById(leader).getMetadataCache();
+        assertThat(metadataCache.getBucketMetadataForTable(tableId).size()).isEqualTo(3);
+
+        // add bucket meta
+        List<BucketMetadata> bucketMetadataList = new ArrayList<>();
+        for (int i = 0; i < 10; i++) {
+            BucketMetadata bucketMetadata =
+                    new BucketMetadata(i, i, i, Arrays.asList(i, i + 1, i + 2));
+            bucketMetadataList.add(bucketMetadata);
+        }
+
+        // 1. test update metadata with PbTableMetadataV2
+        TableMetadata tableMetadata =
+                new TableMetadata(
+                        tableId,
+                        0,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis(),
+                        DATA1_TABLE_PATH,
+                        bucketMetadataList);
+        UpdateMetadataRequest updateMetadataRequest =
+                makeUpdateMetadataRequest(
+                        null,
+                        Collections.emptySet(),
+                        Collections.singletonList(tableMetadata),
+                        Collections.emptyList());
+        leaderGateWay.updateMetadata(updateMetadataRequest).get();
+
+        // verify update
+        assertThat(metadataCache.getBucketMetadataForTable(tableId).values())
+                .containsExactlyInAnyOrderElementsOf(bucketMetadataList);
+
+        // clear the metadataCache
+        metadataCache.clearTableMetadata();
+        assertThat(metadataCache.getBucketMetadataForTable(tableId)).isEmpty();
+
+        // 2. test update metadata with PbTableMetadata
+        TableInfo tableInfo = FLUSS_CLUSTER_EXTENSION.getTableInfo(DATA1_TABLE_PATH);
+        TableMetadata tableMetadataV1 = new TableMetadata(tableInfo, bucketMetadataList);
+        List<PbTableMetadata> pbTableMetadataList = new ArrayList<>();
+        pbTableMetadataList.add(toPbTableMetadata(tableMetadataV1, tableInfo));
+
+        UpdateMetadataRequest updateMetadataRequestV1 = new UpdateMetadataRequest();
+        updateMetadataRequestV1.addAllTableMetadatas(pbTableMetadataList);
+        leaderGateWay.updateMetadata(updateMetadataRequestV1).get();
+
+        TableMetadata cacheTableMetadata = metadataCache.getTableMetadata(DATA1_TABLE_PATH);
+        assertThat(cacheTableMetadata.getTableId()).isEqualTo(tableInfo.getTableId());
+        assertThat(cacheTableMetadata.getSchemaId()).isEqualTo(tableInfo.getSchemaId());
+        assertThat(cacheTableMetadata.getCreatedTime()).isEqualTo(tableInfo.getCreatedTime());
+        assertThat(cacheTableMetadata.getModifiedTime()).isEqualTo(tableInfo.getModifiedTime());
+        assertThat(cacheTableMetadata.getTablePath()).isEqualTo(tableInfo.getTablePath());
+        assertThat(metadataCache.getBucketMetadataForTable(tableId).values())
+                .containsExactlyElementsOf(bucketMetadataList);
+    }
+
     private static void assertPutKvResponse(PutKvResponse putKvResponse) {
         assertThat(putKvResponse.getBucketsRespsCount()).isEqualTo(1);
         PbPutKvRespForBucket putKvRespForBucket = putKvResponse.getBucketsRespsList().get(0);
@@ -965,5 +1041,37 @@ public class TabletServiceITCase {
                                 physicalTablePath, tableBucket, leaderAndIsr.isr(), leaderAndIsr));
         return ServerRpcMessageUtils.makeNotifyLeaderAndIsrRequest(
                 0, Collections.singletonList(reqForBucket));
+    }
+
+    private static PbTableMetadata toPbTableMetadata(
+            TableMetadata tableMetadata, TableInfo tableInfo) {
+        PbTableMetadata pbTableMetadata =
+                new PbTableMetadata()
+                        .setTableId(tableInfo.getTableId())
+                        .setSchemaId(tableInfo.getSchemaId())
+                        .setTableJson(tableInfo.toTableDescriptor().toJsonBytes())
+                        .setCreatedTime(tableInfo.getCreatedTime())
+                        .setModifiedTime(tableInfo.getModifiedTime());
+        TablePath tablePath = tableInfo.getTablePath();
+        pbTableMetadata
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        pbTableMetadata.addAllBucketMetadatas(
+                toPbBucketMetadata(tableMetadata.getBucketMetadataList()));
+        return pbTableMetadata;
+    }
+
+    private static MetadataRequest makeMetadataRequest(Set<TablePath> tablePaths) {
+        MetadataRequest metadataRequest = new MetadataRequest();
+        if (tablePaths != null) {
+            for (TablePath tablePath : tablePaths) {
+                metadataRequest
+                        .addTablePath()
+                        .setDatabaseName(tablePath.getDatabaseName())
+                        .setTableName(tablePath.getTableName());
+            }
+        }
+        return metadataRequest;
     }
 }

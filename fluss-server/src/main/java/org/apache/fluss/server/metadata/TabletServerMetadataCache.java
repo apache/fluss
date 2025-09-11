@@ -115,6 +115,10 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         return serverMetadataSnapshot.getPhysicalTablePath(partitionId);
     }
 
+    public Map<Integer, BucketMetadata> getBucketMetadataForTable(long tableId) {
+        return serverMetadataSnapshot.getBucketMetadataForTable(tableId);
+    }
+
     public TableMetadata getTableMetadata(TablePath tablePath) {
         // always get table info from zk.
         TableInfo tableInfo = metadataManager.getTable(tablePath);
@@ -187,9 +191,8 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                             new HashMap<>(serverMetadataSnapshot.getBucketMetadataMapForTables());
 
                     for (TableMetadata tableMetadata : clusterMetadata.getTableMetadataList()) {
-                        TableInfo tableInfo = tableMetadata.getTableInfo();
-                        TablePath tablePath = tableInfo.getTablePath();
-                        long tableId = tableInfo.getTableId();
+                        TablePath tablePath = tableMetadata.getTablePath();
+                        long tableId = tableMetadata.getTableId();
                         if (tableId == DELETED_TABLE_ID) {
                             Long removedTableId = tableIdByPath.remove(tablePath);
                             if (removedTableId != null) {
