@@ -622,6 +622,8 @@ class PaimonTieringTest {
             // for log table, we can't filter by bucket directly, filter file by __bucket column
             for (Split split : readBuilder.newScan().plan().splits()) {
                 DataSplit dataSplit = (DataSplit) split;
+                // bucket is always 0
+                assertThat(dataSplit.bucket()).isEqualTo(0);
                 // filter by __bucket column, remove any data file that don't belone to this bucket
                 dataSplit
                         .dataFiles()
