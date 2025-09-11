@@ -59,7 +59,7 @@
         </file>
 
         <file>
-            <source>../fluss-filesystems/fluss-fs-hadoop/target/fluss-fs-hadoop-${project.version}-with-dependencies.jar</source>
+            <source>../fluss-filesystems/fluss-fs-hadoop/target/fluss-fs-hadoop-${project.version}.jar</source>
             <outputDirectory>plugins/hdfs/</outputDirectory>
             <destName>fluss-fs-hadoop-${project.version}.jar</destName>
             <fileMode>0644</fileMode>
