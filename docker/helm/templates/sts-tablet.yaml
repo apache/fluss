@@ -1,0 +1,78 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: tablet-server
+  labels:
+  {{- include "fluss.labels" . | nindent 4 }}
+spec:
+  serviceName: tablet-server
+  replicas: 3
+  selector:
+    matchLabels:
+      {{- include "fluss.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: tablet
+  template:
+    metadata:
+      labels:
+        {{- include "fluss.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: tablet
+    spec:
+      containers:
+        - name: {{ .Chart.Name }}-tablet
+          image: "{{.Values.image.repository}}:{{ .Values.image.tag }}"
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          env:
+            - name: POD_NAME
+              valueFrom: 
+                fieldRef: 
+                  fieldPath: metadata.name 
+            - name: POD_IP
+              valueFrom: 
+                fieldRef: 
+                  fieldPath: status.podIP
+            - name: POD_NAMESPACE
+              valueFrom: 
+                fieldRef: 
+                  fieldPath: metadata.namespace
+          command:
+            - "/bin/sh"
+            - "-c"
+            - |
+              export FLUSS_SERVER_ID=${POD_NAME##*-} && \
+              cp /opt/conf/server.yaml $FLUSS_HOME/conf && \
+
+              echo "" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "tablet-server.id: ${FLUSS_SERVER_ID}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "bind.listeners: INTERNAL://${POD_IP}:{{ .Values.appConfig.internalPort }}, CLIENT://0.0.0.0:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "advertised.listeners: CLIENT://${POD_IP}:9124, INTERNAL://${POD_IP}:9123" >> $FLUSS_HOME/conf/server.yaml && \
+              
+              bin/tablet-server.sh start-foreground
+          # advertised.listeners: CLIENT://$(POD_NAME).fluss-tablet-hs.default.svc.cluster.local:9124
+          livenessProbe:
+            failureThreshold: 100
+            timeoutSeconds: 1
+            initialDelaySeconds: 10
+            periodSeconds: 3
+            tcpSocket:
+              port: {{.Values.appConfig.externalPort}}
+          readinessProbe:
+            failureThreshold: 100
+            timeoutSeconds: 1
+            initialDelaySeconds: 10
+            periodSeconds: 3
+            tcpSocket:
+              port: {{.Values.appConfig.externalPort}}
+          resources:
+            {{- toYaml .Values.resources.tabletServer | nindent 12 }}
+          volumeMounts:
+            - name: fluss-conf
+              mountPath: /opt/conf
+            - name: data
+              mountPath: /tmp/fluss
+
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: fluss-conf
+          configMap:
+            name: fluss-conf-file
