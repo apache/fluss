@@ -1401,7 +1401,7 @@ public class ConfigOptions {
     public static final ConfigOption<String> KV_LOG_DIR =
             key("kv.rocksdb.log.dir")
                     .stringType()
-                    .noDefaultValue()
+                    .defaultValue("FLUSS_HOME/log/rocksdb")
                     .withDescription(
                             "The directory for RocksDB's information logging files. "
                                     + "If empty (Fluss default setting), log files will be in the same directory as the Fluss log. "
