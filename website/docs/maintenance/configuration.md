@@ -163,9 +163,9 @@ during the Fluss cluster working.
 
 ## Lakehouse
 
-| Option          | Type | Default | Description                                                                                                               |
-|-----------------|------|---------|---------------------------------------------------------------------------------------------------------------------------|
-| datalake.format | Enum | (None)  | The datalake format used by of Fluss to be as lakehouse storage, such as Paimon, Iceberg, Hudi. Now, only support Paimon. |
+| Option          | Type | Default | Description                                                                                                                                                                                                                 |
+|-----------------|------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| datalake.format | Enum | (None)  | The datalake format used by of Fluss to be as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.   |
 
 ## Kafka
 
