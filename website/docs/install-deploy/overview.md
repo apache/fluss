@@ -142,3 +142,5 @@ Fluss can be deployed in three different ways:
 
 **NOTE**:
 - Local Cluster is for testing purpose only.
+- Distributed Cluster is for production purpose.
+- Docker run / Docker Compose is for quick deployment.
