@@ -19,7 +19,9 @@ package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.bucketing.BucketingFunction;
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.table.getter.PartialPartitionGetter;
 import org.apache.fluss.client.table.getter.PartitionGetter;
+import org.apache.fluss.client.utils.ClientUtils;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TableBucket;
@@ -39,6 +41,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
 
@@ -61,9 +64,13 @@ class PrefixKeyLookuper implements Lookuper {
     private final int numBuckets;
 
     /**
-     * a getter to extract partition from prefix lookup key row, null when it's not a partitioned.
+     * a getter to extract partition from prefix lookup key row, null when it's not a partitioned or
+     * when lookup keys don't contain all partition columns.
      */
     private @Nullable final PartitionGetter partitionGetter;
+
+    /** a partial partition getter to extract available partition values from lookup key row. */
+    private @Nullable final PartialPartitionGetter partialPartitionGetter;
 
     /** Decode the lookup bytes to result row. */
     private final ValueDecoder kvValueDecoder;
@@ -86,10 +93,38 @@ class PrefixKeyLookuper implements Lookuper {
 
         this.bucketKeyEncoder = KeyEncoder.of(lookupRowType, tableInfo.getBucketKeys(), lakeFormat);
         this.bucketingFunction = BucketingFunction.of(lakeFormat);
-        this.partitionGetter =
-                tableInfo.isPartitioned()
-                        ? new PartitionGetter(lookupRowType, tableInfo.getPartitionKeys())
-                        : null;
+
+        if (tableInfo.isPartitioned()) {
+            List<String> partitionKeys = tableInfo.getPartitionKeys();
+            Set<String> lookupColumnSet = new HashSet<>(lookupColumnNames);
+            Set<String> availablePartitionKeys =
+                    partitionKeys.stream()
+                            .filter(lookupColumnSet::contains)
+                            .collect(Collectors.toSet());
+
+            if (availablePartitionKeys.size() == partitionKeys.size()) {
+                // All partition keys are available, use traditional PartitionGetter
+                this.partitionGetter = new PartitionGetter(lookupRowType, partitionKeys);
+                this.partialPartitionGetter = null;
+            } else if (availablePartitionKeys.size() > 0) {
+                // Some partition keys are available, use PartialPartitionGetter
+                this.partitionGetter = null;
+                List<String> availablePartitionKeyList =
+                        partitionKeys.stream()
+                                .filter(availablePartitionKeys::contains)
+                                .collect(Collectors.toList());
+                this.partialPartitionGetter =
+                        new PartialPartitionGetter(lookupRowType, availablePartitionKeyList);
+            } else {
+                // No partition keys available
+                this.partitionGetter = null;
+                this.partialPartitionGetter = null;
+            }
+        } else {
+            this.partitionGetter = null;
+            this.partialPartitionGetter = null;
+        }
+
         this.kvValueDecoder =
                 new ValueDecoder(
                         RowDecoder.create(
@@ -120,18 +155,9 @@ class PrefixKeyLookuper implements Lookuper {
             }
         }
 
-        // verify the lookup columns must contain all partition fields if this is partitioned table
-        if (tableInfo.isPartitioned()) {
-            List<String> partitionKeys = tableInfo.getPartitionKeys();
-            Set<String> lookupColumnsSet = new HashSet<>(lookupColumns);
-            if (!lookupColumnsSet.containsAll(partitionKeys)) {
-                throw new IllegalArgumentException(
-                        String.format(
-                                "Can not perform prefix lookup on table '%s', "
-                                        + "because the lookup columns %s must contain all partition fields %s.",
-                                tableInfo.getTablePath(), lookupColumns, partitionKeys));
-            }
-        }
+        // NOTE: Relaxed constraint - no longer require lookup columns to contain all partition
+        // fields
+        // This allows cross-partition prefix lookups with performance considerations
 
         // verify the lookup columns must contain all bucket keys **in order**
         List<String> physicalLookupColumns = new ArrayList<>(lookupColumns);
@@ -150,33 +176,95 @@ class PrefixKeyLookuper implements Lookuper {
         byte[] bucketKeyBytes = bucketKeyEncoder.encodeKey(prefixKey);
         int bucketId = bucketingFunction.bucketing(bucketKeyBytes, numBuckets);
 
-        Long partitionId = null;
+        // Unified lookup process:
+        // Step 1: Determine target partitions based on prefixKey
+        // Step 2: Perform lookup on the target partition list
+        // Single partition lookup is a special case where the partition list contains only one
+        // element
+        return getTargetPartitions(prefixKey)
+                .thenCompose(
+                        partitionIds -> {
+                            if (partitionIds.isEmpty()) {
+                                return CompletableFuture.completedFuture(
+                                        new LookupResult(Collections.emptyList()));
+                            }
+
+                            // Create parallel lookup tasks for all target partitions
+                            List<CompletableFuture<List<byte[]>>> lookupFutures =
+                                    partitionIds.stream()
+                                            .map(
+                                                    partitionId -> {
+                                                        TableBucket tableBucket =
+                                                                new TableBucket(
+                                                                        tableInfo.getTableId(),
+                                                                        partitionId,
+                                                                        bucketId);
+                                                        return lookupClient.prefixLookup(
+                                                                tableBucket, bucketKeyBytes);
+                                                    })
+                                            .collect(Collectors.toList());
+
+                            // Combine all lookup results
+                            return CompletableFuture.allOf(
+                                            lookupFutures.toArray(new CompletableFuture[0]))
+                                    .thenApply(
+                                            v -> {
+                                                List<byte[]> allResults = new ArrayList<>();
+                                                for (CompletableFuture<List<byte[]>> future :
+                                                        lookupFutures) {
+                                                    try {
+                                                        allResults.addAll(future.get());
+                                                    } catch (Exception e) {
+                                                        throw new RuntimeException(
+                                                                "Error combining lookup results",
+                                                                e);
+                                                    }
+                                                }
+                                                return decodeResults(allResults);
+                                            });
+                        });
+    }
+
+    private CompletableFuture<List<Long>> getTargetPartitions(InternalRow prefixKey) {
+        if (!tableInfo.isPartitioned()) {
+            // Non-partitioned table: return list with single null partition ID
+            return CompletableFuture.completedFuture(Collections.singletonList(null));
+        }
+
         if (partitionGetter != null) {
+            // All partition keys are available: single partition lookup
             try {
-                partitionId =
+                Long partitionId =
                         getPartitionId(
                                 prefixKey,
                                 partitionGetter,
                                 tableInfo.getTablePath(),
                                 metadataUpdater);
+                return CompletableFuture.completedFuture(Collections.singletonList(partitionId));
             } catch (PartitionNotExistException e) {
-                return CompletableFuture.completedFuture(new LookupResult(Collections.emptyList()));
+                // Partition does not exist, return empty list
+                return CompletableFuture.completedFuture(Collections.emptyList());
             }
         }
 
-        TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), partitionId, bucketId);
-        return lookupClient
-                .prefixLookup(tableBucket, bucketKeyBytes)
-                .thenApply(
-                        result -> {
-                            List<InternalRow> rowList = new ArrayList<>(result.size());
-                            for (byte[] valueBytes : result) {
-                                if (valueBytes == null) {
-                                    continue;
-                                }
-                                rowList.add(kvValueDecoder.decodeValue(valueBytes).row);
-                            }
-                            return new LookupResult(rowList);
-                        });
+        // Multi-partition case
+        return CompletableFuture.supplyAsync(
+                () ->
+                        ClientUtils.getPartitionIds(
+                                tableInfo.getTablePath(),
+                                metadataUpdater,
+                                prefixKey,
+                                partialPartitionGetter));
+    }
+
+    private LookupResult decodeResults(List<byte[]> resultBytes) {
+        List<InternalRow> rowList = new ArrayList<>(resultBytes.size());
+        for (byte[] valueBytes : resultBytes) {
+            if (valueBytes == null) {
+                continue;
+            }
+            rowList.add(kvValueDecoder.decodeValue(valueBytes).row);
+        }
+        return new LookupResult(rowList);
     }
 }

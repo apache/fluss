@@ -18,22 +18,31 @@
 package org.apache.fluss.client.utils;
 
 import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.client.table.getter.PartialPartitionGetter;
 import org.apache.fluss.client.table.getter.PartitionGetter;
+import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.net.InetSocketAddress;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -131,5 +140,96 @@ public final class ClientUtils {
         PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, partitionName);
         metadataUpdater.checkAndUpdatePartitionMetadata(physicalTablePath);
         return metadataUpdater.getCluster().getPartitionIdOrElseThrow(physicalTablePath);
+    }
+
+    /**
+     * Return all partition ids for the given table. If partialPartitionGetter is provided, only
+     * return partition ids that match the partial partition specification.
+     *
+     * @param tablePath the table path
+     * @param metadataUpdater the metadata updater
+     * @param prefixKey the prefix key to extract partial partition values from
+     * @param partialPartitionGetter optional partial partition getter for filtering
+     * @return list of partition ids that match the criteria
+     */
+    public static List<Long> getPartitionIds(
+            TablePath tablePath,
+            MetadataUpdater metadataUpdater,
+            InternalRow prefixKey,
+            @Nullable PartialPartitionGetter partialPartitionGetter) {
+        checkNotNull(tablePath, "tablePath shouldn't be null.");
+        checkNotNull(metadataUpdater, "metadataUpdater shouldn't be null.");
+
+        // Ensure we have up-to-date table metadata
+        metadataUpdater.checkAndUpdateTableMetadata(Collections.singleton(tablePath));
+
+        Cluster cluster = metadataUpdater.getCluster();
+        Map<PhysicalTablePath, Long> partitionIdByPath = cluster.getPartitionIdByPath();
+
+        // Find all partitions for this table
+        List<Long> candidatePartitionIds =
+                partitionIdByPath.entrySet().stream()
+                        .filter(
+                                entry -> {
+                                    PhysicalTablePath physicalTablePath = entry.getKey();
+                                    return physicalTablePath.getTablePath().equals(tablePath)
+                                            && physicalTablePath.getPartitionName() != null;
+                                })
+                        .map(Map.Entry::getValue)
+                        .collect(Collectors.toList());
+
+        if (candidatePartitionIds.isEmpty()) {
+            LOG.debug("No partitions found for table: {}", tablePath);
+            return Collections.emptyList();
+        }
+
+        // If no partial partition filtering is needed, return all partitions
+        if (partialPartitionGetter == null) {
+            return candidatePartitionIds;
+        }
+
+        // Extract partial partition values from prefix key
+        Map<String, String> partialPartitionValues =
+                partialPartitionGetter.getPartialPartitionSpec(prefixKey);
+
+        if (partialPartitionValues.isEmpty()) {
+            return candidatePartitionIds;
+        }
+
+        // Filter partitions based on partial partition values
+        return candidatePartitionIds.stream()
+                .filter(
+                        partitionId -> {
+                            try {
+                                String partitionName =
+                                        cluster.getPartitionNameOrElseThrow(partitionId);
+                                // Get table info to extract partition keys
+                                TableInfo tableInfo = cluster.getTableOrElseThrow(tablePath);
+                                List<String> partitionKeys = tableInfo.getPartitionKeys();
+                                ResolvedPartitionSpec partitionSpec =
+                                        ResolvedPartitionSpec.fromPartitionName(
+                                                partitionKeys, partitionName);
+                                return matchesPartialPartitionSpec(
+                                        partitionSpec, partialPartitionValues);
+                            } catch (Exception e) {
+                                LOG.warn(
+                                        "Failed to check partition {} for filtering, excluding from results",
+                                        partitionId,
+                                        e);
+                                return false;
+                            }
+                        })
+                .collect(Collectors.toList());
+    }
+
+    private static boolean matchesPartialPartitionSpec(
+            ResolvedPartitionSpec partitionSpec, Map<String, String> partialPartitionValues) {
+        Map<String, String> specMap = partitionSpec.toPartitionSpec().getSpecMap();
+        for (Map.Entry<String, String> entry : partialPartitionValues.entrySet()) {
+            if (!entry.getValue().equals(specMap.get(entry.getKey()))) {
+                return false;
+            }
+        }
+        return true;
     }
 }
