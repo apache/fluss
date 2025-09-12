@@ -1298,7 +1298,7 @@ public class ConfigOptions {
                                     + "Once the `table.datalake.format` property is configured, Fluss adopts the key encoding and bucketing strategy used by the corresponding data lake format. "
                                     + "This ensures consistency in key encoding and bucketing, enabling seamless **Union Read** functionality across Fluss and Lakehouse. "
                                     + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
-                                    + "If `table.datalake.format` is not explicitly set during table creation, the table will default to the format specified by the `datalake.format` configuration in the Fluss cluster. ");
+                                    + "If `table.datalake.format` is not explicitly set during table creation, the table will default to the format specified by the `datalake.format` configuration in the Fluss cluster.");
 
     public static final ConfigOption<Duration> TABLE_DATALAKE_FRESHNESS =
             key("table.datalake.freshness")
@@ -1642,7 +1642,7 @@ public class ConfigOptions {
                     .noDefaultValue()
                     .withDescription(
                             "The datalake format used by of Fluss to be as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. "
-                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi. ");
+                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka
