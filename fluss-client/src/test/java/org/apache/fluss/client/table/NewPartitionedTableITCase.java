@@ -45,6 +45,7 @@ import org.apache.fluss.types.StringType;
 import org.apache.fluss.types.TimeType;
 import org.apache.fluss.types.TimestampType;
 import org.apache.fluss.types.TinyIntType;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
