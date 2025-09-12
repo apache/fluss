@@ -104,6 +104,8 @@ public class CoordinatorContext {
     private ServerInfo coordinatorServerInfo = null;
     private int coordinatorEpoch = INITIAL_COORDINATOR_EPOCH;
 
+    private Runnable partitionCountUpdateCallback = null;
+
     public CoordinatorContext() {}
 
     public int getCoordinatorEpoch() {
@@ -232,6 +234,17 @@ public class CoordinatorContext {
     public void putPartition(long partitionId, PhysicalTablePath physicalTablePath) {
         this.pathByPartitionId.put(partitionId, physicalTablePath);
         this.partitionIdByPath.put(physicalTablePath, partitionId);
+        updatePartitionCountMetrics();
+    }
+
+    public void setPartitionCountUpdateCallback(Runnable callback) {
+        this.partitionCountUpdateCallback = callback;
+    }
+
+    private void updatePartitionCountMetrics() {
+        if (partitionCountUpdateCallback != null) {
+            partitionCountUpdateCallback.run();
+        }
     }
 
     public TableInfo getTableInfoById(long tableId) {
@@ -551,6 +564,25 @@ public class CoordinatorContext {
         return partitionsToBeDeleted;
     }
 
+    public int getTotalPartitionCount() {
+        return partitionAssignments.size();
+    }
+
+
+    public int getPartitionCountForTable(long tableId) {
+        return (int)
+                partitionAssignments.keySet().stream()
+                        .filter(partition -> partition.getTableId() == tableId)
+                        .count();
+    }
+
+
+    public Set<TablePartition> getPartitionsForTable(long tableId) {
+        return partitionAssignments.keySet().stream()
+                .filter(partition -> partition.getTableId() == tableId)
+                .collect(Collectors.toSet());
+    }
+
     public boolean isToBeDeleted(TableBucket tableBucket) {
         if (tableBucket.getPartitionId() == null) {
             return isTableQueuedForDeletion(tableBucket.getTableId());
@@ -614,6 +646,8 @@ public class CoordinatorContext {
         if (physicalTablePath != null) {
             partitionIdByPath.remove(physicalTablePath);
         }
+        // Update partition count metrics when partition is removed
+        updatePartitionCountMetrics();
     }
 
     private void clearTablesState() {

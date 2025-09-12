@@ -25,6 +25,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.coordinator.MetadataManager;
+import org.apache.fluss.server.metrics.group.PhysicalTableMetricGroup;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 
@@ -68,11 +70,16 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
 
     private final MetadataManager metadataManager;
     private final ZooKeeperClient zkClient;
+    private final TabletServerMetricGroup metricGroup;
 
-    public TabletServerMetadataCache(MetadataManager metadataManager, ZooKeeperClient zkClient) {
+    public TabletServerMetadataCache(
+            MetadataManager metadataManager,
+            ZooKeeperClient zkClient,
+            TabletServerMetricGroup metricGroup) {
         this.serverMetadataSnapshot = ServerMetadataSnapshot.empty();
         this.metadataManager = metadataManager;
         this.zkClient = zkClient;
+        this.metricGroup = metricGroup;
     }
 
     @Override
@@ -269,7 +276,34 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
                                     partitionIdByPath,
                                     bucketMetadataMapForTables,
                                     bucketMetadataMapForPartitions);
+
+                    // Update partition count metrics
+                    updatePartitionCountMetrics(partitionIdByPath);
                 });
+    }
+
+    private void updatePartitionCountMetrics(Map<PhysicalTablePath, Long> partitionIdByPath) {
+        if (metricGroup != null) {
+            Map<TablePath, Integer> partitionCountByTable = new HashMap<>();
+            for (PhysicalTablePath physicalTablePath : partitionIdByPath.keySet()) {
+                TablePath tablePath = physicalTablePath.getTablePath();
+                partitionCountByTable.merge(tablePath, 1, Integer::sum);
+            }
+
+            for (Map.Entry<TablePath, Integer> entry : partitionCountByTable.entrySet()) {
+                TablePath tablePath = entry.getKey();
+                int partitionCount = entry.getValue();
+
+                PhysicalTablePath physicalTablePath = PhysicalTablePath.of(tablePath, null);
+                PhysicalTableMetricGroup tableMetricGroup =
+                        metricGroup.getPhysicalTableMetricGroup(physicalTablePath);
+                if (tableMetricGroup != null) {
+                    ((PhysicalTableMetricGroup.MutableGauge<Integer>)
+                                    tableMetricGroup.partitionCount())
+                            .setValue(partitionCount);
+                }
+            }
+        }
     }
 
     @VisibleForTesting

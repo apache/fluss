@@ -20,6 +20,7 @@ package org.apache.fluss.server.metrics.group;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.Counter;
+import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.MeterView;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.NoOpCounter;
@@ -50,6 +51,9 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
     // ---- metrics for kv, will be null if the table isn't a kv table ----
     private final @Nullable KvMetricGroup kvMetrics;
 
+    // ---- partition metrics ----
+    private final MutableGauge<Integer> partitionCount;
+
     public PhysicalTableMetricGroup(
             MetricRegistry registry,
             PhysicalTablePath physicalTablePath,
@@ -63,6 +67,10 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
                         physicalTablePath.getTableName()),
                 serverMetricGroup);
         this.physicalTablePath = physicalTablePath;
+
+        // Initialize partition count gauge
+        this.partitionCount = new MutableGauge<>(0);
+        gauge(MetricNames.PARTITION_COUNT, partitionCount);
 
         // if is kv table, create kv metrics
         if (isKvTable) {
@@ -237,6 +245,28 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
 
     public int bucketGroupsCount() {
         return buckets.size();
+    }
+
+    public MutableGauge<Integer> partitionCount() {
+        return partitionCount;
+    }
+
+
+    public static class MutableGauge<T> implements Gauge<T> {
+        private volatile T value;
+
+        public MutableGauge(T initialValue) {
+            this.value = initialValue;
+        }
+
+        @Override
+        public T getValue() {
+            return value;
+        }
+
+        public void setValue(T value) {
+            this.value = value;
+        }
     }
 
     /** Metric group for specific kind of tablet of a table. */

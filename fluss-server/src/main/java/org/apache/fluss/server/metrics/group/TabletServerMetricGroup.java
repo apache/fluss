@@ -142,4 +142,13 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
             }
         }
     }
+
+    public PhysicalTableMetricGroup getPhysicalTableMetricGroup(
+            PhysicalTablePath physicalTablePath) {
+        return metricGroupByPhysicalTable.get(physicalTablePath);
+    }
+
+    public MetricRegistry getRegistry() {
+        return super.registry;
+    }
 }

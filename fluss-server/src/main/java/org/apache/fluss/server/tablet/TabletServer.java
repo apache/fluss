@@ -184,7 +184,9 @@ public class TabletServer extends ServerBase {
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
             MetadataManager metadataManager = new MetadataManager(zkClient, conf);
-            this.metadataCache = new TabletServerMetadataCache(metadataManager, zkClient);
+            this.metadataCache =
+                    new TabletServerMetadataCache(
+                            metadataManager, zkClient, tabletServerMetricGroup);
 
             this.scheduler = new FlussScheduler(conf.get(BACKGROUND_THREADS));
             scheduler.startup();
