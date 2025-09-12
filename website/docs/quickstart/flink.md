@@ -6,7 +6,7 @@ sidebar_position: 1
 # Real-Time Analytics With Flink
 
 This guide will get you up and running with Apache Flink to do real-time analytics, covering some powerful features of Fluss,
-including integrating with various data lake formats like Paimon, Iceberg, and Lance.
+including integrating with Paimon.
 The guide is derived from [TPC-H](https://www.tpc.org/tpch/) **Q5**.
 
 For more information on working with Flink, refer to the [Apache Flink Engine](engine-flink/getting-started.md) section.
@@ -346,13 +346,10 @@ The following SQL query should return an empty result.
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
 
-## Integrate with Data Lake
+## Integrate with Paimon
 ### Start the Lakehouse Tiering Service
-To integrate with data lake formats like [Apache Paimon](https://paimon.apache.org/),  [Apache Iceberg](https://iceberg.apache.org/), or [Lance](https://lancedb.com/), you need to start the `Lakehouse Tiering Service`. 
-
-The command to start the service varies depending on the data lake format you're using. Below is an example using Paimon. For Iceberg or Lance, please refer to their respective documentation for format-specific parameters.
-
-Open a new terminal, navigate to the `fluss-quickstart-flink` directory, and execute the following command within this directory to start the service with Paimon:
+To integrate with [Apache Paimon](https://paimon.apache.org/), you need to start the `Lakehouse Tiering Service`. 
+Open a new terminal, navigate to the `fluss-quickstart-flink` directory, and execute the following command within this directory to start the service:
 ```shell
 docker compose exec jobmanager \
     /opt/flink/bin/flink run \
@@ -362,8 +359,7 @@ docker compose exec jobmanager \
     --datalake.paimon.metastore filesystem \
     --datalake.paimon.warehouse /tmp/paimon
 ```
-
-You should see a Flink Job to tier data from Fluss to your chosen data lake format (here is paimon) running in the [Flink Web UI](http://localhost:8083/).
+You should see a Flink Job to tier data from Fluss to Paimon running in the [Flink Web UI](http://localhost:8083/).
 
 ### Streaming into Fluss datalake-enabled tables
 
