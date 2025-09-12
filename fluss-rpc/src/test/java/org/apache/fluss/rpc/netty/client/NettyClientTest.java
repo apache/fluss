@@ -200,7 +200,7 @@ final class NettyClientTest {
                                 service,
                                 metricGroup,
                                 RequestsMetrics.createCoordinatorServerRequestMetrics(
-                                        metricGroup)); ) {
+                                        metricGroup))) {
             multipleEndpointsServer.start();
             ApiVersionsRequest request =
                     new ApiVersionsRequest()
