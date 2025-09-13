@@ -19,29 +19,21 @@
 package org.apache.fluss.lake.iceberg.source;
 
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.lake.iceberg.conf.IcebergConfiguration;
+import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
 import org.apache.fluss.lake.source.Planner;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.iceberg.FileScanTask;
-import org.apache.iceberg.PartitionField;
-import org.apache.iceberg.PartitionSpec;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.io.CloseableIterable;
-import org.apache.iceberg.transforms.TransformUtils;
-import org.apache.iceberg.types.Types;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.List;
-import java.util.Map;
-import java.util.function.Function;
-import java.util.stream.Collectors;
 
-import static org.apache.fluss.lake.iceberg.IcebergLakeCatalog.ICEBERG_CATALOG_DEFAULT_NAME;
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
-import static org.apache.iceberg.CatalogUtil.buildIcebergCatalog;
 
 /** Iceberg split planner. */
 public class IcebergSplitPlanner implements Planner<IcebergSplit> {
@@ -59,76 +51,16 @@ public class IcebergSplitPlanner implements Planner<IcebergSplit> {
     @Override
     public List<IcebergSplit> plan() throws IOException {
         List<IcebergSplit> splits = new ArrayList<>();
-        Catalog catalog = createIcebergCatalog(icebergConfig);
+        Catalog catalog = IcebergCatalogUtils.createIcebergCatalog(icebergConfig);
         Table table = catalog.loadTable(toIceberg(tablePath));
-        Function<FileScanTask, Integer> bucketExtract = createBucketExtractor(table);
-        Function<FileScanTask, List<String>> partitionExtract = createPartitionExtractor(table);
         try (CloseableIterable<FileScanTask> tasks =
                 table.newScan()
                         .useSnapshot(snapshotId)
                         .includeColumnStats()
                         .ignoreResiduals()
                         .planFiles()) {
-            tasks.forEach(
-                    task ->
-                            splits.add(
-                                    new IcebergSplit(
-                                            task,
-                                            bucketExtract.apply(task),
-                                            partitionExtract.apply(task))));
+            tasks.forEach(task -> splits.add(new IcebergSplit(task, -1, Collections.emptyList())));
         }
         return splits;
-    }
-
-    private Function<FileScanTask, Integer> createBucketExtractor(Table table) {
-        PartitionSpec partitionSpec = table.spec();
-        List<PartitionField> partitionFields = partitionSpec.fields();
-
-        List<PartitionField> bucketFields =
-                partitionFields.stream()
-                        .filter(field -> TransformUtils.isBucketTransform(field.transform()))
-                        .collect(Collectors.toList());
-
-        if (bucketFields.size() != 1) {
-            throw new UnsupportedOperationException(
-                    String.format(
-                            "Only one bucket key is supported for Iceberg at the moment, but found %d",
-                            bucketFields.size()));
-        }
-
-        PartitionField bucketField = bucketFields.get(0);
-        Types.StructType partitionType = partitionSpec.partitionType();
-        int bucketFieldIndex =
-                partitionType.fields().indexOf(partitionType.field(bucketField.fieldId()));
-
-        return task -> task.file().partition().get(bucketFieldIndex, Integer.class);
-    }
-
-    private Function<FileScanTask, List<String>> createPartitionExtractor(Table table) {
-        PartitionSpec partitionSpec = table.spec();
-        List<PartitionField> partitionFields = partitionSpec.fields();
-        Types.StructType partitionType = partitionSpec.partitionType();
-
-        List<Integer> nonBucketFieldIndices =
-                partitionFields.stream()
-                        .filter(field -> !TransformUtils.isBucketTransform(field.transform()))
-                        .map(
-                                field ->
-                                        partitionType
-                                                .fields()
-                                                .indexOf(partitionType.field(field.fieldId())))
-                        .collect(Collectors.toList());
-
-        return task ->
-                nonBucketFieldIndices.stream()
-                        .map(index -> task.partition().get(index, String.class))
-                        .collect(Collectors.toList());
-    }
-
-    private Catalog createIcebergCatalog(Configuration configuration) {
-        Map<String, String> icebergProps = configuration.toMap();
-        String catalogName = icebergProps.getOrDefault("name", ICEBERG_CATALOG_DEFAULT_NAME);
-        return buildIcebergCatalog(
-                catalogName, icebergProps, IcebergConfiguration.from(configuration).get());
     }
 }

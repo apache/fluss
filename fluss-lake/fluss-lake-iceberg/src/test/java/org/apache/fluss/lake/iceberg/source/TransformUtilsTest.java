@@ -26,7 +26,7 @@ import org.junit.jupiter.api.Test;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test class for {@link TransformUtils}. */
-public class TransformUtilsTest {
+class TransformUtilsTest {
     @Test
     public void testIsBucketTransformWithBucketInstance() {
         Transform<?, ?> bucketTransform = Transforms.bucket(16);

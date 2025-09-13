@@ -41,6 +41,7 @@ public class IcebergSplit implements LakeSplit, Serializable {
 
     @Override
     public int bucket() {
+        // TODO: if it's not bucket awared - fluss log table, we can just return -1. #1691
         return bucket;
     }
 

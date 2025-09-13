@@ -58,14 +58,9 @@ class IcebergSplitSerializerTest extends IcebergSourceTestBase {
 
         // write data
         Table table = getTable(tablePath);
-        GenericRecord record1 = GenericRecord.create(table.schema());
-        record1.set(0, 12);
-        record1.set(1, "a");
-        record1.set(2, "A");
-        GenericRecord record2 = GenericRecord.create(table.schema());
-        record2.set(0, 13);
-        record2.set(1, "b");
-        record2.set(2, "B");
+
+        GenericRecord record1 = createIcebergRecord(schema, 12, "a", "A");
+        GenericRecord record2 = createIcebergRecord(schema, 13, "b", "B");
 
         writeRecord(table, Arrays.asList(record1, record2), null, 0);
         table.refresh();

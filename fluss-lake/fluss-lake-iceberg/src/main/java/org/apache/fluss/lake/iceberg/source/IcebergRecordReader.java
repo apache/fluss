@@ -130,7 +130,8 @@ public class IcebergRecordReader implements RecordReader {
                     offset,
                     timestamp,
                     ChangeType.INSERT,
-                    projectedRow.replaceRow(icebergRecordAsFlussRow.replaceRow(icebergRecord)));
+                    projectedRow.replaceRow(
+                            icebergRecordAsFlussRow.replaceIcebergRecord(icebergRecord)));
         }
     }
 }

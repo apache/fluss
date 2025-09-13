@@ -51,7 +51,6 @@ import org.apache.iceberg.data.IcebergGenericReader;
 import org.apache.iceberg.data.Record;
 import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.types.Types;
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -71,7 +70,7 @@ import static org.apache.iceberg.types.Types.NestedField.required;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test class for {@link IcebergRecordReader}. */
-public class IcebergRecordReaderTest extends IcebergSourceTestBase {
+class IcebergRecordReaderTest extends IcebergSourceTestBase {
 
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
@@ -103,7 +102,7 @@ public class IcebergRecordReaderTest extends IcebergSourceTestBase {
         // write data
         Table table = getTable(tablePath);
         List<InternalRow> writtenRows = new ArrayList<>();
-        writtenRows.addAll(writeFullTypeRows(table, 10, isPartitioned ? "p1" : null));
+        writtenRows.addAll(writeFullTypeRows(table, 9, isPartitioned ? "p1" : null));
         writtenRows.addAll(writeFullTypeRows(table, 20, isPartitioned ? "p2" : null));
 
         // refresh table
@@ -113,8 +112,7 @@ public class IcebergRecordReaderTest extends IcebergSourceTestBase {
         List<Row> actual = new ArrayList<>();
 
         LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
-        List<IcebergSplit> icebergSplits = lakeSource.createPlanner(snapshot::snapshotId).plan();
-        for (IcebergSplit icebergSplit : icebergSplits) {
+        for (IcebergSplit icebergSplit : lakeSource.createPlanner(snapshot::snapshotId).plan()) {
             RecordReader recordReader = lakeSource.createRecordReader(() -> icebergSplit);
             CloseableIterator<LogRecord> iterator = recordReader.read();
             actual.addAll(
@@ -123,46 +121,27 @@ public class IcebergRecordReaderTest extends IcebergSourceTestBase {
                             TransformingCloseableIterator.transform(iterator, LogRecord::getRow)));
             iterator.close();
         }
-        List<Row> expectRows =
+        List<Row> expect =
                 convertToFlinkRow(fieldGetters, CloseableIterator.wrap(writtenRows.iterator()));
-        assertThat(actual).containsExactlyInAnyOrderElementsOf(expectRows);
-    }
+        assertThat(actual).containsExactlyInAnyOrderElementsOf(expect);
 
-    @Test
-    void testReadLogTableWithProject() throws Exception {
-        // prepare iceberg table
-        TablePath tablePath = TablePath.of(DEFAULT_DB, DEFAULT_TABLE + "_with_project");
-        createFullTypeLogTable(tablePath, false, DEFAULT_BUCKET_NUM);
-
-        InternalRow.FieldGetter[] fieldGetters =
+        // test project
+        InternalRow.FieldGetter[] projectFieldGetters =
                 InternalRow.createFieldGetters(
                         RowType.of(new TinyIntType(), new StringType(), new DoubleType()));
-
-        // write data
-        Table table = getTable(tablePath);
-        writeFullTypeRows(table, 10, null);
-
-        // refresh table
-        table.refresh();
-        Snapshot snapshot = table.currentSnapshot();
-
-        List<Row> actual = new ArrayList<>();
-
-        LakeSource<IcebergSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
         lakeSource.withProject(new int[][] {new int[] {5}, new int[] {1}, new int[] {3}});
 
-        List<IcebergSplit> icebergSplits = lakeSource.createPlanner(snapshot::snapshotId).plan();
-        for (IcebergSplit icebergSplit : icebergSplits) {
+        List<Row> projectActual = new ArrayList<>();
+        for (IcebergSplit icebergSplit : lakeSource.createPlanner(snapshot::snapshotId).plan()) {
             RecordReader recordReader = lakeSource.createRecordReader(() -> icebergSplit);
             CloseableIterator<LogRecord> iterator = recordReader.read();
-            actual.addAll(
+            projectActual.addAll(
                     convertToFlinkRow(
-                            fieldGetters,
+                            projectFieldGetters,
                             TransformingCloseableIterator.transform(iterator, LogRecord::getRow)));
             iterator.close();
         }
 
-        table.refresh();
         TableScan tableScan =
                 table.newScan()
                         .project(
@@ -171,20 +150,22 @@ public class IcebergRecordReaderTest extends IcebergSourceTestBase {
                                         optional(2, "name", Types.StringType.get()),
                                         optional(4, "salary", Types.DoubleType.get())));
         IcebergGenericReader reader = new IcebergGenericReader(tableScan, true);
-        List<Row> expectRows = new ArrayList<>();
+        List<Row> projectExpect = new ArrayList<>();
         try (CloseableIterable<FileScanTask> fileScanTasks = tableScan.planFiles()) {
-            org.apache.iceberg.io.CloseableIterator<Record> iterator =
-                    reader.open(fileScanTasks.iterator().next()).iterator();
-            IcebergRecordAsFlussRow recordAsFlussRow = new IcebergRecordAsFlussRow();
-            expectRows.addAll(
-                    convertToFlinkRow(
-                            fieldGetters,
-                            TransformingCloseableIterator.transform(
-                                    CloseableIterator.wrap(iterator),
-                                    recordAsFlussRow::replaceRow)));
-            iterator.close();
+            for (FileScanTask task : fileScanTasks) {
+                org.apache.iceberg.io.CloseableIterator<Record> iterator =
+                        reader.open(task).iterator();
+                IcebergRecordAsFlussRow recordAsFlussRow = new IcebergRecordAsFlussRow();
+                projectExpect.addAll(
+                        convertToFlinkRow(
+                                projectFieldGetters,
+                                TransformingCloseableIterator.transform(
+                                        CloseableIterator.wrap(iterator),
+                                        recordAsFlussRow::replaceIcebergRecord)));
+                iterator.close();
+            }
         }
-        assertThat(actual).containsExactlyInAnyOrderElementsOf(expectRows);
+        assertThat(projectActual).containsExactlyInAnyOrderElementsOf(projectExpect);
     }
 
     private void createFullTypeLogTable(TablePath tablePath, boolean isPartitioned, int bucketNum)
@@ -250,7 +231,7 @@ public class IcebergRecordReaderTest extends IcebergSourceTestBase {
             records.add(record);
 
             IcebergRecordAsFlussRow row = new IcebergRecordAsFlussRow();
-            row.setIcebergRecord(record);
+            row.replaceIcebergRecord(record);
             flussRows.add(row);
         }
         writeRecord(table, records, partition, 0);

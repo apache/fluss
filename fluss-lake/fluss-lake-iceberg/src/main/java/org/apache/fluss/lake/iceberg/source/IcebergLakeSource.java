@@ -19,7 +19,7 @@
 package org.apache.fluss.lake.iceberg.source;
 
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.lake.iceberg.conf.IcebergConfiguration;
+import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
 import org.apache.fluss.lake.serializer.SimpleVersionedSerializer;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.Planner;
@@ -35,14 +35,12 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
-import java.util.Map;
 
-import static org.apache.fluss.lake.iceberg.IcebergLakeCatalog.ICEBERG_CATALOG_DEFAULT_NAME;
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
-import static org.apache.iceberg.CatalogUtil.buildIcebergCatalog;
 
 /** Iceberg lake source. */
 public class IcebergLakeSource implements LakeSource<IcebergSplit> {
+    private static final long serialVersionUID = 1L;
     private final Configuration icebergConfig;
     private final TablePath tablePath;
     private @Nullable int[][] project;
@@ -75,7 +73,7 @@ public class IcebergLakeSource implements LakeSource<IcebergSplit> {
 
     @Override
     public RecordReader createRecordReader(ReaderContext<IcebergSplit> context) throws IOException {
-        Catalog catalog = createIcebergCatalog(icebergConfig);
+        Catalog catalog = IcebergCatalogUtils.createIcebergCatalog(icebergConfig);
         Table table = catalog.loadTable(toIceberg(tablePath));
         return new IcebergRecordReader(context.lakeSplit().fileScanTask(), table, project);
     }
@@ -83,12 +81,5 @@ public class IcebergLakeSource implements LakeSource<IcebergSplit> {
     @Override
     public SimpleVersionedSerializer<IcebergSplit> getSplitSerializer() {
         return new IcebergSplitSerializer();
-    }
-
-    private Catalog createIcebergCatalog(Configuration configuration) {
-        Map<String, String> icebergProps = configuration.toMap();
-        String catalogName = icebergProps.getOrDefault("name", ICEBERG_CATALOG_DEFAULT_NAME);
-        return buildIcebergCatalog(
-                catalogName, icebergProps, IcebergConfiguration.from(configuration).get());
     }
 }

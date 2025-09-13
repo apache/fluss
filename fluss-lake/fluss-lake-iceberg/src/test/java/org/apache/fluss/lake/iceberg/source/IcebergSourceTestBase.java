@@ -20,8 +20,8 @@ package org.apache.fluss.lake.iceberg.source;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.lake.iceberg.IcebergLakeStorage;
-import org.apache.fluss.lake.iceberg.conf.IcebergConfiguration;
 import org.apache.fluss.lake.iceberg.tiering.writer.TaskWriterFactory;
+import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.utils.CloseableIterator;
@@ -35,6 +35,7 @@ import org.apache.iceberg.catalog.Catalog;
 import org.apache.iceberg.catalog.Namespace;
 import org.apache.iceberg.catalog.SupportsNamespaces;
 import org.apache.iceberg.catalog.TableIdentifier;
+import org.apache.iceberg.data.GenericRecord;
 import org.apache.iceberg.data.Record;
 import org.apache.iceberg.io.TaskWriter;
 import org.junit.jupiter.api.BeforeAll;
@@ -45,11 +46,9 @@ import javax.annotation.Nullable;
 import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.function.Function;
 
 import static org.apache.fluss.utils.Preconditions.checkState;
-import static org.apache.iceberg.CatalogUtil.buildIcebergCatalog;
 
 /** Base class for Iceberg source tests. */
 class IcebergSourceTestBase {
@@ -68,11 +67,7 @@ class IcebergSourceTestBase {
         configuration.setString("type", "hadoop");
         configuration.setString("name", "fluss_test_catalog");
         lakeStorage = new IcebergLakeStorage(configuration);
-        Map<String, String> icebergProps = configuration.toMap();
-        String catalogName = icebergProps.getOrDefault("name", "iceberg_catalog");
-        icebergCatalog =
-                buildIcebergCatalog(
-                        catalogName, icebergProps, IcebergConfiguration.from(configuration).get());
+        icebergCatalog = IcebergCatalogUtils.createIcebergCatalog(configuration);
     }
 
     public void createTable(TablePath tablePath, Schema schema, PartitionSpec partitionSpec)
@@ -120,6 +115,14 @@ class IcebergSourceTestBase {
     public Table getTable(TablePath tablePath) throws Exception {
         return icebergCatalog.loadTable(
                 TableIdentifier.of(tablePath.getDatabaseName(), tablePath.getTableName()));
+    }
+
+    public GenericRecord createIcebergRecord(Schema schema, Object... values) {
+        GenericRecord record = GenericRecord.create(schema);
+        for (int i = 0; i < values.length; i++) {
+            record.set(i, values[i]);
+        }
+        return record;
     }
 
     /** Adapter for transforming closeable iterator. */

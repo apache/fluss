@@ -71,22 +71,22 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         // wait until records has been synced
         waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
 
-        // now, start to read the log table, which will read paimon
-        // may read fluss or not, depends on the log offset of paimon snapshot
+        // now, start to read the log table, which will read iceberg
+        // may read fluss or not, depends on the log offset of iceberg snapshot
         List<Row> actual =
                 CollectionUtil.iteratorToList(
                         batchTEnv.executeSql("select * from " + tableName).collect());
 
         assertThat(actual).containsExactlyInAnyOrderElementsOf(writtenRows);
 
-        // can database sync job
+        // cancel the tiering job
         jobClient.cancel().get();
 
         // write some log data again
         writtenRows.addAll(writeRows(t1, 3, isPartitioned));
 
         // query the log table again and check the data
-        // it should read both paimon snapshot and fluss log
+        // it should read both iceberg snapshot and fluss log
         actual =
                 CollectionUtil.iteratorToList(
                         batchTEnv.executeSql("select * from " + tableName).collect());
@@ -111,6 +111,7 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
             String plan = batchTEnv.explainSql(sqlWithPartitionFilter);
 
             // check if the plan contains partition filter
+            // TODO: push down iceberg partition filter
             assertThat(plan)
                     .contains("TableSourceScan(")
                     .contains("LogicalFilter(condition=[=($15, _UTF-16LE'" + partition + "'");

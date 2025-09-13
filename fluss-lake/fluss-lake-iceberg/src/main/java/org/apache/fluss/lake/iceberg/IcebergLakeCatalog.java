@@ -20,7 +20,7 @@ package org.apache.fluss.lake.iceberg;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableAlreadyExistException;
-import org.apache.fluss.lake.iceberg.conf.IcebergConfiguration;
+import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -49,12 +49,9 @@ import java.util.Set;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
-import static org.apache.iceberg.CatalogUtil.buildIcebergCatalog;
 
 /** An Iceberg implementation of {@link LakeCatalog}. */
 public class IcebergLakeCatalog implements LakeCatalog {
-
-    public static final String ICEBERG_CATALOG_DEFAULT_NAME = "fluss-iceberg-catalog";
 
     public static final LinkedHashMap<String, Type> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
@@ -74,19 +71,12 @@ public class IcebergLakeCatalog implements LakeCatalog {
     private static final String ICEBERG_CONF_PREFIX = "iceberg.";
 
     public IcebergLakeCatalog(Configuration configuration) {
-        this.icebergCatalog = createIcebergCatalog(configuration);
+        this.icebergCatalog = IcebergCatalogUtils.createIcebergCatalog(configuration);
     }
 
     @VisibleForTesting
     protected Catalog getIcebergCatalog() {
         return icebergCatalog;
-    }
-
-    private Catalog createIcebergCatalog(Configuration configuration) {
-        Map<String, String> icebergProps = configuration.toMap();
-        String catalogName = icebergProps.getOrDefault("name", ICEBERG_CATALOG_DEFAULT_NAME);
-        return buildIcebergCatalog(
-                catalogName, icebergProps, IcebergConfiguration.from(configuration).get());
     }
 
     @Override

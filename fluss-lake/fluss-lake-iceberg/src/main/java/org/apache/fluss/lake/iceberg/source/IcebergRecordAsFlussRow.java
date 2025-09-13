@@ -41,11 +41,7 @@ public class IcebergRecordAsFlussRow implements InternalRow {
 
     public IcebergRecordAsFlussRow() {}
 
-    public void setIcebergRecord(Record icebergRecord) {
-        this.icebergRecord = icebergRecord;
-    }
-
-    public IcebergRecordAsFlussRow replaceRow(Record icebergRecord) {
+    public IcebergRecordAsFlussRow replaceIcebergRecord(Record icebergRecord) {
         this.icebergRecord = icebergRecord;
         return this;
     }

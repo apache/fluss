@@ -23,7 +23,7 @@ import org.apache.iceberg.TableScan;
 
 /**
  * GenericReader to read for records for iceberg. Extends from Iceberg {@link GenericReader} to
- * enable the {@link FileScanTask} method to be visible to Fluss.
+ * enable the {@link #open(FileScanTask)} method to be visible to Fluss.
  */
 public class IcebergGenericReader extends GenericReader {
 
