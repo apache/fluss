@@ -144,8 +144,8 @@ class IcebergSplitPlannerTest extends IcebergSourceTestBase {
         // Log table is not bucket-aware
         assertThat(icebergSplits.get(0).bucket()).isEqualTo(-1);
         assertThat(icebergSplits.get(1).bucket()).isEqualTo(-1);
-        // Log table is not partition-aware
-        assertThat(icebergSplits.get(0).partition()).isEqualTo(Collections.EMPTY_LIST);
-        assertThat(icebergSplits.get(1).partition()).isEqualTo(Collections.EMPTY_LIST);
+        assertThat(icebergSplits.stream().map(IcebergSplit::partition))
+                .containsExactlyInAnyOrder(
+                        Collections.singletonList("a"), Collections.singletonList("b"));
     }
 }
