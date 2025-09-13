@@ -49,6 +49,7 @@ import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
  * paimon table.
  */
 public class PaimonLakeSource implements LakeSource<PaimonSplit> {
+    private static final long serialVersionUID = 1L;
 
     private final Configuration paimonConfig;
     private final TablePath tablePath;

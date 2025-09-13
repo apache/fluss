@@ -80,6 +80,7 @@ import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.apache.iceberg.expressions.Expressions.equal;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -460,5 +461,33 @@ public class FlinkIcebergTieringTestBase {
 
         writeRows(tablePath, rows, !tableDescriptor.hasPrimaryKey());
         return writtenRowsByPartition;
+    }
+
+    protected void waitUntilBucketSynced(
+            TablePath tablePath, long tableId, int bucketCount, boolean isPartition) {
+        if (isPartition) {
+            Map<Long, String> partitionById = waitUntilPartitions(tablePath);
+            for (Long partitionId : partitionById.keySet()) {
+                for (int i = 0; i < bucketCount; i++) {
+                    TableBucket tableBucket = new TableBucket(tableId, partitionId, i);
+                    waitUntilBucketSynced(tableBucket);
+                }
+            }
+        } else {
+            for (int i = 0; i < bucketCount; i++) {
+                TableBucket tableBucket = new TableBucket(tableId, i);
+                waitUntilBucketSynced(tableBucket);
+            }
+        }
+    }
+
+    protected void waitUntilBucketSynced(TableBucket tb) {
+        waitUntil(
+                () -> {
+                    Replica replica = getLeaderReplica(tb);
+                    return replica.getLogTablet().getLakeTableSnapshotId() >= 0;
+                },
+                Duration.ofMinutes(2),
+                "bucket " + tb + " not synced");
     }
 }

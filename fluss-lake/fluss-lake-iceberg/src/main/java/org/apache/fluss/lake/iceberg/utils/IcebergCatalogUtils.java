@@ -15,26 +15,26 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.lake.iceberg.tiering;
+package org.apache.fluss.lake.iceberg.utils;
 
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
+import org.apache.fluss.lake.iceberg.conf.IcebergConfiguration;
 
 import org.apache.iceberg.catalog.Catalog;
 
-import java.io.Serializable;
+import java.util.Map;
 
-/** A provider for Iceberg catalog. */
-public class IcebergCatalogProvider implements Serializable {
+import static org.apache.iceberg.CatalogUtil.buildIcebergCatalog;
 
-    private static final long serialVersionUID = 1L;
-    private final Configuration icebergConfig;
+/** Iceberg catalog utils. */
+public class IcebergCatalogUtils {
 
-    public IcebergCatalogProvider(Configuration icebergConfig) {
-        this.icebergConfig = icebergConfig;
-    }
+    public static final String ICEBERG_CATALOG_DEFAULT_NAME = "fluss-iceberg-catalog";
 
-    public Catalog get() {
-        return IcebergCatalogUtils.createIcebergCatalog(icebergConfig);
+    public static Catalog createIcebergCatalog(Configuration configuration) {
+        Map<String, String> icebergProps = configuration.toMap();
+        String catalogName = icebergProps.getOrDefault("name", ICEBERG_CATALOG_DEFAULT_NAME);
+        return buildIcebergCatalog(
+                catalogName, icebergProps, IcebergConfiguration.from(configuration).get());
     }
 }

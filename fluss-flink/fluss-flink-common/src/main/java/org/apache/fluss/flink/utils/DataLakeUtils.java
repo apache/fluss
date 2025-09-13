@@ -42,13 +42,6 @@ public class DataLakeUtils {
                             ConfigOptions.TABLE_DATALAKE_FORMAT.key()));
         }
 
-        if (datalakeFormat != DataLakeFormat.PAIMON) {
-            throw new UnsupportedOperationException(
-                    String.format(
-                            "The datalake format %s " + " is not supported. Only %s is supported.",
-                            datalakeFormat, DataLakeFormat.PAIMON));
-        }
-
         // currently, extract datalake catalog config
         String dataLakePrefix = "table.datalake." + datalakeFormat + ".";
         return extractAndRemovePrefix(tableOptions.toMap(), dataLakePrefix);

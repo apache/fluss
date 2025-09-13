@@ -79,7 +79,7 @@ class IcebergRecordAsFlussRowTest {
         record.setField("__offset", 100L);
         record.setField("__timestamp", OffsetDateTime.now(ZoneOffset.UTC));
 
-        icebergRecordAsFlussRow.setIcebergRecord(record);
+        icebergRecordAsFlussRow.replaceIcebergRecord(record);
 
         // Should return count excluding system columns (3 system columns)
         assertThat(icebergRecordAsFlussRow.getFieldCount()).isEqualTo(13);
@@ -91,7 +91,7 @@ class IcebergRecordAsFlussRowTest {
         record.setField("name", null); // null value
         record.setField("age", 30);
 
-        icebergRecordAsFlussRow.setIcebergRecord(record);
+        icebergRecordAsFlussRow.replaceIcebergRecord(record);
 
         assertThat(icebergRecordAsFlussRow.isNullAt(0)).isFalse(); // id
         assertThat(icebergRecordAsFlussRow.isNullAt(1)).isTrue(); // name
@@ -120,7 +120,7 @@ class IcebergRecordAsFlussRowTest {
         record.setField("__offset", 100L);
         record.setField("__timestamp", OffsetDateTime.now(ZoneOffset.UTC));
 
-        icebergRecordAsFlussRow.setIcebergRecord(record);
+        icebergRecordAsFlussRow.replaceIcebergRecord(record);
 
         // Test all data type conversions
         assertThat(icebergRecordAsFlussRow.getLong(0)).isEqualTo(12345L); // id

@@ -19,7 +19,6 @@
 package org.apache.fluss.lake.iceberg.utils;
 
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.lake.iceberg.conf.IcebergConfiguration;
 import org.apache.fluss.metadata.TablePath;
 
 import org.apache.iceberg.PartitionKey;
@@ -35,10 +34,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
-import java.util.Map;
 
 import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
-import static org.apache.iceberg.CatalogUtil.buildIcebergCatalog;
 import static org.apache.iceberg.types.Types.NestedField.optional;
 import static org.apache.iceberg.types.Types.NestedField.required;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -69,11 +66,7 @@ class IcebergConversionsTest {
         configuration.setString("warehouse", tempWarehouseDir.toURI().toString());
         configuration.setString("catalog-impl", "org.apache.iceberg.inmemory.InMemoryCatalog");
         configuration.setString("name", "fluss_test_catalog");
-
-        Map<String, String> icebergProps = configuration.toMap();
-        String catalogName = icebergProps.getOrDefault("name", "default_iceberg_catalog");
-        return buildIcebergCatalog(
-                catalogName, icebergProps, IcebergConfiguration.from(configuration).get());
+        return IcebergCatalogUtils.createIcebergCatalog(configuration);
     }
 
     private Table createIcebergTable(
