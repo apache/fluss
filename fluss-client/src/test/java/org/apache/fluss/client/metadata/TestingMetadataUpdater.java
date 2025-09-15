@@ -32,6 +32,7 @@ import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.tablet.TestTabletServerGateway;
 
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -65,7 +66,8 @@ public class TestingMetadataUpdater extends MetadataUpdater {
         super(
                 RpcClient.create(
                         new Configuration(), TestingClientMetricGroup.newInstance(), false),
-                Cluster.empty());
+                Cluster.empty(),
+                Duration.ofSeconds(30).toMillis());
         initializeCluster(coordinatorServer, tabletServers, tableInfos);
         coordinatorGateway = new TestCoordinatorGateway();
         tabletServerGatewayMap = new HashMap<>();

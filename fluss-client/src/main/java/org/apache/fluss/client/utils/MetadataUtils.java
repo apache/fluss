@@ -63,9 +63,10 @@ public class MetadataUtils {
      * add those table into cluster.
      */
     public static Cluster sendMetadataRequestAndRebuildCluster(
-            AdminReadOnlyGateway gateway, Set<TablePath> tablePaths)
+            AdminReadOnlyGateway gateway, Set<TablePath> tablePaths, long metadataRequestTimeoutMs)
             throws ExecutionException, InterruptedException, TimeoutException {
-        return sendMetadataRequestAndRebuildCluster(gateway, false, null, tablePaths, null, null);
+        return sendMetadataRequestAndRebuildCluster(
+                gateway, false, null, tablePaths, null, null, metadataRequestTimeoutMs);
     }
 
     /**
@@ -79,7 +80,8 @@ public class MetadataUtils {
             RpcClient client,
             @Nullable Set<TablePath> tablePaths,
             @Nullable Collection<PhysicalTablePath> tablePartitionNames,
-            @Nullable Collection<Long> tablePartitionIds)
+            @Nullable Collection<Long> tablePartitionIds,
+            long metadataRequestTimeoutMs)
             throws ExecutionException, InterruptedException, TimeoutException {
         AdminReadOnlyGateway gateway =
                 GatewayClientProxy.createGatewayProxy(
@@ -87,7 +89,13 @@ public class MetadataUtils {
                         client,
                         AdminReadOnlyGateway.class);
         return sendMetadataRequestAndRebuildCluster(
-                gateway, true, cluster, tablePaths, tablePartitionNames, tablePartitionIds);
+                gateway,
+                true,
+                cluster,
+                tablePaths,
+                tablePartitionNames,
+                tablePartitionIds,
+                metadataRequestTimeoutMs);
     }
 
     /** maybe partial update cluster. */
@@ -97,7 +105,8 @@ public class MetadataUtils {
             Cluster originCluster,
             @Nullable Set<TablePath> tablePaths,
             @Nullable Collection<PhysicalTablePath> tablePartitions,
-            @Nullable Collection<Long> tablePartitionIds)
+            @Nullable Collection<Long> tablePartitionIds,
+            long metadataRequestTimeoutMs)
             throws ExecutionException, InterruptedException, TimeoutException {
         MetadataRequest metadataRequest =
                 ClientRpcMessageUtils.makeMetadataRequest(
@@ -160,7 +169,9 @@ public class MetadataUtils {
                                     newPartitionIdByPath,
                                     newTablePathToTableInfo);
                         })
-                .get(30, TimeUnit.SECONDS); // TODO currently, we don't have timeout logic in
+                .get(
+                        metadataRequestTimeoutMs,
+                        TimeUnit.MILLISECONDS); // TODO currently, we don't have timeout logic in
         // RpcClient, it will let the get() block forever. So we
         // time out here
     }

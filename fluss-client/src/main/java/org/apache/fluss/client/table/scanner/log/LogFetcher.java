@@ -273,18 +273,21 @@ public class LogFetcher implements Closeable {
         return new TableOrPartitions(tableIdsInFetchRequest, tablePartitionsInFetchRequest);
     }
 
-    private static class TableOrPartitions {
+    /** A helper class to hold table ids or table partitions. */
+    @VisibleForTesting
+    public static class TableOrPartitions {
         private final @Nullable Set<Long> tableIds;
         private final @Nullable Set<TablePartition> tablePartitions;
 
-        private TableOrPartitions(
+        TableOrPartitions(
                 @Nullable Set<Long> tableIds, @Nullable Set<TablePartition> tablePartitions) {
             this.tableIds = tableIds;
             this.tablePartitions = tablePartitions;
         }
     }
 
-    private void invalidTableOrPartitions(TableOrPartitions tableOrPartitions) {
+    @VisibleForTesting
+    public void invalidTableOrPartitions(TableOrPartitions tableOrPartitions) {
         Set<PhysicalTablePath> physicalTablePaths =
                 metadataUpdater.getPhysicalTablePathByIds(
                         tableOrPartitions.tableIds, tableOrPartitions.tablePartitions);

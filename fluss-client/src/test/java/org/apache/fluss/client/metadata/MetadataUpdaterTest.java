@@ -20,7 +20,6 @@ package org.apache.fluss.client.metadata;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
-import org.apache.fluss.client.utils.MetadataUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.Configuration;
@@ -31,9 +30,11 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 
+import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -64,13 +65,14 @@ class MetadataUpdaterTest {
         // any N levels UnmodifiableCollection
         for (int i = 0; i < 20000; i++) {
             cluster =
-                    MetadataUtils.sendMetadataRequestAndRebuildCluster(
+                    sendMetadataRequestAndRebuildCluster(
                             FLUSS_CLUSTER_EXTENSION.newCoordinatorClient(),
                             true,
                             cluster,
                             null,
                             null,
-                            null);
+                            null,
+                            Duration.ofSeconds(30).toMillis());
         }
     }
 
@@ -111,7 +113,8 @@ class MetadataUpdaterTest {
                         Collections.emptyMap(),
                         Collections.emptyMap());
 
-        metadataUpdater = new MetadataUpdater(rpcClient, newCluster);
+        metadataUpdater =
+                new MetadataUpdater(rpcClient, newCluster, Duration.ofSeconds(30).toMillis());
         // shouldn't update metadata to empty since the empty metadata will be ignored
         metadataUpdater.updateMetadata(null, null, null);
         assertThat(metadataUpdater.getCluster().getAliveTabletServers())
