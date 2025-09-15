@@ -43,11 +43,11 @@ public class FlussSourceEnumeratorStateSerializer
 
     @Nullable private final LakeSource<LakeSplit> lakeSource;
 
-    private static final int VERSION_0 = 0;
+    private static final int VERSION_1 = 1;
     private static final ThreadLocal<DataOutputSerializer> SERIALIZER_CACHE =
             ThreadLocal.withInitial(() -> new DataOutputSerializer(64));
 
-    private static final int CURRENT_VERSION = VERSION_0;
+    private static final int CURRENT_VERSION = VERSION_1;
 
     public FlussSourceEnumeratorStateSerializer(LakeSource<LakeSplit> lakeSource) {
         this.lakeSource = lakeSource;
@@ -95,7 +95,7 @@ public class FlussSourceEnumeratorStateSerializer
 
     @Override
     public SourceEnumeratorState deserialize(int version, byte[] serialized) throws IOException {
-        if (version != VERSION_0) {
+        if (version > CURRENT_VERSION || version < 0) {
             throw new IOException("Unknown version or corrupt state: " + version);
         }
         final DataInputDeserializer in = new DataInputDeserializer(serialized);
@@ -126,7 +126,7 @@ public class FlussSourceEnumeratorStateSerializer
         List<SourceSplitBase> remainingHybridLakeFlussSplits = null;
         if (lakeSource != null) {
             // todo: add a ut for serialize remaining hybrid lake fluss splits
-            remainingHybridLakeFlussSplits = deserializeRemainingHybridLakeFlussSplits(in);
+            remainingHybridLakeFlussSplits = deserializeRemainingHybridLakeFlussSplits(version, in);
         }
 
         return new SourceEnumeratorState(
@@ -156,7 +156,7 @@ public class FlussSourceEnumeratorStateSerializer
 
     @Nullable
     private List<SourceSplitBase> deserializeRemainingHybridLakeFlussSplits(
-            final DataInputDeserializer in) throws IOException {
+            int version, final DataInputDeserializer in) throws IOException {
         if (in.readBoolean()) {
             int numSplits = in.readInt();
             List<SourceSplitBase> splits = new ArrayList<>(numSplits);
@@ -165,9 +165,7 @@ public class FlussSourceEnumeratorStateSerializer
                 int splitSizeInBytes = in.readInt();
                 byte[] splitBytes = new byte[splitSizeInBytes];
                 in.readFully(splitBytes);
-                splits.add(
-                        sourceSplitSerializer.deserialize(
-                                sourceSplitSerializer.getVersion(), splitBytes));
+                splits.add(sourceSplitSerializer.deserialize(version, splitBytes));
             }
             return splits;
         } else {

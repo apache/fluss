@@ -40,6 +40,10 @@ import static org.apache.fluss.flink.lake.split.LakeSnapshotSplit.LAKE_SNAPSHOT_
 /** A serializer for lake split. */
 public class LakeSplitSerializer {
 
+    private static final int VERSION_0 = 0;
+
+    private static final int CURRENT_VERSION = VERSION_0;
+
     private final SimpleVersionedSerializer<LakeSplit> sourceSplitSerializer;
 
     public LakeSplitSerializer(SimpleVersionedSerializer<LakeSplit> sourceSplitSerializer) {
@@ -86,18 +90,25 @@ public class LakeSplitSerializer {
     }
 
     public SourceSplitBase deserialize(
+            int version,
             byte splitKind,
             TableBucket tableBucket,
             @Nullable String partition,
             DataInputDeserializer input)
             throws IOException {
         if (splitKind == LAKE_SNAPSHOT_SPLIT_KIND) {
-            int splitIndex = input.readInt();
+            int splitIndex = -1;
+            if (version > VERSION_0) {
+                splitIndex = input.readInt();
+            }
             byte[] serializeBytes = new byte[input.readInt()];
             input.read(serializeBytes);
             LakeSplit lakeSplit =
                     sourceSplitSerializer.deserialize(
                             sourceSplitSerializer.getVersion(), serializeBytes);
+            if (splitIndex < 0) {
+                return new LakeSnapshotSplit(tableBucket, partition, lakeSplit);
+            }
             return new LakeSnapshotSplit(tableBucket, partition, lakeSplit, splitIndex);
         } else if (splitKind == LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND) {
             List<LakeSplit> lakeSplits = null;
@@ -115,19 +126,33 @@ public class LakeSplitSerializer {
             long startingOffset = input.readLong();
             long stoppingOffset = input.readLong();
             long recordsToSkip = input.readLong();
-            int splitIndex = input.readInt();
-            boolean isLakeSplitFinished = input.readBoolean();
+            if (version > VERSION_0) {
+                int splitIndex = input.readInt();
+                boolean isLakeSplitFinished = input.readBoolean();
+                return new LakeSnapshotAndFlussLogSplit(
+                        tableBucket,
+                        partition,
+                        lakeSplits,
+                        startingOffset,
+                        stoppingOffset,
+                        recordsToSkip,
+                        splitIndex,
+                        isLakeSplitFinished);
+            }
+
             return new LakeSnapshotAndFlussLogSplit(
                     tableBucket,
                     partition,
                     lakeSplits,
                     startingOffset,
                     stoppingOffset,
-                    recordsToSkip,
-                    splitIndex,
-                    isLakeSplitFinished);
+                    recordsToSkip);
         } else {
             throw new UnsupportedOperationException("Unsupported split kind: " + splitKind);
         }
+    }
+
+    public int getVersion() {
+        return CURRENT_VERSION;
     }
 }

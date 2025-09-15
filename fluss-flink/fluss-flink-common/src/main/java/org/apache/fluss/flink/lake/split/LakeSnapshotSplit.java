@@ -43,6 +43,11 @@ public class LakeSnapshotSplit extends SourceSplitBase {
     }
 
     public LakeSnapshotSplit(
+            TableBucket tableBucket, @Nullable String partitionName, LakeSplit lakeSplit) {
+        this(tableBucket, partitionName, lakeSplit, 0, 0);
+    }
+
+    public LakeSnapshotSplit(
             TableBucket tableBucket,
             @Nullable String partitionName,
             LakeSplit lakeSplit,

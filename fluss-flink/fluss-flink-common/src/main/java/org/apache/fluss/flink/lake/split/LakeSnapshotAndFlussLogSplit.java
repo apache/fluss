@@ -73,6 +73,25 @@ public class LakeSnapshotAndFlussLogSplit extends SourceSplitBase {
             @Nullable List<LakeSplit> snapshotSplits,
             long startingOffset,
             long stoppingOffset,
+            long recordsToSkip) {
+        this(
+                tableBucket,
+                partitionName,
+                snapshotSplits,
+                startingOffset,
+                stoppingOffset,
+                recordsToSkip,
+                0,
+                // if lake splits is null, no lake splits, also means LakeSplitFinished
+                snapshotSplits == null);
+    }
+
+    public LakeSnapshotAndFlussLogSplit(
+            TableBucket tableBucket,
+            @Nullable String partitionName,
+            @Nullable List<LakeSplit> snapshotSplits,
+            long startingOffset,
+            long stoppingOffset,
             long recordsToSkip,
             int currentLakeSplitIndex,
             boolean isLakeSplitFinished) {
