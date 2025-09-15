@@ -46,7 +46,6 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.net.InetSocketAddress;
-import java.time.Duration;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.HashSet;
@@ -66,28 +65,19 @@ public class MetadataUpdater {
 
     private final RpcClient rpcClient;
     protected volatile Cluster cluster;
-    private final long metadataRequestTimeoutMs;
 
     public MetadataUpdater(Configuration configuration, RpcClient rpcClient) {
-        this(
-                rpcClient,
-                initializeCluster(configuration, rpcClient),
-                Duration.ofSeconds(30).toMillis());
+        this(rpcClient, initializeCluster(configuration, rpcClient));
     }
 
     @VisibleForTesting
-    public MetadataUpdater(RpcClient rpcClient, Cluster cluster, long metadataRequestTimeoutMs) {
+    public MetadataUpdater(RpcClient rpcClient, Cluster cluster) {
         this.rpcClient = rpcClient;
         this.cluster = cluster;
-        this.metadataRequestTimeoutMs = metadataRequestTimeoutMs;
     }
 
     public Cluster getCluster() {
         return cluster;
-    }
-
-    public long getMetadataRequestTimeoutMs() {
-        return metadataRequestTimeoutMs;
     }
 
     public @Nullable ServerNode getCoordinatorServer() {
@@ -277,8 +267,7 @@ public class MetadataUpdater {
                                 rpcClient,
                                 tablePaths,
                                 tablePartitionNames,
-                                tablePartitionIds,
-                                metadataRequestTimeoutMs);
+                                tablePartitionIds);
             }
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
@@ -304,9 +293,7 @@ public class MetadataUpdater {
         Exception lastException = null;
         for (InetSocketAddress address : inetSocketAddresses) {
             try {
-                cluster =
-                        tryToInitializeCluster(
-                                rpcClient, address, Duration.ofSeconds(30).toMillis());
+                cluster = tryToInitializeCluster(rpcClient, address);
                 break;
             } catch (Exception e) {
                 LOG.error(
@@ -329,8 +316,7 @@ public class MetadataUpdater {
         return cluster;
     }
 
-    private static Cluster tryToInitializeCluster(
-            RpcClient rpcClient, InetSocketAddress address, long metadataRequestTimeoutMs)
+    private static Cluster tryToInitializeCluster(RpcClient rpcClient, InetSocketAddress address)
             throws Exception {
         ServerNode serverNode =
                 new ServerNode(
@@ -338,8 +324,7 @@ public class MetadataUpdater {
         AdminReadOnlyGateway adminReadOnlyGateway =
                 GatewayClientProxy.createGatewayProxy(
                         () -> serverNode, rpcClient, AdminReadOnlyGateway.class);
-        return sendMetadataRequestAndRebuildCluster(
-                adminReadOnlyGateway, Collections.emptySet(), metadataRequestTimeoutMs);
+        return sendMetadataRequestAndRebuildCluster(adminReadOnlyGateway, Collections.emptySet());
     }
 
     /** Invalid the bucket metadata for the given physical table paths. */

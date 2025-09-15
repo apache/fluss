@@ -30,7 +30,6 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
-import java.time.Duration;
 import java.util.Collections;
 import java.util.List;
 
@@ -71,8 +70,7 @@ class MetadataUpdaterTest {
                             cluster,
                             null,
                             null,
-                            null,
-                            Duration.ofSeconds(30).toMillis());
+                            null);
         }
     }
 
@@ -113,8 +111,7 @@ class MetadataUpdaterTest {
                         Collections.emptyMap(),
                         Collections.emptyMap());
 
-        metadataUpdater =
-                new MetadataUpdater(rpcClient, newCluster, Duration.ofSeconds(30).toMillis());
+        metadataUpdater = new MetadataUpdater(rpcClient, newCluster);
         // shouldn't update metadata to empty since the empty metadata will be ignored
         metadataUpdater.updateMetadata(null, null, null);
         assertThat(metadataUpdater.getCluster().getAliveTabletServers())

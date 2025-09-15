@@ -152,8 +152,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                         oldCluster.getTableIdByPath(),
                         oldCluster.getPartitionIdByPath(),
                         oldCluster.getTableInfoByPath());
-        metadataUpdater =
-                new MetadataUpdater(rpcClient, newCluster, Duration.ofSeconds(30).toMillis());
+        metadataUpdater = new MetadataUpdater(rpcClient, newCluster);
 
         LogScannerStatus logScannerStatus = new LogScannerStatus();
         logScannerStatus.assignScanBuckets(Collections.singletonMap(tb0, 0L));
@@ -216,7 +215,8 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                             }
                         });
 
-        future.get(2, TimeUnit.MINUTES);
+        future.get(30, TimeUnit.SECONDS);
+        assertThat(future.isDone()).isTrue();
     }
 
     private void addRecordsToBucket(

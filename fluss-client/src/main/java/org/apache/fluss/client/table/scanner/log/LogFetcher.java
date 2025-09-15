@@ -275,7 +275,7 @@ public class LogFetcher implements Closeable {
 
     /** A helper class to hold table ids or table partitions. */
     @VisibleForTesting
-    public static class TableOrPartitions {
+    static class TableOrPartitions {
         private final @Nullable Set<Long> tableIds;
         private final @Nullable Set<TablePartition> tablePartitions;
 
@@ -287,7 +287,7 @@ public class LogFetcher implements Closeable {
     }
 
     @VisibleForTesting
-    public void invalidTableOrPartitions(TableOrPartitions tableOrPartitions) {
+    void invalidTableOrPartitions(TableOrPartitions tableOrPartitions) {
         Set<PhysicalTablePath> physicalTablePaths =
                 metadataUpdater.getPhysicalTablePathByIds(
                         tableOrPartitions.tableIds, tableOrPartitions.tablePartitions);

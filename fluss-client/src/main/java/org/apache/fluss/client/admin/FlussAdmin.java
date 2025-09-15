@@ -128,8 +128,7 @@ public class FlussAdmin implements Admin {
                                         metadataUpdater.getCluster(),
                                         null,
                                         null,
-                                        null,
-                                        metadataUpdater.getMetadataRequestTimeoutMs());
+                                        null);
                         serverNodeList.add(cluster.getCoordinatorServer());
                         serverNodeList.addAll(cluster.getAliveTabletServerList());
                         future.complete(serverNodeList);
