@@ -95,12 +95,12 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
             PhysicalTablePath physicalTablePath,
             long tableId,
             @Nullable Long partitionId,
-            Set<Integer> assignments) {
+            Set<Integer> buckets) {
         TablePath tablePath = physicalTablePath.getTablePath();
         SimpleTableMetricGroup tableMetricGroup =
                 metricGroupByTable.computeIfAbsent(
                         tablePath, table -> new SimpleTableMetricGroup(registry, tablePath, this));
-        assignments.forEach(
+        buckets.forEach(
                 bucket ->
                         tableMetricGroup.addBucketMetricGroup(
                                 physicalTablePath.getPartitionName(),
@@ -124,7 +124,7 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
     }
 
     /** The metric group for table. */
-    public static class SimpleTableMetricGroup extends AbstractMetricGroup {
+    private static class SimpleTableMetricGroup extends AbstractMetricGroup {
 
         private final Map<TableBucket, BucketMetricGroup> buckets = new HashMap<>();
 

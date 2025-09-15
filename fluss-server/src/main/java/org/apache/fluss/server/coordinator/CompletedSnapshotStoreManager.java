@@ -141,12 +141,16 @@ public class CompletedSnapshotStoreManager {
                                 coordinatorMetricGroup.getTableBucketMetricGroup(
                                         tablePath, tableBucket);
                         if (bucketMetricGroup != null) {
-                            LOG.info("ADDED bucketMetricGroup for tableBucket {}.", bucket);
+                            LOG.info("Add bucketMetricGroup for tableBucket {}.", bucket);
                             bucketMetricGroup.gauge(
                                     MetricNames.KV_NUM_SNAPSHOTS, () -> getNumSnapshots(bucket));
                             bucketMetricGroup.gauge(
                                     MetricNames.KV_ALL_SNAPSHOT_SIZE,
                                     () -> getAllSnapshotSize(bucket));
+                        } else {
+                            LOG.warn(
+                                    "Failed to add bucketMetricGroup for tableBucket {} when creating completed snapshot.",
+                                    bucket);
                         }
                         return snapshotStore;
                     } catch (Exception e) {

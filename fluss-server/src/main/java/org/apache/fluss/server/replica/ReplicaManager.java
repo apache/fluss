@@ -118,7 +118,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicBoolean;
-import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
 import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
@@ -362,18 +361,16 @@ public class ReplicaManager {
     }
 
     private long physicalStorageLocalSize() {
-        AtomicLong localSize = new AtomicLong(0L);
-
-        onlineReplicas()
-                .forEach(
+        return onlineReplicas()
+                .mapToLong(
                         replica -> {
+                            long size = replica.getLogTablet().logSize();
                             if (replica.isKvTable()) {
-                                localSize.addAndGet(replica.getLatestKvSnapshotSize());
+                                size += replica.getLatestKvSnapshotSize();
                             }
-                            localSize.addAndGet(replica.getLogTablet().logSize());
-                        });
-
-        return localSize.get();
+                            return size;
+                        })
+                .reduce(0L, Long::sum);
     }
 
     private long physicalStorageRemoteLogSize() {

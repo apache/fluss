@@ -65,7 +65,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.atomic.AtomicLong;
 
 import static org.apache.fluss.utils.FileUtils.flushFileIfExists;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
@@ -352,11 +351,9 @@ public final class LogTablet {
         if (remoteLogEndOffset <= 0L) {
             return localLog.getSegments().sizeInBytes();
         } else {
-            AtomicLong logicalStorageSize = new AtomicLong(remoteLogSize);
-            localLog.getSegments().higherSegments(remoteLogEndOffset).stream()
+            return localLog.getSegments().higherSegments(remoteLogEndOffset).stream()
                     .mapToLong(LogSegment::getSizeInBytes)
-                    .forEach(logicalStorageSize::addAndGet);
-            return logicalStorageSize.get();
+                    .reduce(remoteLogSize, Long::sum);
         }
     }
 

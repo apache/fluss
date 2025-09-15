@@ -457,6 +457,20 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
             }
         }
+
+        // register table/bucket metrics when initialing context.a
+        TablePath tablePath = coordinatorContext.getTablePathById(tableId);
+        if (tablePath != null) {
+            coordinatorMetricGroup.addTableBucketMetricGroup(
+                    PhysicalTablePath.of(
+                            tablePath,
+                            partitionId == null
+                                    ? null
+                                    : coordinatorContext.getPartitionName(partitionId)),
+                    tableId,
+                    partitionId,
+                    tableAssignment.getBucketAssignments().keySet());
+        }
     }
 
     private void onShutdown() {
@@ -598,7 +612,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
         // register partition metrics.
         coordinatorMetricGroup.addTableBucketMetricGroup(
-                PhysicalTablePath.of(tablePath),
+                PhysicalTablePath.of(tablePath, partitionName),
                 tableId,
                 partitionId,
                 partitionAssignment.getBucketAssignments().keySet());
@@ -1015,16 +1029,17 @@ public class CoordinatorEventProcessor implements EventProcessor {
             return;
         }
         // commit the kv snapshot asynchronously
+        TableBucket tb = event.getTableBucket();
+        TablePath tablePath = coordinatorContext.getTablePathById(tb.getTableId());
         ioExecutor.execute(
                 () -> {
                     try {
-                        TableBucket tb = event.getTableBucket();
                         CompletedSnapshot completedSnapshot =
                                 event.getAddCompletedSnapshotData().getCompletedSnapshot();
                         // add completed snapshot
                         CompletedSnapshotStore completedSnapshotStore =
                                 completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
-                                        coordinatorContext.getTablePathById(tb.getTableId()), tb);
+                                        tablePath, tb);
                         // this involves IO operation (ZK), so we do it in ioExecutor
                         completedSnapshotStore.add(completedSnapshot);
                         coordinatorEventManager.put(

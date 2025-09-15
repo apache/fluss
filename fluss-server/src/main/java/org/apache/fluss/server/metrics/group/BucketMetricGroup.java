@@ -59,7 +59,7 @@ public class BucketMetricGroup extends AbstractMetricGroup {
         return "bucket";
     }
 
-    public TableMetricGroup getTableMetricGroup() {
-        return (TableMetricGroup) parent;
+    public AbstractMetricGroup getParentMetricGroup() {
+        return parent;
     }
 }
