@@ -217,6 +217,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
 
         future.get(30, TimeUnit.SECONDS);
         assertThat(future.isDone()).isTrue();
+        executor.shutdownNow();
     }
 
     private void addRecordsToBucket(
