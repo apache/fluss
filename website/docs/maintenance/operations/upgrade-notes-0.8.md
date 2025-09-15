@@ -29,23 +29,25 @@ We have updated the report level for some metrics and also removed some metrics,
 
 The following metrics are removed:
 
-1. `fluss_tabletserver_table_bucket_inSyncReplicasCount` - Removed as redundant. Use `fluss_tabletserver_underReplicated` instead
-2. `fluss_tabletserver_table_bucket_log_size`
-3. `fluss_table_bucket_kv_snapshot_latestSnapshotSize`
+- `fluss_tabletserver_table_bucket_inSyncReplicasCount` - Removed as redundant. Use `fluss_tabletserver_underReplicated` instead
+- `fluss_tabletserver_table_bucket_log_size` - Removed as improvement. Use `fluss_tabletserver_table_bucket_logicalStorage_logSize` instead
+- `fluss_table_bucket_kv_snapshot_latestSnapshotSize` - Removed as improvement. Use `fluss_tabletserver_table_bucket_logicalStorage_kvSize` instead
 
 The following metrics are changed:
 
-1. The reporting level has been shifted from the `tableBucket` level to the `tabletserver` level:
-    - `fluss_tabletserver_table_bucket_underMinIsr` to `fluss_tabletserver_underMinIsr`
-    - `fluss_tabletserver_table_bucket_underReplicated` to `fluss_tabletserver_underReplicated`
-    - `fluss_tabletserver_table_bucket_atMinIsr` to `fluss_tabletserver_atMinIsr`
-    - `fluss_tabletserver_table_bucket_isrExpandsPerSecond` to `fluss_tabletserver_isrExpandsPerSecond`
-    - `fluss_tabletserver_table_bucket_isrShrinksPerSecond` to `fluss_tabletserver_isrShrinksPerSecond`
-    - `fluss_tabletserver_table_bucket_failedIsrUpdatesPerSecond` to `fluss_tabletserver_failedIsrUpdatesPerSecond`
-    - `fluss_tabletserver_table_bucket_log_flushPerSecond` to `fluss_tabletserver_logFlushPerSecond`
-    - `fluss_tabletserver_table_bucket_log_flushLatencyMs` to `fluss_tabletserver_logFlushLatencyMs`
-    - `fluss_tabletserver_table_bucket_kv_preWriteBufferFlushPerSecond` to `fluss_tabletserver_kvFlushPerSecond`
-    - `fluss_tabletserver_table_bucket_kv_preWriteBufferFlushLatencyMs` to `fluss_tabletserver_kvFlushLatencyMs`
-    - `fluss_tabletserver_table_bucket_kv_preWriteBufferTruncateAsDuplicatedPerSecond` to `fluss_tabletserver_preWriteBufferTruncateAsDuplicatedPerSecond`
-    - `fluss_tabletserver_table_bucket_kv_preWriteBufferTruncateAsErrorPerSecond` to `fluss_tabletserver_preWriteBufferTruncateAsErrorPerSecond`
-2. This correction addresses reporting errors in metric names by changing the `table` level metric prefix from `fluss_tabletserver_table__` (used a double underscore (__)) to `fluss_tabletserver_table_`. For example, change `fluss_tabletserver_table__messagesInPerSecond` to `fluss_tabletserver_table_messagesInPerSecond`.
+- The reporting level has been shifted from the `tableBucket` level to the `tabletserver` level:
+  - `fluss_tabletserver_table_bucket_underMinIsr` to `fluss_tabletserver_underMinIsr`
+  - `fluss_tabletserver_table_bucket_underReplicated` to `fluss_tabletserver_underReplicated`
+  - `fluss_tabletserver_table_bucket_atMinIsr` to `fluss_tabletserver_atMinIsr`
+  - `fluss_tabletserver_table_bucket_isrExpandsPerSecond` to `fluss_tabletserver_isrExpandsPerSecond`
+  - `fluss_tabletserver_table_bucket_isrShrinksPerSecond` to `fluss_tabletserver_isrShrinksPerSecond`
+  - `fluss_tabletserver_table_bucket_failedIsrUpdatesPerSecond` to `fluss_tabletserver_failedIsrUpdatesPerSecond`
+  - `fluss_tabletserver_table_bucket_log_flushPerSecond` to `fluss_tabletserver_logFlushPerSecond`
+  - `fluss_tabletserver_table_bucket_log_flushLatencyMs` to `fluss_tabletserver_logFlushLatencyMs`
+  - `fluss_tabletserver_table_bucket_kv_preWriteBufferFlushPerSecond` to `fluss_tabletserver_kvFlushPerSecond`
+  - `fluss_tabletserver_table_bucket_kv_preWriteBufferFlushLatencyMs` to `fluss_tabletserver_kvFlushLatencyMs`
+  - `fluss_tabletserver_table_bucket_kv_preWriteBufferTruncateAsDuplicatedPerSecond` to `fluss_tabletserver_preWriteBufferTruncateAsDuplicatedPerSecond`
+  - `fluss_tabletserver_table_bucket_kv_preWriteBufferTruncateAsErrorPerSecond` to `fluss_tabletserver_preWriteBufferTruncateAsErrorPerSecond`
+- Correction addresses reporting errors in metric names by changing the `table` level metric prefix from `fluss_tabletserver_table__` (used a double underscore (__)) to `fluss_tabletserver_table_`. 
+  - The affected metrics are all metrics with [Scope: tableserver, infix: table](docs/maintenance/observability/monitor-metrics.md#tablebucket)
+  - For example, change `fluss_tabletserver_table__messagesInPerSecond` to `fluss_tabletserver_table_messagesInPerSecond`.
