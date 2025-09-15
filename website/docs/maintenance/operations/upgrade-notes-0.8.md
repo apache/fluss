@@ -31,7 +31,7 @@ The following metrics are removed:
 
 - `fluss_tabletserver_table_bucket_inSyncReplicasCount` - Removed as redundant. Use `fluss_tabletserver_underReplicated` instead
 - `fluss_tabletserver_table_bucket_log_size` - Removed as improvement. Use `fluss_tabletserver_table_bucket_logicalStorage_logSize` instead
-- `fluss_table_bucket_kv_snapshot_latestSnapshotSize` - Removed as improvement. Use `fluss_tabletserver_table_bucket_logicalStorage_kvSize` instead
+- `fluss_tabletserver_table_bucket_kv_snapshot_latestSnapshotSize` - Removed as improvement. Use `fluss_tabletserver_table_bucket_logicalStorage_kvSize` instead
 
 The following metrics are changed:
 
