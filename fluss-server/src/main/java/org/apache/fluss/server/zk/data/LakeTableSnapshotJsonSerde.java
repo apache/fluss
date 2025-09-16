@@ -43,6 +43,7 @@ public class LakeTableSnapshotJsonSerde
     private static final String BUCKET_ID = "bucket_id";
     private static final String LOG_START_OFFSET = "log_start_offset";
     private static final String LOG_END_OFFSET = "log_end_offset";
+    private static final String MAX_TIMESTAMP = "max_timestamp";
     private static final String PARTITION_NAME = "partition_name";
 
     private static final int VERSION = 1;
@@ -82,6 +83,11 @@ public class LakeTableSnapshotJsonSerde
                         LOG_END_OFFSET, lakeTableSnapshot.getLogEndOffset(tableBucket).get());
             }
 
+            if (lakeTableSnapshot.getMaxTimestamp(tableBucket).isPresent()) {
+                generator.writeNumberField(
+                        MAX_TIMESTAMP, lakeTableSnapshot.getMaxTimestamp(tableBucket).get());
+            }
+
             generator.writeEndObject();
         }
         generator.writeEndArray();
@@ -100,6 +106,7 @@ public class LakeTableSnapshotJsonSerde
         Iterator<JsonNode> buckets = node.get(BUCKETS).elements();
         Map<TableBucket, Long> bucketLogStartOffset = new HashMap<>();
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+        Map<TableBucket, Long> bucketMaxTimestamp = new HashMap<>();
         Map<Long, String> partitionNameIdByPartitionId = new HashMap<>();
         while (buckets.hasNext()) {
             JsonNode bucket = buckets.next();
@@ -120,6 +127,12 @@ public class LakeTableSnapshotJsonSerde
                 bucketLogEndOffset.put(tableBucket, null);
             }
 
+            if (bucket.get(MAX_TIMESTAMP) != null) {
+                bucketMaxTimestamp.put(tableBucket, bucket.get(MAX_TIMESTAMP).asLong());
+            } else {
+                bucketMaxTimestamp.put(tableBucket, null);
+            }
+
             if (partitionId != null && bucket.get(PARTITION_NAME) != null) {
                 partitionNameIdByPartitionId.put(
                         tableBucket.getPartitionId(), bucket.get(PARTITION_NAME).asText());
@@ -130,6 +143,7 @@ public class LakeTableSnapshotJsonSerde
                 tableId,
                 bucketLogStartOffset,
                 bucketLogEndOffset,
+                bucketMaxTimestamp,
                 partitionNameIdByPartitionId);
     }
 }

@@ -449,6 +449,7 @@ message PbLakeTableOffsetForBucket {
   optional int64 log_start_offset = 3;
   optional int64 log_end_offset = 4;
   optional string partition_name = 5;
+  optional int64 max_timestamp = 6;
 }
 
 message CommitLakeTableSnapshotResponse {

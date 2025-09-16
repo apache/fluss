@@ -229,10 +229,14 @@ public class TieringCommitOperator<WriteResult, Committable>
             for (TableBucketWriteResult<WriteResult> writeResult : committableWriteResults) {
                 TableBucket tableBucket = writeResult.tableBucket();
                 if (writeResult.tableBucket().getPartitionId() == null) {
-                    flussTableLakeSnapshot.addBucketOffset(tableBucket, writeResult.logEndOffset());
+                    flussTableLakeSnapshot.addBucketOffsetAndTimestamp(
+                            tableBucket, writeResult.logEndOffset(), writeResult.maxTimestamp());
                 } else {
-                    flussTableLakeSnapshot.addPartitionBucketOffset(
-                            tableBucket, writeResult.partitionName(), writeResult.logEndOffset());
+                    flussTableLakeSnapshot.addPartitionBucketOffsetAndTimestamp(
+                            tableBucket,
+                            writeResult.partitionName(),
+                            writeResult.logEndOffset(),
+                            writeResult.maxTimestamp());
                 }
             }
             flussTableLakeSnapshotCommitter.commit(flussTableLakeSnapshot);

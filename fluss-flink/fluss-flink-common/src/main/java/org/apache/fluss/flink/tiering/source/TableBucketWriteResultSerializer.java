@@ -85,6 +85,9 @@ public class TableBucketWriteResultSerializer<WriteResult>
         // serialize log end offset
         out.writeLong(tableBucketWriteResult.logEndOffset());
 
+        // serialize max timestamp
+        out.writeLong(tableBucketWriteResult.maxTimestamp());
+
         // serialize number of write results
         out.writeInt(tableBucketWriteResult.numberOfWriteResults());
 
@@ -129,6 +132,8 @@ public class TableBucketWriteResultSerializer<WriteResult>
 
         // deserialize log end offset
         long logEndOffset = in.readLong();
+        // deserialize max timestamp
+        long maxTimestamp = in.readLong();
         // deserialize number of write results
         int numberOfWriteResults = in.readInt();
         return new TableBucketWriteResult<>(
@@ -137,6 +142,7 @@ public class TableBucketWriteResultSerializer<WriteResult>
                 partitionName,
                 writeResult,
                 logEndOffset,
+                maxTimestamp,
                 numberOfWriteResults);
     }
 }

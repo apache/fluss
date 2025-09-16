@@ -44,7 +44,7 @@ class TableBucketWriteResultSerializerTest {
         String partitionName = isPartitioned ? "partition1" : null;
         TableBucketWriteResult<TestingWriteResult> tableBucketWriteResult =
                 new TableBucketWriteResult<>(
-                        tablePath, tableBucket, partitionName, testingWriteResult, 10, 20);
+                        tablePath, tableBucket, partitionName, testingWriteResult, 10, 30L, 20);
 
         // test serialize and deserialize
         byte[] serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
@@ -63,7 +63,8 @@ class TableBucketWriteResultSerializerTest {
 
         // verify when writeResult is null
         tableBucketWriteResult =
-                new TableBucketWriteResult<>(tablePath, tableBucket, partitionName, null, 20, 30);
+                new TableBucketWriteResult<>(
+                        tablePath, tableBucket, partitionName, null, 20, 30L, 30);
         serialized = tableBucketWriteResultSerializer.serialize(tableBucketWriteResult);
         deserialized =
                 tableBucketWriteResultSerializer.deserialize(

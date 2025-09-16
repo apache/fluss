@@ -1048,6 +1048,11 @@ public class ZooKeeperClient implements AutoCloseable {
                     new HashMap<>(previous.getBucketLogEndOffset());
             bucketLogEndOffset.putAll(lakeTableSnapshot.getBucketLogEndOffset());
 
+            // merge max timestamp, current will override the previous
+            Map<TableBucket, Long> bucketMaxTimestamp =
+                    new HashMap<>(previous.getBucketMaxTimestamp());
+            bucketMaxTimestamp.putAll(lakeTableSnapshot.getBucketMaxTimestamp());
+
             Map<Long, String> partitionNameById =
                     new HashMap<>(previous.getPartitionNameIdByPartitionId());
             partitionNameById.putAll(lakeTableSnapshot.getPartitionNameIdByPartitionId());
@@ -1058,6 +1063,7 @@ public class ZooKeeperClient implements AutoCloseable {
                             lakeTableSnapshot.getTableId(),
                             bucketLogStartOffset,
                             bucketLogEndOffset,
+                            bucketMaxTimestamp,
                             partitionNameById);
             zkClient.setData().forPath(path, LakeTableZNode.encode(lakeTableSnapshot));
         } else {
