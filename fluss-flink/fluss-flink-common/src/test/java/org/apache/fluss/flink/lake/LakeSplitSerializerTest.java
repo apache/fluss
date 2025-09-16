@@ -44,8 +44,6 @@ class LakeSplitSerializerTest {
 
     private static final int SERIALIZER_VERSION = 1;
 
-    private static final int OLD_SERIALIZER_VERSION_0 = 0;
-
     private static final byte[] TEST_DATA = "test-lake-split".getBytes();
 
     private static final int STOPPING_OFFSET = 1024;
@@ -72,7 +70,6 @@ class LakeSplitSerializerTest {
 
         SourceSplitBase deserializedSplit =
                 serializer.deserialize(
-                        sourceSplitSerializer.getVersion(),
                         LAKE_SNAPSHOT_SPLIT_KIND,
                         tableBucket,
                         "2025-08-18",
@@ -85,32 +82,6 @@ class LakeSplitSerializerTest {
         assertThat("2025-08-18").isEqualTo(result.getPartitionName());
         assertThat(LAKE_SPLIT).isEqualTo(result.getLakeSplit());
         assertThat(splitIndex).isEqualTo(result.getSplitIndex());
-    }
-
-    @Test
-    void testSerializeAndDeserializeLakeSnapshotSplitForVersion0() throws IOException {
-        // test back compatibility with verison = 0
-        LakeSnapshotSplit originalSplit =
-                new LakeSnapshotSplit(tableBucket, "2025-08-18", LAKE_SPLIT);
-
-        DataOutputSerializer output = new DataOutputSerializer(STOPPING_OFFSET);
-        serializer.serialize(output, originalSplit);
-
-        SourceSplitBase deserializedSplit =
-                serializer.deserialize(
-                        OLD_SERIALIZER_VERSION_0,
-                        LAKE_SNAPSHOT_SPLIT_KIND,
-                        tableBucket,
-                        "2025-08-18",
-                        new DataInputDeserializer(output.getCopyOfBuffer()));
-
-        assertThat(deserializedSplit instanceof LakeSnapshotSplit).isTrue();
-        LakeSnapshotSplit result = (LakeSnapshotSplit) deserializedSplit;
-
-        assertThat(tableBucket).isEqualTo(result.getTableBucket());
-        assertThat("2025-08-18").isEqualTo(result.getPartitionName());
-        assertThat(LAKE_SPLIT).isEqualTo(result.getLakeSplit());
-        assertThat(0).isEqualTo(result.getSplitIndex());
     }
 
     @Test
@@ -131,7 +102,6 @@ class LakeSplitSerializerTest {
 
         SourceSplitBase deserializedSplit =
                 serializer.deserialize(
-                        sourceSplitSerializer.getVersion(),
                         LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND,
                         tableBucket,
                         "2025-08-18",
@@ -151,42 +121,6 @@ class LakeSplitSerializerTest {
     }
 
     @Test
-    void testSerializeAndDeserializeLakeSnapshotAndFlussLogSplitForVersion0() throws IOException {
-        // test back compatibility with verison = 0
-        LakeSnapshotAndFlussLogSplit originalSplit =
-                new LakeSnapshotAndFlussLogSplit(
-                        tableBucket,
-                        "2025-08-18",
-                        Collections.singletonList(LAKE_SPLIT),
-                        EARLIEST_OFFSET,
-                        STOPPING_OFFSET,
-                        2);
-
-        DataOutputSerializer output = new DataOutputSerializer(STOPPING_OFFSET);
-        serializer.serialize(output, originalSplit);
-
-        SourceSplitBase deserializedSplit =
-                serializer.deserialize(
-                        OLD_SERIALIZER_VERSION_0,
-                        LAKE_SNAPSHOT_FLUSS_LOG_SPLIT_KIND,
-                        tableBucket,
-                        "2025-08-18",
-                        new DataInputDeserializer(output.getCopyOfBuffer()));
-
-        assertThat(deserializedSplit instanceof LakeSnapshotAndFlussLogSplit).isTrue();
-        LakeSnapshotAndFlussLogSplit result = (LakeSnapshotAndFlussLogSplit) deserializedSplit;
-
-        assertThat(result.getTableBucket()).isEqualTo(tableBucket);
-        assertThat(result.getPartitionName()).isEqualTo("2025-08-18");
-        assertThat(result.getLakeSplits()).isEqualTo(Collections.singletonList(LAKE_SPLIT));
-        assertThat(result.getStartingOffset()).isEqualTo(EARLIEST_OFFSET);
-        assertThat(result.getStoppingOffset().get()).isEqualTo(STOPPING_OFFSET);
-        assertThat(result.getCurrentLakeSplitIndex()).isEqualTo(0);
-        assertThat(result.getRecordsToSkip()).isEqualTo(2);
-        assertThat(result.isLakeSplitFinished()).isEqualTo(false);
-    }
-
-    @Test
     void testDeserializeWithWrongSplitKind() throws IOException {
         DataOutputSerializer output = new DataOutputSerializer(1024);
         output.writeInt(0);
@@ -194,7 +128,6 @@ class LakeSplitSerializerTest {
         assertThatThrownBy(
                         () ->
                                 serializer.deserialize(
-                                        sourceSplitSerializer.getVersion(),
                                         (byte) 99,
                                         tableBucket,
                                         "2023-10-01",
