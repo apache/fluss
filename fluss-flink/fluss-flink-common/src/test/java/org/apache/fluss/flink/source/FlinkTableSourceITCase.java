@@ -1191,27 +1191,21 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         .collect(Collectors.toList());
         waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "2027"));
 
-        String plan =
-                tEnv.explainSql("select * from partitioned_table_in where c in ('2025','2026')");
+        String query1 = "select * from partitioned_table_in where c in ('2025','2026')";
+        String plan = tEnv.explainSql(query1);
         assertThat(plan)
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_in, filter=[OR(=(c, _UTF-16LE'2025'), =(c, _UTF-16LE'2026'))]]], fields=[a, b, c])");
 
-        org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql("select * from partitioned_table_in where c in ('2025','2026')")
-                        .collect();
-
+        org.apache.flink.util.CloseableIterator<Row> rowIter = tEnv.executeSql(query1).collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
 
-        plan = tEnv.explainSql("select * from partitioned_table_in where c ='2025' or  c ='2026'");
+        String query2 = "select * from partitioned_table_in where c ='2025' or  c ='2026'";
+        plan = tEnv.explainSql(query2);
         assertThat(plan)
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_in, filter=[OR(=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"), =(c, _UTF-16LE'2026':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))]]], fields=[a, b, c])");
-
-        rowIter =
-                tEnv.executeSql("select * from partitioned_table_in where c ='2025' or  c ='2026'")
-                        .collect();
-
+        rowIter = tEnv.executeSql(query2).collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }
 
@@ -1240,7 +1234,6 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 expectedRowValues.add(String.format("+I[%d, 2026, %d]", i, i * 100));
             }
         }
-        writeRows(conn, tablePath, rows, false);
 
         for (int i = 0; i < 10; i++) {
             rows.add(row(i, "v" + i, "2027", i * 100));
@@ -1249,20 +1242,15 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         writeRows(conn, tablePath, rows, false);
         waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "2027"));
 
-        String plan =
-                tEnv.explainSql(
-                        "select a,c,d from combined_filters_table_in where c in ('2025','2026') and d % 200 = 0");
+        String query1 =
+                "select a,c,d from combined_filters_table_in where c in ('2025','2026') and d % 200 = 0";
+        String plan = tEnv.explainSql(query1);
         assertThat(plan)
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table_in, filter=[OR(=(c, _UTF-16LE'2025'), =(c, _UTF-16LE'2026'))], project=[a, c, d]]], fields=[a, c, d])");
 
         // test column filter、partition filter and flink runtime filter
-        org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql(
-                                "select a,c,d from combined_filters_table_in where c in ('2025','2026') "
-                                        + "and d % 200 = 0")
-                        .collect();
-
+        org.apache.flink.util.CloseableIterator<Row> rowIter = tEnv.executeSql(query1).collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
 
         rowIter =
@@ -1293,41 +1281,35 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                         .collect(Collectors.toList());
         waitUntilAllBucketFinishSnapshot(admin, tablePath, Arrays.asList("2025", "2026", "3026"));
 
-        String plan = tEnv.explainSql("select * from partitioned_table_like where c like '202%'");
+        String query1 = "select * from partitioned_table_like where c like '202%'";
+        String plan = tEnv.explainSql(query1);
         assertThat(plan)
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_like, filter=[LIKE(c, _UTF-16LE'202%')]]], fields=[a, b, c])");
 
-        org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql("select * from partitioned_table_like where c like '202%'")
-                        .collect();
+        org.apache.flink.util.CloseableIterator<Row> rowIter = tEnv.executeSql(query1).collect();
 
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
         expectedRowValues =
                 allData.stream()
                         .filter(s -> s.contains("2026") || s.contains("3026"))
                         .collect(Collectors.toList());
-        plan = tEnv.explainSql("select * from partitioned_table_like where c like '%026'");
+        String query2 = "select * from partitioned_table_like where c like '%026'";
+        plan = tEnv.explainSql(query2);
         assertThat(plan)
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_like, filter=[LIKE(c, _UTF-16LE'%026')]]], fields=[a, b, c])");
-
-        rowIter =
-                tEnv.executeSql("select * from partitioned_table_like where c like '%026'")
-                        .collect();
-
+        rowIter = tEnv.executeSql(query2).collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
 
         expectedRowValues =
                 allData.stream().filter(s -> s.contains("3026")).collect(Collectors.toList());
-        plan = tEnv.explainSql("select * from partitioned_table_like where c like '%3026%'");
+        String query3 = "select * from partitioned_table_like where c like '%3026%'";
+        plan = tEnv.explainSql(query3);
         assertThat(plan)
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_like, filter=[LIKE(c, _UTF-16LE'%3026%')]]], fields=[a, b, c])");
-
-        rowIter =
-                tEnv.executeSql("select * from partitioned_table_like where c like '%3026%'")
-                        .collect();
+        rowIter = tEnv.executeSql(query3).collect();
 
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }
@@ -1353,22 +1335,17 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         waitUntilAllBucketFinishSnapshot(
                 admin, tablePath, Arrays.asList("2025$1", "2025$2", "2026$1"));
 
-        String plan =
-                tEnv.explainSql(
-                        "select * from partitioned_table_complex where  a = 3\n"
-                                + "    and (c in ('2026')  or d like '%1%') "
-                                + "    and     b like '%v3%'");
+        String query =
+                "select * from partitioned_table_complex where  a = 3\n"
+                        + "    and (c in ('2026')  or d like '%1%') "
+                        + "    and     b like '%v3%'";
+        String plan = tEnv.explainSql(query);
         assertThat(plan)
                 .contains(
                         "Calc(select=[3 AS a, b, c, d], where=[((a = 3) AND LIKE(b, '%v3%'))])\n"
                                 + "+- TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_complex, filter=[OR(=(c, _UTF-16LE'2026'), LIKE(d, _UTF-16LE'%1%'))]]], fields=[a, b, c, d])");
 
-        org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql(
-                                "select * from partitioned_table_complex where  a = 3\n"
-                                        + "    and (c in ('2026')  or d like '%1%') "
-                                        + "    and     b like '%v3%'")
-                        .collect();
+        org.apache.flink.util.CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
 
         assertResultsIgnoreOrder(rowIter, expectedRowValues, true);
     }

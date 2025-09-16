@@ -21,10 +21,12 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DecimalType;
+import org.apache.fluss.types.LocalZonedTimestampType;
 import org.apache.fluss.types.TimestampType;
 
 import java.math.BigDecimal;
 import java.nio.charset.StandardCharsets;
+import java.util.TimeZone;
 
 /** Type related helper functions. */
 public class TypeUtils {
@@ -62,6 +64,10 @@ public class TypeUtils {
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 TimestampType timestampType = (TimestampType) type;
                 return BinaryStringUtils.toTimestampNtz(str, timestampType.getPrecision());
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                LocalZonedTimestampType localZonedTimestampType = (LocalZonedTimestampType) type;
+                return BinaryStringUtils.toTimestampLtz(
+                        str, localZonedTimestampType.getPrecision(), TimeZone.getDefault());
             default:
                 throw new UnsupportedOperationException("Unsupported type " + type);
         }

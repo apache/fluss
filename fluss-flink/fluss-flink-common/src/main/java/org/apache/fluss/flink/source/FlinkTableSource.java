@@ -26,6 +26,7 @@ import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
+import org.apache.fluss.flink.utils.PredicateConverter;
 import org.apache.fluss.flink.utils.PushdownUtils;
 import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
 import org.apache.fluss.lake.source.LakeSource;
@@ -92,6 +93,8 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
+import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
+import static org.apache.fluss.flink.utils.PushdownUtils.extractFieldEquals;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -142,11 +145,11 @@ public class FlinkTableSource
     @Nullable private RowLevelModificationType modificationScanType;
 
     // count(*) push down
-    protected boolean selectRowCount = false;
+    private boolean selectRowCount = false;
 
     private long limit = -1;
 
-    @Nullable protected Predicate partitionFilters;
+    @Nullable private Predicate partitionFilters;
 
     private final Map<String, String> tableOptions;
 
@@ -479,17 +482,17 @@ public class FlinkTableSource
                 && filters.size() == primaryKeyIndexes.length) {
 
             Map<Integer, LogicalType> primaryKeyTypes = getPrimaryKeyTypes();
-            List<PushdownUtils.FieldEqual> fieldEquals =
-                    PushdownUtils.extractFieldEquals(
+            List<FieldEqual> fieldEquals =
+                    extractFieldEquals(
                             filters,
                             primaryKeyTypes,
                             acceptedFilters,
                             remainingFilters,
-                            PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE);
+                            FLINK_INTERNAL_VALUE);
             int[] keyRowProjection = getKeyRowProjection();
             HashSet<Integer> visitedPkFields = new HashSet<>();
             GenericRowData lookupRow = new GenericRowData(primaryKeyIndexes.length);
-            for (PushdownUtils.FieldEqual fieldEqual : fieldEquals) {
+            for (FieldEqual fieldEqual : fieldEquals) {
                 lookupRow.setField(keyRowProjection[fieldEqual.fieldIndex], fieldEqual.equalValue);
                 visitedPkFields.add(fieldEqual.fieldIndex);
             }
@@ -527,9 +530,7 @@ public class FlinkTableSource
                                         partitionKeyTypes, partitionKeys.toArray(new String[0])),
                                 filter);
 
-                if (!predicateOptional.isPresent()) {
-                    remainingFilters.add(filter);
-                } else {
+                if (predicateOptional.isPresent()) {
                     Predicate p = predicateOptional.get();
                     if (!p.visit(partitionPredicateVisitor)) {
                         remainingFilters.add(filter);
@@ -537,24 +538,18 @@ public class FlinkTableSource
                         acceptedFilters.add(filter);
                     }
                     converted.add(p);
+                } else {
+                    remainingFilters.add(filter);
                 }
             }
             partitionFilters = converted.isEmpty() ? null : PredicateBuilder.and(converted);
             // lake source is not null
             if (lakeSource != null) {
-                PredicateVisitor<Boolean> lakePredicateVisitor =
-                        new PartitionPredicateVisitor(tableOutputType.getFieldNames());
-
                 List<Predicate> lakePredicates = new ArrayList<>();
                 for (ResolvedExpression filter : filters) {
-
                     Optional<Predicate> predicateOptional =
                             PredicateConverter.convert(tableOutputType, filter);
-
-                    if (predicateOptional.isPresent()) {
-                        Predicate p = predicateOptional.get();
-                        lakePredicates.add(p);
-                    }
+                    predicateOptional.ifPresent(lakePredicates::add);
                 }
 
                 if (!lakePredicates.isEmpty()) {

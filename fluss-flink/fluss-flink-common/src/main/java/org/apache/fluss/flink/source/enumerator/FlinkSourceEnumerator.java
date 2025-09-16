@@ -135,7 +135,7 @@ public class FlinkSourceEnumerator
 
     private volatile boolean closed = false;
 
-    private Predicate partitionFilters;
+    @Nullable private final Predicate partitionFilters;
 
     @Nullable private final LakeSource<LakeSplit> lakeSource;
 
@@ -148,7 +148,7 @@ public class FlinkSourceEnumerator
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
-            Predicate partitionFilters) {
+            @Nullable Predicate partitionFilters) {
         this(
                 tablePath,
                 flussConf,
@@ -171,7 +171,7 @@ public class FlinkSourceEnumerator
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
-            Predicate partitionFilters,
+            @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource) {
         this(
                 tablePath,
@@ -201,7 +201,7 @@ public class FlinkSourceEnumerator
             OffsetsInitializer startingOffsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             boolean streaming,
-            Predicate partitionFilters,
+            @Nullable Predicate partitionFilters,
             @Nullable LakeSource<LakeSplit> lakeSource) {
         this.tablePath = checkNotNull(tablePath);
         this.flussConf = checkNotNull(flussConf);
@@ -362,28 +362,22 @@ public class FlinkSourceEnumerator
             int originalSize = partitionInfos.size();
             List<PartitionInfo> filteredPartitionInfos =
                     partitionInfos.stream()
-                            .filter(
-                                    partitionInfo ->
-                                            partitionFilters.test(
-                                                    convertPartitionInfoToInternalRow(
-                                                            partitionInfo)))
+                            .filter(partition -> partitionFilters.test(toInternalRow(partition)))
                             .collect(Collectors.toList());
 
             int filteredSize = filteredPartitionInfos.size();
-            // Only log when there's actual filtering happening or when it's the first time
             if (originalSize != filteredSize) {
-                LOG.info(
-                        "Applied partition filter for table {}: {} partitions filtered to {} partitions with predicate: {}",
+                LOG.debug(
+                        "Applied partition filter for table {}: {} partitions filtered down to {} "
+                                + "matching partitions with predicate: {}. Matching partitions after filtering: {}",
                         tablePath,
                         originalSize,
                         filteredSize,
-                        partitionFilters);
-                if (LOG.isDebugEnabled()) {
-                    LOG.debug("Filtered partitions: {}", filteredPartitionInfos);
-                }
-            } else if (LOG.isDebugEnabled()) {
+                        partitionFilters,
+                        filteredPartitionInfos);
+            } else {
                 LOG.debug(
-                        "Partition filter applied for table {} but no partitions were filtered out (total: {})",
+                        "Partition filter applied for table {}, but all {} partitions matched the predicate",
                         tablePath,
                         originalSize);
             }
@@ -391,7 +385,7 @@ public class FlinkSourceEnumerator
         }
     }
 
-    private InternalRow convertPartitionInfoToInternalRow(PartitionInfo partitionInfo) {
+    private static InternalRow toInternalRow(PartitionInfo partitionInfo) {
         List<String> partitionValues =
                 partitionInfo.getResolvedPartitionSpec().getPartitionValues();
         GenericRow genericRow = new GenericRow(partitionValues.size());
@@ -412,18 +406,14 @@ public class FlinkSourceEnumerator
             return;
         }
 
-        if (LOG.isDebugEnabled()) {
-            LOG.debug(
-                    "Checking partition changes for table {}, found {} partitions",
-                    tablePath,
-                    partitionInfos.size());
-        }
+        LOG.debug(
+                "Checking partition changes for table {}, found {} partitions",
+                tablePath,
+                partitionInfos.size());
 
         final PartitionChange partitionChange = getPartitionChange(partitionInfos);
         if (partitionChange.isEmpty()) {
-            if (LOG.isDebugEnabled()) {
-                LOG.debug("No partition changes detected for table {}", tablePath);
-            }
+            LOG.debug("No partition changes detected for table {}", tablePath);
             return;
         }
 

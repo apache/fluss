@@ -1,11 +1,10 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one
- * or more contributor license agreements.  See the NOTICE file
- * distributed with this work for additional information
- * regarding copyright ownership.  The ASF licenses this file
- * to you under the Apache License, Version 2.0 (the
- * "License"); you may not use this file except in compliance
- * with the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
  *     http://www.apache.org/licenses/LICENSE-2.0
  *
@@ -16,10 +15,9 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.flink.source;
+package org.apache.fluss.flink.utils;
 
 import org.apache.fluss.flink.row.FlinkAsFlussRow;
-import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.predicate.UnsupportedExpression;
@@ -51,8 +49,9 @@ import static org.apache.flink.table.types.logical.utils.LogicalTypeCasts.suppor
 /* This file is based on source code of Apache Paimon Project (https://paimon.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
+
 /**
- * Convert {@link Expression} to {@link Predicate}.
+ * Convert Flink {@link Expression} to Fluss {@link Predicate}.
  *
  * <p>For {@link FieldReferenceExpression}, please use name instead of index, if the project
  * pushdown is before and the filter pushdown is after, the index of the filter will be projected.
