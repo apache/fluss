@@ -28,7 +28,6 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandleStore;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.kv.snapshot.SharedKvFileRegistry;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
-import org.apache.fluss.server.metrics.group.BucketMetricGroup;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.utils.MapUtils;
@@ -137,7 +136,7 @@ public class CompletedSnapshotStoreManager {
                                 bucket,
                                 end - start);
 
-                        BucketMetricGroup bucketMetricGroup =
+                        MetricGroup bucketMetricGroup =
                                 coordinatorMetricGroup.getTableBucketMetricGroup(
                                         tablePath, tableBucket);
                         if (bucketMetricGroup != null) {

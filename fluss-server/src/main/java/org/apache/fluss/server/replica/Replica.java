@@ -249,8 +249,7 @@ public final class Replica {
     private void registerMetrics() {
         // get root metric in the reference: bucket -> table -> tabletServer
         TabletServerMetricGroup serverMetrics =
-                ((TableMetricGroup) bucketMetricGroup.getParentMetricGroup())
-                        .getServerMetricGroup();
+                bucketMetricGroup.getTableMetricGroup().getServerMetricGroup();
         isrExpands = serverMetrics.isrExpands();
         isrShrinks = serverMetrics.isrShrinks();
         failedIsrUpdates = serverMetrics.failedIsrUpdates();
@@ -370,7 +369,7 @@ public final class Replica {
     }
 
     public TableMetricGroup tableMetrics() {
-        return (TableMetricGroup) bucketMetricGroup.getParentMetricGroup();
+        return bucketMetricGroup.getTableMetricGroup();
     }
 
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {

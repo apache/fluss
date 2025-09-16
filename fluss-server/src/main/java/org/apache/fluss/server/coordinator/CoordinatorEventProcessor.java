@@ -458,7 +458,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
             }
         }
 
-        // register table/bucket metrics when initialing context.a
+        // register table/bucket metrics when initialing context.
         TablePath tablePath = coordinatorContext.getTablePathById(tableId);
         if (tablePath != null) {
             coordinatorMetricGroup.addTableBucketMetricGroup(

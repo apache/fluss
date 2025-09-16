@@ -22,6 +22,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
+import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.utils.MapUtils;
@@ -81,7 +82,7 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
     //  table buckets groups
     // ------------------------------------------------------------------------
 
-    public @Nullable BucketMetricGroup getTableBucketMetricGroup(
+    public @Nullable MetricGroup getTableBucketMetricGroup(
             TablePath tablePath, TableBucket tableBucket) {
         SimpleTableMetricGroup tableMetricGroup = metricGroupByTable.get(tablePath);
         if (tableMetricGroup == null) {
@@ -125,7 +126,7 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
     /** The metric group for table. */
     private static class SimpleTableMetricGroup extends AbstractMetricGroup {
 
-        private final Map<TableBucket, BucketMetricGroup> buckets = new HashMap<>();
+        private final Map<TableBucket, SimpleBucketMetricGroup> buckets = new HashMap<>();
 
         private final TablePath tablePath;
 
@@ -166,7 +167,7 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
             buckets.computeIfAbsent(
                     tableBucket,
                     (bucket) ->
-                            new BucketMetricGroup(
+                            new SimpleBucketMetricGroup(
                                     registry, partitionName, tableBucket.getBucket(), this));
         }
 
@@ -196,8 +197,41 @@ public class CoordinatorMetricGroup extends AbstractMetricGroup {
         }
 
         public void removeBucketMetricGroup(TableBucket tb) {
-            BucketMetricGroup metricGroup = buckets.remove(tb);
+            SimpleBucketMetricGroup metricGroup = buckets.remove(tb);
             metricGroup.close();
+        }
+    }
+
+    /** The metric group for bucket. */
+    private static class SimpleBucketMetricGroup extends AbstractMetricGroup {
+        // will be null if the bucket doesn't belong to a partition
+        private final @Nullable String partitionName;
+        private final int bucket;
+
+        public SimpleBucketMetricGroup(
+                MetricRegistry registry,
+                @Nullable String partitionName,
+                int bucket,
+                SimpleTableMetricGroup parent) {
+            super(registry, makeScope(parent, String.valueOf(bucket)), parent);
+            this.partitionName = partitionName;
+            this.bucket = bucket;
+        }
+
+        @Override
+        protected void putVariables(Map<String, String> variables) {
+            if (partitionName != null) {
+                variables.put("partition", partitionName);
+            } else {
+                // value of empty string indicates non-partitioned tables
+                variables.put("partition", "");
+            }
+            variables.put("bucket", String.valueOf(bucket));
+        }
+
+        @Override
+        protected String getGroupName(CharacterFilter filter) {
+            return "bucket";
         }
     }
 }
