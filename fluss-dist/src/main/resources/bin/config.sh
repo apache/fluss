@@ -30,13 +30,12 @@ constructFlussClassPath() {
         else
             FLUSS_CLASSPATH="$FLUSS_CLASSPATH":"$jarfile"
         fi
+    done < <(find "$FLUSS_LIB_DIR" ! -type d -name '*.jar' -print0 | sort -z)
 
     # Add Hadoop dependencies from environment variables HADOOP_CLASSPATH
     if [ -n "${HADOOP_CLASSPATH}" ]; then
         FLUSS_CLASSPATH="$FLUSS_CLASSPATH":"$HADOOP_CLASSPATH"
     fi
-
-    done < <(find "$FLUSS_LIB_DIR" ! -type d -name '*.jar' -print0 | sort -z)
 
     local FLUSS_SERVER_COUNT
     FLUSS_SERVER_COUNT="$(echo "$FLUSS_SERVER" | tr -s ':' '\n' | grep -v '^$' | wc -l)"
