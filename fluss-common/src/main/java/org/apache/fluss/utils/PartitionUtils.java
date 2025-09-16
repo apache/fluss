@@ -37,6 +37,7 @@ import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.metadata.TablePath.detectInvalidName;
+import static org.apache.fluss.metadata.TablePath.validatePrefix;
 
 /** Utils for partition. */
 public class PartitionUtils {
@@ -66,7 +67,10 @@ public class PartitionUtils {
     private static final String HOUR_FORMAT = "yyyyMMddHH";
 
     public static void validatePartitionSpec(
-            TablePath tablePath, List<String> partitionKeys, PartitionSpec partitionSpec) {
+            TablePath tablePath,
+            List<String> partitionKeys,
+            PartitionSpec partitionSpec,
+            boolean isCreate) {
         Map<String, String> partitionSpecMap = partitionSpec.getSpecMap();
         if (partitionKeys.size() != partitionSpecMap.size()) {
             throw new InvalidPartitionException(
@@ -87,16 +91,21 @@ public class PartitionUtils {
             }
         }
 
-        validatePartitionValues(reOrderedPartitionValues);
+        validatePartitionValues(reOrderedPartitionValues, isCreate);
     }
 
     @VisibleForTesting
-    static void validatePartitionValues(List<String> partitionValues) {
+    static void validatePartitionValues(List<String> partitionValues, boolean isCreate) {
         for (String value : partitionValues) {
-            String invalidName = detectInvalidName(value);
-            if (invalidName != null) {
+            String invalidNameError = detectInvalidName(value);
+            if (invalidNameError != null || (isCreate && validatePrefix(value) != null)) {
                 throw new InvalidPartitionException(
-                        "The partition value " + value + " is invalid: " + invalidName);
+                        "The partition value "
+                                + value
+                                + " is invalid: "
+                                + (invalidNameError != null
+                                        ? invalidNameError
+                                        : validatePrefix(value)));
             }
         }
     }
