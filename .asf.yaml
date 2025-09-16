@@ -30,6 +30,9 @@ github:
     - streaming
     - real-time-analytics
     - lakehouse
+    - big-data
+    - hacktoberfest
+
   enabled_merge_buttons:
     squash:  true
     merge:   false
