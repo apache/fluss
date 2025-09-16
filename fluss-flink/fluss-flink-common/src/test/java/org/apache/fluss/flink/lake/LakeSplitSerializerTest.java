@@ -44,6 +44,8 @@ class LakeSplitSerializerTest {
 
     private static final int SERIALIZER_VERSION = 1;
 
+    private static final int DESERIALIZER_VERSION = 2;
+
     private static final byte[] TEST_DATA = "test-lake-split".getBytes();
 
     private static final int STOPPING_OFFSET = 1024;
@@ -70,6 +72,39 @@ class LakeSplitSerializerTest {
 
         SourceSplitBase deserializedSplit =
                 serializer.deserialize(
+                        LAKE_SNAPSHOT_SPLIT_KIND,
+                        tableBucket,
+                        "2025-08-18",
+                        new DataInputDeserializer(output.getCopyOfBuffer()));
+
+        assertThat(deserializedSplit instanceof LakeSnapshotSplit).isTrue();
+        LakeSnapshotSplit result = (LakeSnapshotSplit) deserializedSplit;
+
+        assertThat(tableBucket).isEqualTo(result.getTableBucket());
+        assertThat("2025-08-18").isEqualTo(result.getPartitionName());
+        assertThat(LAKE_SPLIT).isEqualTo(result.getLakeSplit());
+        assertThat(splitIndex).isEqualTo(result.getSplitIndex());
+    }
+
+    @Test
+    void testSerializeAndDeserializeLakeSnapshotSplitBackwardCompatibility() throws IOException {
+        SimpleVersionedSerializer<LakeSplit> sourceSplitSerializerV1 =
+                new TestSimpleVersionedSerializer();
+        SimpleVersionedSerializer<LakeSplit> sourceSplitSerializerV2 =
+                new TestSimpleVersionedSerializerV2();
+        LakeSplitSerializer serializerV1 = new LakeSplitSerializer(sourceSplitSerializerV1);
+        LakeSplitSerializer serializerV2 = new LakeSplitSerializer(sourceSplitSerializerV2);
+
+        // Prepare test data
+        int splitIndex = 1;
+        LakeSnapshotSplit originalSplit =
+                new LakeSnapshotSplit(tableBucket, "2025-08-18", LAKE_SPLIT, splitIndex);
+
+        DataOutputSerializer output = new DataOutputSerializer(STOPPING_OFFSET);
+        serializerV1.serialize(output, originalSplit);
+
+        SourceSplitBase deserializedSplit =
+                serializerV2.deserialize(
                         LAKE_SNAPSHOT_SPLIT_KIND,
                         tableBucket,
                         "2025-08-18",
@@ -152,6 +187,28 @@ class LakeSplitSerializerTest {
         @Override
         public int getVersion() {
             return SERIALIZER_VERSION;
+        }
+    }
+
+    private static class TestSimpleVersionedSerializerV2
+            implements SimpleVersionedSerializer<LakeSplit> {
+
+        @Override
+        public byte[] serialize(LakeSplit split) throws IOException {
+            return TEST_DATA;
+        }
+
+        @Override
+        public LakeSplit deserialize(int version, byte[] serialized) throws IOException {
+            if (version < DESERIALIZER_VERSION) {
+                return LAKE_SPLIT;
+            }
+            return new TestLakeSplit(0, Collections.singletonList("2025-08-19"));
+        }
+
+        @Override
+        public int getVersion() {
+            return DESERIALIZER_VERSION;
         }
     }
 
