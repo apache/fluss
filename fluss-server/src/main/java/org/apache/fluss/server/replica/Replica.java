@@ -1420,10 +1420,11 @@ public final class Replica {
                                                 new ArrayList<>(currentIstState.isr());
                                         newIsr.removeAll(outOfSyncFollowerReplicas);
                                         LOG.info(
-                                                "Shrink ISR From {} to {}. Leader: (high watermark: {}, "
+                                                "Shrink ISR From {} to {} for bucket {}. Leader: (high watermark: {}, "
                                                         + "end offset: {}, out of sync replicas: {})",
                                                 currentIstState.isr(),
                                                 newIsr,
+                                                tableBucket,
                                                 logTablet.getHighWatermark(),
                                                 logTablet.localLogEndOffset(),
                                                 outOfSyncFollowerReplicas);
