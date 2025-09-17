@@ -21,6 +21,7 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.metadata.TestingMetadataUpdater;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
@@ -42,6 +43,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link LogFetchCollector}. */
 public class LogFetchCollectorTest {
@@ -153,6 +155,35 @@ public class LogFetchCollectorTest {
         // collect again, should be empty
         bucketAndRecords = logFetchCollector.collectFetch(logFetchBuffer);
         assertThat(bucketAndRecords.size()).isEqualTo(0);
+    }
+
+    @Test
+    void testFetchException() throws Exception {
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+        PendingFetch pendingFetch =
+                new PendingFetch() {
+                    @Override
+                    public TableBucket tableBucket() {
+                        return tb;
+                    }
+
+                    @Override
+                    public boolean isCompleted() {
+                        return true;
+                    }
+
+                    @Override
+                    public CompletedFetch toCompletedFetch() {
+                        throw new FetchException("test fetch exception");
+                    }
+                };
+
+        try (LogFetchBuffer logFetchBuffer = new LogFetchBuffer()) {
+            logFetchBuffer.pend(pendingFetch);
+            logFetchBuffer.tryComplete(tb);
+            assertThatThrownBy(() -> logFetchCollector.collectFetch(logFetchBuffer))
+                    .hasMessageContaining("test fetch exception");
+        }
     }
 
     private DefaultCompletedFetch makeCompletedFetch(
