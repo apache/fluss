@@ -28,15 +28,23 @@ import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.EOFException;
 import java.io.File;
+import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.UUID;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
+import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.V0_RECORD_BATCH_HEADER_SIZE;
+import static org.apache.fluss.record.LogRecordBatchFormat.V1_RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.LogRecordReadContext.createArrowReadContext;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.createRecordsWithoutBaseLogOffset;
@@ -126,17 +134,23 @@ class FileLogProjectionTest {
 
     static Stream<Arguments> projectedFieldsArgs() {
         return Stream.of(
-                Arguments.of((Object) new int[] {0}),
-                Arguments.arguments((Object) new int[] {1}),
-                Arguments.arguments((Object) new int[] {0, 1}));
+                Arguments.of((Object) new int[] {0}, LOG_MAGIC_VALUE_V0),
+                Arguments.arguments((Object) new int[] {1}, LOG_MAGIC_VALUE_V0),
+                Arguments.arguments((Object) new int[] {0, 1}, LOG_MAGIC_VALUE_V0),
+                Arguments.of((Object) new int[] {0}, LOG_MAGIC_VALUE_V1),
+                Arguments.arguments((Object) new int[] {1}, LOG_MAGIC_VALUE_V1),
+                Arguments.arguments((Object) new int[] {0, 1}, LOG_MAGIC_VALUE_V1));
     }
 
     @ParameterizedTest
     @MethodSource("projectedFieldsArgs")
-    void testProject(int[] projectedFields) throws Exception {
+    void testProject(int[] projectedFields, byte recordBatchMagic) throws Exception {
         FileLogRecords fileLogRecords =
                 createFileLogRecords(
-                        TestData.DATA1_ROW_TYPE, TestData.DATA1, TestData.ANOTHER_DATA1);
+                        recordBatchMagic,
+                        TestData.DATA1_ROW_TYPE,
+                        TestData.DATA1,
+                        TestData.ANOTHER_DATA1);
         List<Object[]> results =
                 doProjection(
                         new FileLogProjection(),
@@ -159,11 +173,15 @@ class FileLogProjectionTest {
         assertEquals(results, expected);
     }
 
-    @Test
-    void testIllegalByteOrder() throws Exception {
+    @ParameterizedTest
+    @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
+    void testIllegalByteOrder(byte recordBatchMagic) throws Exception {
         FileLogRecords fileLogRecords =
                 createFileLogRecords(
-                        TestData.DATA1_ROW_TYPE, TestData.DATA1, TestData.ANOTHER_DATA1);
+                        recordBatchMagic,
+                        TestData.DATA1_ROW_TYPE,
+                        TestData.DATA1,
+                        TestData.ANOTHER_DATA1);
         FileLogProjection projection = new FileLogProjection();
         // overwrite the wrong decoding byte order endian
         projection.getLogHeaderBuffer().order(ByteOrder.BIG_ENDIAN);
@@ -180,14 +198,18 @@ class FileLogProjectionTest {
                 .hasMessageContaining("Failed to read `arrow header` from file channel");
     }
 
-    @Test
-    void testProjectSizeLimited() throws Exception {
+    @ParameterizedTest
+    @ValueSource(bytes = {LOG_MAGIC_VALUE_V0, LOG_MAGIC_VALUE_V1})
+    void testProjectSizeLimited(byte recordBatchMagic) throws Exception {
         List<Object[]> allData = new ArrayList<>();
         allData.addAll(TestData.DATA1);
         allData.addAll(TestData.ANOTHER_DATA1);
         FileLogRecords fileLogRecords =
                 createFileLogRecords(
-                        TestData.DATA1_ROW_TYPE, TestData.DATA1, TestData.ANOTHER_DATA1);
+                        recordBatchMagic,
+                        TestData.DATA1_ROW_TYPE,
+                        TestData.DATA1,
+                        TestData.ANOTHER_DATA1);
         int totalSize = fileLogRecords.sizeInBytes();
         boolean hasEmpty = false;
         boolean hasHalf = false;
@@ -218,9 +240,89 @@ class FileLogProjectionTest {
         assertThat(hasFull).isTrue();
     }
 
+    @Test
+    void testReadLogHeaderFullyOrFail() throws Exception {
+        ByteBuffer logHeaderBuffer = ByteBuffer.allocate(V1_RECORD_BATCH_HEADER_SIZE);
+
+        // only V1 log header, should read fully
+        try (FileLogRecords fileLogRecords =
+                createFileWithLogHeader(LOG_MAGIC_VALUE_V1, V1_RECORD_BATCH_HEADER_SIZE)) {
+            FileLogProjection.readLogHeaderFullyOrFail(
+                    fileLogRecords.channel(), logHeaderBuffer, 0);
+            assertThat(logHeaderBuffer.hasRemaining()).isFalse();
+        }
+
+        // V1 log header with data, should read fully
+        try (FileLogRecords fileLogRecords = createFileWithLogHeader(LOG_MAGIC_VALUE_V1, 100)) {
+            logHeaderBuffer.rewind();
+            FileLogProjection.readLogHeaderFullyOrFail(
+                    fileLogRecords.channel(), logHeaderBuffer, 0);
+            assertThat(logHeaderBuffer.hasRemaining()).isFalse();
+        }
+
+        // only v0 log header, should only read 48 bytes
+        try (FileLogRecords fileLogRecords =
+                createFileWithLogHeader(LOG_MAGIC_VALUE_V0, V0_RECORD_BATCH_HEADER_SIZE)) {
+            logHeaderBuffer.rewind();
+            FileLogProjection.readLogHeaderFullyOrFail(
+                    fileLogRecords.channel(), logHeaderBuffer, 0);
+            assertThat(logHeaderBuffer.hasRemaining()).isTrue();
+            assertThat(logHeaderBuffer.position()).isEqualTo(V0_RECORD_BATCH_HEADER_SIZE);
+        }
+
+        // v0 log header with data, should read fully
+        try (FileLogRecords fileLogRecords = createFileWithLogHeader(LOG_MAGIC_VALUE_V0, 100)) {
+            logHeaderBuffer.rewind();
+            FileLogProjection.readLogHeaderFullyOrFail(
+                    fileLogRecords.channel(), logHeaderBuffer, 0);
+            assertThat(logHeaderBuffer.hasRemaining()).isFalse();
+        }
+
+        // v1 log header incomplete, should throw exception
+        try (FileLogRecords fileLogRecords =
+                createFileWithLogHeader(LOG_MAGIC_VALUE_V1, V0_RECORD_BATCH_HEADER_SIZE)) {
+            logHeaderBuffer.rewind();
+            assertThatThrownBy(
+                            () ->
+                                    FileLogProjection.readLogHeaderFullyOrFail(
+                                            fileLogRecords.channel(), logHeaderBuffer, 0),
+                            "Should throw exception if the log header is incomplete")
+                    .isInstanceOf(EOFException.class)
+                    .hasMessageContaining(
+                            "Expected to read 52 bytes, but reached end of file after reading 48 bytes.");
+        }
+
+        // v0 log header incomplete, should throw exception
+        try (FileLogRecords fileLogRecords =
+                createFileWithLogHeader(LOG_MAGIC_VALUE_V0, V0_RECORD_BATCH_HEADER_SIZE - 1)) {
+            logHeaderBuffer.rewind();
+            assertThatThrownBy(
+                            () ->
+                                    FileLogProjection.readLogHeaderFullyOrFail(
+                                            fileLogRecords.channel(), logHeaderBuffer, 0),
+                            "Should throw exception if the log header is incomplete")
+                    .isInstanceOf(EOFException.class)
+                    .hasMessageContaining(
+                            "Expected to read 48 bytes, but reached end of file after reading 47 bytes.");
+        }
+    }
+
+    private FileLogRecords createFileWithLogHeader(byte magic, int length) throws Exception {
+        ByteBuffer buffer = ByteBuffer.allocate(length).order(ByteOrder.LITTLE_ENDIAN);
+        buffer.position(MAGIC_OFFSET);
+        buffer.put(magic);
+        buffer.position(length);
+        buffer.flip();
+        File file = new File(tempDir, UUID.randomUUID() + ".log");
+        FileLogRecords fileLogRecords = FileLogRecords.open(file);
+        fileLogRecords.channel().write(buffer);
+        fileLogRecords.flush();
+        return fileLogRecords;
+    }
+
     @SafeVarargs
-    private final FileLogRecords createFileLogRecords(RowType rowType, List<Object[]>... inputs)
-            throws Exception {
+    final FileLogRecords createFileLogRecords(
+            byte recordBatchMagic, RowType rowType, List<Object[]>... inputs) throws Exception {
         FileLogRecords fileLogRecords = FileLogRecords.open(new File(tempDir, "test.tmp"));
         long offsetBase = 0L;
         for (List<Object[]> input : inputs) {
@@ -230,6 +332,7 @@ class FileLogProjectionTest {
                             DEFAULT_SCHEMA_ID,
                             offsetBase,
                             System.currentTimeMillis(),
+                            recordBatchMagic,
                             input,
                             LogFormat.ARROW));
             offsetBase += input.size();

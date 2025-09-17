@@ -19,8 +19,9 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.memory.MemorySegment;
 
-import static org.apache.fluss.record.DefaultLogRecordBatch.LENGTH_OFFSET;
-import static org.apache.fluss.record.DefaultLogRecordBatch.LOG_OVERHEAD;
+import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
+import static org.apache.fluss.record.LogRecordBatchFormat.V0_RECORD_BATCH_HEADER_SIZE;
 
 /**
  * A byte buffer backed log input stream. This class avoids the need to copy records by returning
@@ -40,7 +41,8 @@ class MemorySegmentLogInputStream implements LogInputStream<LogRecordBatch> {
 
     public LogRecordBatch nextBatch() {
         Integer batchSize = nextBatchSize();
-        if (batchSize == null || remaining < batchSize) {
+        // should at-least larger than V0 header size, because V1 header is larger than V0.
+        if (batchSize == null || remaining < batchSize || remaining < V0_RECORD_BATCH_HEADER_SIZE) {
             return null;
         }
 

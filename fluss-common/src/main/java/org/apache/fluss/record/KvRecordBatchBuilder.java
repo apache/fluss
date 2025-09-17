@@ -37,6 +37,8 @@ import static org.apache.fluss.record.DefaultKvRecordBatch.LENGTH_LENGTH;
 import static org.apache.fluss.record.DefaultKvRecordBatch.RECORD_BATCH_HEADER_SIZE;
 import static org.apache.fluss.record.DefaultKvRecordBatch.SCHEMA_ID_OFFSET;
 import static org.apache.fluss.record.KvRecordBatch.CURRENT_KV_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** Builder for {@link DefaultKvRecordBatch} memory bytes. */
@@ -72,8 +74,8 @@ public class KvRecordBatchBuilder implements AutoCloseable {
         this.writeLimit = writeLimit;
         this.pagedOutputView = pagedOutputView;
         this.firstSegment = pagedOutputView.getCurrentSegment();
-        this.writerId = LogRecordBatch.NO_WRITER_ID;
-        this.batchSequence = LogRecordBatch.NO_BATCH_SEQUENCE;
+        this.writerId = NO_WRITER_ID;
+        this.batchSequence = NO_BATCH_SEQUENCE;
         this.currentRecordNumber = 0;
         this.isClosed = false;
         // We don't need to write header information while the builder creating,

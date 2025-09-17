@@ -263,4 +263,8 @@ public final class LogSegments {
     public long sizeInBytes() {
         return segments.values().stream().mapToLong(LogSegment::getSizeInBytes).sum();
     }
+
+    public TableBucket getTableBucket() {
+        return tableBucket;
+    }
 }

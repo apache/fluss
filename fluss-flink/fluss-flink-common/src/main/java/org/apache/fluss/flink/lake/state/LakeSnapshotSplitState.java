@@ -25,16 +25,16 @@ import org.apache.fluss.flink.source.split.SourceSplitState;
 public class LakeSnapshotSplitState extends SourceSplitState {
 
     private final LakeSnapshotSplit split;
-    private long recordsToSplit;
+    private long recordsToSkip;
 
     public LakeSnapshotSplitState(LakeSnapshotSplit split) {
         super(split);
         this.split = split;
-        this.recordsToSplit = split.getRecordsToSplit();
+        this.recordsToSkip = split.getRecordsToSkip();
     }
 
     public void setRecordsToSkip(long recordsToSkip) {
-        this.recordsToSplit = recordsToSkip;
+        this.recordsToSkip = recordsToSkip;
     }
 
     @Override
@@ -44,6 +44,6 @@ public class LakeSnapshotSplitState extends SourceSplitState {
                 split.getPartitionName(),
                 split.getLakeSplit(),
                 split.getSplitIndex(),
-                recordsToSplit);
+                recordsToSkip);
     }
 }

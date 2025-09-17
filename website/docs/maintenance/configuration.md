@@ -82,6 +82,7 @@ during the Fluss cluster working.
 | zookeeper.client.tolerate-suspended-connections | Boolean  | false   | Defines whether a suspended ZooKeeper connection will be treated as an error that causes the leader information to be invalidated or not. In case you set this option to %s, Fluss will wait until a ZooKeeper connection is marked as lost before it revokes the leadership of components. This has the effect that Fluss is more resilient against temporary connection instabilities at the cost of running more likely into timing issues with ZooKeeper.                                                                 |
 | zookeeper.client.ensemble-tracker               | Boolean  | true    | Defines whether Curator should enable ensemble tracker. This can be useful in certain scenarios in which CuratorFramework is accessing to ZK clusters via load balancer or Virtual IPs. Default Curator EnsembleTracking logic watches `CuratorEventType.GET_CONFIG` events and changes ZooKeeper connection string. It is not desired behaviour when ZooKeeper is running under the Virtual IPs. Under certain configurations EnsembleTracking can lead to setting of ZooKeeper connection string with unresolvable hostnames. |
 | zookeeper.client.config-path                    | String   | (None)  | The file path from which the ZooKeeper client reads its configuration. This allows each ZooKeeper client instance to load its own configuration file, instead of relying on shared JVM-level environment settings. This enables fine-grained control over ZooKeeper client behavior.                                                                                                                                                                                                                                          |
+| zookeeper.client.max-inflight-requests          | String   | 100     | The maximum number of unacknowledged requests the client will send to ZooKeeper before blocking.                                                                                                                                                                                                                                                                                                                                                                                                                              |
 
 ## Netty
 
@@ -91,7 +92,7 @@ during the Fluss cluster working.
 | netty.server.num-worker-threads  | Integer  | 8       | The number of threads that the server uses for processing requests, which may include disk and remote I/O.                                  |
 | netty.server.max-queued-requests | Integer  | 500     | The number of queued requests allowed for worker threads, before blocking the I/O threads.                                                  |
 | netty.connection.max-idle-time   | Duration | 10min   | Close idle connections after the given time specified by this config.                                                                       |
-| netty.client.num-network-threads | Integer  | 3       | The number of threads that the client uses for sending requests to the network and receiving responses from network. The default value is 3 |
+| netty.client.num-network-threads | Integer  | 4       | The number of threads that the client uses for sending requests to the network and receiving responses from network. The default value is 4 |
 
 ## Log
 
@@ -163,9 +164,9 @@ during the Fluss cluster working.
 
 ## Lakehouse
 
-| Option          | Type | Default | Description                                                                                                               |
-|-----------------|------|---------|---------------------------------------------------------------------------------------------------------------------------|
-| datalake.format | Enum | (None)  | The datalake format used by of Fluss to be as lakehouse storage, such as Paimon, Iceberg, Hudi. Now, only support Paimon. |
+| Option          | Type | Default | Description                                                                                                                                                                                                                 |
+|-----------------|------|---------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| datalake.format | Enum | (None)  | The datalake format used by of Fluss to be as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.   |
 
 ## Kafka
 

@@ -18,6 +18,8 @@
 package org.apache.fluss.lake.iceberg;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.iceberg.source.IcebergLakeSource;
+import org.apache.fluss.lake.iceberg.source.IcebergSplit;
 import org.apache.fluss.lake.iceberg.tiering.IcebergLakeTieringFactory;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.source.LakeSource;
@@ -44,7 +46,7 @@ public class IcebergLakeStorage implements LakeStorage {
     }
 
     @Override
-    public LakeSource<?> createLakeSource(TablePath tablePath) {
-        throw new UnsupportedOperationException("Not implemented");
+    public LakeSource<IcebergSplit> createLakeSource(TablePath tablePath) {
+        return new IcebergLakeSource(icebergConfig, tablePath);
     }
 }

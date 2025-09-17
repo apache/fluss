@@ -185,7 +185,10 @@ public class FlinkTableSource
         this.mergeEngineType = mergeEngineType;
         this.tableOptions = tableOptions;
         if (isDataLakeEnabled) {
-            this.lakeSource = createLakeSource(tablePath, tableOptions);
+            this.lakeSource =
+                    checkNotNull(
+                            createLakeSource(tablePath, tableOptions),
+                            "LakeSource must not be null if enable datalake");
         }
     }
 
@@ -567,7 +570,11 @@ public class FlinkTableSource
                 || aggregateExpressions.size() != 1
                 || hasPrimaryKey()
                 || groupingSets.size() > 1
-                || (groupingSets.size() == 1 && groupingSets.get(0).length > 0)) {
+                || (groupingSets.size() == 1 && groupingSets.get(0).length > 0)
+                // The count pushdown feature is not supported when the data lake is enabled.
+                // Otherwise, it'll cause miss count data in lake. But In the future, we can push
+                // down count into lake.
+                || isDataLakeEnabled) {
             return false;
         }
 

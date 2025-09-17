@@ -5,6 +5,8 @@ sidebar_position: 3
 
 # Lance
 
+## Introduction
+
 [Lance](https://lancedb.github.io/lance/) is a modern table format optimized for machine learning and AI applications. 
 To integrate Fluss with Lance, you must enable lakehouse storage and configure Lance as the lakehouse storage. For more details, see [Enable Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md#enable-lakehouse-storage).
 

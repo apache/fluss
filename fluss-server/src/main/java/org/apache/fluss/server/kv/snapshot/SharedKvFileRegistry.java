@@ -53,6 +53,9 @@ public class SharedKvFileRegistry implements AutoCloseable {
     /** This flag indicates whether or not the registry is open or if close() was called. */
     private boolean open;
 
+    /** The total size of all kv files registered in this registry. */
+    private volatile long fileSize;
+
     /** Executor for async kv deletion. */
     private final Executor asyncDisposalExecutor;
 
@@ -64,6 +67,11 @@ public class SharedKvFileRegistry implements AutoCloseable {
         this.registeredKvEntries = new HashMap<>();
         this.asyncDisposalExecutor = checkNotNull(asyncDisposalExecutor);
         this.open = true;
+        this.fileSize = 0L;
+    }
+
+    public long getFileSize() {
+        return fileSize;
     }
 
     public KvFileHandle registerReference(
@@ -87,6 +95,7 @@ public class SharedKvFileRegistry implements AutoCloseable {
                 LOG.trace("Registered new kv file {} under key {}.", newHandle, registrationKey);
                 entry = new SharedKvEntry(newHandle, snapshotID);
                 registeredKvEntries.put(registrationKey, entry);
+                fileSize += newHandle.getSize();
 
                 // no further handling
                 return entry.kvFileHandle;
@@ -134,6 +143,7 @@ public class SharedKvFileRegistry implements AutoCloseable {
                 if (entry.lastUsedSnapshotID < lowestSnapshotID) {
                     subsumed.add(entry.kvFileHandle);
                     it.remove();
+                    fileSize -= entry.kvFileHandle.getSize();
                 }
             }
         }

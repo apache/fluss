@@ -24,15 +24,20 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 
 import org.apache.flink.core.execution.JobClient;
+import org.apache.flink.core.execution.SavepointFormatType;
+import org.apache.flink.table.api.TableResult;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.io.File;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
@@ -42,12 +47,16 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertRowResultsIgnoreOrder;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The IT case for Flink union data in lake and fluss for log table. */
 class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
+
+    @TempDir public static File savepointDir;
 
     @BeforeAll
     protected static void beforeAll() {
@@ -76,7 +85,7 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
 
         assertThat(actual).containsExactlyInAnyOrderElementsOf(writtenRows);
 
-        // can database sync job
+        // cancel the tiering job
         jobClient.cancel().get();
 
         // write some log data again
@@ -146,7 +155,7 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         assertResultsIgnoreOrder(
                 actual, writtenRows.stream().map(Row::toString).collect(Collectors.toList()), true);
 
-        // can database sync job
+        // cancel the tiering job
         jobClient.cancel().get();
 
         // write some log data again
@@ -167,6 +176,70 @@ class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         }
         assertResultsIgnoreOrder(
                 actual, writtenRows.stream().map(Row::toString).collect(Collectors.toList()), true);
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testUnionReadLogTableFailover(boolean isPartitioned) throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName1 =
+                "restore_logTable_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String resultTableName =
+                "result_table" + (isPartitioned ? "partitioned" : "non_partitioned");
+
+        TablePath table1 = TablePath.of(DEFAULT_DB, tableName1);
+        TablePath resultTable = TablePath.of(DEFAULT_DB, resultTableName);
+        List<Row> writtenRows = new LinkedList<>();
+        long tableId = prepareLogTable(table1, DEFAULT_BUCKET_NUM, isPartitioned, writtenRows);
+        // wait until records has been synced
+        waitUntilBucketSynced(table1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
+
+        StreamTableEnvironment streamTEnv = buildStreamTEnv(null);
+        // now, start to read the log table to write to a fluss result table
+        // may read fluss or not, depends on the log offset of paimon snapshot
+        createFullTypeLogTable(resultTable, DEFAULT_BUCKET_NUM, isPartitioned, false);
+        TableResult insertResult =
+                streamTEnv.executeSql(
+                        "insert into " + resultTableName + " select * from " + tableName1);
+
+        CloseableIterator<Row> actual =
+                streamTEnv.executeSql("select * from " + resultTableName).collect();
+        if (isPartitioned) {
+            assertRowResultsIgnoreOrder(actual, writtenRows, false);
+        } else {
+            assertResultsExactOrder(actual, writtenRows, false);
+        }
+
+        // now, stop the job with save point
+        String savepointPath =
+                insertResult
+                        .getJobClient()
+                        .get()
+                        .stopWithSavepoint(
+                                false,
+                                savepointDir.getAbsolutePath(),
+                                SavepointFormatType.CANONICAL)
+                        .get();
+
+        // re buildStreamTEnv
+        streamTEnv = buildStreamTEnv(savepointPath);
+        insertResult =
+                streamTEnv.executeSql(
+                        "insert into " + resultTableName + " select * from " + tableName1);
+
+        // write some log data again
+        List<Row> rows = writeRows(table1, 3, isPartitioned);
+        if (isPartitioned) {
+            assertRowResultsIgnoreOrder(actual, rows, true);
+        } else {
+            assertResultsExactOrder(actual, rows, true);
+        }
+
+        // cancel jobs
+        insertResult.getJobClient().get().cancel().get();
+        jobClient.cancel().get();
     }
 
     private long prepareLogTable(

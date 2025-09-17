@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableBucketReplica;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.DeleteReplicaResponseReceivedEvent;
 import org.apache.fluss.server.coordinator.event.TestingEventManager;
@@ -47,6 +48,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import javax.annotation.Nullable;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
@@ -64,6 +66,7 @@ import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH_PK;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionSuccessful;
+import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link TableManager}. */
@@ -129,7 +132,8 @@ class TableManagerTest {
                         coordinatorContext,
                         replicaStateMachine,
                         tableBucketStateMachine,
-                        new RemoteStorageCleaner(conf, ioExecutor));
+                        new RemoteStorageCleaner(conf, ioExecutor),
+                        ioExecutor);
         tableManager.startup();
 
         coordinatorContext.setLiveTabletServers(
@@ -195,7 +199,10 @@ class TableManagerTest {
 
         // call method resumeDeletions, should delete the assignments from zk
         tableManager.resumeDeletions();
-        assertThat(zookeeperClient.getTableAssignment(tableId)).isEmpty();
+        // retry for async deletion of TableAssignment
+        retry(
+                Duration.ofSeconds(30),
+                () -> assertThat(zookeeperClient.getTableAssignment(tableId)).isEmpty());
         // the table will also be removed from coordinator context
         assertThat(coordinatorContext.getAllReplicasForTable(tableId)).isEmpty();
     }
@@ -267,15 +274,11 @@ class TableManagerTest {
         PartitionAssignment partitionAssignment =
                 new PartitionAssignment(tableId, createAssignment().getBucketAssignments());
         String partitionName = "2024";
+        long partitionId = zookeeperClient.getPartitionIdAndIncrement();
         zookeeperClient.registerPartitionAssignmentAndMetadata(
-                zookeeperClient.getPartitionIdAndIncrement(),
-                partitionName,
-                partitionAssignment,
-                DATA1_TABLE_PATH,
-                tableId);
+                partitionId, partitionName, partitionAssignment, DATA1_TABLE_PATH, tableId);
 
         // create partition
-        long partitionId = 1L;
         tableManager.onCreateNewPartition(
                 DATA1_TABLE_PATH, tableId, partitionId, partitionName, partitionAssignment);
 
@@ -284,8 +287,24 @@ class TableManagerTest {
 
         // drop partition
         // all replicas should be deleted
+        coordinatorContext.queuePartitionDeletion(
+                Collections.singleton(new TablePartition(tableId, partitionId)));
         tableManager.onDeletePartition(tableId, partitionId);
         checkReplicaDelete(tableId, partitionId, partitionAssignment);
+
+        // mark all replica as delete
+        for (TableBucketReplica replica : getReplicas(tableId, partitionId, partitionAssignment)) {
+            coordinatorContext.putReplicaState(replica, ReplicaDeletionSuccessful);
+        }
+
+        // call method resumeDeletions, should delete the assignments from zk
+        tableManager.resumeDeletions();
+        // retry for async deletion of PartitionAssignment
+        retry(
+                Duration.ofSeconds(30),
+                () -> assertThat(zookeeperClient.getPartitionAssignment(partitionId)).isEmpty());
+        // the partition will also be removed from coordinator context
+        assertThat(coordinatorContext.getAllReplicasForPartition(tableId, partitionId)).isEmpty();
     }
 
     private TableAssignment createAssignment() {
@@ -349,9 +368,14 @@ class TableManagerTest {
     }
 
     private Set<TableBucketReplica> getReplicas(long tableId, TableAssignment assignment) {
+        return getReplicas(tableId, null, assignment);
+    }
+
+    private Set<TableBucketReplica> getReplicas(
+            long tableId, Long partitionId, TableAssignment assignment) {
         Set<TableBucketReplica> tableBucketReplicas = new HashSet<>();
         for (int bucketId : assignment.getBuckets()) {
-            TableBucket tableBucket = new TableBucket(tableId, bucketId);
+            TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
             List<Integer> replicas = assignment.getBucketAssignment(bucketId).getReplicas();
             for (int replica : replicas) {
                 tableBucketReplicas.add(new TableBucketReplica(tableBucket, replica));

@@ -26,6 +26,9 @@ import org.apache.fluss.utils.CloseableIterator;
 
 import java.util.Iterator;
 
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
+
 /**
  * A record batch is a container for {@link LogRecord LogRecords}.
  *
@@ -33,17 +36,8 @@ import java.util.Iterator;
  */
 @PublicEvolving
 public interface LogRecordBatch {
-
-    /** The "magic" values. */
-    byte LOG_MAGIC_VALUE_V0 = 0;
-
     /** The current "magic" value. */
-    byte CURRENT_LOG_MAGIC_VALUE = LOG_MAGIC_VALUE_V0;
-
-    /** Value used if non-idempotent. */
-    long NO_WRITER_ID = -1L;
-
-    int NO_BATCH_SEQUENCE = -1;
+    byte CURRENT_LOG_MAGIC_VALUE = LOG_MAGIC_VALUE_V1;
 
     /**
      * Check whether the checksum of this batch is correct.
@@ -128,6 +122,13 @@ public interface LogRecordBatch {
      * @return batch base sequence
      */
     int batchSequence();
+
+    /**
+     * Get leader epoch of this bucket for this log record batch.
+     *
+     * @return leader epoch
+     */
+    int leaderEpoch();
 
     /**
      * Get the size in bytes of this batch, including the size of the record and the batch overhead.

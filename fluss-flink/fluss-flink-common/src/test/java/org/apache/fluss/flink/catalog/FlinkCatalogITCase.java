@@ -33,6 +33,7 @@ import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
+import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
@@ -655,6 +656,21 @@ abstract class FlinkCatalogITCase {
             }
             flussClusterExtension.close();
         }
+    }
+
+    @Test
+    void testCreateCatalogWithUnexistedDatabase() {
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        String.format(
+                                                "create catalog test_non_exist_database_catalog with ('type' = 'fluss', '%s' = '%s', 'default-database' = 'non-exist')",
+                                                BOOTSTRAP_SERVERS.key(),
+                                                FLUSS_CLUSTER_EXTENSION.getBootstrapServers())))
+                .rootCause()
+                .isExactlyInstanceOf(CatalogException.class)
+                .hasMessage(
+                        "The configured default-database 'non-exist' does not exist in the Fluss cluster.");
     }
 
     private static void assertOptionsEqual(

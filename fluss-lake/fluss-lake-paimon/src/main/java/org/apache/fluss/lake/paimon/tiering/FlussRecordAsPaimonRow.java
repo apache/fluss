@@ -25,14 +25,13 @@ import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
 
+import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toRowKind;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** To wrap Fluss {@link LogRecord} as paimon {@link InternalRow}. */
 public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
 
-    // Lake table for paimon will append three system columns: __bucket, __offset,__timestamp
-    private static final int LAKE_PAIMON_SYSTEM_COLUMNS = 3;
     private final int bucket;
     private LogRecord logRecord;
     private int originRowFieldCount;
@@ -47,7 +46,7 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
         this.internalRow = logRecord.getRow();
         this.originRowFieldCount = internalRow.getFieldCount();
         checkState(
-                originRowFieldCount == tableRowType.getFieldCount() - LAKE_PAIMON_SYSTEM_COLUMNS,
+                originRowFieldCount == tableRowType.getFieldCount() - SYSTEM_COLUMNS.size(),
                 "The paimon table fields count must equals to LogRecord's fields count.");
     }
 
@@ -56,7 +55,7 @@ public class FlussRecordAsPaimonRow extends FlussRowAsPaimonRow {
         return
         //  business (including partitions) + system (three system fields: bucket, offset,
         // timestamp)
-        originRowFieldCount + LAKE_PAIMON_SYSTEM_COLUMNS;
+        originRowFieldCount + SYSTEM_COLUMNS.size();
     }
 
     @Override

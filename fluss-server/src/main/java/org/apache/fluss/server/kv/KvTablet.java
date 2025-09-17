@@ -29,9 +29,6 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.metrics.MeterView;
-import org.apache.fluss.metrics.MetricNames;
-import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.KvRecord;
 import org.apache.fluss.record.KvRecordBatch;
@@ -55,7 +52,7 @@ import org.apache.fluss.server.kv.wal.IndexWalBuilder;
 import org.apache.fluss.server.kv.wal.WalBuilder;
 import org.apache.fluss.server.log.LogAppendInfo;
 import org.apache.fluss.server.log.LogTablet;
-import org.apache.fluss.server.metrics.group.BucketMetricGroup;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.utils.FatalErrorHandler;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.types.DataType;
@@ -124,6 +121,7 @@ public final class KvTablet {
             TableBucket tableBucket,
             LogTablet logTablet,
             File kvTabletDir,
+            TabletServerMetricGroup serverMetricGroup,
             RocksDBKv rocksDBKv,
             long writeBatchSize,
             LogFormat logFormat,
@@ -139,7 +137,7 @@ public final class KvTablet {
         this.kvTabletDir = kvTabletDir;
         this.rocksDBKv = rocksDBKv;
         this.writeBatchSize = writeBatchSize;
-        this.kvPreWriteBuffer = new KvPreWriteBuffer(createKvBatchWriter());
+        this.kvPreWriteBuffer = new KvPreWriteBuffer(createKvBatchWriter(), serverMetricGroup);
         this.logFormat = logFormat;
         this.arrowWriterProvider = new ArrowWriterPool(arrowBufferAllocator);
         this.memorySegmentPool = memorySegmentPool;
@@ -153,6 +151,7 @@ public final class KvTablet {
             LogTablet logTablet,
             File kvTabletDir,
             Configuration serverConf,
+            TabletServerMetricGroup serverMetricGroup,
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
@@ -168,6 +167,7 @@ public final class KvTablet {
                 logTablet,
                 kvTabletDir,
                 serverConf,
+                serverMetricGroup,
                 arrowBufferAllocator,
                 memorySegmentPool,
                 kvFormat,
@@ -182,6 +182,7 @@ public final class KvTablet {
             LogTablet logTablet,
             File kvTabletDir,
             Configuration serverConf,
+            TabletServerMetricGroup serverMetricGroup,
             BufferAllocator arrowBufferAllocator,
             MemorySegmentPool memorySegmentPool,
             KvFormat kvFormat,
@@ -195,6 +196,7 @@ public final class KvTablet {
                 tableBucket,
                 logTablet,
                 kvTabletDir,
+                serverMetricGroup,
                 kv,
                 serverConf.get(ConfigOptions.KV_WRITE_BATCH_SIZE).getBytes(),
                 logTablet.getLogFormat(),
@@ -241,24 +243,6 @@ public final class KvTablet {
 
     public long getFlushedLogOffset() {
         return flushedLogOffset;
-    }
-
-    public void registerMetrics(BucketMetricGroup bucketMetricGroup) {
-        MetricGroup metricGroup = bucketMetricGroup.addGroup("kv");
-
-        // about pre-write buffer.
-        metricGroup.meter(
-                MetricNames.KV_PRE_WRITE_BUFFER_FLUSH_RATE,
-                new MeterView(kvPreWriteBuffer.getFlushCount()));
-        metricGroup.histogram(
-                MetricNames.KV_PRE_WRITE_BUFFER_FLUSH_LATENCY_MS,
-                kvPreWriteBuffer.getFlushLatencyHistogram());
-        metricGroup.meter(
-                MetricNames.KV_PRE_WRITE_BUFFER_TRUNCATE_AS_DUPLICATED_RATE,
-                new MeterView(kvPreWriteBuffer.getTruncateAsDuplicatedCount()));
-        metricGroup.meter(
-                MetricNames.KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE,
-                new MeterView(kvPreWriteBuffer.getTruncateAsErrorCount()));
     }
 
     /**

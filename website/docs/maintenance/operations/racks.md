@@ -1,5 +1,5 @@
 ---
-title: Racks
+title: Rack-Aware Deployment
 sidebar_position: 2
 ---
 

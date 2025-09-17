@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -29,6 +30,7 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.TabletManagerBase;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -87,6 +89,7 @@ public final class LogManager extends TabletManagerBase {
     private final ZooKeeperClient zkClient;
     private final Scheduler scheduler;
     private final Clock clock;
+    private final TabletServerMetricGroup serverMetricGroup;
     private final ReentrantLock logCreationOrDeletionLock = new ReentrantLock();
 
     private final Map<TableBucket, LogTablet> currentLogs = MapUtils.newConcurrentHashMap();
@@ -100,19 +103,25 @@ public final class LogManager extends TabletManagerBase {
             ZooKeeperClient zkClient,
             int recoveryThreadsPerDataDir,
             Scheduler scheduler,
-            Clock clock)
+            Clock clock,
+            TabletServerMetricGroup serverMetricGroup)
             throws Exception {
         super(TabletType.LOG, dataDir, conf, recoveryThreadsPerDataDir);
         this.zkClient = zkClient;
         this.scheduler = scheduler;
         this.clock = clock;
+        this.serverMetricGroup = serverMetricGroup;
         createAndValidateDataDir(dataDir);
 
         initializeCheckpointMaps();
     }
 
     public static LogManager create(
-            Configuration conf, ZooKeeperClient zkClient, Scheduler scheduler, Clock clock)
+            Configuration conf,
+            ZooKeeperClient zkClient,
+            Scheduler scheduler,
+            Clock clock,
+            TabletServerMetricGroup serverMetricGroup)
             throws Exception {
         String dataDirString = conf.getString(ConfigOptions.DATA_DIR);
         File dataDir = new File(dataDirString).getAbsoluteFile();
@@ -122,7 +131,8 @@ public final class LogManager extends TabletManagerBase {
                 zkClient,
                 conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
                 scheduler,
-                clock);
+                clock,
+                serverMetricGroup);
     }
 
     public void startup() {
@@ -180,24 +190,8 @@ public final class LogManager extends TabletManagerBase {
             final boolean cleanShutdown = isCleanShutdown;
             // set runnable job.
             Runnable[] jobsForDir =
-                    tabletsToLoad.stream()
-                            .map(
-                                    tabletDir ->
-                                            (Runnable)
-                                                    () -> {
-                                                        LOG.debug("Loading log {}", tabletDir);
-                                                        try {
-                                                            loadLog(
-                                                                    tabletDir,
-                                                                    cleanShutdown,
-                                                                    finalRecoveryPoints,
-                                                                    conf,
-                                                                    clock);
-                                                        } catch (Exception e) {
-                                                            throw new FlussRuntimeException(e);
-                                                        }
-                                                    })
-                            .toArray(Runnable[]::new);
+                    createLogLoadingJobs(
+                            tabletsToLoad, cleanShutdown, finalRecoveryPoints, conf, clock);
 
             long startTime = System.currentTimeMillis();
 
@@ -246,6 +240,7 @@ public final class LogManager extends TabletManagerBase {
                                     tablePath,
                                     tabletDir,
                                     conf,
+                                    serverMetricGroup,
                                     0L,
                                     scheduler,
                                     logFormat,
@@ -348,6 +343,7 @@ public final class LogManager extends TabletManagerBase {
                         physicalTablePath,
                         tabletDir,
                         conf,
+                        serverMetricGroup,
                         logRecoveryPoint,
                         scheduler,
                         tableInfo.getTableConfig().getLogFormat(),
@@ -458,6 +454,70 @@ public final class LogManager extends TabletManagerBase {
         }
 
         LOG.info("Shut down LogManager complete.");
+    }
+
+    /** Create runnable jobs for loading logs from tablet directories. */
+    private Runnable[] createLogLoadingJobs(
+            List<File> tabletsToLoad,
+            boolean cleanShutdown,
+            Map<TableBucket, Long> recoveryPoints,
+            Configuration conf,
+            Clock clock) {
+        Runnable[] jobs = new Runnable[tabletsToLoad.size()];
+        for (int i = 0; i < tabletsToLoad.size(); i++) {
+            final File tabletDir = tabletsToLoad.get(i);
+            jobs[i] = createLogLoadingJob(tabletDir, cleanShutdown, recoveryPoints, conf, clock);
+        }
+        return jobs;
+    }
+
+    /** Create a runnable job for loading log from a single tablet directory. */
+    private Runnable createLogLoadingJob(
+            File tabletDir,
+            boolean cleanShutdown,
+            Map<TableBucket, Long> recoveryPoints,
+            Configuration conf,
+            Clock clock) {
+        return new Runnable() {
+            @Override
+            public void run() {
+                LOG.debug("Loading log {}", tabletDir);
+                try {
+                    loadLog(tabletDir, cleanShutdown, recoveryPoints, conf, clock);
+                } catch (Exception e) {
+                    LOG.error("Fail to loadLog from {}", tabletDir, e);
+                    if (e instanceof SchemaNotExistException) {
+                        LOG.error(
+                                "schema not exist, table for {} has already been dropped, the residual data will be removed.",
+                                tabletDir,
+                                e);
+                        FileUtils.deleteDirectoryQuietly(tabletDir);
+
+                        // Also delete corresponding KV tablet directory if it exists
+                        try {
+                            Tuple2<PhysicalTablePath, TableBucket> pathAndBucket =
+                                    FlussPaths.parseTabletDir(tabletDir);
+                            File kvTabletDir =
+                                    FlussPaths.kvTabletDir(
+                                            dataDir, pathAndBucket.f0, pathAndBucket.f1);
+                            if (kvTabletDir.exists()) {
+                                LOG.info(
+                                        "Also removing corresponding KV tablet directory: {}",
+                                        kvTabletDir);
+                                FileUtils.deleteDirectoryQuietly(kvTabletDir);
+                            }
+                        } catch (Exception kvDeleteException) {
+                            LOG.warn(
+                                    "Failed to delete corresponding KV tablet directory for log {}: {}",
+                                    tabletDir,
+                                    kvDeleteException.getMessage());
+                        }
+                        return;
+                    }
+                    throw new FlussRuntimeException(e);
+                }
+            }
+        };
     }
 
     @VisibleForTesting

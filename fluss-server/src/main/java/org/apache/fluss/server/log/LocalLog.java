@@ -25,11 +25,10 @@ import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.Counter;
-import org.apache.fluss.metrics.DescriptiveStatisticsHistogram;
 import org.apache.fluss.metrics.Histogram;
-import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 
@@ -90,6 +89,7 @@ public final class LocalLog {
     public LocalLog(
             File logTabletDir,
             Configuration config,
+            TabletServerMetricGroup serverMetricGroup,
             LogSegments segments,
             long recoveryPoint,
             LogOffsetMetadata nextOffsetMetadata,
@@ -105,9 +105,8 @@ public final class LocalLog {
         this.logFormat = logFormat;
 
         lastFlushedTime = new AtomicLong(System.currentTimeMillis());
-        flushCount = new SimpleCounter();
-        // consider won't flush frequently, we set a small window size
-        flushLatencyHistogram = new DescriptiveStatisticsHistogram(5);
+        flushCount = serverMetricGroup.logFlushCount();
+        flushLatencyHistogram = serverMetricGroup.logFlushLatencyHistogram();
         localLogStartOffset = segments.isEmpty() ? 0L : segments.firstSegmentBaseOffset().get();
         localMaxTimestamp =
                 segments.isEmpty() ? 0L : segments.lastSegment().get().maxTimestampSoFar();
@@ -123,14 +122,6 @@ public final class LocalLog {
 
     long getRecoveryPoint() {
         return recoveryPoint;
-    }
-
-    Histogram getFlushLatencyHistogram() {
-        return flushLatencyHistogram;
-    }
-
-    Counter getFlushCount() {
-        return flushCount;
     }
 
     /** The offset metadata of the next message that will be appended to the log. */

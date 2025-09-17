@@ -26,6 +26,7 @@ import org.apache.iceberg.CombinedScanTask;
 import org.apache.iceberg.ContentScanTask;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.FileScanTask;
+import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.data.IcebergGenericReader;
 import org.apache.iceberg.data.Record;
@@ -82,10 +83,15 @@ public class IcebergRewriteDataFiles {
         return this;
     }
 
-    private List<CombinedScanTask> planRewriteFileGroups() throws IOException {
+    private List<CombinedScanTask> planRewriteFileGroups(long snapshotId) throws IOException {
         List<FileScanTask> fileScanTasks = new ArrayList<>();
         try (CloseableIterable<FileScanTask> tasks =
-                table.newScan().includeColumnStats().filter(filter).ignoreResiduals().planFiles()) {
+                table.newScan()
+                        .useSnapshot(snapshotId)
+                        .includeColumnStats()
+                        .filter(filter)
+                        .ignoreResiduals()
+                        .planFiles()) {
             tasks.forEach(fileScanTasks::add);
         }
 
@@ -137,7 +143,12 @@ public class IcebergRewriteDataFiles {
     public RewriteDataFileResult execute() {
         try {
             // plan the file groups to be rewrite
-            List<CombinedScanTask> tasksToRewrite = planRewriteFileGroups();
+            Snapshot snapshot = table.currentSnapshot();
+            // if no snapshot, just return
+            if (snapshot == null) {
+                return null;
+            }
+            List<CombinedScanTask> tasksToRewrite = planRewriteFileGroups(snapshot.snapshotId());
             if (tasksToRewrite.isEmpty()) {
                 return null;
             }
@@ -152,7 +163,8 @@ public class IcebergRewriteDataFiles {
                                 .collect(Collectors.toList()));
             }
             LOG.info("Finish rewriting files from {} to {}.", deletedDataFiles, addedDataFiles);
-            return new RewriteDataFileResult(deletedDataFiles, addedDataFiles);
+            return new RewriteDataFileResult(
+                    snapshot.snapshotId(), deletedDataFiles, addedDataFiles);
         } catch (Exception e) {
             throw new RuntimeException(
                     String.format("Fail to compact bucket %s of table %s.", bucket, table.name()),

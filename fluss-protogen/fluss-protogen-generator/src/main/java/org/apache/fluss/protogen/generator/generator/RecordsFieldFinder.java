@@ -21,17 +21,26 @@ import io.protostuff.parser.Field;
 import io.protostuff.parser.Message;
 import io.protostuff.parser.MessageField;
 
+import java.util.HashSet;
+import java.util.Set;
+
 /** Finder to find <code>byte[] records</code> protobuf fields. */
 public class RecordsFieldFinder {
 
     public static final String RECORDS_FIELD_NAME = "records";
 
-    public static boolean hasRecordsField(Message message) {
-        return message.getFields().stream().anyMatch(RecordsFieldFinder::hasRecordsField);
+    private Set<Message> visited = new HashSet<>();
+
+    public boolean hasRecordsField(Message message) {
+        visited.add(message);
+        return message.getFields().stream().anyMatch(this::hasRecordsField);
     }
 
-    private static boolean hasRecordsField(Field<?> field) {
+    private boolean hasRecordsField(Field<?> field) {
         if (field instanceof MessageField) {
+            if (visited.contains(((MessageField) field).getMessage())) {
+                return false;
+            }
             return hasRecordsField(((MessageField) field).getMessage());
         } else if (field instanceof Field.Bytes) {
             return !field.isRepeated() && field.getName().equals(RECORDS_FIELD_NAME);

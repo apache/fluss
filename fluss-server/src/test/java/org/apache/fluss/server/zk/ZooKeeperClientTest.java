@@ -131,52 +131,74 @@ class ZooKeeperClientTest {
         // get tablet server1
         assertThat(zookeeperClient.getTabletServer(1)).contains(registration1);
         assertThat(zookeeperClient.getTabletServer(2)).contains(registration2);
+        // fetch all tablet servers
+        assertThat(zookeeperClient.getTabletServers(new int[] {1, 2}))
+                .containsValues(registration1, registration2);
     }
 
     @Test
     void testTabletAssignments() throws Exception {
-        long tableId = 1;
+        long tableId1 = 1;
+        long tableId2 = 2;
         // try to get tablet assignment, should return empty
-        assertThat(zookeeperClient.getTableAssignment(tableId)).isEmpty();
+        assertThat(zookeeperClient.getTableAssignment(tableId1)).isEmpty();
+        assertThat(zookeeperClient.getTableAssignment(tableId2)).isEmpty();
 
-        TableAssignment tableAssignment =
+        TableAssignment tableAssignment1 =
                 TableAssignment.builder()
                         .add(0, BucketAssignment.of(1, 4, 5))
                         .add(1, BucketAssignment.of(2, 3))
                         .build();
-        zookeeperClient.registerTableAssignment(tableId, tableAssignment);
-        assertThat(zookeeperClient.getTableAssignment(tableId)).contains(tableAssignment);
+        TableAssignment tableAssignment2 =
+                TableAssignment.builder()
+                        .add(0, BucketAssignment.of(1, 2))
+                        .add(1, BucketAssignment.of(3, 4, 5))
+                        .build();
+        zookeeperClient.registerTableAssignment(tableId1, tableAssignment1);
+        zookeeperClient.registerTableAssignment(tableId2, tableAssignment2);
+        assertThat(zookeeperClient.getTableAssignment(tableId1)).contains(tableAssignment1);
+        assertThat(zookeeperClient.getTableAssignment(tableId2)).contains(tableAssignment2);
+        assertThat(zookeeperClient.getTablesAssignments(Arrays.asList(tableId1, tableId2)))
+                .containsValues(tableAssignment1, tableAssignment2);
 
         // test update
-        TableAssignment tableAssignment2 =
+        TableAssignment tableAssignment3 =
                 TableAssignment.builder().add(3, BucketAssignment.of(1, 5)).build();
-        zookeeperClient.updateTableAssignment(tableId, tableAssignment2);
-        assertThat(zookeeperClient.getTableAssignment(tableId)).contains(tableAssignment2);
+        zookeeperClient.updateTableAssignment(tableId1, tableAssignment3);
+        assertThat(zookeeperClient.getTableAssignment(tableId1)).contains(tableAssignment3);
 
         // test delete
-        zookeeperClient.deleteTableAssignment(tableId);
-        assertThat(zookeeperClient.getTableAssignment(tableId)).isEmpty();
+        zookeeperClient.deleteTableAssignment(tableId1);
+        assertThat(zookeeperClient.getTableAssignment(tableId1)).isEmpty();
     }
 
     @Test
     void testLeaderAndIsr() throws Exception {
         // try to get bucket leadership, should return empty
-        TableBucket tableBucket = new TableBucket(1, 1);
-        assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).isEmpty();
+        TableBucket tableBucket1 = new TableBucket(1, 1);
+        TableBucket tableBucket2 = new TableBucket(1, 2);
+        assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).isEmpty();
+        assertThat(zookeeperClient.getLeaderAndIsr(tableBucket2)).isEmpty();
 
         // try to register bucket leaderAndIsr
-        LeaderAndIsr leaderAndIsr = new LeaderAndIsr(1, 10, Arrays.asList(1, 2, 3), 100, 1000);
-        zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
-        assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).hasValue(leaderAndIsr);
+        LeaderAndIsr leaderAndIsr1 = new LeaderAndIsr(1, 10, Arrays.asList(1, 2, 3), 100, 1000);
+        LeaderAndIsr leaderAndIsr2 = new LeaderAndIsr(2, 10, Arrays.asList(4, 5, 6), 100, 1000);
+
+        zookeeperClient.registerLeaderAndIsr(tableBucket1, leaderAndIsr1);
+        zookeeperClient.registerLeaderAndIsr(tableBucket2, leaderAndIsr2);
+        assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).hasValue(leaderAndIsr1);
+        assertThat(zookeeperClient.getLeaderAndIsr(tableBucket2)).hasValue(leaderAndIsr2);
+        assertThat(zookeeperClient.getLeaderAndIsrs(Arrays.asList(tableBucket1, tableBucket2)))
+                .containsValues(leaderAndIsr1, leaderAndIsr2);
 
         // test update
-        leaderAndIsr = new LeaderAndIsr(2, 20, Collections.emptyList(), 200, 2000);
-        zookeeperClient.updateLeaderAndIsr(tableBucket, leaderAndIsr);
-        assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).hasValue(leaderAndIsr);
+        leaderAndIsr1 = new LeaderAndIsr(2, 20, Collections.emptyList(), 200, 2000);
+        zookeeperClient.updateLeaderAndIsr(tableBucket1, leaderAndIsr1);
+        assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).hasValue(leaderAndIsr1);
 
         // test delete
-        zookeeperClient.deleteLeaderAndIsr(tableBucket);
-        assertThat(zookeeperClient.getLeaderAndIsr(tableBucket)).isEmpty();
+        zookeeperClient.deleteLeaderAndIsr(tableBucket1);
+        assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).isEmpty();
     }
 
     @ParameterizedTest
@@ -280,15 +302,18 @@ class ZooKeeperClientTest {
 
     @Test
     void testTable() throws Exception {
-        TablePath tablePath = TablePath.of("db", "tb");
-        assertThat(zookeeperClient.getTable(tablePath)).isEmpty();
+        TablePath tablePath1 = TablePath.of("db", "tb1");
+        TablePath tablePath2 = TablePath.of("db", "tb2");
+
+        assertThat(zookeeperClient.getTable(tablePath1)).isEmpty();
+        assertThat(zookeeperClient.getTable(tablePath2)).isEmpty();
 
         // register table.
         Map<String, String> options = new HashMap<>();
         options.put("option-1", "100");
         options.put("option-2", "200");
         long currentMillis = System.currentTimeMillis();
-        TableRegistration tableReg =
+        TableRegistration tableReg1 =
                 new TableRegistration(
                         11,
                         "first table",
@@ -298,17 +323,9 @@ class ZooKeeperClientTest {
                         Collections.singletonMap("custom-1", "100"),
                         currentMillis,
                         currentMillis);
-
-        zookeeperClient.registerTable(tablePath, tableReg);
-        Optional<TableRegistration> optionalTable = zookeeperClient.getTable(tablePath);
-        assertThat(optionalTable.isPresent()).isTrue();
-        assertThat(optionalTable.get()).isEqualTo(tableReg);
-
-        // update table.
-        currentMillis = System.currentTimeMillis();
-        tableReg =
+        TableRegistration tableReg2 =
                 new TableRegistration(
-                        22,
+                        12,
                         "second table",
                         Arrays.asList("a", "b"),
                         new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
@@ -316,14 +333,39 @@ class ZooKeeperClientTest {
                         Collections.singletonMap("custom-2", "200"),
                         currentMillis,
                         currentMillis);
-        zookeeperClient.updateTable(tablePath, tableReg);
-        optionalTable = zookeeperClient.getTable(tablePath);
-        assertThat(optionalTable.isPresent()).isTrue();
-        assertThat(optionalTable.get()).isEqualTo(tableReg);
+        zookeeperClient.registerTable(tablePath1, tableReg1);
+        zookeeperClient.registerTable(tablePath2, tableReg2);
+
+        Optional<TableRegistration> optionalTable1 = zookeeperClient.getTable(tablePath1);
+        Optional<TableRegistration> optionalTable2 = zookeeperClient.getTable(tablePath2);
+
+        assertThat(optionalTable1.isPresent()).isTrue();
+        assertThat(optionalTable1.get()).isEqualTo(tableReg1);
+        assertThat(optionalTable2.isPresent()).isTrue();
+        assertThat(optionalTable2.get()).isEqualTo(tableReg2);
+        assertThat(zookeeperClient.getTables(Arrays.asList(tablePath1, tablePath2)))
+                .containsValues(tableReg1, tableReg2);
+
+        // update table.
+        currentMillis = System.currentTimeMillis();
+        tableReg1 =
+                new TableRegistration(
+                        13,
+                        "third table",
+                        Arrays.asList("a", "b"),
+                        new TableDescriptor.TableDistribution(16, Collections.singletonList("a")),
+                        options,
+                        Collections.singletonMap("custom-3", "300"),
+                        currentMillis,
+                        currentMillis);
+        zookeeperClient.updateTable(tablePath1, tableReg1);
+        optionalTable1 = zookeeperClient.getTable(tablePath1);
+        assertThat(optionalTable1.isPresent()).isTrue();
+        assertThat(optionalTable1.get()).isEqualTo(tableReg1);
 
         // delete table.
-        zookeeperClient.deleteTable(tablePath);
-        assertThat(zookeeperClient.getTable(tablePath)).isEmpty();
+        zookeeperClient.deleteTable(tablePath1);
+        assertThat(zookeeperClient.getTable(tablePath1)).isEmpty();
     }
 
     @Test
@@ -496,6 +538,8 @@ class ZooKeeperClientTest {
         assertThat(partition.getPartitionId()).isEqualTo(1L);
         partition = zookeeperClient.getPartition(tablePath, "p2").get();
         assertThat(partition.getPartitionId()).isEqualTo(2L);
+        assertThat(zookeeperClient.getPartitionsForTables(Arrays.asList(tablePath)))
+                .containsValues(new ArrayList<>(partitions));
 
         // test delete partition
         zookeeperClient.deletePartition(tablePath, "p1");

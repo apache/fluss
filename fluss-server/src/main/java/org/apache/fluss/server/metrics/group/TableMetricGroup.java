@@ -17,7 +17,8 @@
 
 package org.apache.fluss.server.metrics.group;
 
-import org.apache.fluss.metadata.PhysicalTablePath;
+import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.MeterView;
@@ -35,34 +36,35 @@ import java.util.Map;
 import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
 
 /**
- * Metrics for the physical tables(tables or partitions) in server with {@link
- * TabletServerMetricGroup} as parent group.
+ * Metrics for the tables(tables or partitions) in server with {@link TabletServerMetricGroup} as
+ * parent group.
  */
-public class PhysicalTableMetricGroup extends AbstractMetricGroup {
+public class TableMetricGroup extends AbstractMetricGroup {
 
-    private final Map<Integer, BucketMetricGroup> buckets = new HashMap<>();
+    private final Map<TableBucket, BucketMetricGroup> buckets = new HashMap<>();
 
-    private final PhysicalTablePath physicalTablePath;
+    private final TablePath tablePath;
 
-    // ---- metrics for log, when the table is for kv, it's for cdc log
+    // server-level metrics
+    private final TabletServerMetricGroup serverMetrics;
+
+    // table-level metrics for log, when the table is for kv, it's for cdc log
     private final LogMetricGroup logMetrics;
 
-    // ---- metrics for kv, will be null if the table isn't a kv table ----
+    // table-level  metrics for kv, will be null if the table isn't a kv table
     private final @Nullable KvMetricGroup kvMetrics;
 
-    public PhysicalTableMetricGroup(
+    public TableMetricGroup(
             MetricRegistry registry,
-            PhysicalTablePath physicalTablePath,
+            TablePath tablePath,
             boolean isKvTable,
             TabletServerMetricGroup serverMetricGroup) {
         super(
                 registry,
-                makeScope(
-                        serverMetricGroup,
-                        physicalTablePath.getDatabaseName(),
-                        physicalTablePath.getTableName()),
+                makeScope(serverMetricGroup, tablePath.getDatabaseName(), tablePath.getTableName()),
                 serverMetricGroup);
-        this.physicalTablePath = physicalTablePath;
+        this.serverMetrics = serverMetricGroup;
+        this.tablePath = tablePath;
 
         // if is kv table, create kv metrics
         if (isKvTable) {
@@ -77,15 +79,8 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
 
     @Override
     protected void putVariables(Map<String, String> variables) {
-        variables.put("database", physicalTablePath.getDatabaseName());
-        variables.put("table", physicalTablePath.getTableName());
-
-        if (physicalTablePath.getPartitionName() != null) {
-            variables.put("partition", physicalTablePath.getPartitionName());
-        } else {
-            // value of empty string indicates non-partitioned tables
-            variables.put("partition", "");
-        }
+        variables.put("database", tablePath.getDatabaseName());
+        variables.put("table", tablePath.getTableName());
     }
 
     @Override
@@ -94,16 +89,19 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
         return "table";
     }
 
-    public Counter logMessageIn() {
-        return logMetrics.messagesIn;
+    public void incLogMessageIn(long n) {
+        logMetrics.messagesIn.inc(n);
+        serverMetrics.messageIn().inc(n);
     }
 
-    public Counter logBytesIn() {
-        return logMetrics.bytesIn;
+    public void incLogBytesIn(long n) {
+        logMetrics.bytesIn.inc(n);
+        serverMetrics.bytesIn().inc(n);
     }
 
-    public Counter logBytesOut() {
-        return logMetrics.bytesOut;
+    public void incLogBytesOut(long n) {
+        logMetrics.bytesOut.inc(n);
+        serverMetrics.bytesOut().inc(n);
     }
 
     public Counter totalFetchLogRequests() {
@@ -142,19 +140,21 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
         return logMetrics.remoteLogDeleteErrors;
     }
 
-    public Counter kvMessageIn() {
+    public void incKvMessageIn(long n) {
         if (kvMetrics == null) {
-            return NoOpCounter.INSTANCE;
+            NoOpCounter.INSTANCE.inc(n);
         } else {
-            return kvMetrics.messagesIn;
+            kvMetrics.messagesIn.inc(n);
+            serverMetrics.messageIn().inc(n);
         }
     }
 
-    public Counter kvBytesIn() {
+    public void incKvBytesIn(long n) {
         if (kvMetrics == null) {
-            return NoOpCounter.INSTANCE;
+            NoOpCounter.INSTANCE.inc(n);
         } else {
-            return kvMetrics.bytesIn;
+            kvMetrics.bytesIn.inc(n);
+            serverMetrics.bytesIn().inc(n);
         }
     }
 
@@ -225,18 +225,26 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
     // ------------------------------------------------------------------------
     //  bucket groups
     // ------------------------------------------------------------------------
-    public BucketMetricGroup addBucketMetricGroup(int bucketId) {
+    public BucketMetricGroup addBucketMetricGroup(
+            @Nullable String partitionName, TableBucket tableBucket) {
         return buckets.computeIfAbsent(
-                bucketId, (bucket) -> new BucketMetricGroup(registry, bucketId, this));
+                tableBucket,
+                (bucket) ->
+                        new BucketMetricGroup(
+                                registry, partitionName, tableBucket.getBucket(), this));
     }
 
-    public void removeBucketMetricGroup(int bucketId) {
-        BucketMetricGroup metricGroup = buckets.remove(bucketId);
+    public void removeBucketMetricGroup(TableBucket tableBucket) {
+        BucketMetricGroup metricGroup = buckets.remove(tableBucket);
         metricGroup.close();
     }
 
     public int bucketGroupsCount() {
         return buckets.size();
+    }
+
+    public TabletServerMetricGroup getServerMetricGroup() {
+        return (TabletServerMetricGroup) parent;
     }
 
     /** Metric group for specific kind of tablet of a table. */
@@ -248,12 +256,11 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
         protected final Counter bytesIn;
         protected final Counter bytesOut;
 
-        private TabletMetricGroup(
-                PhysicalTableMetricGroup physicalTableMetricGroup, TabletType tabletType) {
+        private TabletMetricGroup(TableMetricGroup tableMetricGroup, TabletType tabletType) {
             super(
-                    physicalTableMetricGroup.registry,
-                    makeScope(physicalTableMetricGroup, tabletType.name),
-                    physicalTableMetricGroup);
+                    tableMetricGroup.registry,
+                    makeScope(tableMetricGroup, tabletType.name),
+                    tableMetricGroup);
             this.tabletType = tabletType;
 
             messagesIn = new ThreadSafeSimpleCounter();
@@ -293,9 +300,8 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
         private final Counter remoteLogDeleteRequests;
         private final Counter remoteLogDeleteErrors;
 
-        private LogMetricGroup(
-                PhysicalTableMetricGroup physicalTableMetricGroup, TabletType groupType) {
-            super(physicalTableMetricGroup, groupType);
+        private LogMetricGroup(TableMetricGroup tableMetricGroup, TabletType groupType) {
+            super(tableMetricGroup, groupType);
             // for fetch log requests
             totalFetchLogRequests = new ThreadSafeSimpleCounter();
             meter(MetricNames.TOTAL_FETCH_LOG_REQUESTS_RATE, new MeterView(totalFetchLogRequests));
@@ -350,8 +356,8 @@ public class PhysicalTableMetricGroup extends AbstractMetricGroup {
         private final Counter totalPrefixLookupRequests;
         private final Counter failedPrefixLookupRequests;
 
-        public KvMetricGroup(PhysicalTableMetricGroup physicalTableMetricGroup) {
-            super(physicalTableMetricGroup, TabletType.KV);
+        public KvMetricGroup(TableMetricGroup tableMetricGroup) {
+            super(tableMetricGroup, TabletType.KV);
 
             // for lookup request
             totalLookupRequests = new ThreadSafeSimpleCounter();

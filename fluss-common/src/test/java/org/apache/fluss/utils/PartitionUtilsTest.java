@@ -24,6 +24,10 @@ import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.DataTypeRoot;
 
 import org.junit.jupiter.api.Test;
 
@@ -33,8 +37,10 @@ import java.time.ZonedDateTime;
 import java.util.Arrays;
 import java.util.Collections;
 
+import static org.apache.fluss.metadata.TablePath.detectInvalidName;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_PATH;
+import static org.apache.fluss.utils.PartitionUtils.convertValueOfType;
 import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionValues;
@@ -147,5 +153,174 @@ class PartitionUtilsTest {
                             autoPartitionTimeUnit);
             assertThat(resolvedPartitionSpec.getPartitionName()).isEqualTo(expected[i]);
         }
+    }
+
+    @Test
+    void testString() {
+        Object value = BinaryString.fromString("Fluss");
+        DataTypeRoot type = DataTypeRoot.STRING;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("Fluss");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testCharConvert() {
+        Object value = BinaryString.fromString("F");
+        DataTypeRoot type = DataTypeRoot.CHAR;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("F");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testBooleanConvert() {
+        Object value = true;
+        DataTypeRoot type = DataTypeRoot.BOOLEAN;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("true");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testByteConvert() {
+        Object value = new byte[] {0x10, 0x20, 0x30, 0x40, 0x50, (byte) 0b11111111};
+        DataTypeRoot type = DataTypeRoot.BYTES;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("1020304050ff");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testBinaryConvert() {
+        Object value = new byte[] {0x10, 0x20, 0x30, 0x40, 0x50, (byte) 0b11111111};
+        DataTypeRoot type = DataTypeRoot.BINARY;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("1020304050ff");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testTinyInt() {
+        Object value = (byte) 100;
+        DataTypeRoot type = DataTypeRoot.TINYINT;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("100");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testSmallInt() {
+        Object value = (short) -32760;
+        DataTypeRoot type = DataTypeRoot.SMALLINT;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("-32760");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testInt() {
+        Object value = 299000;
+        DataTypeRoot type = DataTypeRoot.INTEGER;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("299000");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testDate() {
+        Object value = 20235;
+        DataTypeRoot type = DataTypeRoot.DATE;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("2025-05-27");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testTimeNTZ() {
+        int value = 5402199;
+        DataTypeRoot type = DataTypeRoot.TIME_WITHOUT_TIME_ZONE;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("01-30-02_199");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testFloat() {
+        Object value = 5.73f;
+        DataTypeRoot type = DataTypeRoot.FLOAT;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("5_73");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testDouble() {
+        Object value = 5.73;
+        DataTypeRoot type = DataTypeRoot.DOUBLE;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("5_73");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testTimestampNTZ() {
+        long millis = 1748662955428L;
+        int nanos = 99988;
+        TimestampNtz timeStampNTZValue = TimestampNtz.fromMillis(millis, nanos);
+        DataTypeRoot type = DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE;
+
+        String toStringResult = convertValueOfType(timeStampNTZValue, type);
+        assertThat(toStringResult).isEqualTo("2025-05-31-03-42-35_428099988");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testTimestampLTZ() {
+        long millis = 1748662955428L;
+        int nanos = 99988;
+        TimestampLtz timestampLTZ = TimestampLtz.fromEpochMillis(millis, nanos);
+        DataTypeRoot type = DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE;
+
+        String toStringResult = convertValueOfType(timestampLTZ, type);
+        assertThat(toStringResult).isEqualTo("2025-05-31-03-42-35_428099988");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
+    }
+
+    @Test
+    void testBigInt() {
+        long value = 1748662955428L;
+        DataTypeRoot type = DataTypeRoot.BIGINT;
+
+        String toStringResult = convertValueOfType(value, type);
+        assertThat(toStringResult).isEqualTo("1748662955428");
+        String detectInvalid = detectInvalidName(toStringResult);
+        assertThat(detectInvalid).isEqualTo(null);
     }
 }

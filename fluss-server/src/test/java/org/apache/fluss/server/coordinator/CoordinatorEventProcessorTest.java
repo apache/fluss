@@ -221,7 +221,7 @@ class CoordinatorEventProcessorTest {
         // mock CompletedSnapshotStore
         for (TableBucket tableBucket : allTableBuckets(t1Id, nBuckets)) {
             completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
-                    new TableBucket(tableBucket.getTableId(), tableBucket.getBucket()));
+                    t1, new TableBucket(tableBucket.getTableId(), tableBucket.getBucket()));
         }
         assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isNotEmpty();
 
@@ -606,6 +606,7 @@ class CoordinatorEventProcessorTest {
         // mock CompletedSnapshotStore for partition1
         for (TableBucket tableBucket : allTableBuckets(tableId, partition1Id, nBuckets)) {
             completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
+                    tablePath,
                     new TableBucket(
                             tableBucket.getTableId(),
                             tableBucket.getPartitionId(),
@@ -763,7 +764,11 @@ class CoordinatorEventProcessorTest {
                                 completedSnapshot, coordinatorEpoch, bucketLeaderEpoch),
                         responseCompletableFuture2));
         responseCompletableFuture2.get();
-        verifyReceiveRequestExceptFor(3, leader, NotifyKvSnapshotOffsetRequest.class);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        verifyReceiveRequestExceptFor(
+                                3, leader, NotifyKvSnapshotOffsetRequest.class));
     }
 
     @Test
@@ -1082,6 +1087,7 @@ class CoordinatorEventProcessorTest {
                         .hasMessage("No requests pending for inbound response.");
             } else {
                 // should contain NotifyKvSnapshotOffsetRequest
+                assertThat(testTabletServerGateway.pendingRequestSize()).isNotZero();
                 assertThat(testTabletServerGateway.getRequest(0)).isInstanceOf(requestClass);
             }
         }

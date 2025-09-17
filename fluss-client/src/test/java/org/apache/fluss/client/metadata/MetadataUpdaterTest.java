@@ -20,7 +20,6 @@ package org.apache.fluss.client.metadata;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
-import org.apache.fluss.client.utils.MetadataUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.Configuration;
@@ -34,6 +33,7 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.util.Collections;
 import java.util.List;
 
+import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -64,7 +64,7 @@ class MetadataUpdaterTest {
         // any N levels UnmodifiableCollection
         for (int i = 0; i < 20000; i++) {
             cluster =
-                    MetadataUtils.sendMetadataRequestAndRebuildCluster(
+                    sendMetadataRequestAndRebuildCluster(
                             FLUSS_CLUSTER_EXTENSION.newCoordinatorClient(),
                             true,
                             cluster,

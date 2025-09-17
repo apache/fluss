@@ -189,7 +189,7 @@ public class FlinkTestBase extends AbstractTestBase {
 
     /**
      * Wait until the default number of partitions is created. Return the map from partition id to
-     * partition name. .
+     * partition name.
      */
     public static Map<Long, String> waitUntilPartitions(
             ZooKeeperClient zooKeeperClient, TablePath tablePath) {

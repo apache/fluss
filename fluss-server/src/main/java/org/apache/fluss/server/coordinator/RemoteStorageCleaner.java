@@ -57,14 +57,14 @@ public class RemoteStorageCleaner {
         }
     }
 
-    public void deleteTableRemoteDir(TablePath tablePath, boolean isKvTable, long tableId) {
+    public void asyncDeleteTableRemoteDir(TablePath tablePath, boolean isKvTable, long tableId) {
         if (isKvTable) {
             asyncDeleteDir(FlussPaths.remoteTableDir(remoteKvDir, tablePath, tableId));
         }
         asyncDeleteDir(FlussPaths.remoteTableDir(remoteLogDir, tablePath, tableId));
     }
 
-    public void deletePartitionRemoteDir(
+    public void asyncDeletePartitionRemoteDir(
             PhysicalTablePath physicalTablePath, boolean isKvTable, TablePartition tablePartition) {
         if (isKvTable) {
             asyncDeleteDir(

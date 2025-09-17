@@ -463,6 +463,12 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ZooKeeper Client Settings
     // ------------------------------------------------------------------------
+    public static final ConfigOption<Integer> ZOOKEEPER_MAX_INFLIGHT_REQUESTS =
+            key("zookeeper.client.max-inflight-requests")
+                    .intType()
+                    .defaultValue(100)
+                    .withDescription(
+                            "The maximum number of unacknowledged requests the client will send to ZooKeeper before blocking.");
 
     public static final ConfigOption<Duration> ZOOKEEPER_SESSION_TIMEOUT =
             key("zookeeper.client.session-timeout")
@@ -757,10 +763,10 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> NETTY_CLIENT_NUM_NETWORK_THREADS =
             key("netty.client.num-network-threads")
                     .intType()
-                    .defaultValue(3)
+                    .defaultValue(4)
                     .withDescription(
                             "The number of threads that the client uses for sending requests to the "
-                                    + "network and receiving responses from network. The default value is 3");
+                                    + "network and receiving responses from network. The default value is 4");
 
     // ------------------------------------------------------------------------
     //  Client Settings
@@ -1293,7 +1299,8 @@ public class ConfigOptions {
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The data lake format of the table specifies the tiered Lakehouse storage format, such as Paimon, Iceberg, DeltaLake, or Hudi. Currently, only `paimon` is supported. "
+                            "The data lake format of the table specifies the tiered Lakehouse storage format. Currently, supported formats are `paimon`, `iceberg`, and `lance`. "
+                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi. "
                                     + "Once the `table.datalake.format` property is configured, Fluss adopts the key encoding and bucketing strategy used by the corresponding data lake format. "
                                     + "This ensures consistency in key encoding and bucketing, enabling seamless **Union Read** functionality across Fluss and Lakehouse. "
                                     + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
@@ -1640,8 +1647,8 @@ public class ConfigOptions {
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The datalake format used by Fluss to be as lake storage, such as Paimon, Iceberg, Hudi. "
-                                    + "Now, only support Paimon.");
+                            "The datalake format used by of Fluss to be as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. "
+                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka

@@ -418,30 +418,6 @@ class TableManagerITCase {
         assertThat(zkClient.getPartitions(tablePath)).isEmpty();
     }
 
-    @Test
-    void testCreateInvalidPartitionedTable() throws Exception {
-        AdminGateway adminGateway = getAdminGateway();
-        String db1 = "db1";
-        String tb1 = "tb1";
-        TablePath tablePath = TablePath.of(db1, tb1);
-        // first create a database
-        adminGateway.createDatabase(newCreateDatabaseRequest(db1, false)).get();
-
-        TableDescriptor tableWithIntPartKey =
-                newPartitionedTableBuilder(null).partitionedBy("id").build();
-        assertThatThrownBy(
-                        () ->
-                                adminGateway
-                                        .createTable(
-                                                newCreateTableRequest(
-                                                        tablePath, tableWithIntPartKey, false))
-                                        .get())
-                .cause()
-                .isInstanceOf(InvalidTableException.class)
-                .hasMessageContaining(
-                        "Currently, partitioned table supported partition key type are [STRING], but got partition key 'id' with data type INT NOT NULL.");
-    }
-
     @ParameterizedTest
     @ValueSource(booleans = {true, false})
     void testMetadata(boolean isCoordinatorServer) throws Exception {

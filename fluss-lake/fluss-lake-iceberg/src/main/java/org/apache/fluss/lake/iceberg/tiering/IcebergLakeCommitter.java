@@ -28,6 +28,7 @@ import org.apache.fluss.utils.json.BucketOffsetJsonSerde;
 
 import org.apache.iceberg.AppendFiles;
 import org.apache.iceberg.CatalogUtil;
+import org.apache.iceberg.ContentFile;
 import org.apache.iceberg.DataFile;
 import org.apache.iceberg.DeleteFile;
 import org.apache.iceberg.RewriteFiles;
@@ -162,11 +163,20 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
             Map<String, String> snapshotProperties) {
         icebergTable.refresh();
         RewriteFiles rewriteFiles = icebergTable.newRewrite();
-        for (RewriteDataFileResult rewriteDataFileResult : rewriteDataFileResults) {
-            rewriteDataFileResult.addedDataFiles().forEach(rewriteFiles::addFile);
-            rewriteDataFileResult.deletedDataFiles().forEach(rewriteFiles::deleteFile);
-        }
         try {
+            if (rewriteDataFileResults.stream()
+                            .map(RewriteDataFileResult::snapshotId)
+                            .distinct()
+                            .count()
+                    > 1) {
+                throw new IllegalArgumentException(
+                        "Rewrite data file results must have same snapshot id.");
+            }
+            rewriteFiles.validateFromSnapshot(rewriteDataFileResults.get(0).snapshotId());
+            for (RewriteDataFileResult rewriteDataFileResult : rewriteDataFileResults) {
+                rewriteDataFileResult.addedDataFiles().forEach(rewriteFiles::addFile);
+                rewriteDataFileResult.deletedDataFiles().forEach(rewriteFiles::deleteFile);
+            }
             return commit(rewriteFiles, snapshotProperties);
         } catch (Exception e) {
             List<String> rewriteAddedDataFiles =
@@ -174,7 +184,7 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
                             .flatMap(
                                     rewriteDataFileResult ->
                                             rewriteDataFileResult.addedDataFiles().stream())
-                            .map(dataFile -> dataFile.path().toString())
+                            .map(ContentFile::location)
                             .collect(Collectors.toList());
             LOG.error(
                     "Failed to commit rewrite files to iceberg, delete rewrite added files {}.",
