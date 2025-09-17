@@ -476,8 +476,9 @@ public class RemoteLogIndexCache implements Closeable {
                 index = readIndex.apply(indexFile);
             } catch (CorruptIndexException ex) {
                 LOG.info(
-                        "Error occurred while loading the stored index file {}",
+                        "Error occurred while loading the stored index file {} for bucket {}",
                         indexFile.getPath(),
+                        remoteLogSegment.tableBucket(),
                         ex);
             }
         }
