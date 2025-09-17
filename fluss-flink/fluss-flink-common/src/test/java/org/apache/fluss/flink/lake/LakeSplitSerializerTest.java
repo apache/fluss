@@ -42,10 +42,6 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 class LakeSplitSerializerTest {
     private static final byte LAKE_SNAPSHOT_SPLIT_KIND = -1;
 
-    private static final int SERIALIZER_VERSION = 1;
-
-    private static final int DESERIALIZER_VERSION = 2;
-
     private static final byte[] TEST_DATA = "test-lake-split".getBytes();
 
     private static final int STOPPING_OFFSET = 1024;
@@ -174,6 +170,8 @@ class LakeSplitSerializerTest {
     private static class TestSimpleVersionedSerializer
             implements SimpleVersionedSerializer<LakeSplit> {
 
+        private static final int V1 = 1;
+
         @Override
         public byte[] serialize(LakeSplit split) throws IOException {
             return TEST_DATA;
@@ -186,12 +184,14 @@ class LakeSplitSerializerTest {
 
         @Override
         public int getVersion() {
-            return SERIALIZER_VERSION;
+            return V1;
         }
     }
 
     private static class TestSimpleVersionedSerializerV2
             implements SimpleVersionedSerializer<LakeSplit> {
+
+        private static final int V2 = 2;
 
         @Override
         public byte[] serialize(LakeSplit split) throws IOException {
@@ -200,7 +200,7 @@ class LakeSplitSerializerTest {
 
         @Override
         public LakeSplit deserialize(int version, byte[] serialized) throws IOException {
-            if (version < DESERIALIZER_VERSION) {
+            if (version < V2) {
                 return LAKE_SPLIT;
             }
             return new TestLakeSplit(0, Collections.singletonList("2025-08-19"));
@@ -208,7 +208,7 @@ class LakeSplitSerializerTest {
 
         @Override
         public int getVersion() {
-            return DESERIALIZER_VERSION;
+            return V2;
         }
     }
 

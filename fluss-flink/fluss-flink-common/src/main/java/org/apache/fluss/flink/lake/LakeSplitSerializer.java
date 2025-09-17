@@ -40,10 +40,6 @@ import static org.apache.fluss.flink.lake.split.LakeSnapshotSplit.LAKE_SNAPSHOT_
 /** A serializer for lake split. */
 public class LakeSplitSerializer {
 
-    private static final int VERSION_0 = 0;
-
-    private static final int CURRENT_VERSION = VERSION_0;
-
     private final SimpleVersionedSerializer<LakeSplit> sourceSplitSerializer;
 
     public LakeSplitSerializer(SimpleVersionedSerializer<LakeSplit> sourceSplitSerializer) {
@@ -131,9 +127,5 @@ public class LakeSplitSerializer {
         } else {
             throw new UnsupportedOperationException("Unsupported split kind: " + splitKind);
         }
-    }
-
-    public int getVersion() {
-        return CURRENT_VERSION;
     }
 }
