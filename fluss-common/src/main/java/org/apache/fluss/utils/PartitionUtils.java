@@ -27,7 +27,6 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypeRoot;
-import org.apache.fluss.types.PartitionNameConverters;
 
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
@@ -181,6 +180,10 @@ public class PartitionUtils {
                 Integer intValue = (Integer) value;
                 stringPartitionKey = intValue.toString();
                 break;
+            case BIGINT:
+                Long bigIntValue = (Long) value;
+                stringPartitionKey = bigIntValue.toString();
+                break;
             case DATE:
                 Integer dateValue = (Integer) value;
                 stringPartitionKey = PartitionNameConverters.dayToString(dateValue);
@@ -204,10 +207,6 @@ public class PartitionUtils {
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 TimestampNtz timeStampNTZValue = (TimestampNtz) value;
                 stringPartitionKey = PartitionNameConverters.timestampToString(timeStampNTZValue);
-                break;
-            case BIGINT:
-                Long bigIntValue = (Long) value;
-                stringPartitionKey = bigIntValue.toString();
                 break;
             default:
                 throw new IllegalArgumentException("Unsupported DataTypeRoot: " + type);
