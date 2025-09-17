@@ -199,7 +199,7 @@ class TypedPartitionedTableITCase extends ClientToServerITCaseBase {
             assertThat(actualPartition.getPartitionName()).isEqualTo(result.get(i));
 
             Map<Long, List<InternalRow>> expectPartitionAppendRows = new HashMap<>();
-            expectPartitionAppendRows.put(actualPartition.getPartitionId(), List.of(row));
+            expectPartitionAppendRows.put(actualPartition.getPartitionId(), Arrays.asList(row));
             // assert result
             verifyPartitionLogs(table, schema.getRowType(), expectPartitionAppendRows);
             admin.dropTable(tablePath, true).get();
