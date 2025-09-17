@@ -123,6 +123,7 @@ public final class LogTablet {
     // note: currently, for primary key table, the log start offset nerve be updated
     private volatile long lakeLogStartOffset = Long.MAX_VALUE;
     private volatile long lakeLogEndOffset = -1L;
+    private volatile long lakeMaxTimestamp = -1;
 
     private LogTablet(
             PhysicalTablePath physicalPath,
@@ -246,6 +247,10 @@ public final class LogTablet {
 
     public long getLakeLogEndOffset() {
         return lakeLogEndOffset;
+    }
+
+    public long getLakeMaxTimestamp() {
+        return lakeMaxTimestamp;
     }
 
     public int getWriterIdCount() {
@@ -504,6 +509,12 @@ public final class LogTablet {
     public void updateLakeLogEndOffset(long lakeLogEndOffset) {
         if (lakeLogEndOffset > this.lakeLogEndOffset) {
             this.lakeLogEndOffset = lakeLogEndOffset;
+        }
+    }
+
+    public void updateLakeMaxTimestamp(long lakeMaxTimestamp) {
+        if (lakeMaxTimestamp > this.lakeMaxTimestamp) {
+            this.lakeMaxTimestamp = lakeMaxTimestamp;
         }
     }
 

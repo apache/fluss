@@ -88,6 +88,10 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             Long partitionId = partitionBucket.f0;
             if (partitionId == null) {
                 tableBucket = new TableBucket(tableId, partitionBucket.f1);
+                // we use -1 since we don't store timestamp in lake snapshot property for
+                // simplicity, it may cause the timestamp to be -1 during constructing lake
+                // snapshot to commit to Fluss.
+                // But it should happen rarely and should be a normal value after next tiering.
                 flussTableLakeSnapshot.addBucketOffsetAndTimestamp(
                         tableBucket, entry.getValue(), -1);
             } else {

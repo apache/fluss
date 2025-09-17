@@ -1490,6 +1490,8 @@ public class ServerRpcMessageUtils {
 
         lakeTableSnapshot.getLogEndOffset(tableBucket).ifPresent(reqForBucket::setLogEndOffset);
 
+        lakeTableSnapshot.getMaxTimestamp(tableBucket).ifPresent(reqForBucket::setMaxTimestamp);
+
         return reqForBucket;
     }
 
@@ -1509,8 +1511,11 @@ public class ServerRpcMessageUtils {
                     reqForBucket.hasLogStartOffset() ? reqForBucket.getLogStartOffset() : null;
             Long logEndOffset =
                     reqForBucket.hasLogEndOffset() ? reqForBucket.getLogEndOffset() : null;
+            Long maxTimestamp =
+                    reqForBucket.hasMaxTimestamp() ? reqForBucket.getMaxTimestamp() : null;
             lakeBucketOffsetMap.put(
-                    tableBucket, new LakeBucketOffset(snapshotId, logStartOffset, logEndOffset));
+                    tableBucket,
+                    new LakeBucketOffset(snapshotId, logStartOffset, logEndOffset, maxTimestamp));
         }
 
         return new NotifyLakeTableOffsetData(

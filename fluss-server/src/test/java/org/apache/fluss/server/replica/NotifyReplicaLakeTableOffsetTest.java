@@ -43,30 +43,37 @@ class NotifyReplicaLakeTableOffsetTest extends ReplicaTestBase {
         Replica replica = replicaManager.getReplicaOrException(tb);
 
         // now, notify lake table offset
-        notifyAndVerify(tb, replica, 1, 0L, 20L);
+        notifyAndVerify(tb, replica, 1, 0L, 20L, System.currentTimeMillis());
         // notify again
-        notifyAndVerify(tb, replica, 2, 20L, 30L);
+        notifyAndVerify(tb, replica, 2, 20L, 30L, System.currentTimeMillis());
     }
 
     private void notifyAndVerify(
-            TableBucket tb, Replica replica, long snapshotId, long startOffset, long endOffset)
+            TableBucket tb,
+            Replica replica,
+            long snapshotId,
+            long startOffset,
+            long endOffset,
+            long maxTimestamp)
             throws Exception {
         NotifyLakeTableOffsetData notifyLakeTableOffsetData =
-                getNotifyLakeTableOffset(tb, snapshotId, startOffset, endOffset);
+                getNotifyLakeTableOffset(tb, snapshotId, startOffset, endOffset, maxTimestamp);
         CompletableFuture<NotifyLakeTableOffsetResponse> future = new CompletableFuture<>();
         replicaManager.notifyLakeTableOffset(notifyLakeTableOffsetData, future::complete);
         future.get();
-        verifyLakeTableOffset(replica, snapshotId, startOffset, endOffset);
+        verifyLakeTableOffset(replica, snapshotId, startOffset, endOffset, maxTimestamp);
     }
 
     private void verifyLakeTableOffset(
-            Replica replica, long snapshotId, long startOffset, long endOffset) {
+            Replica replica, long snapshotId, long startOffset, long endOffset, long maxTimestamp) {
         AssertionsForClassTypes.assertThat(replica.getLogTablet().getLakeTableSnapshotId())
                 .isEqualTo(snapshotId);
         AssertionsForClassTypes.assertThat(replica.getLogTablet().getLakeLogStartOffset())
                 .isEqualTo(startOffset);
         AssertionsForClassTypes.assertThat(replica.getLogTablet().getLakeLogEndOffset())
                 .isEqualTo(endOffset);
+        AssertionsForClassTypes.assertThat(replica.getLogTablet().getLakeMaxTimestamp())
+                .isEqualTo(maxTimestamp);
     }
 
     private TableBucket makeTableBucket(boolean partitionTable) {
@@ -82,10 +89,15 @@ class NotifyReplicaLakeTableOffsetTest extends ReplicaTestBase {
     }
 
     private NotifyLakeTableOffsetData getNotifyLakeTableOffset(
-            TableBucket tableBucket, long snapshotId, long startOffset, long endOffset) {
+            TableBucket tableBucket,
+            long snapshotId,
+            long startOffset,
+            long endOffset,
+            long maxTimestamp) {
         return new NotifyLakeTableOffsetData(
                 1,
                 Collections.singletonMap(
-                        tableBucket, new LakeBucketOffset(snapshotId, startOffset, endOffset)));
+                        tableBucket,
+                        new LakeBucketOffset(snapshotId, startOffset, endOffset, maxTimestamp)));
     }
 }

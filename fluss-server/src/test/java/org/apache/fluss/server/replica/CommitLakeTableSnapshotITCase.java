@@ -131,6 +131,7 @@ class CommitLakeTableSnapshotITCase {
                         assertThat(logTablet.getLakeLogStartOffset())
                                 .isEqualTo(dataLakeLogStartOffset);
                         assertThat(logTablet.getLakeLogEndOffset()).isEqualTo(dataLakeLogEndOffset);
+                        assertThat(logTablet.getLakeMaxTimestamp()).isEqualTo(dataLakeMaxTimestamp);
                     });
         }
 

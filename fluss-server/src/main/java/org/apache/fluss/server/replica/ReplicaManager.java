@@ -720,6 +720,10 @@ public class ReplicaManager {
                                 .getLogEndOffset()
                                 .ifPresent(logTablet::updateLakeLogEndOffset);
 
+                        lakeBucketOffset
+                                .getMaxTimestamp()
+                                .ifPresent(logTablet::updateLakeMaxTimestamp);
+
                         responseCallback.accept(new NotifyLakeTableOffsetResponse());
                     }
                 });
@@ -779,6 +783,10 @@ public class ReplicaManager {
             lakeTableSnapshot
                     .getLogEndOffset(tb)
                     .ifPresent(replica.getLogTablet()::updateLakeLogEndOffset);
+
+            lakeTableSnapshot
+                    .getMaxTimestamp(tb)
+                    .ifPresent(replica.getLogTablet()::updateLakeMaxTimestamp);
         }
     }
 
