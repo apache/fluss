@@ -160,4 +160,17 @@ public class EnumsTest {
         assertThat(parsed.getEAt(1)).isEqualTo(E1.B1);
         assertThat(parsed.getEAt(2)).isEqualTo(E1.C1);
     }
+
+    @Test
+    public void testToString() {
+        EnumTest2 lpet2 = new EnumTest2().setE(E2.D2);
+        assertThat(lpet2.toString()).isEqualTo("EnumTest2{e=D2}");
+
+        EnumTest2Repeated lpet2Repeated = new EnumTest2Repeated();
+        lpet2Repeated.addE(E2.A2);
+        lpet2Repeated.addE(E2.B2);
+        lpet2Repeated.addE(E2.C2);
+        lpet2Repeated.addE(E2.D2);
+        assertThat(lpet2Repeated.toString()).isEqualTo("EnumTest2Repeated{es=[A2, B2, C2, D2]}");
+    }
 }
