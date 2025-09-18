@@ -68,7 +68,7 @@ class ClusterTest {
 
     @Test
     void testReturnModifiableCollections() {
-        Cluster cluster = createCluster();
+        Cluster cluster = createCluster(aliveTabletServersById);
         assertThatThrownBy(() -> cluster.getAliveTabletServers().put(1, NODES[3]))
                 .isInstanceOf(UnsupportedOperationException.class);
         assertThatThrownBy(
@@ -87,7 +87,7 @@ class ClusterTest {
 
     @Test
     void testGetTable() {
-        Cluster cluster = createCluster();
+        Cluster cluster = createCluster(aliveTabletServersById);
         assertThat(cluster.getTable(DATA1_TABLE_PATH).get()).isEqualTo(DATA1_TABLE_INFO);
         assertThat(cluster.getTable(DATA2_TABLE_PATH).get()).isEqualTo(DATA2_TABLE_INFO);
         assertThat(cluster.getSchema(DATA1_TABLE_PATH).get())
@@ -98,7 +98,7 @@ class ClusterTest {
 
     @Test
     void testInvalidMetaAndUpdate() {
-        Cluster cluster = createCluster();
+        Cluster cluster = createCluster(aliveTabletServersById);
         for (int i = 0; i < 10000; i++) {
             // mock invalid meta
             cluster =
@@ -130,7 +130,35 @@ class ClusterTest {
                                         NODES_IDS)));
     }
 
-    private Cluster createCluster() {
+    @Test
+    void testGetRandomTabletServer() {
+        Map<Integer, ServerNode> aliveTabletServersById = new HashMap<>();
+        for (int i = 0; i < 1000; i++) {
+            aliveTabletServersById.put(
+                    i, new ServerNode(i, "localhost", 99 + i, ServerType.TABLET_SERVER));
+        }
+        Cluster cluster = createCluster(aliveTabletServersById);
+
+        Map<ServerNode, Integer> selectionCount = new HashMap<>();
+        int selectionNumber = 100000;
+        for (int i = 0; i < selectionNumber; i++) {
+            ServerNode serverNode = cluster.getRandomTabletServer();
+            selectionCount.put(serverNode, selectionCount.getOrDefault(serverNode, 0) + 1);
+        }
+
+        double avg = selectionNumber / (double) selectionCount.size();
+        double variance =
+                selectionCount.values().stream()
+                                .mapToDouble(count -> Math.pow(count - avg, 2))
+                                .sum()
+                        / selectionCount.size();
+        double stdDev = Math.sqrt(variance);
+        double cv = stdDev / avg;
+        // check the Coefficient of Variation is less than 0.2
+        assertThat(cv).isLessThan(0.2);
+    }
+
+    private Cluster createCluster(Map<Integer, ServerNode> aliveTabletServersById) {
         Map<PhysicalTablePath, List<BucketLocation>> tablePathToBucketLocations = new HashMap<>();
         tablePathToBucketLocations.put(
                 DATA1_PHYSICAL_TABLE_PATH,

@@ -34,6 +34,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * An immutable representation of a subset of the server nodes, tables, and buckets and schemas in
@@ -44,6 +46,9 @@ import java.util.Set;
  */
 @Internal
 public final class Cluster {
+
+    private static final AtomicLong RANDOM_SEED = new AtomicLong(System.nanoTime());
+
     @Nullable private final ServerNode coordinatorServer;
     private final Map<PhysicalTablePath, List<BucketLocation>> availableLocationsByPath;
     private final Map<TableBucket, BucketLocation> availableLocationByBucket;
@@ -209,7 +214,13 @@ public final class Cluster {
     public ServerNode getRandomTabletServer() {
         // TODO this method need to get one tablet server according to the load.
         List<ServerNode> serverNodes = new ArrayList<>(aliveTabletServersById.values());
-        return !serverNodes.isEmpty() ? serverNodes.get(0) : null;
+        if (serverNodes.isEmpty()) {
+            return null;
+        }
+
+        long seedMix = RANDOM_SEED.get() ^ ThreadLocalRandom.current().nextLong();
+        int index = (int) (Math.abs(seedMix) % serverNodes.size());
+        return serverNodes.get(index);
     }
 
     /** Get the list of available buckets for this table/partition. */
