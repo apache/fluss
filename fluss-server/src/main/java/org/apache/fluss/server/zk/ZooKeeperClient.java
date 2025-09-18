@@ -1085,7 +1085,7 @@ public class ZooKeeperClient implements AutoCloseable {
     public Map<Integer, Optional<BucketSnapshot>> getTableLatestBucketSnapshot(long tableId)
             throws Exception {
         Optional<TableAssignment> optTableAssignment = getTableAssignment(tableId);
-        if (optTableAssignment.isEmpty()) {
+        if (!optTableAssignment.isPresent()) {
             return Collections.emptyMap();
         } else {
             TableAssignment tableAssignment = optTableAssignment.get();
@@ -1096,7 +1096,7 @@ public class ZooKeeperClient implements AutoCloseable {
     public Map<Integer, Optional<BucketSnapshot>> getPartitionLatestBucketSnapshot(long partitionId)
             throws Exception {
         Optional<PartitionAssignment> optPartitionAssignment = getPartitionAssignment(partitionId);
-        if (optPartitionAssignment.isEmpty()) {
+        if (!optPartitionAssignment.isPresent()) {
             return Collections.emptyMap();
         } else {
             return getBucketSnapshots(
@@ -1634,9 +1634,11 @@ public class ZooKeeperClient implements AutoCloseable {
 
         // Check for non-existent partitions
         if (!remainingPartitionIds.isEmpty()) {
-            return CompletableFuture.failedFuture(
+            CompletableFuture<List<PartitionPathInfo>> future = new CompletableFuture<>();
+            future.completeExceptionally(
                     new PartitionNotExistException(
                             "Partition not exist for partition ids: " + remainingPartitionIds));
+            return future;
         }
 
         if (tablePartitionMapping.isEmpty()) {
@@ -1859,7 +1861,7 @@ public class ZooKeeperClient implements AutoCloseable {
                                             this.getPartition(
                                                     physicalTablePath.getTablePath(),
                                                     physicalTablePath.getPartitionName());
-                                    if (tablePartition.isEmpty()) {
+                                    if (!tablePartition.isPresent()) {
                                         throw new PartitionNotExistException(
                                                 "Table partition '"
                                                         + physicalTablePath
