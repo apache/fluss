@@ -643,12 +643,11 @@ class ZooKeeperClientTest {
         zookeeperClient.registerTable(tablePath, tableReg);
 
         // Create partition assignment
+        Map<Integer, BucketAssignment> bucketAssignments = new HashMap<>();
+        bucketAssignments.put(0, BucketAssignment.of(1, 2));
+        bucketAssignments.put(1, BucketAssignment.of(2, 3));
         PartitionAssignment partitionAssignment =
-                new PartitionAssignment(
-                        tableId,
-                        Map.of(
-                                0, BucketAssignment.of(1, 2),
-                                1, BucketAssignment.of(2, 3)));
+                new PartitionAssignment(tableId, bucketAssignments);
 
         zookeeperClient.registerPartitionAssignmentAndMetadata(
                 partitionId, partitionName, partitionAssignment, tablePath, tableId);
@@ -714,9 +713,11 @@ class ZooKeeperClientTest {
         String partitionName2 = "p2";
 
         PartitionAssignment partitionAssignment1 =
-                new PartitionAssignment(tableId1, Map.of(0, BucketAssignment.of(1, 2)));
+                new PartitionAssignment(
+                        tableId1, Collections.singletonMap(0, BucketAssignment.of(1, 2)));
         PartitionAssignment partitionAssignment2 =
-                new PartitionAssignment(tableId1, Map.of(1, BucketAssignment.of(2, 3)));
+                new PartitionAssignment(
+                        tableId1, Collections.singletonMap(1, BucketAssignment.of(2, 3)));
 
         zookeeperClient.registerPartitionAssignmentAndMetadata(
                 partitionId1, partitionName1, partitionAssignment1, tablePath1, tableId1);
@@ -728,7 +729,8 @@ class ZooKeeperClientTest {
         String partitionName3 = "p1";
 
         PartitionAssignment partitionAssignment3 =
-                new PartitionAssignment(tableId2, Map.of(0, BucketAssignment.of(1, 3)));
+                new PartitionAssignment(
+                        tableId2, Collections.singletonMap(0, BucketAssignment.of(1, 3)));
 
         zookeeperClient.registerPartitionAssignmentAndMetadata(
                 partitionId3, partitionName3, partitionAssignment3, tablePath2, tableId2);
@@ -800,7 +802,7 @@ class ZooKeeperClientTest {
     void testBatchGetPartitionMetadataFromZkAsyncWithNonExistentPartition() {
         // Test error handling when partition doesn't exist
         TablePath tablePath = TablePath.of("test_db", "table1");
-        Set<Long> nonExistentPartitionIds = Set.of(999L, 1000L);
+        Set<Long> nonExistentPartitionIds = new HashSet<>(Arrays.asList(999L, 1000L));
 
         CompletableFuture<List<PartitionMetadata>> future =
                 zookeeperClient.batchGetPartitionMetadataFromZkAsync(

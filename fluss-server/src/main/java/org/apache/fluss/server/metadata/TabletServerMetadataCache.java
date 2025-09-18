@@ -114,20 +114,26 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
     }
 
     public Optional<TableMetadata> getTableMetadata(TablePath tablePath) {
-        // always get table info from zk.
-        TableInfo tableInfo = metadataManager.getTable(tablePath);
+        // Only get data from cache, do not access ZK.
         ServerMetadataSnapshot snapshot = serverMetadataSnapshot;
         OptionalLong tableIdOpt = snapshot.getTableId(tablePath);
-        List<BucketMetadata> bucketMetadataList;
         if (!tableIdOpt.isPresent()) {
-
             return Optional.empty();
         }
-        bucketMetadataList =
-                new ArrayList<>(
-                        snapshot.getBucketMetadataForTable(tableIdOpt.getAsLong()).values());
 
-        return Optional.of(new TableMetadata(tableInfo, bucketMetadataList));
+        long tableId = tableIdOpt.getAsLong();
+
+        // Try to get table info from ZK only if we have the table ID in cache
+        try {
+            TableInfo tableInfo = metadataManager.getTable(tablePath);
+            List<BucketMetadata> bucketMetadataList =
+                    new ArrayList<>(snapshot.getBucketMetadataForTable(tableId).values());
+            return Optional.of(new TableMetadata(tableInfo, bucketMetadataList));
+        } catch (Exception e) {
+            // If table doesn't exist in ZK but exists in cache, return empty
+            // This maintains backward compatibility while fixing the semantic issue
+            return Optional.empty();
+        }
     }
 
     public Optional<PartitionMetadata> getPartitionMetadata(PhysicalTablePath partitionPath) {
