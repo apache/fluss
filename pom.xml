@@ -162,6 +162,11 @@
             -Djdk.reflect.useDirectMethodHandle=false
             -Dio.netty.tryReflectionSetAccessible=true
         </extraJavaTestArgs>
+        <!-- Javadoc generation properties -->
+        <maven.javadoc.failOnError>false</maven.javadoc.failOnError>
+        <maven.javadoc.failOnWarnings>false</maven.javadoc.failOnWarnings>
+        <maven.javadoc.quiet>true</maven.javadoc.quiet>
+        <javadoc.version>3.6.3</javadoc.version>
     </properties>
 
     <dependencies>
@@ -527,6 +532,57 @@
                                 </goals>
                             </execution>
                         </executions>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+        <profile>
+            <id>javadoc-aggregate</id>
+            <activation>
+                <property>
+                    <name>javadoc.aggregate</name>
+                </property>
+            </activation>
+            <modules>
+                <!-- Only include Public-API-relevant modules -->
+                <module>fluss-client</module>
+                <module>fluss-flink</module>
+            </modules>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.apache.maven.plugins</groupId>
+                        <artifactId>maven-javadoc-plugin</artifactId>
+                        <version>${javadoc.version}</version>
+                        <configuration>
+                            <!-- Enhanced configuration for aggregate docs -->
+                            <source>11</source>
+                            <encoding>UTF-8</encoding>
+                            <windowTitle>Apache Fluss ${project.version} API</windowTitle>
+                            <doctitle>Apache Fluss ${project.version} API</doctitle>
+                            <show>protected</show>
+                            <use>true</use>
+                            <version>true</version>
+                            <author>true</author>
+                            <splitindex>true</splitindex>
+                            <nohelp>true</nohelp>
+                            <doclint>none</doclint>
+                            <failOnError>false</failOnError>
+                            <failOnWarnings>false</failOnWarnings>
+                            <quiet>true</quiet>
+                            <detectOfflineLinks>false</detectOfflineLinks>
+                            <additionalJOptions>
+                                <additionalJOption>-J-Xmx2g</additionalJOption>
+                                <additionalJOption>-J--illegal-access=permit</additionalJOption>
+                            </additionalJOptions>
+                            <excludePackageNames>*.internal.*:*.impl.*:*.test.*:*.tests.*:*.generated.*:*.benchmark.*:*.protogen.*</excludePackageNames>
+                            <groups>
+                            </groups>
+                            <links>
+                                <link>https://docs.oracle.com/en/java/javase/11/docs/api/</link>
+                                <link>https://nightlies.apache.org/flink/flink-docs-master/api/java/</link>
+                            </links>
+                        </configuration>
                     </plugin>
                 </plugins>
             </build>
@@ -945,6 +1001,81 @@
                     </execution>
                 </executions>
             </plugin>
+<!--            <plugin>-->
+<!--                <groupId>org.apache.maven.plugins</groupId>-->
+<!--                <artifactId>maven-javadoc-plugin</artifactId>-->
+<!--                <version>${javadoc.version}</version>-->
+<!--                <configuration>-->
+<!--                    &lt;!&ndash; Java source settings &ndash;&gt;-->
+<!--                    <source>11</source>-->
+<!--                    <encoding>UTF-8</encoding>-->
+<!--                    <docencoding>UTF-8</docencoding>-->
+<!--                    <charset>UTF-8</charset>-->
+
+<!--                    &lt;!&ndash; Titles &ndash;&gt;-->
+<!--                    <windowTitle>Apache Fluss ${project.version} API</windowTitle>-->
+<!--                    <doctitle>Apache Fluss ${project.version} API</doctitle>-->
+
+<!--                    &lt;!&ndash; Standard options &ndash;&gt;-->
+<!--                    <author>true</author>-->
+<!--                    <version>true</version>-->
+<!--                    <use>true</use>-->
+<!--                    <splitindex>true</splitindex>-->
+<!--                    <show>protected</show>-->
+<!--                    <nohelp>true</nohelp>-->
+
+<!--                    &lt;!&ndash; Error handling &ndash;&gt;-->
+<!--                    <doclint>none</doclint>-->
+<!--                    <failOnError>false</failOnError>-->
+<!--                    <failOnWarnings>false</failOnWarnings>-->
+
+<!--                    &lt;!&ndash; External links &ndash;&gt;-->
+<!--                    <links>-->
+<!--                        <link>https://docs.oracle.com/en/java/javase/11/docs/api/</link>-->
+<!--                        <link>https://nightlies.apache.org/flink/flink-docs-master/api/java/</link>-->
+<!--                    </links>-->
+
+<!--                    &lt;!&ndash; Group by packages &ndash;&gt;-->
+<!--                    <groups>-->
+<!--                        <group>-->
+<!--                            <title>Client API</title>-->
+<!--                            <packages>org.apache.fluss.client*</packages>-->
+<!--                        </group>-->
+<!--                        <group>-->
+<!--                            <title>Flink Integration</title>-->
+<!--                            <packages>org.apache.fluss.flink*</packages>-->
+<!--                        </group>-->
+<!--                    </groups>-->
+
+<!--                    &lt;!&ndash; Exclude tests/internal &ndash;&gt;-->
+<!--                    <excludePackageNames>*.internal*:*.impl*:*.test*:*.tests*:*.generated*:*.benchmark*</excludePackageNames>-->
+
+<!--                    <subpackages>org.apache.fluss</subpackages>-->
+
+<!--                    <additionalJOptions>-->
+<!--                        <additionalJOption>-Xdoclint:none</additionalJOption>-->
+<!--                        <additionalJOption>-Xmaxwarns</additionalJOption>-->
+<!--                        <additionalJOption>1</additionalJOption>-->
+<!--                        <additionalJOption>-J-Xmx1024m</additionalJOption>-->
+<!--                    </additionalJOptions>-->
+<!--                </configuration>-->
+
+<!--                <executions>-->
+<!--                    <execution>-->
+<!--                        <id>aggregate</id>-->
+<!--                        <phase>site</phase>-->
+<!--                        <goals>-->
+<!--                            <goal>aggregate</goal>-->
+<!--                        </goals>-->
+<!--                    </execution>-->
+<!--                    <execution>-->
+<!--                        <id>attach-javadocs</id>-->
+<!--                        <goals>-->
+<!--                            <goal>jar</goal>-->
+<!--                        </goals>-->
+<!--                    </execution>-->
+<!--                </executions>-->
+<!--            </plugin>-->
 
         </plugins>
 
