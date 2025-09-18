@@ -240,6 +240,14 @@ public final class NettyServerHandler extends ChannelInboundHandlerAdapter {
             send.writeTo(ctx);
             ctx.flush();
             long requestEndTimeMs = System.currentTimeMillis();
+            LOG.debug(
+                    "Finished process request type: {}, inQueueTime: {}, processTime: {}, "
+                            + "responseSendToClientTime: {}, request from: {}",
+                    request.getApiMethod().getApiKey(),
+                    request.getRequestDequeTimeMs() - request.getStartTimeMs(),
+                    request.getRequestCompletedTimeMs() - request.getRequestDequeTimeMs(),
+                    requestEndTimeMs - request.getRequestCompletedTimeMs(),
+                    request.getAddress());
             updateRequestMetrics(request, requestEndTimeMs);
         } catch (Throwable t) {
             LOG.error("Failed to send response to client.", t);
