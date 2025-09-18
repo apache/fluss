@@ -1649,6 +1649,7 @@ public final class Replica {
         failedIsrUpdates.inc();
         switch (error) {
             case OPERATION_NOT_ATTEMPTED_EXCEPTION:
+            case INELIGIBLE_REPLICA_EXCEPTION:
                 // Care must be taken when resetting to the last committed state since we may not
                 // know in general whether the request was applied or not taking into account
                 // retries and controller changes which might have occurred before we received the

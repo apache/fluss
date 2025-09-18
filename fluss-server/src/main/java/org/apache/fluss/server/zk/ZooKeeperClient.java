@@ -408,6 +408,10 @@ public class ZooKeeperClient implements AutoCloseable {
                 .forPath(bucketsParentPath);
 
         for (RegisterTableBucketLeadAndIsrInfo info : registerList) {
+            LOG.info(
+                    "Batch Register {} for bucket {} in Zookeeper.",
+                    info.getLeaderAndIsr(),
+                    info.getTableBucket());
             byte[] data = LeaderAndIsrZNode.encode(info.getLeaderAndIsr());
             // create direct parent node
             CuratorOp parentNodeCreate =
@@ -487,6 +491,7 @@ public class ZooKeeperClient implements AutoCloseable {
             TableBucket tableBucket = entry.getKey();
             LeaderAndIsr leaderAndIsr = entry.getValue();
 
+            LOG.info("Batch Update {} for bucket {} in Zookeeper.", leaderAndIsr, tableBucket);
             String path = LeaderAndIsrZNode.path(tableBucket);
             byte[] data = LeaderAndIsrZNode.encode(leaderAndIsr);
             CuratorOp updateOp = zkClient.transactionOp().setData().forPath(path, data);

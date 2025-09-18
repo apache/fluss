@@ -28,6 +28,7 @@ import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.DuplicateSequenceException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FencedTieringEpochException;
+import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -217,7 +218,11 @@ public enum Errors {
     LAKE_SNAPSHOT_NOT_EXIST(
             53, "The lake snapshot is not exist.", LakeTableSnapshotNotExistException::new),
     LAKE_TABLE_ALREADY_EXIST(
-            54, "The lake table already exists.", LakeTableAlreadyExistException::new);
+            54, "The lake table already exists.", LakeTableAlreadyExistException::new),
+    INELIGIBLE_REPLICA_EXCEPTION(
+            55,
+            "The new ISR contains at least one ineligible replica.",
+            IneligibleReplicaException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

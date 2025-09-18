@@ -25,6 +25,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
 import org.apache.fluss.exception.TabletServerNotAvailableException;
@@ -1026,6 +1027,20 @@ public class CoordinatorEventProcessor implements EventProcessor {
                 // that this node is not the leader.
                 throw new InvalidUpdateVersionException(
                         "The request bucket epoch in adjust isr request is lower than current bucket epoch in coordinator.");
+            } else {
+                // Check if the new ISR are all ineligible replicas (doesn't contain any shutting
+                // down tabletServers).
+                Set<Integer> ineligibleReplicas = new HashSet<>(newLeaderAndIsr.isr());
+                ineligibleReplicas.removeAll(coordinatorContext.liveTabletServerSet());
+                if (!ineligibleReplicas.isEmpty()) {
+                    String errorMsg =
+                            String.format(
+                                    "Rejecting adjustIsr request for table bucket %s because it "
+                                            + "specified ineligible replicas %s in the new ISR %s",
+                                    tableBucket, ineligibleReplicas, newLeaderAndIsr.isr());
+                    LOG.info(errorMsg);
+                    throw new IneligibleReplicaException(errorMsg);
+                }
             }
         }
     }

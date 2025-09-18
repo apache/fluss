@@ -20,6 +20,7 @@ package org.apache.fluss.server.replica;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FencedLeaderEpochException;
+import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.server.entity.FetchReqInfo;
@@ -118,7 +119,7 @@ public class AdjustIsrTest extends ReplicaTestBase {
     }
 
     @Test
-    void testSubmitShrinkIsrAsLeaderFenced() throws Exception {
+    void testSubmitShrinkIsrAsLeaderFenced() {
         // replica set is 1,2,3 , isr set is 1,2,3.
         TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
         makeLogTableAsLeader(tb, Arrays.asList(1, 2, 3), Arrays.asList(1, 2, 3), false);
@@ -143,5 +144,35 @@ public class AdjustIsrTest extends ReplicaTestBase {
                 .rootCause()
                 .isInstanceOf(FencedLeaderEpochException.class)
                 .hasMessageContaining("request leader epoch is fenced.");
+    }
+
+    @Test
+    void testSubmitShrinkIsrAsServerAlreadyShutdown() {
+        // replica set is 1,2,3 , isr set is 1,2,3.
+        TableBucket tb = new TableBucket(DATA1_TABLE_ID, 1);
+        makeLogTableAsLeader(tb, Arrays.asList(1, 2, 3), Arrays.asList(1, 2, 3), false);
+
+        Replica replica = replicaManager.getReplicaOrException(tb);
+        assertThat(replica.getIsr()).containsExactlyInAnyOrder(1, 2, 3);
+
+        // To mock we prepare an isr shrink in Replica#maybeShrinkIsr();
+        IsrState.PendingShrinkIsrState pendingShrinkIsrState =
+                replica.prepareIsrShrink(
+                        new IsrState.CommittedIsrState(Arrays.asList(1, 2, 3)),
+                        Arrays.asList(1, 2),
+                        Collections.singletonList(3));
+
+        // Set tabletServer-2 as shutdown tabletServers to mock server already shutdown.
+        testCoordinatorGateway.setShutdownTabletServers(Collections.singleton(2));
+        assertThatThrownBy(
+                        () ->
+                                replica.submitAdjustIsr(pendingShrinkIsrState)
+                                        .get(1, TimeUnit.MINUTES))
+                .rootCause()
+                .isInstanceOf(IneligibleReplicaException.class)
+                .hasMessage(
+                        "Rejecting adjustIsr request for table bucket "
+                                + "TableBucket{tableId=150001, bucket=1} because it specified ineligible replicas [2] "
+                                + "in the new ISR LeaderAndIsr{leader=1, leaderEpoch=0, isr=[1, 2], coordinatorEpoch=0, bucketEpoch=0}");
     }
 }
