@@ -618,7 +618,14 @@ public class CoordinatorRequestBatch {
                 (tableId, bucketMetadataList) -> {
                     TableInfo tableInfo = getTableInfo(tableId);
                     if (tableInfo != null) {
-                        tableMetadataList.add(new TableMetadata(tableInfo, bucketMetadataList));
+                        tableMetadataList.add(
+                                new TableMetadata(
+                                        tableInfo.getTableId(),
+                                        tableInfo.getSchemaId(),
+                                        tableInfo.getCreatedTime(),
+                                        tableInfo.getModifiedTime(),
+                                        tableInfo.getTablePath(),
+                                        bucketMetadataList));
                     }
                 });
 
@@ -662,7 +669,13 @@ public class CoordinatorRequestBatch {
                     TableInfo tableInfo = getTableInfo(tableId);
                     if (tableInfo != null) {
                         tableMetadataList.add(
-                                new TableMetadata(getTableInfo(tableId), Collections.emptyList()));
+                                new TableMetadata(
+                                        tableInfo.getTableId(),
+                                        tableInfo.getSchemaId(),
+                                        tableInfo.getCreatedTime(),
+                                        tableInfo.getModifiedTime(),
+                                        tableInfo.getTablePath(),
+                                        Collections.emptyList()));
                     }
                 });
 
