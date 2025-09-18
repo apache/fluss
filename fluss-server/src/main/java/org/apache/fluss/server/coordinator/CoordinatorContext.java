@@ -156,19 +156,7 @@ public class CoordinatorContext {
     }
 
     public boolean isReplicaOnline(int serverId, TableBucket tableBucket) {
-        return isReplicaOnline(serverId, tableBucket, false);
-    }
-
-    public boolean isReplicaOnline(
-            int serverId, TableBucket tableBucket, boolean includeShuttingDownTabletServers) {
-        boolean serverOnline;
-        if (includeShuttingDownTabletServers) {
-            serverOnline = liveOrShuttingDownTabletServers().contains(serverId);
-        } else {
-            serverOnline = liveTabletServerSet().contains(serverId);
-        }
-
-        return serverOnline
+        return liveTabletServerSet().contains(serverId)
                 && !replicasOnOffline
                         .getOrDefault(serverId, Collections.emptySet())
                         .contains(tableBucket);

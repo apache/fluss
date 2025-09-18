@@ -1234,6 +1234,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
         // If the tabletServer is a follower, updates the isr in ZK and notifies the current leader.
         replicaStateMachine.handleStateChanges(replicasFollowedByServer, OfflineReplica);
 
+        // Return the list of buckets that are still being managed by the controlled shutdown
+        // tabletServer after leader migration.
         response.addAllRemainingLeaderBuckets(
                 coordinatorContext.getBucketsWithLeaderIn(tabletServerId).stream()
                         .map(ServerRpcMessageUtils::fromTableBucket)

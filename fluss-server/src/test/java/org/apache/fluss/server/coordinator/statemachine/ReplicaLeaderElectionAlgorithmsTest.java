@@ -17,6 +17,8 @@
 
 package org.apache.fluss.server.coordinator.statemachine;
 
+import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionAlgorithms.LeaderElectionResult;
+
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
@@ -39,8 +41,12 @@ public class ReplicaLeaderElectionAlgorithmsTest {
         List<Integer> liveReplicas = Collections.singletonList(4);
         List<Integer> isr = Arrays.asList(2, 4);
 
-        Optional<Integer> leaderOpt = defaultReplicaLeaderElection(assignments, liveReplicas, isr);
-        assertThat(leaderOpt).hasValue(4);
+        Optional<LeaderElectionResult> leaderElectionResultOpt =
+                defaultReplicaLeaderElection(assignments, liveReplicas, isr);
+        assertThat(leaderElectionResultOpt.isPresent()).isTrue();
+        LeaderElectionResult leaderElectionResult = leaderElectionResultOpt.get();
+        assertThat(leaderElectionResult.getLeader()).isEqualTo(4);
+        assertThat(leaderElectionResult.getNewIsr()).containsExactly(2, 4);
     }
 
     @Test
@@ -49,10 +55,13 @@ public class ReplicaLeaderElectionAlgorithmsTest {
         List<Integer> liveReplicas = Arrays.asList(2, 4);
         List<Integer> isr = Arrays.asList(2, 4);
         Set<Integer> shutdownTabletServers = Collections.singleton(2);
-        Optional<Integer> leaderOpt =
+        Optional<LeaderElectionResult> leaderElectionResultOpt =
                 controlledShutdownReplicaLeaderElection(
                         assignments, liveReplicas, isr, shutdownTabletServers);
-        assertThat(leaderOpt).hasValue(4);
+        assertThat(leaderElectionResultOpt.isPresent()).isTrue();
+        LeaderElectionResult leaderElectionResult = leaderElectionResultOpt.get();
+        assertThat(leaderElectionResult.getLeader()).isEqualTo(4);
+        assertThat(leaderElectionResult.getNewIsr()).containsExactly(4);
     }
 
     @Test
@@ -61,10 +70,10 @@ public class ReplicaLeaderElectionAlgorithmsTest {
         List<Integer> liveReplicas = Arrays.asList(2, 4);
         List<Integer> isr = Collections.singletonList(2);
         Set<Integer> shutdownTabletServers = Collections.singleton(2);
-        Optional<Integer> leaderOpt =
+        Optional<LeaderElectionResult> leaderElectionResultOpt =
                 controlledShutdownReplicaLeaderElection(
                         assignments, liveReplicas, isr, shutdownTabletServers);
-        assertThat(leaderOpt).isEmpty();
+        assertThat(leaderElectionResultOpt).isEmpty();
     }
 
     @Test
@@ -73,9 +82,9 @@ public class ReplicaLeaderElectionAlgorithmsTest {
         List<Integer> liveReplicas = Arrays.asList(2, 4);
         List<Integer> isr = Arrays.asList(2, 4);
         Set<Integer> shutdownTabletServers = new HashSet<>(Arrays.asList(2, 4));
-        Optional<Integer> leaderOpt =
+        Optional<LeaderElectionResult> leaderElectionResultOpt =
                 controlledShutdownReplicaLeaderElection(
                         assignments, liveReplicas, isr, shutdownTabletServers);
-        assertThat(leaderOpt).isEmpty();
+        assertThat(leaderElectionResultOpt).isEmpty();
     }
 }

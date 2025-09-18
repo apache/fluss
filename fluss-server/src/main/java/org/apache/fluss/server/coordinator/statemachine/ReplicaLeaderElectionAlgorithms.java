@@ -21,23 +21,24 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /** The algorithms to elect the replica leader. */
 public class ReplicaLeaderElectionAlgorithms {
-    public static Optional<Integer> defaultReplicaLeaderElection(
+    public static Optional<LeaderElectionResult> defaultReplicaLeaderElection(
             List<Integer> assignments, List<Integer> aliveReplicas, List<Integer> isr) {
         // currently, we always use the first replica in assignment, which also in aliveReplicas and
         // isr as the leader replica.
         for (int assignment : assignments) {
             if (aliveReplicas.contains(assignment) && isr.contains(assignment)) {
-                return Optional.of(assignment);
+                return Optional.of(new LeaderElectionResult(assignment, isr));
             }
         }
 
         return Optional.empty();
     }
 
-    public static Optional<Integer> controlledShutdownReplicaLeaderElection(
+    public static Optional<LeaderElectionResult> controlledShutdownReplicaLeaderElection(
             List<Integer> assignments,
             List<Integer> isr,
             List<Integer> aliveReplicas,
@@ -47,9 +48,33 @@ public class ReplicaLeaderElectionAlgorithms {
             if (aliveReplicas.contains(id)
                     && isrSet.contains(id)
                     && !shutdownTabletServers.contains(id)) {
-                return Optional.of(id);
+                return Optional.of(
+                        new LeaderElectionResult(
+                                id,
+                                isr.stream()
+                                        .filter(replica -> !shutdownTabletServers.contains(replica))
+                                        .collect(Collectors.toList())));
             }
         }
         return Optional.empty();
+    }
+
+    /** The result of replica leader election for different election algorithm. */
+    public static final class LeaderElectionResult {
+        private final int leader;
+        private final List<Integer> newIsr;
+
+        public LeaderElectionResult(int leader, List<Integer> newIsr) {
+            this.leader = leader;
+            this.newIsr = newIsr;
+        }
+
+        public int getLeader() {
+            return leader;
+        }
+
+        public List<Integer> getNewIsr() {
+            return newIsr;
+        }
     }
 }
