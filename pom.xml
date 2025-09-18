@@ -65,6 +65,7 @@
         <module>fluss-common</module>
         <module>fluss-metrics</module>
         <module>fluss-client</module>
+        <module>fluss-protogen</module>
         <module>fluss-rpc</module>
         <module>fluss-dist</module>
         <module>fluss-filesystems</module>
@@ -72,7 +73,6 @@
         <module>fluss-test-coverage</module>
         <module>fluss-server</module>
         <module>fluss-flink</module>
-        <module>fluss-protogen</module>
         <module>fluss-jmh</module>
         <module>fluss-lake</module>
         <module>fluss-kafka</module>

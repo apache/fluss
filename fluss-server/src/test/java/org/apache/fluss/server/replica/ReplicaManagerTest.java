@@ -23,7 +23,6 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidRequiredAcksException;
 import org.apache.fluss.exception.NotLeaderOrFollowerException;
-import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
@@ -1846,11 +1845,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
         expectedTableMetadataById.forEach(
                 (k, v) -> {
                     if (v != null) {
-                        assertTableMetadata(serverMetadataCache.getTableMetadata(k)).isEqualTo(v);
+                        assertTableMetadata(serverMetadataCache.getTableMetadata(k).get())
+                                .isEqualTo(v);
                     } else {
-                        assertThatThrownBy(() -> serverMetadataCache.getTableMetadata(k))
-                                .isInstanceOf(TableNotExistException.class)
-                                .hasMessageContaining("Table '" + k + "' does not exist.");
+                        assertThat(serverMetadataCache.getTableMetadata(k)).isEmpty();
                     }
                 });
 
@@ -1871,10 +1869,10 @@ class ReplicaManagerTest extends ReplicaTestBase {
         expectedPartitionMetadataById.forEach(
                 (k, v) -> {
                     if (v != null) {
-                        assertPartitionMetadata(serverMetadataCache.getPartitionMetadata(k))
+                        assertPartitionMetadata(serverMetadataCache.getPartitionMetadata(k).get())
                                 .isEqualTo(v);
                     } else {
-                        assertThat(serverMetadataCache.getPartitionMetadata(k)).isNull();
+                        assertThat(serverMetadataCache.getPartitionMetadata(k)).isEmpty();
                     }
                 });
     }

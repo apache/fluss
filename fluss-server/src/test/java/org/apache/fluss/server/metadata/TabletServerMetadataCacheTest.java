@@ -306,7 +306,7 @@ public class TabletServerMetadataCacheTest {
             TableInfo expectedTableInfo,
             List<BucketMetadata> expectedBucketMetadataList) {
         TablePath tablePath = serverMetadataCache.getTablePath(tableId).get();
-        TableMetadata tableMetadata = serverMetadataCache.getTableMetadata(tablePath);
+        TableMetadata tableMetadata = serverMetadataCache.getTableMetadata(tablePath).get();
         assertThat(tableMetadata.getTableInfo()).isEqualTo(expectedTableInfo);
         assertThat(tableMetadata.getBucketMetadataList())
                 .hasSameElementsAs(expectedBucketMetadataList);
@@ -322,8 +322,10 @@ public class TabletServerMetadataCacheTest {
                 serverMetadataCache.getPhysicalTablePath(partitionId).get().getPartitionName();
         assertThat(actualPartitionName).isEqualTo(expectedPartitionName);
         PartitionMetadata partitionMetadata =
-                serverMetadataCache.getPartitionMetadata(
-                        PhysicalTablePath.of(partitionedTablePath, actualPartitionName));
+                serverMetadataCache
+                        .getPartitionMetadata(
+                                PhysicalTablePath.of(partitionedTablePath, actualPartitionName))
+                        .get();
         assertThat(partitionMetadata.getTableId()).isEqualTo(expectedTableId);
         assertThat(partitionMetadata.getPartitionId()).isEqualTo(expectedPartitionId);
         assertThat(partitionMetadata.getPartitionName()).isEqualTo(actualPartitionName);
@@ -346,7 +348,7 @@ public class TabletServerMetadataCacheTest {
         assertThat(serverMetadataCache.getTablePath(DATA1_TABLE_ID).get())
                 .isEqualTo(DATA1_TABLE_PATH);
 
-        TableMetadata cachedMetadata = serverMetadataCache.getTableMetadata(DATA1_TABLE_PATH);
+        TableMetadata cachedMetadata = serverMetadataCache.getTableMetadata(DATA1_TABLE_PATH).get();
         assertThat(cachedMetadata).isNotNull();
         assertThat(cachedMetadata.getTableInfo()).isEqualTo(DATA1_TABLE_INFO);
         assertThat(cachedMetadata.getBucketMetadataList()).hasSameElementsAs(initialBucketMetadata);
@@ -367,7 +369,7 @@ public class TabletServerMetadataCacheTest {
         serverMetadataCache.updateTableMetadata(newMetadata);
 
         // Then: verify the new metadata replaces the old one
-        TableMetadata cachedMetadata = serverMetadataCache.getTableMetadata(DATA1_TABLE_PATH);
+        TableMetadata cachedMetadata = serverMetadataCache.getTableMetadata(DATA1_TABLE_PATH).get();
         assertThat(cachedMetadata.getBucketMetadataList()).hasSameElementsAs(newBucketMetadata);
         assertThat(cachedMetadata.getBucketMetadataList())
                 .doesNotContainAnyElementsOf(initialBucketMetadata);
@@ -394,7 +396,8 @@ public class TabletServerMetadataCacheTest {
         assertThat(serverMetadataCache.getPhysicalTablePath(partitionId).get())
                 .isEqualTo(partitionPath);
 
-        PartitionMetadata cachedMetadata = serverMetadataCache.getPartitionMetadata(partitionPath);
+        PartitionMetadata cachedMetadata =
+                serverMetadataCache.getPartitionMetadata(partitionPath).get();
         assertThat(cachedMetadata).isNotNull();
         assertThat(cachedMetadata.getTableId()).isEqualTo(partitionTableId);
         assertThat(cachedMetadata.getPartitionId()).isEqualTo(partitionId);
@@ -417,7 +420,7 @@ public class TabletServerMetadataCacheTest {
 
         // Then: partition metadata should not be cached
         assertThat(serverMetadataCache.getPhysicalTablePath(partitionId)).isEmpty();
-        assertThat(serverMetadataCache.getPartitionMetadata(partitionPath)).isNull();
+        assertThat(serverMetadataCache.getPartitionMetadata(partitionPath)).isEmpty();
     }
 
     @Test
@@ -443,7 +446,8 @@ public class TabletServerMetadataCacheTest {
         serverMetadataCache.updatePartitionMetadata(newPartitionMetadata);
 
         // Then: verify the new metadata replaces the old one
-        PartitionMetadata cachedMetadata = serverMetadataCache.getPartitionMetadata(partitionPath);
+        PartitionMetadata cachedMetadata =
+                serverMetadataCache.getPartitionMetadata(partitionPath).get();
         assertThat(cachedMetadata.getBucketMetadataList()).hasSameElementsAs(newBucketMetadata);
         assertThat(cachedMetadata.getBucketMetadataList())
                 .doesNotContainAnyElementsOf(initialBucketMetadata);
@@ -511,11 +515,11 @@ public class TabletServerMetadataCacheTest {
 
         // Then: verify all table metadata is cleared
         assertThat(serverMetadataCache.getTablePath(DATA1_TABLE_ID)).isEmpty();
-        assertThat(serverMetadataCache.getTableMetadata(DATA1_TABLE_PATH)).isNull();
+        assertThat(serverMetadataCache.getTableMetadata(DATA1_TABLE_PATH)).isEmpty();
         assertThat(serverMetadataCache.getTablePath(partitionTableId)).isEmpty();
-        assertThat(serverMetadataCache.getTableMetadata(partitionedTablePath)).isNull();
+        assertThat(serverMetadataCache.getTableMetadata(partitionedTablePath)).isEmpty();
         assertThat(serverMetadataCache.getPhysicalTablePath(partitionId)).isEmpty();
-        assertThat(serverMetadataCache.getPartitionMetadata(partitionPath)).isNull();
+        assertThat(serverMetadataCache.getPartitionMetadata(partitionPath)).isEmpty();
     }
 
     private static final class TestingMetadataManager extends MetadataManager {

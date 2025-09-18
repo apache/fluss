@@ -113,7 +113,7 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         return serverMetadataSnapshot.getPhysicalTablePath(partitionId);
     }
 
-    public TableMetadata getTableMetadata(TablePath tablePath) {
+    public Optional<TableMetadata> getTableMetadata(TablePath tablePath) {
         // always get table info from zk.
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         ServerMetadataSnapshot snapshot = serverMetadataSnapshot;
@@ -121,18 +121,17 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         List<BucketMetadata> bucketMetadataList;
         if (!tableIdOpt.isPresent()) {
 
-            return null;
+            return Optional.empty();
         }
         bucketMetadataList =
                 new ArrayList<>(
                         snapshot.getBucketMetadataForTable(tableIdOpt.getAsLong()).values());
 
-        return new TableMetadata(tableInfo, bucketMetadataList);
+        return Optional.of(new TableMetadata(tableInfo, bucketMetadataList));
     }
 
-    public PartitionMetadata getPartitionMetadata(PhysicalTablePath partitionPath) {
-        TablePath tablePath =
-                new TablePath(partitionPath.getDatabaseName(), partitionPath.getTableName());
+    public Optional<PartitionMetadata> getPartitionMetadata(PhysicalTablePath partitionPath) {
+        TablePath tablePath = partitionPath.getTablePath();
         String partitionName = partitionPath.getPartitionName();
         ServerMetadataSnapshot snapshot = serverMetadataSnapshot;
 
@@ -141,14 +140,16 @@ public class TabletServerMetadataCache implements ServerMetadataCache {
         if (tableIdOpt.isPresent() && partitionIdOpt.isPresent()) {
             long tableId = tableIdOpt.getAsLong();
             long partitionId = partitionIdOpt.get();
-            return new PartitionMetadata(
-                    tableId,
-                    partitionName,
-                    partitionId,
-                    new ArrayList<>(snapshot.getBucketMetadataForPartition(partitionId).values()));
+            return Optional.of(
+                    new PartitionMetadata(
+                            tableId,
+                            partitionName,
+                            partitionId,
+                            new ArrayList<>(
+                                    snapshot.getBucketMetadataForPartition(partitionId).values())));
         } else {
 
-            return null;
+            return Optional.empty();
         }
     }
 

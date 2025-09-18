@@ -88,7 +88,7 @@ import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
-import org.apache.fluss.server.metadata.CoordinatorMetadataFunctionProvider;
+import org.apache.fluss.server.metadata.CoordinatorMetadataProvider;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
@@ -434,8 +434,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                     session,
                                     authorizer,
                                     metadataCache,
-                                    new CoordinatorMetadataFunctionProvider(
-                                            zkClient, metadataCache, ctx, metadataManager),
+                                    new CoordinatorMetadataProvider(zkClient, ctx, metadataManager),
                                     response);
                             try {
                                 return response.get();

@@ -25,7 +25,6 @@ import org.apache.fluss.exception.NonPrimaryKeyTableException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.SecurityTokenException;
-import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
@@ -82,25 +81,16 @@ import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.CoordinatorService;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
-import org.apache.fluss.server.metadata.BucketMetadata;
-import org.apache.fluss.server.metadata.MetadataFunctionProvider;
+import org.apache.fluss.server.metadata.MetadataProvider;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.tablet.TabletService;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LakeTableSnapshot;
-import org.apache.fluss.server.zk.data.LeaderAndIsr;
-import org.apache.fluss.server.zk.data.TableAssignment;
-import org.apache.fluss.utils.ExceptionUtils;
-import org.apache.fluss.utils.MapUtils;
-import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
-import org.apache.commons.lang3.builder.EqualsBuilder;
-import org.apache.commons.lang3.builder.HashCodeBuilder;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -114,12 +104,7 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentLinkedQueue;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclFilter;
@@ -133,7 +118,6 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListAclsRe
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toGetFileSystemSecurityTokenResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toListPartitionInfosResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /**
@@ -154,16 +138,6 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
     private long tokenLastUpdateTimeMs = 0;
     private ObtainedSecurityToken securityToken = null;
-
-    private static final ExecutorService ZK_META_UPDATE_EXECUTOR =
-            Executors.newFixedThreadPool(8, new ExecutorThreadFactory("zk-metadata-update-"));
-
-    private static final ConcurrentHashMap<
-                    TableMetadataKey, CompletableFuture<List<BucketMetadata>>>
-            PENDING_TABLE_METADATA_FROM_ZK_FUTURES = MapUtils.newConcurrentHashMap();
-
-    private static final ConcurrentHashMap<PhysicalTablePath, CompletableFuture<PartitionMetadata>>
-            PENDING_PARTITION_METADATA_FROM_ZK_FUTURES = MapUtils.newConcurrentHashMap();
 
     public RpcServiceBase(
             FileSystem remoteFileSystem,
@@ -494,7 +468,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             Session session,
             Authorizer authorizer,
             ServerMetadataCache metadataCache,
-            MetadataFunctionProvider functionProvider,
+            MetadataProvider functionProvider,
             CompletableFuture<MetadataResponse> responseFuture) {
         List<PbTablePath> pbTablePaths = request.getTablePathsList();
         List<CompletableFuture<TableMetadata>> pendingTableMetadata = new ArrayList<>();
@@ -553,7 +527,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
 
             if (!partitionIdsNotExistsInCache.isEmpty()) {
                 pendingPartitionMetadataMissingIdsPartition =
-                        batchGetPartitionMetadataFromZkAsync(
+                        zkClient.batchGetPartitionMetadataFromZkAsync(
                                         tablePaths, partitionIdsNotExistsInCache)
                                 .thenApply(
                                         batchMetadata -> {
@@ -622,307 +596,6 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
                     });
         } catch (Exception e) {
             responseFuture.completeExceptionally(e);
-        }
-    }
-
-    public static CompletableFuture<List<BucketMetadata>> getTableMetadataFromZkAsync(
-            ZooKeeperClient zkClient, TablePath tablePath, long tableId, boolean isPartitioned) {
-        TableMetadataKey metadataKey = new TableMetadataKey(tablePath, tableId, isPartitioned);
-        return PENDING_TABLE_METADATA_FROM_ZK_FUTURES
-                .computeIfAbsent(
-                        metadataKey,
-                        key ->
-                                CompletableFuture.supplyAsync(
-                                                () ->
-                                                        getTableMetadataFromZkInternal(
-                                                                zkClient,
-                                                                tablePath,
-                                                                tableId,
-                                                                isPartitioned),
-                                                ZK_META_UPDATE_EXECUTOR)
-                                        .thenApply(
-                                                tableMeta -> {
-                                                    return tableMeta;
-                                                }))
-                .handle(
-                        (partitionMetadata, throwable) -> {
-                            PENDING_TABLE_METADATA_FROM_ZK_FUTURES.remove(metadataKey);
-                            if (throwable != null) {
-                                throwable =
-                                        ExceptionUtils.stripException(
-                                                throwable, CompletionException.class);
-                                if (throwable instanceof TableNotExistException) {
-                                    throw (TableNotExistException) throwable;
-                                }
-                                LOG.error(
-                                        "Failed to get metadata for table {}, id {}",
-                                        tablePath,
-                                        tableId);
-                                throw new FlussRuntimeException(
-                                        String.format(
-                                                "Failed to get metadata for table %s, id %d",
-                                                tablePath, tableId),
-                                        throwable);
-                            }
-                            return partitionMetadata;
-                        });
-    }
-
-    private static List<BucketMetadata> getTableMetadataFromZkInternal(
-            ZooKeeperClient zkClient, TablePath tablePath, long tableId, boolean isPartitioned) {
-        try {
-            AssignmentInfo assignmentInfo =
-                    getAssignmentInfo(tableId, PhysicalTablePath.of(tablePath), zkClient);
-            List<BucketMetadata> bucketMetadataList = new ArrayList<>();
-            if (assignmentInfo.tableAssignment != null) {
-                TableAssignment tableAssignment = assignmentInfo.tableAssignment;
-                bucketMetadataList =
-                        toBucketMetadataList(tableId, null, tableAssignment, null, zkClient);
-            } else {
-                if (isPartitioned) {
-                    LOG.warn("No table assignment node found for table {}", tableId);
-                }
-            }
-            return bucketMetadataList;
-        } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    String.format("Failed to get metadata for %s", tablePath), e);
-        }
-    }
-
-    public static CompletableFuture<PartitionMetadata> getPartitionMetadataFromZkAsync(
-            PhysicalTablePath partitionPath, ZooKeeperClient zkClient) {
-        return PENDING_PARTITION_METADATA_FROM_ZK_FUTURES.computeIfAbsent(
-                partitionPath,
-                key ->
-                        CompletableFuture.supplyAsync(
-                                        () ->
-                                                getPartitionMetadataFromZkInternal(
-                                                        partitionPath, zkClient),
-                                        ZK_META_UPDATE_EXECUTOR)
-                                .thenApply(
-                                        partitionMetadata -> {
-                                            return partitionMetadata;
-                                        })
-                                .handle(
-                                        (partitionMetadata, throwable) -> {
-                                            PENDING_PARTITION_METADATA_FROM_ZK_FUTURES.remove(
-                                                    partitionPath);
-                                            if (throwable != null) {
-                                                throwable =
-                                                        ExceptionUtils.stripException(
-                                                                throwable,
-                                                                CompletionException.class);
-                                                if (throwable
-                                                        instanceof PartitionNotExistException) {
-                                                    throw (PartitionNotExistException) throwable;
-                                                }
-                                                LOG.error(
-                                                        "Failed to get metadata for partition {}",
-                                                        partitionPath);
-                                                throw new FlussRuntimeException(
-                                                        String.format(
-                                                                "Failed to get metadata for partition %s",
-                                                                partitionPath),
-                                                        throwable);
-                                            } else {
-                                                return partitionMetadata;
-                                            }
-                                        }));
-    }
-
-    private static PartitionMetadata getPartitionMetadataFromZkInternal(
-            PhysicalTablePath partitionPath, ZooKeeperClient zkClient) {
-        try {
-            checkNotNull(
-                    partitionPath.getPartitionName(),
-                    "partitionName must be not null, but get: " + partitionPath);
-            AssignmentInfo assignmentInfo = getAssignmentInfo(null, partitionPath, zkClient);
-            List<BucketMetadata> bucketMetadataList = new ArrayList<>();
-            checkNotNull(
-                    assignmentInfo.partitionId,
-                    "partition id must be not null for " + partitionPath);
-            if (assignmentInfo.tableAssignment != null) {
-                TableAssignment tableAssignment = assignmentInfo.tableAssignment;
-                bucketMetadataList =
-                        toBucketMetadataList(
-                                assignmentInfo.tableId,
-                                assignmentInfo.partitionId,
-                                tableAssignment,
-                                null,
-                                zkClient);
-            } else {
-                LOG.warn("No partition assignment node found for partition {}", partitionPath);
-            }
-            return new PartitionMetadata(
-                    assignmentInfo.tableId,
-                    partitionPath.getPartitionName(),
-                    assignmentInfo.partitionId,
-                    bucketMetadataList);
-        } catch (PartitionNotExistException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new FlussRuntimeException(
-                    String.format("Failed to get metadata for partition %s", partitionPath), e);
-        }
-    }
-
-    private static List<BucketMetadata> toBucketMetadataList(
-            long tableId,
-            @Nullable Long partitionId,
-            TableAssignment tableAssignment,
-            @Nullable Integer leaderEpoch,
-            ZooKeeperClient zkClient)
-            throws Exception {
-        List<BucketMetadata> bucketMetadataList = new ArrayList<>();
-        // iterate each bucket assignment
-        for (Map.Entry<Integer, BucketAssignment> assignment :
-                tableAssignment.getBucketAssignments().entrySet()) {
-            int bucketId = assignment.getKey();
-            TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
-
-            List<Integer> replicas = assignment.getValue().getReplicas();
-
-            // now get the leader
-            Optional<LeaderAndIsr> optLeaderAndIsr = zkClient.getLeaderAndIsr(tableBucket);
-            Integer leader = optLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
-            bucketMetadataList.add(new BucketMetadata(bucketId, leader, leaderEpoch, replicas));
-        }
-        return bucketMetadataList;
-    }
-
-    public CompletableFuture<List<PartitionMetadata>> batchGetPartitionMetadataFromZkAsync(
-            Collection<TablePath> tablePaths, Set<Long> partitionIdSet) {
-        // todo: hack logic; currently, we can't get partition metadata by partition ids directly,
-        // in here, we always assume the partition ids must belong to the first argument tablePaths;
-        // at least, in current client metadata request design, the assumption is true.
-        // but the assumption is fragile; we should use metadata cache to help to get partition by
-        // partition ids
-        return CompletableFuture.supplyAsync(
-                () -> {
-                    List<CompletableFuture<PartitionMetadata>> partitionMetadataFutures =
-                            new ArrayList<>();
-                    try {
-                        for (TablePath tablePath : tablePaths) {
-                            if (partitionIdSet.isEmpty()) {
-                                break;
-                            }
-                            Set<Long> hitPartitionIds = new HashSet<>();
-                            // TODO: this is a heavy operation, should be optimized when we have
-                            // metadata cache
-                            Map<Long, String> partitionNameById =
-                                    zkClient.getPartitionIdAndNames(tablePath);
-                            for (Long partitionId : partitionIdSet) {
-                                // the partition is under the table, get the metadata
-                                String partitionName = partitionNameById.get(partitionId);
-                                if (partitionName != null) {
-                                    partitionMetadataFutures.add(
-                                            getPartitionMetadataFromZkAsync(
-                                                    PhysicalTablePath.of(tablePath, partitionName),
-                                                    zkClient));
-                                    hitPartitionIds.add(partitionId);
-                                }
-                            }
-                            partitionIdSet.removeAll(hitPartitionIds);
-                        }
-                    } catch (Exception e) {
-                        throw new FlussRuntimeException(
-                                "Failed to get metadata for partition ids: " + partitionIdSet, e);
-                    }
-                    if (!partitionIdSet.isEmpty()) {
-                        throw new PartitionNotExistException(
-                                "Partition not exist for partition ids: " + partitionIdSet);
-                    }
-                    return partitionMetadataFutures.stream()
-                            .map(
-                                    partitionMetadataCompletableFuture -> {
-                                        try {
-                                            return partitionMetadataCompletableFuture.get();
-                                        } catch (InterruptedException | ExecutionException e) {
-                                            throw new RuntimeException(e);
-                                        }
-                                    })
-                            .collect(Collectors.toList());
-                },
-                ZK_META_UPDATE_EXECUTOR);
-    }
-
-    private static AssignmentInfo getAssignmentInfo(
-            @Nullable Long tableId, PhysicalTablePath physicalTablePath, ZooKeeperClient zkClient)
-            throws Exception {
-        // it's a partition, get the partition assignment
-        if (physicalTablePath.getPartitionName() != null) {
-            Optional<TablePartition> tablePartition =
-                    zkClient.getPartition(
-                            physicalTablePath.getTablePath(), physicalTablePath.getPartitionName());
-            if (!tablePartition.isPresent()) {
-                throw new PartitionNotExistException(
-                        "Table partition '" + physicalTablePath + "' does not exist.");
-            }
-            long partitionId = tablePartition.get().getPartitionId();
-
-            return new AssignmentInfo(
-                    tablePartition.get().getTableId(),
-                    zkClient.getPartitionAssignment(partitionId).orElse(null),
-                    partitionId);
-        } else {
-            checkNotNull(tableId, "tableId must be not null");
-            return new AssignmentInfo(
-                    tableId, zkClient.getTableAssignment(tableId).orElse(null), null);
-        }
-    }
-
-    private static class AssignmentInfo {
-        private final long tableId;
-        // null then the bucket doesn't belong to a partition. Otherwise, not null
-        private final @Nullable Long partitionId;
-        private final @Nullable TableAssignment tableAssignment;
-
-        private AssignmentInfo(
-                long tableId, TableAssignment tableAssignment, @Nullable Long partitionId) {
-            this.tableId = tableId;
-            this.tableAssignment = tableAssignment;
-            this.partitionId = partitionId;
-        }
-    }
-
-    private static class TableMetadataKey {
-        private final TablePath tablePath;
-        private final long tableId;
-        private final boolean isPartitioned;
-
-        private TableMetadataKey(TablePath tablePath, long tableId, boolean isPartitioned) {
-            this.tablePath = tablePath;
-            this.tableId = tableId;
-            this.isPartitioned = isPartitioned;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) {
-                return true;
-            }
-
-            if (!(o instanceof TableMetadataKey)) {
-                return false;
-            }
-
-            TableMetadataKey that = (TableMetadataKey) o;
-
-            return new EqualsBuilder()
-                    .append(tableId, that.tableId)
-                    .append(isPartitioned, that.isPartitioned)
-                    .append(tablePath, that.tablePath)
-                    .isEquals();
-        }
-
-        @Override
-        public int hashCode() {
-            return new HashCodeBuilder(17, 37)
-                    .append(tablePath)
-                    .append(tableId)
-                    .append(isPartitioned)
-                    .toHashCode();
         }
     }
 }

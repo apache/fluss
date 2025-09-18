@@ -34,7 +34,7 @@ import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.metadata.BucketMetadata;
-import org.apache.fluss.server.metadata.MetadataFunctionProvider;
+import org.apache.fluss.server.metadata.MetadataProvider;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metadata.TableMetadata;
@@ -115,7 +115,7 @@ class RpcServiceBaseTest {
                 Session session,
                 Authorizer authorizer,
                 ServerMetadataCache metadataCache,
-                MetadataFunctionProvider functionProvider,
+                MetadataProvider functionProvider,
                 CompletableFuture<MetadataResponse> responseFuture) {
             super.processMetadataRequest(
                     request,
@@ -158,7 +158,7 @@ class RpcServiceBaseTest {
 
         // Execute test
         CompletableFuture<List<BucketMetadata>> future =
-                RpcServiceBase.getTableMetadataFromZkAsync(
+                ZooKeeperClient.getTableMetadataFromZkAsync(
                         mockZkClient, testTablePath, testTableId, false);
 
         // Verify results
@@ -183,7 +183,7 @@ class RpcServiceBaseTest {
 
         // Execute test
         CompletableFuture<List<BucketMetadata>> future =
-                RpcServiceBase.getTableMetadataFromZkAsync(
+                ZooKeeperClient.getTableMetadataFromZkAsync(
                         mockZkClient, testTablePath, testTableId, false);
 
         // Verify results - should return empty list for non-partitioned table
@@ -198,7 +198,7 @@ class RpcServiceBaseTest {
 
         // Execute test - should log warning but not throw exception
         CompletableFuture<List<BucketMetadata>> future =
-                RpcServiceBase.getTableMetadataFromZkAsync(
+                ZooKeeperClient.getTableMetadataFromZkAsync(
                         mockZkClient, testTablePath, testTableId, true);
 
         // Verify results - should return empty list
@@ -214,7 +214,7 @@ class RpcServiceBaseTest {
 
         // Execute test
         CompletableFuture<List<BucketMetadata>> future =
-                RpcServiceBase.getTableMetadataFromZkAsync(
+                ZooKeeperClient.getTableMetadataFromZkAsync(
                         mockZkClient, testTablePath, testTableId, false);
 
         // Verify exception is thrown
@@ -230,7 +230,6 @@ class RpcServiceBaseTest {
         Map<Integer, BucketAssignment> bucketAssignments = new HashMap<>();
         bucketAssignments.put(0, BucketAssignment.of(1, 2, 3));
         bucketAssignments.put(1, BucketAssignment.of(2, 3, 4));
-        TableAssignment tableAssignment = new TableAssignment(bucketAssignments);
 
         // Mock ZooKeeper responses
         when(mockZkClient.getPartition(testTablePath, "partition1"))
@@ -244,7 +243,7 @@ class RpcServiceBaseTest {
 
         // Execute test
         CompletableFuture<PartitionMetadata> future =
-                RpcServiceBase.getPartitionMetadataFromZkAsync(testPartitionPath, mockZkClient);
+                ZooKeeperClient.getPartitionMetadataFromZkAsync(testPartitionPath, mockZkClient);
 
         // Verify results
         PartitionMetadata result = future.get();
@@ -271,7 +270,7 @@ class RpcServiceBaseTest {
         // Execute test
         PhysicalTablePath nonexistentPath = PhysicalTablePath.of(testTablePath, "nonexistent");
         CompletableFuture<PartitionMetadata> future =
-                RpcServiceBase.getPartitionMetadataFromZkAsync(nonexistentPath, mockZkClient);
+                ZooKeeperClient.getPartitionMetadataFromZkAsync(nonexistentPath, mockZkClient);
 
         // Verify exception is thrown
         assertThatThrownBy(future::get)
@@ -293,10 +292,10 @@ class RpcServiceBaseTest {
 
         // Execute concurrent requests with same key
         CompletableFuture<List<BucketMetadata>> future1 =
-                RpcServiceBase.getTableMetadataFromZkAsync(
+                ZooKeeperClient.getTableMetadataFromZkAsync(
                         mockZkClient, testTablePath, testTableId, false);
         CompletableFuture<List<BucketMetadata>> future2 =
-                RpcServiceBase.getTableMetadataFromZkAsync(
+                ZooKeeperClient.getTableMetadataFromZkAsync(
                         mockZkClient, testTablePath, testTableId, false);
 
         // Verify both requests return the same result
@@ -322,9 +321,9 @@ class RpcServiceBaseTest {
 
         // Execute concurrent requests with same key
         CompletableFuture<PartitionMetadata> future1 =
-                RpcServiceBase.getPartitionMetadataFromZkAsync(testPartitionPath, mockZkClient);
+                ZooKeeperClient.getPartitionMetadataFromZkAsync(testPartitionPath, mockZkClient);
         CompletableFuture<PartitionMetadata> future2 =
-                RpcServiceBase.getPartitionMetadataFromZkAsync(testPartitionPath, mockZkClient);
+                ZooKeeperClient.getPartitionMetadataFromZkAsync(testPartitionPath, mockZkClient);
 
         // Verify both requests return the same result
         PartitionMetadata result1 = future1.get();
@@ -349,7 +348,7 @@ class RpcServiceBaseTest {
 
         // Execute test
         CompletableFuture<List<BucketMetadata>> future =
-                RpcServiceBase.getTableMetadataFromZkAsync(
+                ZooKeeperClient.getTableMetadataFromZkAsync(
                         mockZkClient, testTablePath, testTableId, false);
 
         // The entry should be added to the map
@@ -373,7 +372,7 @@ class RpcServiceBaseTest {
 
         // Execute test
         CompletableFuture<List<BucketMetadata>> future =
-                RpcServiceBase.getTableMetadataFromZkAsync(
+                ZooKeeperClient.getTableMetadataFromZkAsync(
                         mockZkClient, testTablePath, testTableId, false);
 
         // The entry should be added to the map
@@ -393,7 +392,6 @@ class RpcServiceBaseTest {
         // Setup test data
         Map<Integer, BucketAssignment> bucketAssignments = new HashMap<>();
         bucketAssignments.put(0, BucketAssignment.of(1, 2, 3));
-        TableAssignment tableAssignment = new TableAssignment(bucketAssignments);
 
         // Mock ZooKeeper responses
         when(mockZkClient.getPartition(testTablePath, "partition1"))
@@ -408,7 +406,7 @@ class RpcServiceBaseTest {
 
         // Execute test
         CompletableFuture<PartitionMetadata> future =
-                RpcServiceBase.getPartitionMetadataFromZkAsync(testPartitionPath, mockZkClient);
+                ZooKeeperClient.getPartitionMetadataFromZkAsync(testPartitionPath, mockZkClient);
 
         // The entry should be added to the map
         assertThat(getPendingPartitionMetadataFutureMap()).hasSize(1);
@@ -431,7 +429,7 @@ class RpcServiceBaseTest {
 
         // Execute test
         CompletableFuture<PartitionMetadata> future =
-                RpcServiceBase.getPartitionMetadataFromZkAsync(testPartitionPath, mockZkClient);
+                ZooKeeperClient.getPartitionMetadataFromZkAsync(testPartitionPath, mockZkClient);
 
         // The entry should be added to the map
         assertThat(getPendingPartitionMetadataFutureMap()).hasSize(1);
@@ -456,7 +454,7 @@ class RpcServiceBaseTest {
         Session session = createTestSession();
         Authorizer authorizer = mock(Authorizer.class);
         ServerMetadataCache metadataCache = mock(ServerMetadataCache.class);
-        MetadataFunctionProvider functionProvider = mock(MetadataFunctionProvider.class);
+        MetadataProvider functionProvider = mock(MetadataProvider.class);
 
         when(authorizer.isAuthorized(any(), any(), any())).thenReturn(true);
         TablePath tablePath = TablePath.of("db", "table");
@@ -516,7 +514,7 @@ class RpcServiceBaseTest {
         Session session = createTestSession();
         Authorizer authorizer = mock(Authorizer.class);
         ServerMetadataCache metadataCache = mock(ServerMetadataCache.class);
-        MetadataFunctionProvider functionProvider = mock(MetadataFunctionProvider.class);
+        MetadataProvider functionProvider = mock(MetadataProvider.class);
 
         when(authorizer.isAuthorized(any(), any(), any())).thenReturn(true);
         TablePath tablePath = TablePath.of("db", "table");
@@ -583,7 +581,7 @@ class RpcServiceBaseTest {
         Session session = createTestSession();
         Authorizer authorizer = mock(Authorizer.class);
         ServerMetadataCache metadataCache = mock(ServerMetadataCache.class);
-        MetadataFunctionProvider functionProvider = mock(MetadataFunctionProvider.class);
+        MetadataProvider functionProvider = mock(MetadataProvider.class);
 
         when(authorizer.isAuthorized(any(), any(), any())).thenReturn(true);
         PhysicalTablePath partitionPath =
@@ -641,7 +639,7 @@ class RpcServiceBaseTest {
         Session session = createTestSession();
         Authorizer authorizer = mock(Authorizer.class);
         ServerMetadataCache metadataCache = mock(ServerMetadataCache.class);
-        MetadataFunctionProvider functionProvider = mock(MetadataFunctionProvider.class);
+        MetadataProvider functionProvider = mock(MetadataProvider.class);
 
         when(authorizer.isAuthorized(any(), any(), any())).thenReturn(true);
         PhysicalTablePath partitionPath =
@@ -697,7 +695,7 @@ class RpcServiceBaseTest {
         Session session = createTestSession();
         Authorizer authorizer = mock(Authorizer.class);
         ServerMetadataCache metadataCache = mock(ServerMetadataCache.class);
-        MetadataFunctionProvider functionProvider = mock(MetadataFunctionProvider.class);
+        MetadataProvider functionProvider = mock(MetadataProvider.class);
 
         when(authorizer.isAuthorized(any(), any(), any())).thenReturn(true);
         PhysicalTablePath partitionPath =

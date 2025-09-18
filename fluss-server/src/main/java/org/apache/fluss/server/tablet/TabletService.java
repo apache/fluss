@@ -72,7 +72,7 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
-import org.apache.fluss.server.metadata.TabletServerMetadataFunctionProvider;
+import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -123,7 +123,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final String serviceName;
     private final ReplicaManager replicaManager;
     private final TabletServerMetadataCache metadataCache;
-    private final TabletServerMetadataFunctionProvider metadataFunctionProvider;
+    private final TabletServerMetadataProvider metadataFunctionProvider;
 
     public TabletService(
             int serverId,
@@ -138,7 +138,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         this.replicaManager = replicaManager;
         this.metadataCache = metadataCache;
         this.metadataFunctionProvider =
-                new TabletServerMetadataFunctionProvider(zkClient, metadataCache, metadataManager);
+                new TabletServerMetadataProvider(zkClient, metadataCache, metadataManager);
     }
 
     @Override
