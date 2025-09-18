@@ -42,6 +42,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.net.ConnectException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -156,9 +157,9 @@ final class NettyClientTest {
                                 nettyClient
                                         .sendRequest(serverNode, ApiKeys.API_VERSIONS, request)
                                         .get())
-                .isInstanceOf(ExecutionException.class)
-                .hasMessageContaining("Disconnected from node")
-                .hasRootCauseMessage("finishConnect(..) failed: Connection refused");
+                .rootCause()
+                .isInstanceOf(ConnectException.class)
+                .hasMessageContaining("Connection refused");
         assertThat(nettyClient.connections().size()).isEqualTo(0);
 
         // restart the netty server.
