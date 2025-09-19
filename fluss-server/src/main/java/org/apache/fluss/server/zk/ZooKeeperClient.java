@@ -107,7 +107,6 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CompletableFuture;
-import java.util.concurrent.CompletionException;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutionException;
 import java.util.concurrent.Semaphore;
@@ -1470,7 +1469,8 @@ public class ZooKeeperClient implements AutoCloseable {
     private List<BucketMetadata> handleTableMetadataException(
             Throwable throwable, TablePath tablePath, long tableId) {
 
-        Throwable cause = ExceptionUtils.stripException(throwable, CompletionException.class);
+        Throwable cause = ExceptionUtils.stripCompletionException(throwable);
+        cause = ExceptionUtils.stripException(cause, RuntimeException.class);
 
         if (cause instanceof TableNotExistException) {
             throw (TableNotExistException) cause;
@@ -1511,7 +1511,14 @@ public class ZooKeeperClient implements AutoCloseable {
                         assignmentInfo ->
                                 processPartitionAssignmentInfo(assignmentInfo, partitionPath))
                 .exceptionally(
-                        throwable -> handlePartitionMetadataException(throwable, partitionPath));
+                        throwable ->
+                                handlePartitionException(
+                                        throwable,
+                                        "Failed to get metadata for partition {}",
+                                        partitionPath,
+                                        String.format(
+                                                "Failed to get metadata for partition %s",
+                                                partitionPath)));
     }
 
     /**
@@ -1583,25 +1590,6 @@ public class ZooKeeperClient implements AutoCloseable {
     }
 
     /**
-     * Handle exceptions that occur during partition metadata retrieval.
-     *
-     * @param throwable the exception that occurred
-     * @param partitionPath the partition path for error context
-     * @return never returns normally, always throws an exception
-     * @throws PartitionNotExistException if the original cause was partition not existing
-     * @throws FlussRuntimeException for other errors
-     */
-    private PartitionMetadata handlePartitionMetadataException(
-            Throwable throwable, PhysicalTablePath partitionPath) {
-
-        return handlePartitionException(
-                throwable,
-                "Failed to get metadata for partition {}",
-                partitionPath,
-                String.format("Failed to get metadata for partition %s", partitionPath));
-    }
-
-    /**
      * Common exception handler for partition-related operations.
      *
      * @param throwable the exception that occurred
@@ -1619,7 +1607,8 @@ public class ZooKeeperClient implements AutoCloseable {
             Object logContext,
             String errorMessage) {
 
-        Throwable cause = ExceptionUtils.stripException(throwable, CompletionException.class);
+        Throwable cause = ExceptionUtils.stripCompletionException(throwable);
+        cause = ExceptionUtils.stripException(cause, RuntimeException.class);
 
         if (cause instanceof PartitionNotExistException) {
             throw (PartitionNotExistException) cause;

@@ -77,13 +77,6 @@
                             <goal>descriptor</goal>
                         </goals>
                     </execution>
-                    <!-- Ensure the descriptor is always created during clean compile to avoid occasional build failures-->
-                    <execution>
-                        <id>help-goal</id>
-                        <goals>
-                            <goal>helpmojo</goal>
-                        </goals>
-                    </execution>
                 </executions>
             </plugin>
         </plugins>

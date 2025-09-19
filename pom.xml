@@ -1121,6 +1121,29 @@
                     </dependencies>
                 </plugin>
 
+                <plugin>
+                    <groupId>org.apache.fluss</groupId>
+                    <artifactId>fluss-protogen-maven-plugin</artifactId>
+                    <version>${project.version}</version>
+                    <configuration>
+                        <classPrefix></classPrefix>
+                        <singleOuterClass>false</singleOuterClass>
+                    </configuration>
+                    <executions>
+                        <execution>
+                            <goals>
+                                <goal>generate</goal>
+                            </goals>
+                        </execution>
+                    </executions>
+                    <dependencies>
+                        <dependency>
+                            <groupId>org.apache.fluss</groupId>
+                            <artifactId>fluss-protogen-generator</artifactId>
+                            <version>${project.version}</version>
+                        </dependency>
+                    </dependencies>
+                </plugin>
             </plugins>
         </pluginManagement>
     </build>
