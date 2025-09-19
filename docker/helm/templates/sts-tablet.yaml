@@ -5,7 +5,7 @@ metadata:
   labels:
   {{- include "fluss.labels" . | nindent 4 }}
 spec:
-  serviceName: tablet-server
+  serviceName: tablet-server-hs
   replicas: 3
   selector:
     matchLabels:
@@ -40,12 +40,11 @@ spec:
             - |
               export FLUSS_SERVER_ID=${POD_NAME##*-} && \
               cp /opt/conf/server.yaml $FLUSS_HOME/conf && \
-
+              export PORT=$((9125 + ${FLUSS_SERVER_ID})) && \
               echo "" >> $FLUSS_HOME/conf/server.yaml && \
               echo "tablet-server.id: ${FLUSS_SERVER_ID}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "bind.listeners: INTERNAL://${POD_IP}:{{ .Values.appConfig.internalPort }}, CLIENT://0.0.0.0:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
-              echo "advertised.listeners: CLIENT://${POD_IP}:9124, INTERNAL://${POD_IP}:9123" >> $FLUSS_HOME/conf/server.yaml && \
-              
+              echo "advertised.listeners: CLIENT://tablet-server-${FLUSS_SERVER_ID}.tablet-server-hs.default.svc.cluster.local:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
               bin/tablet-server.sh start-foreground
           # advertised.listeners: CLIENT://$(POD_NAME).fluss-tablet-hs.default.svc.cluster.local:9124
           livenessProbe:

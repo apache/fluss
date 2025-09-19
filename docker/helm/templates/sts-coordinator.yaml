@@ -5,7 +5,7 @@ metadata:
   labels:
   {{- include "fluss.labels" . | nindent 4 }}
 spec:
-  serviceName: coordinator-server
+  serviceName: coordinator-server-hs
   replicas: 1 # can only be 1 for now
   selector:
     matchLabels:
@@ -34,6 +34,10 @@ spec:
               valueFrom: 
                 fieldRef: 
                   fieldPath: metadata.namespace
+            - name: NODE_IP
+              valueFrom:
+                fieldRef:
+                  fieldPath: status.hostIP
           command:
             - "/bin/sh"
             - "-c"
@@ -43,9 +47,9 @@ spec:
 
               echo "" >> $FLUSS_HOME/conf/server.yaml && \
               echo "tablet-server.id: ${FLUSS_SERVER_ID}" >> $FLUSS_HOME/conf/server.yaml && \
-              echo "bind.listeners: INTERNAL://${POD_IP}:{{ .Values.appConfig.internalPort }}, CLIENT://0.0.0.0:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
-              echo "advertised.listeners: CLIENT://${POD_IP}:9124, INTERNAL://${POD_IP}:9123" >> $FLUSS_HOME/conf/server.yaml && \
-              
+              echo "bind.listeners: INTERNAL://0.0.0.0:{{ .Values.appConfig.internalPort }}, CLIENT://0.0.0.0:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "advertised.listeners: CLIENT://coordinator-server-${FLUSS_SERVER_ID}.coordinator-server-hs.default.svc.cluster.local:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
+
               bin/coordinator-server.sh start-foreground
           # advertised.listeners: CLIENT://$(POD_NAME).fluss-tablet-hs.default.svc.cluster.local:9124
           livenessProbe:
