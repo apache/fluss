@@ -637,4 +637,8 @@ public class CoordinatorContext {
         // clear the live tablet servers
         liveTabletServers.clear();
     }
+
+    public int getTotalPartitionCount() {
+        return partitionAssignments.size();
+    }
 }

@@ -66,6 +66,7 @@ public final class CoordinatorEventManager implements EventManager {
     private volatile int offlineBucketCount;
     private volatile int tableCount;
     private volatile int bucketCount;
+    private volatile int partitionCount;
     private volatile int replicasToDeleteCount;
 
     private static final int WINDOW_SIZE = 100;
@@ -91,6 +92,7 @@ public final class CoordinatorEventManager implements EventManager {
         coordinatorMetricGroup.gauge(MetricNames.OFFLINE_BUCKET_COUNT, () -> offlineBucketCount);
         coordinatorMetricGroup.gauge(MetricNames.BUCKET_COUNT, () -> bucketCount);
         coordinatorMetricGroup.gauge(MetricNames.TABLE_COUNT, () -> tableCount);
+        coordinatorMetricGroup.gauge(MetricNames.PARTITION_COUNT, () -> partitionCount);
         coordinatorMetricGroup.gauge(
                 MetricNames.REPLICAS_TO_DELETE_COUNT, () -> replicasToDeleteCount);
     }
@@ -104,6 +106,7 @@ public final class CoordinatorEventManager implements EventManager {
                             int tabletServerCount = context.getLiveTabletServers().size();
                             int tableCount = context.allTables().size();
                             int bucketCount = context.bucketLeaderAndIsr().size();
+                            int partitionCount = context.getTotalPartitionCount();
                             int offlineBucketCount = context.getOfflineBucketCount();
 
                             int replicasToDeletes = 0;
@@ -135,6 +138,7 @@ public final class CoordinatorEventManager implements EventManager {
                                     tabletServerCount,
                                     tableCount,
                                     bucketCount,
+                                    partitionCount,
                                     offlineBucketCount,
                                     replicasToDeletes);
                         });
@@ -147,6 +151,7 @@ public final class CoordinatorEventManager implements EventManager {
             this.tabletServerCount = metricsData.tabletServerCount;
             this.tableCount = metricsData.tableCount;
             this.bucketCount = metricsData.bucketCount;
+            this.partitionCount = metricsData.partitionCount;
             this.offlineBucketCount = metricsData.offlineBucketCount;
             this.replicasToDeleteCount = metricsData.replicasToDeleteCount;
         } catch (Exception e) {
@@ -268,6 +273,7 @@ public final class CoordinatorEventManager implements EventManager {
         private final int tabletServerCount;
         private final int tableCount;
         private final int bucketCount;
+        private final int partitionCount;
         private final int offlineBucketCount;
         private final int replicasToDeleteCount;
 
@@ -275,11 +281,13 @@ public final class CoordinatorEventManager implements EventManager {
                 int tabletServerCount,
                 int tableCount,
                 int bucketCount,
+                int partitionCount,
                 int offlineBucketCount,
                 int replicasToDeleteCount) {
             this.tabletServerCount = tabletServerCount;
             this.tableCount = tableCount;
             this.bucketCount = bucketCount;
+            this.partitionCount = partitionCount;
             this.offlineBucketCount = offlineBucketCount;
             this.replicasToDeleteCount = replicasToDeleteCount;
         }
