@@ -1,0 +1,11 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: fluss-conf-file
+  labels:
+  {{- include "fluss.labels" . | nindent 4 }}
+data:
+  server.yaml: |
+    {{- range $key, $val := .Values.configurationOverrides }}
+    {{ $key }}: {{ $val }}
+    {{- end }}
