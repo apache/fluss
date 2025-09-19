@@ -21,7 +21,6 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.coordinator.CoordinatorRequestBatch;
-import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionAlgorithms.LeaderElectionResult;
 import org.apache.fluss.server.entity.BatchRegisterLeadAndIsr;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -43,6 +42,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionAlgorithms.controlledShutdownReplicaLeaderElection;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionAlgorithms.defaultReplicaLeaderElection;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionAlgorithms.initReplicaLeaderElection;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionStrategy.CONTROLLED_SHUTDOWN_ELECTION;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionStrategy.DEFAULT_ELECTION;
 
@@ -428,26 +428,16 @@ public class TableBucketStateMachine {
         }
         // For the case that the table bucket has been initialized, we use all the live assigned
         // servers as inSyncReplica set.
-        List<Integer> isr = liveServers;
-        Optional<LeaderElectionResult> resultOpt =
-                defaultReplicaLeaderElection(assignedServers, liveServers, isr);
+        Optional<ElectionResult> resultOpt =
+                initReplicaLeaderElection(
+                        assignedServers, liveServers, coordinatorContext.getCoordinatorEpoch());
         if (!resultOpt.isPresent()) {
             LOG.error(
                     "The leader election for table bucket {} is empty.",
                     stringifyBucket(tableBucket));
             return Optional.empty();
         }
-        LeaderElectionResult leaderElectionResult = resultOpt.get();
-        // Register the initial leader and isr.
-        LeaderAndIsr leaderAndIsr =
-                new LeaderAndIsr(
-                        leaderElectionResult.getLeader(),
-                        0,
-                        leaderElectionResult.getNewIsr(),
-                        coordinatorContext.getCoordinatorEpoch(),
-                        0);
-
-        return Optional.of(new ElectionResult(liveServers, leaderAndIsr));
+        return resultOpt;
     }
 
     private List<RegisterTableBucketLeadAndIsrInfo> tryRegisterLeaderAndIsrOneByOne(
@@ -608,17 +598,14 @@ public class TableBucketStateMachine {
             return Optional.empty();
         }
 
-        Optional<LeaderElectionResult> resultOpt = Optional.empty();
+        Optional<ElectionResult> resultOpt = Optional.empty();
         if (electionStrategy == DEFAULT_ELECTION) {
-            resultOpt = defaultReplicaLeaderElection(assignment, liveReplicas, leaderAndIsr.isr());
+            resultOpt = defaultReplicaLeaderElection(assignment, liveReplicas, leaderAndIsr);
         } else if (electionStrategy == CONTROLLED_SHUTDOWN_ELECTION) {
             Set<Integer> shuttingDownTabletServers = coordinatorContext.shuttingDownTabletServers();
             resultOpt =
                     controlledShutdownReplicaLeaderElection(
-                            assignment,
-                            leaderAndIsr.isr(),
-                            liveReplicas,
-                            shuttingDownTabletServers);
+                            assignment, liveReplicas, leaderAndIsr, shuttingDownTabletServers);
         }
 
         if (!resultOpt.isPresent()) {
@@ -627,18 +614,7 @@ public class TableBucketStateMachine {
                     stringifyBucket(tableBucket));
             return Optional.empty();
         }
-
-        // get the updated leader and isr
-        LeaderElectionResult leaderElectionResult = resultOpt.get();
-        LeaderAndIsr newLeaderAndIsr =
-                new LeaderAndIsr(
-                        leaderElectionResult.getLeader(),
-                        leaderAndIsr.leaderEpoch() + 1,
-                        leaderElectionResult.getNewIsr(),
-                        coordinatorContext.getCoordinatorEpoch(),
-                        leaderAndIsr.bucketEpoch() + 1);
-
-        return Optional.of(new ElectionResult(liveReplicas, newLeaderAndIsr));
+        return resultOpt;
     }
 
     /** The result of leader election. */
@@ -649,6 +625,14 @@ public class TableBucketStateMachine {
         public ElectionResult(List<Integer> liveReplicas, LeaderAndIsr leaderAndIsr) {
             this.liveReplicas = liveReplicas;
             this.leaderAndIsr = leaderAndIsr;
+        }
+
+        public List<Integer> getLiveReplicas() {
+            return liveReplicas;
+        }
+
+        public LeaderAndIsr getLeaderAndIsr() {
+            return leaderAndIsr;
         }
     }
 }

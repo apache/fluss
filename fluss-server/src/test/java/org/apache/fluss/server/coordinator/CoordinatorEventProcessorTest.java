@@ -810,7 +810,6 @@ class CoordinatorEventProcessorTest {
                                         assertThat(ctx.getBucketLeaderAndIsr(tableBucket))
                                                 .contains(
                                                         leaderAndIsr.newLeaderAndIsr(
-                                                                leaderAndIsr.leader(),
                                                                 leaderAndIsr.isr()))));
 
         // verify the response

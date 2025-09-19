@@ -17,7 +17,8 @@
 
 package org.apache.fluss.server.coordinator.statemachine;
 
-import org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionAlgorithms.LeaderElectionResult;
+import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine.ElectionResult;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import org.junit.jupiter.api.Test;
 
@@ -30,49 +31,69 @@ import java.util.Set;
 
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionAlgorithms.controlledShutdownReplicaLeaderElection;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionAlgorithms.defaultReplicaLeaderElection;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionAlgorithms.initReplicaLeaderElection;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link ReplicaLeaderElectionAlgorithms}. */
 public class ReplicaLeaderElectionAlgorithmsTest {
 
     @Test
-    void testDefaultReplicaLeaderElection() {
+    void testInitReplicaLeaderElection() {
         List<Integer> assignments = Arrays.asList(2, 4);
         List<Integer> liveReplicas = Collections.singletonList(4);
-        List<Integer> isr = Arrays.asList(2, 4);
 
-        Optional<LeaderElectionResult> leaderElectionResultOpt =
-                defaultReplicaLeaderElection(assignments, liveReplicas, isr);
+        Optional<ElectionResult> leaderElectionResultOpt =
+                initReplicaLeaderElection(assignments, liveReplicas, 0);
         assertThat(leaderElectionResultOpt.isPresent()).isTrue();
-        LeaderElectionResult leaderElectionResult = leaderElectionResultOpt.get();
-        assertThat(leaderElectionResult.getLeader()).isEqualTo(4);
-        assertThat(leaderElectionResult.getNewIsr()).containsExactly(2, 4);
+        ElectionResult leaderElectionResult = leaderElectionResultOpt.get();
+        assertThat(leaderElectionResult.getLiveReplicas()).containsExactlyInAnyOrder(4);
+        assertThat(leaderElectionResult.getLeaderAndIsr().leader()).isEqualTo(4);
+        assertThat(leaderElectionResult.getLeaderAndIsr().isr()).containsExactlyInAnyOrder(4);
+    }
+
+    @Test
+    void testDefaultReplicaLeaderElection() {
+        List<Integer> assignments = Arrays.asList(2, 4);
+        List<Integer> liveReplicas = Arrays.asList(2, 4);
+        LeaderAndIsr originLeaderAndIsr = new LeaderAndIsr(4, 0, Arrays.asList(2, 4), 0, 0);
+
+        Optional<ElectionResult> leaderElectionResultOpt =
+                defaultReplicaLeaderElection(assignments, liveReplicas, originLeaderAndIsr);
+        assertThat(leaderElectionResultOpt.isPresent()).isTrue();
+        ElectionResult leaderElectionResult = leaderElectionResultOpt.get();
+        assertThat(leaderElectionResult.getLiveReplicas()).containsExactlyInAnyOrder(2, 4);
+        assertThat(leaderElectionResult.getLeaderAndIsr().leader()).isEqualTo(2);
+        assertThat(leaderElectionResult.getLeaderAndIsr().isr()).containsExactlyInAnyOrder(2, 4);
     }
 
     @Test
     void testControlledShutdownReplicaLeaderElection() {
         List<Integer> assignments = Arrays.asList(2, 4);
         List<Integer> liveReplicas = Arrays.asList(2, 4);
-        List<Integer> isr = Arrays.asList(2, 4);
+        LeaderAndIsr originLeaderAndIsr = new LeaderAndIsr(2, 0, Arrays.asList(2, 4), 0, 0);
         Set<Integer> shutdownTabletServers = Collections.singleton(2);
-        Optional<LeaderElectionResult> leaderElectionResultOpt =
+
+        Optional<ElectionResult> leaderElectionResultOpt =
                 controlledShutdownReplicaLeaderElection(
-                        assignments, liveReplicas, isr, shutdownTabletServers);
+                        assignments, liveReplicas, originLeaderAndIsr, shutdownTabletServers);
         assertThat(leaderElectionResultOpt.isPresent()).isTrue();
-        LeaderElectionResult leaderElectionResult = leaderElectionResultOpt.get();
-        assertThat(leaderElectionResult.getLeader()).isEqualTo(4);
-        assertThat(leaderElectionResult.getNewIsr()).containsExactly(4);
+        ElectionResult leaderElectionResult = leaderElectionResultOpt.get();
+        assertThat(leaderElectionResult.getLiveReplicas()).containsExactlyInAnyOrder(4);
+        assertThat(leaderElectionResult.getLeaderAndIsr().leader()).isEqualTo(4);
+        assertThat(leaderElectionResult.getLeaderAndIsr().isr()).containsExactlyInAnyOrder(4);
     }
 
     @Test
     void testControlledShutdownReplicaLeaderElectionLastIsrShuttingDown() {
         List<Integer> assignments = Arrays.asList(2, 4);
         List<Integer> liveReplicas = Arrays.asList(2, 4);
-        List<Integer> isr = Collections.singletonList(2);
+        LeaderAndIsr originLeaderAndIsr =
+                new LeaderAndIsr(2, 0, Collections.singletonList(2), 0, 0);
         Set<Integer> shutdownTabletServers = Collections.singleton(2);
-        Optional<LeaderElectionResult> leaderElectionResultOpt =
+
+        Optional<ElectionResult> leaderElectionResultOpt =
                 controlledShutdownReplicaLeaderElection(
-                        assignments, liveReplicas, isr, shutdownTabletServers);
+                        assignments, liveReplicas, originLeaderAndIsr, shutdownTabletServers);
         assertThat(leaderElectionResultOpt).isEmpty();
     }
 
@@ -80,11 +101,12 @@ public class ReplicaLeaderElectionAlgorithmsTest {
     void testControlledShutdownPartitionLeaderElectionAllIsrSimultaneouslyShutdown() {
         List<Integer> assignments = Arrays.asList(2, 4);
         List<Integer> liveReplicas = Arrays.asList(2, 4);
-        List<Integer> isr = Arrays.asList(2, 4);
+        LeaderAndIsr originLeaderAndIsr = new LeaderAndIsr(2, 0, Arrays.asList(2, 4), 0, 0);
         Set<Integer> shutdownTabletServers = new HashSet<>(Arrays.asList(2, 4));
-        Optional<LeaderElectionResult> leaderElectionResultOpt =
+
+        Optional<ElectionResult> leaderElectionResultOpt =
                 controlledShutdownReplicaLeaderElection(
-                        assignments, liveReplicas, isr, shutdownTabletServers);
+                        assignments, liveReplicas, originLeaderAndIsr, shutdownTabletServers);
         assertThat(leaderElectionResultOpt).isEmpty();
     }
 }

@@ -172,7 +172,7 @@ public class TabletServerShutdownITCase {
 
         // the follower should be removed from isr
         LeaderAndIsr expectedLeaderAndIsr1 =
-                leaderAndIsr.newLeaderAndIsr(leader, Collections.singletonList(leader));
+                leaderAndIsr.newLeaderAndIsr(Collections.singletonList(leader));
         retry(
                 Duration.ofMinutes(1),
                 () ->

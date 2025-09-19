@@ -70,8 +70,27 @@ public class LeaderAndIsr {
         this.bucketEpoch = bucketEpoch;
     }
 
+    /**
+     * Create a new LeaderAndIsr with the given leader and isr, which means the leader changes.
+     *
+     * @param newLeader the new leader replica id
+     * @param newIsr the new isr
+     * @return the new LeaderAndIsr
+     */
     public LeaderAndIsr newLeaderAndIsr(int newLeader, List<Integer> newIsr) {
-        return new LeaderAndIsr(newLeader, leaderEpoch, newIsr, coordinatorEpoch, bucketEpoch + 1);
+        return new LeaderAndIsr(
+                newLeader, leaderEpoch + 1, newIsr, coordinatorEpoch, bucketEpoch + 1);
+    }
+
+    /**
+     * Create a new LeaderAndIsr with the given isr, which means only the isr changes, but the
+     * leader remains the same.
+     *
+     * @param newIsr the new isr
+     * @return the new LeaderAndIsr
+     */
+    public LeaderAndIsr newLeaderAndIsr(List<Integer> newIsr) {
+        return new LeaderAndIsr(leader, leaderEpoch, newIsr, coordinatorEpoch, bucketEpoch + 1);
     }
 
     public int leader() {
@@ -96,14 +115,6 @@ public class LeaderAndIsr {
 
     public int bucketEpoch() {
         return bucketEpoch;
-    }
-
-    public boolean equalsAllowStalePartitionEpoch(LeaderAndIsr other) {
-        return leader == other.leader
-                && leaderEpoch == other.leaderEpoch
-                && coordinatorEpoch == other.coordinatorEpoch
-                && isr.equals(other.isr)
-                && bucketEpoch <= other.bucketEpoch;
     }
 
     @Override
