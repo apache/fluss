@@ -86,7 +86,7 @@ abstract class FlinkCatalogITCase {
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
-    static Catalog catalog;
+    static FlinkCatalog catalog;
 
     protected TableEnvironment tEnv;
 
@@ -775,7 +775,7 @@ abstract class FlinkCatalogITCase {
                         "The configured default-database 'non-exist' does not exist in the Fluss cluster.");
     }
 
-    private static void assertOptionsEqual(
+    protected static void assertOptionsEqual(
             Map<String, String> actualOptions, Map<String, String> expectedOptions) {
         actualOptions.remove(ConfigOptions.BOOTSTRAP_SERVERS.key());
         actualOptions.remove(ConfigOptions.TABLE_REPLICATION_FACTOR.key());

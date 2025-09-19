@@ -114,7 +114,7 @@ public class FlinkCatalog extends AbstractCatalog {
     protected final String catalogName;
     protected final String defaultDatabase;
     protected final String bootstrapServers;
-    private final Map<String, String> securityConfigs;
+    protected final Map<String, String> securityConfigs;
     protected Connection connection;
     protected Admin admin;
     private volatile @Nullable LakeCatalog lakeCatalog;
