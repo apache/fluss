@@ -1407,6 +1407,22 @@ public class ZooKeeperClient implements AutoCloseable {
         return zkClient;
     }
 
+    /**
+     * Asynchronously retrieves table metadata from ZooKeeper for the specified table.
+     *
+     * <p>This method fetches the table assignment information from ZooKeeper and converts it into a
+     * list of bucket metadata. The operation is performed asynchronously to avoid blocking the
+     * calling thread.
+     *
+     * @param tablePath the path of the table to retrieve metadata for
+     * @param tableId the unique identifier of the table
+     * @param isPartitioned whether the table is partitioned (affects warning behavior for missing
+     *     assignments)
+     * @return a CompletableFuture containing a list of BucketMetadata objects representing all
+     *     buckets for this table. Returns an empty list if no table assignment is found.
+     * @throws TableNotExistException if the table does not exist in ZooKeeper
+     * @throws FlussRuntimeException if there's an error retrieving or processing the metadata
+     */
     public CompletableFuture<List<BucketMetadata>> getTableMetadataFromZkAsync(
             TablePath tablePath, long tableId, boolean isPartitioned) {
 
@@ -1414,37 +1430,56 @@ public class ZooKeeperClient implements AutoCloseable {
 
         return getAssignmentInfoAsync(tableId, physicalTablePath)
                 .thenCompose(
-                        assignmentInfo -> {
-                            if (assignmentInfo.tableAssignment == null) {
-                                if (isPartitioned) {
-                                    LOG.warn(
-                                            "No table assignment node found for table {}", tableId);
-                                }
-                                return CompletableFuture.completedFuture(new ArrayList<>());
-                            }
-
-                            return toBucketMetadataListAsync(
-                                    tableId, null, assignmentInfo.tableAssignment, null);
-                        })
+                        assignmentInfo ->
+                                processTableAssignmentInfo(assignmentInfo, tableId, isPartitioned))
                 .exceptionally(
-                        throwable -> {
-                            Throwable cause =
-                                    ExceptionUtils.stripException(
-                                            throwable, CompletionException.class);
-                            if (cause instanceof TableNotExistException) {
-                                throw new CompletionException(cause);
-                            }
-                            LOG.error(
-                                    "Failed to get metadata for table {}, id {}",
-                                    tablePath,
-                                    tableId);
-                            throw new CompletionException(
-                                    new FlussRuntimeException(
-                                            String.format(
-                                                    "Failed to get metadata for table %s, id %d",
-                                                    tablePath, tableId),
-                                            cause));
-                        });
+                        throwable -> handleTableMetadataException(throwable, tablePath, tableId));
+    }
+
+    /**
+     * Process table assignment information and convert it to bucket metadata list.
+     *
+     * @param assignmentInfo the assignment information retrieved from ZooKeeper
+     * @param tableId the table ID
+     * @param isPartitioned whether the table is partitioned
+     * @return CompletableFuture containing list of BucketMetadata
+     */
+    private CompletableFuture<List<BucketMetadata>> processTableAssignmentInfo(
+            AssignmentInfo assignmentInfo, long tableId, boolean isPartitioned) {
+
+        if (assignmentInfo.tableAssignment == null) {
+            if (isPartitioned) {
+                LOG.warn("No table assignment node found for table {}", tableId);
+            }
+            return CompletableFuture.completedFuture(new ArrayList<>());
+        }
+
+        return toBucketMetadataListAsync(tableId, null, assignmentInfo.tableAssignment, null);
+    }
+
+    /**
+     * Handle exceptions that occur during table metadata retrieval.
+     *
+     * @param throwable the exception that occurred
+     * @param tablePath the table path for error context
+     * @param tableId the table ID for error context
+     * @return never returns normally, always throws an exception
+     * @throws TableNotExistException if the original cause was table not existing
+     * @throws FlussRuntimeException for other errors
+     */
+    private List<BucketMetadata> handleTableMetadataException(
+            Throwable throwable, TablePath tablePath, long tableId) {
+
+        Throwable cause = ExceptionUtils.stripException(throwable, CompletionException.class);
+
+        if (cause instanceof TableNotExistException) {
+            throw (TableNotExistException) cause;
+        }
+
+        LOG.error("Failed to get metadata for table {}, id {}", tablePath, tableId, cause);
+        throw new FlussRuntimeException(
+                String.format("Failed to get metadata for table %s, id %d", tablePath, tableId),
+                cause);
     }
 
     public static CompletableFuture<List<BucketMetadata>> getTableMetadataFromZkAsync(
@@ -1452,61 +1487,146 @@ public class ZooKeeperClient implements AutoCloseable {
         return zkClient.getTableMetadataFromZkAsync(tablePath, tableId, isPartitioned);
     }
 
+    /**
+     * Asynchronously retrieves partition metadata from ZooKeeper for the specified partition.
+     *
+     * <p>This method fetches the partition assignment information from ZooKeeper and converts it
+     * into partition metadata including all bucket metadata. The operation is performed
+     * asynchronously to avoid blocking the calling thread.
+     *
+     * @param partitionPath the physical path of the partition to retrieve metadata for
+     * @return a CompletableFuture containing a PartitionMetadata object representing the partition
+     *     and all its buckets. Returns a PartitionMetadata with empty bucket list if no partition
+     *     assignment is found.
+     * @throws PartitionNotExistException if the partition does not exist in ZooKeeper
+     * @throws FlussRuntimeException if there's an error retrieving or processing the metadata
+     * @throws IllegalArgumentException if the partition ID is null (should never happen for valid
+     *     partitions)
+     */
     public CompletableFuture<PartitionMetadata> getPartitionMetadataFromZkAsync(
             PhysicalTablePath partitionPath) {
 
         return getAssignmentInfoAsync(null, partitionPath)
                 .thenCompose(
-                        assignmentInfo -> {
-                            checkNotNull(
-                                    assignmentInfo.partitionId,
-                                    "partition id must be not null for " + partitionPath);
-
-                            if (assignmentInfo.tableAssignment == null) {
-                                LOG.warn(
-                                        "No partition assignment node found for partition {}",
-                                        partitionPath);
-                                return CompletableFuture.completedFuture(
-                                        new PartitionMetadata(
-                                                assignmentInfo.tableId,
-                                                partitionPath.getPartitionName(),
-                                                assignmentInfo.partitionId != null
-                                                        ? assignmentInfo.partitionId
-                                                        : -1L,
-                                                new ArrayList<>()));
-                            }
-
-                            return toBucketMetadataListAsync(
-                                            assignmentInfo.tableId,
-                                            assignmentInfo.partitionId,
-                                            assignmentInfo.tableAssignment,
-                                            null)
-                                    .thenApply(
-                                            bucketMetadataList ->
-                                                    new PartitionMetadata(
-                                                            assignmentInfo.tableId,
-                                                            partitionPath.getPartitionName(),
-                                                            assignmentInfo.partitionId != null
-                                                                    ? assignmentInfo.partitionId
-                                                                    : -1L,
-                                                            bucketMetadataList));
-                        })
+                        assignmentInfo ->
+                                processPartitionAssignmentInfo(assignmentInfo, partitionPath))
                 .exceptionally(
-                        throwable -> {
-                            Throwable cause =
-                                    ExceptionUtils.stripException(
-                                            throwable, CompletionException.class);
-                            if (cause instanceof PartitionNotExistException) {
-                                throw new CompletionException(cause);
-                            }
-                            LOG.error("Failed to get metadata for partition {}", partitionPath);
-                            throw new CompletionException(
-                                    new FlussRuntimeException(
-                                            String.format(
-                                                    "Failed to get metadata for partition %s",
-                                                    partitionPath),
-                                            cause));
-                        });
+                        throwable -> handlePartitionMetadataException(throwable, partitionPath));
+    }
+
+    /**
+     * Process partition assignment information and convert it to partition metadata.
+     *
+     * @param assignmentInfo the assignment information retrieved from ZooKeeper
+     * @param partitionPath the physical partition path
+     * @return CompletableFuture containing PartitionMetadata
+     */
+    private CompletableFuture<PartitionMetadata> processPartitionAssignmentInfo(
+            AssignmentInfo assignmentInfo, PhysicalTablePath partitionPath) {
+
+        checkNotNull(
+                assignmentInfo.partitionId, "partition id must be not null for " + partitionPath);
+
+        if (assignmentInfo.tableAssignment == null) {
+            return createEmptyPartitionMetadata(assignmentInfo, partitionPath);
+        }
+
+        return buildPartitionMetadataWithBuckets(assignmentInfo, partitionPath);
+    }
+
+    /**
+     * Create partition metadata with empty bucket list when no assignment is found.
+     *
+     * @param assignmentInfo the assignment information (with null tableAssignment)
+     * @param partitionPath the physical partition path
+     * @return CompletableFuture containing PartitionMetadata with empty bucket list
+     */
+    private CompletableFuture<PartitionMetadata> createEmptyPartitionMetadata(
+            AssignmentInfo assignmentInfo, PhysicalTablePath partitionPath) {
+
+        LOG.warn("No partition assignment node found for partition {}", partitionPath);
+
+        PartitionMetadata emptyMetadata =
+                new PartitionMetadata(
+                        assignmentInfo.tableId,
+                        partitionPath.getPartitionName(),
+                        assignmentInfo.partitionId != null ? assignmentInfo.partitionId : -1L,
+                        new ArrayList<>());
+
+        return CompletableFuture.completedFuture(emptyMetadata);
+    }
+
+    /**
+     * Build partition metadata with bucket information from assignment.
+     *
+     * @param assignmentInfo the assignment information with valid tableAssignment
+     * @param partitionPath the physical partition path
+     * @return CompletableFuture containing PartitionMetadata with bucket list
+     */
+    private CompletableFuture<PartitionMetadata> buildPartitionMetadataWithBuckets(
+            AssignmentInfo assignmentInfo, PhysicalTablePath partitionPath) {
+
+        return toBucketMetadataListAsync(
+                        assignmentInfo.tableId,
+                        assignmentInfo.partitionId,
+                        assignmentInfo.tableAssignment,
+                        null)
+                .thenApply(
+                        bucketMetadataList ->
+                                new PartitionMetadata(
+                                        assignmentInfo.tableId,
+                                        partitionPath.getPartitionName(),
+                                        assignmentInfo.partitionId != null
+                                                ? assignmentInfo.partitionId
+                                                : -1L,
+                                        bucketMetadataList));
+    }
+
+    /**
+     * Handle exceptions that occur during partition metadata retrieval.
+     *
+     * @param throwable the exception that occurred
+     * @param partitionPath the partition path for error context
+     * @return never returns normally, always throws an exception
+     * @throws PartitionNotExistException if the original cause was partition not existing
+     * @throws FlussRuntimeException for other errors
+     */
+    private PartitionMetadata handlePartitionMetadataException(
+            Throwable throwable, PhysicalTablePath partitionPath) {
+
+        return handlePartitionException(
+                throwable,
+                "Failed to get metadata for partition {}",
+                partitionPath,
+                String.format("Failed to get metadata for partition %s", partitionPath));
+    }
+
+    /**
+     * Common exception handler for partition-related operations.
+     *
+     * @param throwable the exception that occurred
+     * @param logMessageTemplate the template for log message (with {} placeholder)
+     * @param logContext the context object to be logged
+     * @param errorMessage the error message for FlussRuntimeException
+     * @param <T> the return type (never actually returns)
+     * @return never returns normally, always throws an exception
+     * @throws PartitionNotExistException if the original cause was partition not existing
+     * @throws FlussRuntimeException for other errors
+     */
+    private <T> T handlePartitionException(
+            Throwable throwable,
+            String logMessageTemplate,
+            Object logContext,
+            String errorMessage) {
+
+        Throwable cause = ExceptionUtils.stripException(throwable, CompletionException.class);
+
+        if (cause instanceof PartitionNotExistException) {
+            throw (PartitionNotExistException) cause;
+        }
+
+        LOG.error(logMessageTemplate, logContext, cause);
+        throw new FlussRuntimeException(errorMessage, cause);
     }
 
     public static CompletableFuture<PartitionMetadata> getPartitionMetadataFromZkAsync(
@@ -1544,27 +1664,76 @@ public class ZooKeeperClient implements AutoCloseable {
         // Use batch async method to get all LeaderAndIsr information in one ZK call
         return getLeaderAndIsrsAsync(tableBuckets)
                 .thenApply(
-                        leaderAndIsrMap -> {
-                            List<BucketMetadata> result = new ArrayList<>();
-                            for (TableBucket tableBucket : tableBuckets) {
-                                Map.Entry<Integer, BucketAssignment> assignment =
-                                        bucketToAssignmentMap.get(tableBucket);
-                                int bucketId = assignment.getKey();
-                                List<Integer> replicas = assignment.getValue().getReplicas();
-
-                                Optional<LeaderAndIsr> optLeaderAndIsr =
-                                        leaderAndIsrMap.get(tableBucket);
-                                Integer leader =
-                                        optLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
-
-                                result.add(
-                                        new BucketMetadata(
-                                                bucketId, leader, leaderEpoch, replicas));
-                            }
-                            return result;
-                        });
+                        leaderAndIsrMap ->
+                                assembleBucketMetadataList(
+                                        tableBuckets,
+                                        bucketToAssignmentMap,
+                                        leaderAndIsrMap,
+                                        leaderEpoch));
     }
 
+    /**
+     * Assemble a list of BucketMetadata from table buckets, assignments, and leader information.
+     *
+     * @param tableBuckets the list of table buckets to process
+     * @param bucketToAssignmentMap mapping from table buckets to their assignment entries
+     * @param leaderAndIsrMap mapping from table buckets to their leader and ISR information
+     * @param leaderEpoch the leader epoch to use for all buckets (can be null)
+     * @return a list of BucketMetadata objects
+     */
+    private List<BucketMetadata> assembleBucketMetadataList(
+            List<TableBucket> tableBuckets,
+            Map<TableBucket, Map.Entry<Integer, BucketAssignment>> bucketToAssignmentMap,
+            Map<TableBucket, Optional<LeaderAndIsr>> leaderAndIsrMap,
+            @Nullable Integer leaderEpoch) {
+
+        List<BucketMetadata> result = new ArrayList<>();
+
+        for (TableBucket tableBucket : tableBuckets) {
+            Map.Entry<Integer, BucketAssignment> assignment =
+                    bucketToAssignmentMap.get(tableBucket);
+            int bucketId = assignment.getKey();
+            List<Integer> replicas = assignment.getValue().getReplicas();
+
+            Optional<LeaderAndIsr> optLeaderAndIsr = leaderAndIsrMap.get(tableBucket);
+            Integer leader = optLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
+
+            result.add(new BucketMetadata(bucketId, leader, leaderEpoch, replicas));
+        }
+
+        return result;
+    }
+
+    /**
+     * Asynchronously retrieves partition metadata from ZooKeeper for multiple partitions in batch.
+     *
+     * <p>This method efficiently fetches partition metadata for multiple partitions across multiple
+     * tables in a single batched operation. It performs the following steps:
+     *
+     * <ul>
+     *   <li>Maps table paths to their partition information (name and ID mappings)
+     *   <li>Validates that all requested partition IDs exist
+     *   <li>Builds partition path information with resolved table IDs
+     *   <li>Batch retrieves partition assignments and bucket metadata
+     * </ul>
+     *
+     * <p>The batch operation is optimized to minimize ZooKeeper calls by grouping related
+     * operations together, making it much more efficient than calling {@link
+     * #getPartitionMetadataFromZkAsync(PhysicalTablePath)} individually for each partition.
+     *
+     * @param tablePaths the collection of table paths that may contain the requested partitions.
+     *     This is used to scope the search and improve efficiency. Cannot be empty if
+     *     partitionIdSet is not empty.
+     * @param partitionIdSet the set of partition IDs to retrieve metadata for. Cannot be empty if
+     *     tablePaths is not empty.
+     * @return a CompletableFuture containing a list of PartitionMetadata objects for all found
+     *     partitions. The list may be smaller than the input partition ID set if some partitions
+     *     have no assignment data. Returns an empty list if either input parameter is empty.
+     * @throws PartitionNotExistException if any of the requested partition IDs do not exist in any
+     *     of the provided tables
+     * @throws FlussRuntimeException if there's an error during ZooKeeper operations or metadata
+     *     processing
+     */
     public CompletableFuture<List<PartitionMetadata>> batchGetPartitionMetadataFromZkAsync(
             Collection<TablePath> tablePaths, Set<Long> partitionIdSet) {
         if (tablePaths.isEmpty() || partitionIdSet.isEmpty()) {
@@ -1576,7 +1745,8 @@ public class ZooKeeperClient implements AutoCloseable {
                             try {
                                 return getPartitionNameAndIdsForTables(new ArrayList<>(tablePaths));
                             } catch (Exception e) {
-                                throw new CompletionException(e);
+                                throw new RuntimeException(
+                                        "Failed to get partition name and ids for tables", e);
                             }
                         })
                 .thenCompose(
@@ -1585,46 +1755,51 @@ public class ZooKeeperClient implements AutoCloseable {
                                         tableToPartitionInfo, partitionIdSet))
                 .thenCompose(this::batchGetAssignmentInfoForPartitions)
                 .exceptionally(
-                        throwable -> {
-                            Throwable cause =
-                                    ExceptionUtils.stripException(
-                                            throwable, CompletionException.class);
-                            LOG.error(
-                                    "Failed to batch get partition metadata for partition ids: {}",
-                                    partitionIdSet,
-                                    cause);
-                            if (cause instanceof PartitionNotExistException) {
-                                throw new CompletionException(cause);
-                            }
-                            throw new CompletionException(
-                                    new FlussRuntimeException(
-                                            "Failed to batch get partition metadata for partition ids: "
-                                                    + partitionIdSet,
-                                            cause));
-                        });
+                        throwable ->
+                                handlePartitionException(
+                                        throwable,
+                                        "Failed to batch get partition metadata for partition ids: {}",
+                                        partitionIdSet,
+                                        "Failed to batch get partition metadata for partition ids: "
+                                                + partitionIdSet));
     }
 
     private CompletableFuture<List<PartitionPathInfo>> buildTargetPartitionPathsAndValidate(
             Map<TablePath, Map<String, Long>> tableToPartitionInfo, Set<Long> partitionIdSet) {
-        List<PartitionPathInfo> targetPartitionInfos = new ArrayList<>();
+
+        PartitionCollectionResult collectionResult =
+                collectValidPartitionsAndTables(tableToPartitionInfo, partitionIdSet);
+
+        validateAllPartitionsExist(collectionResult.remainingPartitionIds);
+
+        if (collectionResult.tablePartitionMapping.isEmpty()) {
+            return CompletableFuture.completedFuture(Collections.emptyList());
+        }
+
+        return buildPartitionPathInfosWithTableIds(collectionResult);
+    }
+
+    /**
+     * Collect valid partitions and identify tables that need ID resolution.
+     *
+     * @param tableToPartitionInfo mapping of table paths to their partition information
+     * @param partitionIdSet the set of partition IDs to look for
+     * @return PartitionCollectionResult containing collected information
+     */
+    private PartitionCollectionResult collectValidPartitionsAndTables(
+            Map<TablePath, Map<String, Long>> tableToPartitionInfo, Set<Long> partitionIdSet) {
+
         Set<Long> remainingPartitionIds = new HashSet<>(partitionIdSet);
         Set<TablePath> tablesNeedingIds = new HashSet<>();
         Map<TablePath, List<Tuple2<String, Long>>> tablePartitionMapping = new HashMap<>();
 
-        // First pass: collect valid partitions and identify which tables we need
         for (Map.Entry<TablePath, Map<String, Long>> entry : tableToPartitionInfo.entrySet()) {
             TablePath tablePath = entry.getKey();
             Map<String, Long> partitionInfo = entry.getValue();
 
-            List<Tuple2<String, Long>> validPartitions = new ArrayList<>();
-            for (Map.Entry<String, Long> partitionEntry : partitionInfo.entrySet()) {
-                Long partitionId = partitionEntry.getValue();
-                if (partitionIdSet.contains(partitionId)) {
-                    String partitionName = partitionEntry.getKey();
-                    validPartitions.add(Tuple2.of(partitionName, partitionId));
-                    remainingPartitionIds.remove(partitionId);
-                }
-            }
+            List<Tuple2<String, Long>> validPartitions =
+                    findValidPartitionsForTable(
+                            partitionInfo, partitionIdSet, remainingPartitionIds);
 
             if (!validPartitions.isEmpty()) {
                 tablesNeedingIds.add(tablePath);
@@ -1632,52 +1807,138 @@ public class ZooKeeperClient implements AutoCloseable {
             }
         }
 
-        // Check for non-existent partitions
+        return new PartitionCollectionResult(
+                remainingPartitionIds, tablesNeedingIds, tablePartitionMapping);
+    }
+
+    /**
+     * Find valid partitions for a specific table.
+     *
+     * @param partitionInfo partition information for the table
+     * @param partitionIdSet the set of partition IDs to look for
+     * @param remainingPartitionIds mutable set to track unmatched partition IDs
+     * @return list of valid partitions (name, id) tuples
+     */
+    private List<Tuple2<String, Long>> findValidPartitionsForTable(
+            Map<String, Long> partitionInfo,
+            Set<Long> partitionIdSet,
+            Set<Long> remainingPartitionIds) {
+
+        List<Tuple2<String, Long>> validPartitions = new ArrayList<>();
+
+        for (Map.Entry<String, Long> partitionEntry : partitionInfo.entrySet()) {
+            Long partitionId = partitionEntry.getValue();
+            if (partitionIdSet.contains(partitionId)) {
+                String partitionName = partitionEntry.getKey();
+                validPartitions.add(Tuple2.of(partitionName, partitionId));
+                remainingPartitionIds.remove(partitionId);
+            }
+        }
+
+        return validPartitions;
+    }
+
+    /**
+     * Validate that all requested partitions were found.
+     *
+     * @param remainingPartitionIds partition IDs that were not found
+     * @throws PartitionNotExistException if any partitions are missing
+     */
+    private void validateAllPartitionsExist(Set<Long> remainingPartitionIds) {
         if (!remainingPartitionIds.isEmpty()) {
-            CompletableFuture<List<PartitionPathInfo>> future = new CompletableFuture<>();
-            future.completeExceptionally(
-                    new PartitionNotExistException(
-                            "Partition not exist for partition ids: " + remainingPartitionIds));
-            return future;
+            throw new PartitionNotExistException(
+                    "Partition not exist for partition ids: " + remainingPartitionIds);
         }
+    }
 
-        if (tablePartitionMapping.isEmpty()) {
-            return CompletableFuture.completedFuture(Collections.emptyList());
-        }
+    /**
+     * Build PartitionPathInfo list by resolving table IDs from table registrations.
+     *
+     * @param collectionResult the result from partition collection phase
+     * @return CompletableFuture containing list of PartitionPathInfo
+     */
+    private CompletableFuture<List<PartitionPathInfo>> buildPartitionPathInfosWithTableIds(
+            PartitionCollectionResult collectionResult) {
 
-        // Second pass: batch get table registrations to obtain table IDs (1 ZK call)
         return CompletableFuture.supplyAsync(
                         () -> {
                             try {
-                                return getTables(tablesNeedingIds);
+                                return getTables(collectionResult.tablesNeedingIds);
                             } catch (Exception e) {
-                                throw new CompletionException(e);
+                                throw new RuntimeException("Failed to get table registrations", e);
                             }
                         })
                 .thenApply(
-                        tableRegistrations -> {
-                            // Build PartitionPathInfo list with table IDs
-                            for (Map.Entry<TablePath, List<Tuple2<String, Long>>> entry :
-                                    tablePartitionMapping.entrySet()) {
-                                TablePath tablePath = entry.getKey();
-                                TableRegistration tableRegistration =
-                                        tableRegistrations.get(tablePath);
+                        tableRegistrations ->
+                                buildPartitionPathInfoList(
+                                        collectionResult.tablePartitionMapping,
+                                        tableRegistrations));
+    }
 
-                                if (tableRegistration != null) {
-                                    long tableId = tableRegistration.tableId;
-                                    for (Tuple2<String, Long> partitionInfo : entry.getValue()) {
-                                        String partitionName = partitionInfo.f0;
-                                        Long partitionId = partitionInfo.f1;
-                                        PhysicalTablePath partitionPath =
-                                                PhysicalTablePath.of(tablePath, partitionName);
-                                        targetPartitionInfos.add(
-                                                new PartitionPathInfo(
-                                                        partitionPath, partitionId, tableId));
-                                    }
-                                }
-                            }
-                            return targetPartitionInfos;
-                        });
+    /**
+     * Build the final list of PartitionPathInfo from table registrations and partition mappings.
+     *
+     * @param tablePartitionMapping mapping of tables to their valid partitions
+     * @param tableRegistrations table registration information containing table IDs
+     * @return list of PartitionPathInfo objects
+     */
+    private List<PartitionPathInfo> buildPartitionPathInfoList(
+            Map<TablePath, List<Tuple2<String, Long>>> tablePartitionMapping,
+            Map<TablePath, TableRegistration> tableRegistrations) {
+
+        List<PartitionPathInfo> targetPartitionInfos = new ArrayList<>();
+
+        for (Map.Entry<TablePath, List<Tuple2<String, Long>>> entry :
+                tablePartitionMapping.entrySet()) {
+            TablePath tablePath = entry.getKey();
+            TableRegistration tableRegistration = tableRegistrations.get(tablePath);
+
+            if (tableRegistration != null) {
+                long tableId = tableRegistration.tableId;
+                addPartitionPathInfosForTable(
+                        targetPartitionInfos, tablePath, tableId, entry.getValue());
+            }
+        }
+
+        return targetPartitionInfos;
+    }
+
+    /**
+     * Add PartitionPathInfo objects for all partitions of a specific table.
+     *
+     * @param targetPartitionInfos target list to add to
+     * @param tablePath the table path
+     * @param tableId the table ID
+     * @param partitionInfos list of partition (name, id) tuples
+     */
+    private void addPartitionPathInfosForTable(
+            List<PartitionPathInfo> targetPartitionInfos,
+            TablePath tablePath,
+            long tableId,
+            List<Tuple2<String, Long>> partitionInfos) {
+
+        for (Tuple2<String, Long> partitionInfo : partitionInfos) {
+            String partitionName = partitionInfo.f0;
+            Long partitionId = partitionInfo.f1;
+            PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, partitionName);
+            targetPartitionInfos.add(new PartitionPathInfo(partitionPath, partitionId, tableId));
+        }
+    }
+
+    /** Data structure to hold the result of partition collection phase. */
+    private static class PartitionCollectionResult {
+        final Set<Long> remainingPartitionIds;
+        final Set<TablePath> tablesNeedingIds;
+        final Map<TablePath, List<Tuple2<String, Long>>> tablePartitionMapping;
+
+        PartitionCollectionResult(
+                Set<Long> remainingPartitionIds,
+                Set<TablePath> tablesNeedingIds,
+                Map<TablePath, List<Tuple2<String, Long>>> tablePartitionMapping) {
+            this.remainingPartitionIds = remainingPartitionIds;
+            this.tablesNeedingIds = tablesNeedingIds;
+            this.tablePartitionMapping = tablePartitionMapping;
+        }
     }
 
     /** Asynchronously get partition assignments for multiple partitions using batch processing. */
@@ -1716,22 +1977,18 @@ public class ZooKeeperClient implements AutoCloseable {
             return CompletableFuture.completedFuture(Collections.emptyList());
         }
 
-        // Extract partition IDs for batch assignment retrieval
         List<Long> partitionIds =
                 partitionPathInfos.stream()
                         .map(info -> info.partitionId)
                         .collect(Collectors.toList());
 
-        // Step 1: Batch get all partition assignments (1 batch ZK call)
         return getPartitionsAssignmentsAsync(partitionIds)
                 .thenCompose(
                         partitionAssignments -> {
-                            // Step 2: Build AssignmentInfo objects
                             List<AssignmentInfo> assignmentInfos = new ArrayList<>();
                             for (PartitionPathInfo pathInfo : partitionPathInfos) {
                                 PartitionAssignment partitionAssignment =
                                         partitionAssignments.get(pathInfo.partitionId);
-                                // PartitionAssignment extends TableAssignment, so we can cast it
                                 AssignmentInfo assignmentInfo =
                                         new AssignmentInfo(
                                                 pathInfo.tableId,
@@ -1740,7 +1997,6 @@ public class ZooKeeperClient implements AutoCloseable {
                                 assignmentInfos.add(assignmentInfo);
                             }
 
-                            // Step 3: Process bucket metadata using existing optimized logic
                             return collectAndProcessBucketMetadata(
                                     partitionPathInfos, assignmentInfos);
                         });
@@ -1748,7 +2004,6 @@ public class ZooKeeperClient implements AutoCloseable {
 
     private CompletableFuture<List<PartitionMetadata>> collectAndProcessBucketMetadata(
             List<PartitionPathInfo> partitionPathInfos, List<AssignmentInfo> assignmentInfos) {
-        // Step 1: Collect all TableBuckets for batch LeaderAndIsr retrieval
         List<TableBucket> allTableBuckets = new ArrayList<>();
         Map<TableBucket, Integer> bucketToIndexMap = new HashMap<>();
 
@@ -1766,7 +2021,6 @@ public class ZooKeeperClient implements AutoCloseable {
             }
         }
 
-        // Step 2: Batch get all LeaderAndIsr info (1 ZK call)
         return getLeaderAndIsrsAsync(allTableBuckets)
                 .thenApply(
                         leaderAndIsrMap ->
@@ -1783,7 +2037,6 @@ public class ZooKeeperClient implements AutoCloseable {
             Map<TableBucket, Integer> bucketToIndexMap,
             Map<TableBucket, Optional<LeaderAndIsr>> leaderAndIsrMap) {
 
-        // Step 1: Group bucket metadata by assignment index
         Map<Integer, List<BucketMetadata>> indexToBuckets = new HashMap<>();
 
         for (Map.Entry<TableBucket, Optional<LeaderAndIsr>> entry : leaderAndIsrMap.entrySet()) {
@@ -1818,7 +2071,6 @@ public class ZooKeeperClient implements AutoCloseable {
             }
         }
 
-        // Step 2: Build final PartitionMetadata list
         List<PartitionMetadata> result = new ArrayList<>();
         for (int i = 0; i < partitionPathInfos.size(); i++) {
             PartitionPathInfo pathInfo = partitionPathInfos.get(i);
@@ -1852,47 +2104,82 @@ public class ZooKeeperClient implements AutoCloseable {
     private CompletableFuture<AssignmentInfo> getAssignmentInfoAsync(
             @Nullable Long tableId, PhysicalTablePath physicalTablePath) {
 
-        // it's a partition, get the partition assignment
         if (physicalTablePath.getPartitionName() != null) {
-            return CompletableFuture.supplyAsync(
-                            () -> {
-                                try {
-                                    Optional<TablePartition> tablePartition =
-                                            this.getPartition(
-                                                    physicalTablePath.getTablePath(),
-                                                    physicalTablePath.getPartitionName());
-                                    if (!tablePartition.isPresent()) {
-                                        throw new PartitionNotExistException(
-                                                "Table partition '"
-                                                        + physicalTablePath
-                                                        + "' does not exist.");
-                                    }
-                                    return tablePartition.get();
-                                } catch (Exception e) {
-                                    throw new RuntimeException(e);
-                                }
-                            })
-                    .thenCompose(
-                            tablePartition -> {
-                                long partitionId = tablePartition.getPartitionId();
-                                long realTableId = tablePartition.getTableId();
-                                return getPartitionAssignmentAsync(partitionId)
-                                        .thenApply(
-                                                tableAssignment ->
-                                                        new AssignmentInfo(
-                                                                realTableId,
-                                                                tableAssignment,
-                                                                partitionId));
-                            });
+            return getPartitionAssignmentInfoAsync(physicalTablePath);
         } else {
-            checkNotNull(tableId, "tableId must be not null");
-            long realTableId = tableId != null ? tableId : -1L;
-
-            return getTableAssignmentAsync(realTableId)
-                    .thenApply(
-                            tableAssignment ->
-                                    new AssignmentInfo(realTableId, tableAssignment, null));
+            return getTableAssignmentInfoAsync(tableId);
         }
+    }
+
+    /**
+     * Get assignment info for a partition asynchronously.
+     *
+     * @param physicalTablePath the physical table path containing partition information
+     * @return CompletableFuture containing the AssignmentInfo for the partition
+     */
+    private CompletableFuture<AssignmentInfo> getPartitionAssignmentInfoAsync(
+            PhysicalTablePath physicalTablePath) {
+        return getPartitionInfoAsync(physicalTablePath)
+                .thenCompose(this::fetchPartitionAssignmentAsync);
+    }
+
+    /**
+     * Get assignment info for a table asynchronously.
+     *
+     * @param tableId the table ID
+     * @return CompletableFuture containing the AssignmentInfo for the table
+     */
+    private CompletableFuture<AssignmentInfo> getTableAssignmentInfoAsync(@Nullable Long tableId) {
+        checkNotNull(tableId, "tableId must be not null");
+        long realTableId = tableId != null ? tableId : -1L;
+
+        return getTableAssignmentAsync(realTableId)
+                .thenApply(
+                        tableAssignment -> new AssignmentInfo(realTableId, tableAssignment, null));
+    }
+
+    /**
+     * Get partition information and validate its existence.
+     *
+     * @param physicalTablePath the physical table path containing partition information
+     * @return CompletableFuture containing the TablePartition
+     */
+    private CompletableFuture<TablePartition> getPartitionInfoAsync(
+            PhysicalTablePath physicalTablePath) {
+        return CompletableFuture.supplyAsync(
+                () -> {
+                    try {
+                        Optional<TablePartition> tablePartition =
+                                getPartition(
+                                        physicalTablePath.getTablePath(),
+                                        physicalTablePath.getPartitionName());
+
+                        if (!tablePartition.isPresent()) {
+                            throw new PartitionNotExistException(
+                                    "Table partition '" + physicalTablePath + "' does not exist.");
+                        }
+                        return tablePartition.get();
+                    } catch (Exception e) {
+                        throw new RuntimeException(e);
+                    }
+                });
+    }
+
+    /**
+     * Fetch partition assignment based on partition information.
+     *
+     * @param tablePartition the table partition containing partition and table IDs
+     * @return CompletableFuture containing the AssignmentInfo for the partition
+     */
+    private CompletableFuture<AssignmentInfo> fetchPartitionAssignmentAsync(
+            TablePartition tablePartition) {
+        long partitionId = tablePartition.getPartitionId();
+        long tableId = tablePartition.getTableId();
+
+        return getPartitionAssignmentAsync(partitionId)
+                .thenApply(
+                        tableAssignment ->
+                                new AssignmentInfo(tableId, tableAssignment, partitionId));
     }
 
     private static class AssignmentInfo {
