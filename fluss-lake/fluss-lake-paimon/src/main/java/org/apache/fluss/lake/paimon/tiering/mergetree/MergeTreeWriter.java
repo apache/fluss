@@ -65,10 +65,8 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
         // currently, we don't expose the option, as a workaround way, maybe in the future we can
         // expose it if it's needed
         Map<String, String> props = fileStoreTable.options();
-        String tmpDir = props.get(FLUSS_TIERING_TMP_DIR_KEY);
-        if (tmpDir == null) {
-            tmpDir = System.getProperty("java.io.tmpdir");
-        }
+        String tmpDir =
+                props.getOrDefault(FLUSS_TIERING_TMP_DIR_KEY, System.getProperty("java.io.tmpdir"));
         //noinspection unchecked
         return (TableWriteImpl<KeyValue>)
                 fileStoreTable
