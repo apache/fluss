@@ -43,7 +43,7 @@ public class ReplicaLeaderElectionAlgorithms {
         // currently, we always use the first replica in assignment, which also in aliveReplicas and
         // isr as the leader replica.
         for (int assignment : assignments) {
-            if (aliveReplicas.contains(assignment) && aliveReplicas.contains(assignment)) {
+            if (aliveReplicas.contains(assignment)) {
                 return Optional.of(
                         new ElectionResult(
                                 aliveReplicas,
