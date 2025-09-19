@@ -1,7 +1,10 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: fluss-tablet-hs
+  name: tablet-server-hs
+  labels:
+    {{- include "fluss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: tablet
 spec:
   clusterIP: None
   type: ClusterIP

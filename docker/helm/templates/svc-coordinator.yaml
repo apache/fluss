@@ -1,8 +1,13 @@
 apiVersion: v1
 kind: Service
 metadata:
-  name: fluss-coordinator
+  name: coordinator-server-hs
+  labels:
+    {{- include "fluss.labels" . | nindent 4 }}
+    app.kubernetes.io/component: coordinator
 spec:
+  clusterIP: None
+  type: ClusterIP
   ports:
     - name: internal
       protocol: TCP
@@ -12,7 +17,6 @@ spec:
       protocol: TCP
       port: {{ .Values.appConfig.externalPort }}
       targetPort: {{ .Values.appConfig.externalPort }}
-  type: ClusterIP
   selector:
     {{- include "fluss.selectorLabels" . | nindent 4 }}
     app.kubernetes.io/component: coordinator
