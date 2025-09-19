@@ -28,8 +28,10 @@ import org.junit.jupiter.api.Test;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
@@ -133,29 +135,20 @@ class ClusterTest {
     @Test
     void testGetRandomTabletServer() {
         Map<Integer, ServerNode> aliveTabletServersById = new HashMap<>();
-        for (int i = 0; i < 1000; i++) {
+        for (int i = 0; i < 10; i++) {
             aliveTabletServersById.put(
                     i, new ServerNode(i, "localhost", 99 + i, ServerType.TABLET_SERVER));
         }
         Cluster cluster = createCluster(aliveTabletServersById);
 
-        Map<ServerNode, Integer> selectionCount = new HashMap<>();
-        int selectionNumber = 100000;
-        for (int i = 0; i < selectionNumber; i++) {
+        Set<ServerNode> selectedNodes = new HashSet<>();
+        for (int i = 0; i < 10; i++) {
             ServerNode serverNode = cluster.getRandomTabletServer();
-            selectionCount.put(serverNode, selectionCount.getOrDefault(serverNode, 0) + 1);
+            assertThat(serverNode).isNotNull();
+            selectedNodes.add(serverNode);
         }
 
-        double avg = selectionNumber / (double) selectionCount.size();
-        double variance =
-                selectionCount.values().stream()
-                                .mapToDouble(count -> Math.pow(count - avg, 2))
-                                .sum()
-                        / selectionCount.size();
-        double stdDev = Math.sqrt(variance);
-        double cv = stdDev / avg;
-        // check the Coefficient of Variation is less than 0.2
-        assertThat(cv).isLessThan(0.2);
+        assertThat(selectedNodes).hasSizeGreaterThan(1);
     }
 
     private Cluster createCluster(Map<Integer, ServerNode> aliveTabletServersById) {

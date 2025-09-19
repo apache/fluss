@@ -35,7 +35,6 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
-import java.util.concurrent.atomic.AtomicLong;
 
 /**
  * An immutable representation of a subset of the server nodes, tables, and buckets and schemas in
@@ -46,9 +45,6 @@ import java.util.concurrent.atomic.AtomicLong;
  */
 @Internal
 public final class Cluster {
-
-    private static final AtomicLong RANDOM_SEED = new AtomicLong(System.nanoTime());
-
     @Nullable private final ServerNode coordinatorServer;
     private final Map<PhysicalTablePath, List<BucketLocation>> availableLocationsByPath;
     private final Map<TableBucket, BucketLocation> availableLocationByBucket;
@@ -218,8 +214,7 @@ public final class Cluster {
             return null;
         }
 
-        long seedMix = RANDOM_SEED.get() ^ ThreadLocalRandom.current().nextLong();
-        int index = (int) (Math.abs(seedMix) % serverNodes.size());
+        int index = ThreadLocalRandom.current().nextInt(serverNodes.size());
         return serverNodes.get(index);
     }
 
