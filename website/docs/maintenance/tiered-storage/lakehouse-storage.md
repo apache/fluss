@@ -44,9 +44,22 @@ datalake.paimon.metastore: hive
 datalake.paimon.uri: thrift://<hive-metastore-host-name>:<port>
 datalake.paimon.warehouse: hdfs:///path/to/warehouse
 ```
+
 #### Add other jars required by datalake
 While Fluss includes the core Paimon library, additional jars may still need to be manually added to `${FLUSS_HOME}/plugins/paimon/` according to your needs.
-For example, for OSS filesystem support, you need to put `paimon-oss-<paimon_version>.jar` into directory `${FLUSS_HOME}/plugins/paimon/`.
+For example:
+- If you are using Paimon filesystem catalog with OSS filesystem, you need to put `paimon-oss-<paimon_version>.jar` into directory `${FLUSS_HOME}/plugins/paimon/`.
+- If you are using Hive catalog, you need to put [the flink sql hive connector jar](https://nightlies.apache.org/flink/flink-docs-stable/docs/connectors/table/hive/overview/#using-bundled-hive-jar) into directory `${FLUSS_HOME}/plugins/paimon/`.
+
+#### Hadoop Environment Configuration(required for kerberos-secured HDFS)
+Other usage scenarios can skip this section.
+
+Fluss automatically loads HDFS dependencies on the machine via the HADOOP_CLASSPATH environment variable.
+Make sure that the HADOOP_CLASSPATH environment variable is set up (it can be checked by running echo $HADOOP_CLASSPATH).
+If not, set it up using
+```bash
+export HADOOP_CLASSPATH=`hadoop classpath`
+```
 
 ### Start The Datalake Tiering Service
 Then, you must start the datalake tiering service to tier Fluss's data to the lakehouse storage.
