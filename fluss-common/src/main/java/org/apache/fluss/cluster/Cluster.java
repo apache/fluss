@@ -34,6 +34,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ThreadLocalRandom;
 
 /**
  * An immutable representation of a subset of the server nodes, tables, and buckets and schemas in
@@ -209,7 +210,12 @@ public final class Cluster {
     public ServerNode getRandomTabletServer() {
         // TODO this method need to get one tablet server according to the load.
         List<ServerNode> serverNodes = new ArrayList<>(aliveTabletServersById.values());
-        return !serverNodes.isEmpty() ? serverNodes.get(0) : null;
+        if (serverNodes.isEmpty()) {
+            return null;
+        }
+
+        int index = ThreadLocalRandom.current().nextInt(serverNodes.size());
+        return serverNodes.get(index);
     }
 
     /** Get the list of available buckets for this table/partition. */
