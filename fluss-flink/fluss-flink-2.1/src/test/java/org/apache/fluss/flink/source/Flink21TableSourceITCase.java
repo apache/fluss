@@ -17,13 +17,13 @@
 
 package org.apache.fluss.flink.source;
 
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.InternalRow;
+
 import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.table.api.config.OptimizerConfigOptions;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
-
-import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.row.InternalRow;
 import org.junit.jupiter.api.Test;
 
 import java.util.Arrays;
