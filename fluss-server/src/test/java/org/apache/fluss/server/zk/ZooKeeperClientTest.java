@@ -21,6 +21,7 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
@@ -28,6 +29,8 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
+import org.apache.fluss.server.metadata.BucketMetadata;
+import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
@@ -56,10 +59,12 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
@@ -575,5 +580,264 @@ class ZooKeeperClientTest {
             assertThat(clientConfig.getProperty(ZKClientConfig.ZK_SASL_CLIENT_USERNAME))
                     .isEqualTo("zookeeper2");
         }
+    }
+
+    @Test
+    void testGetTableMetadataFromZkAsync() throws Exception {
+        // Prepare test data using TestData constants
+        TablePath tablePath = TablePath.of("test_db", "test_table");
+        long tableId = 1001L;
+
+        // Create table assignment
+        TableAssignment tableAssignment =
+                TableAssignment.builder()
+                        .add(0, BucketAssignment.of(1, 2, 3))
+                        .add(1, BucketAssignment.of(2, 3, 4))
+                        .build();
+
+        zookeeperClient.registerTableAssignment(tableId, tableAssignment);
+
+        // Create leader and isr for buckets
+        TableBucket tableBucket0 = new TableBucket(tableId, 0);
+        TableBucket tableBucket1 = new TableBucket(tableId, 1);
+
+        LeaderAndIsr leaderAndIsr0 = new LeaderAndIsr(1, 10, Arrays.asList(1, 2, 3), 100, 1000);
+        LeaderAndIsr leaderAndIsr1 = new LeaderAndIsr(2, 20, Arrays.asList(2, 3, 4), 200, 2000);
+
+        zookeeperClient.registerLeaderAndIsr(tableBucket0, leaderAndIsr0);
+        zookeeperClient.registerLeaderAndIsr(tableBucket1, leaderAndIsr1);
+
+        // Test getTableMetadataFromZkAsync
+        CompletableFuture<List<BucketMetadata>> future =
+                zookeeperClient.getTableMetadataFromZkAsync(tablePath, tableId, false);
+
+        List<BucketMetadata> bucketMetadataList = future.get();
+
+        assertThat(bucketMetadataList).hasSize(2);
+
+        // Verify bucket metadata
+        Map<Integer, BucketMetadata> bucketMap =
+                bucketMetadataList.stream()
+                        .collect(Collectors.toMap(BucketMetadata::getBucketId, b -> b));
+
+        BucketMetadata bucket0Metadata = bucketMap.get(0);
+        assertThat(extractLeaderFromBucketMetadata(bucket0Metadata)).isEqualTo(1);
+        assertThat(bucket0Metadata.getReplicas()).containsExactly(1, 2, 3);
+
+        BucketMetadata bucket1Metadata = bucketMap.get(1);
+        assertThat(extractLeaderFromBucketMetadata(bucket1Metadata)).isEqualTo(2);
+        assertThat(bucket1Metadata.getReplicas()).containsExactly(2, 3, 4);
+    }
+
+    @Test
+    void testGetPartitionMetadataFromZkAsync() throws Exception {
+        // Prepare test data
+        TablePath tablePath = TablePath.of("test_db", "test_partition_table");
+        long tableId = 2001L;
+        long partitionId = 1L;
+        String partitionName = "p1";
+
+        long currentMillis = System.currentTimeMillis();
+        TableRegistration tableReg =
+                createTestTableRegistration(tableId, "partition table", currentMillis);
+        zookeeperClient.registerTable(tablePath, tableReg);
+
+        // Create partition assignment
+        Map<Integer, BucketAssignment> bucketAssignments = new HashMap<>();
+        bucketAssignments.put(0, BucketAssignment.of(1, 2));
+        bucketAssignments.put(1, BucketAssignment.of(2, 3));
+        PartitionAssignment partitionAssignment =
+                new PartitionAssignment(tableId, bucketAssignments);
+
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partitionId, partitionName, partitionAssignment, tablePath, tableId);
+
+        // Create leader and isr for partition buckets
+        TableBucket partitionBucket0 = new TableBucket(tableId, partitionId, 0);
+        TableBucket partitionBucket1 = new TableBucket(tableId, partitionId, 1);
+
+        LeaderAndIsr leaderAndIsr0 = new LeaderAndIsr(1, 10, Arrays.asList(1, 2), 100, 1000);
+        LeaderAndIsr leaderAndIsr1 = new LeaderAndIsr(2, 20, Arrays.asList(2, 3), 200, 2000);
+
+        zookeeperClient.registerLeaderAndIsr(partitionBucket0, leaderAndIsr0);
+        zookeeperClient.registerLeaderAndIsr(partitionBucket1, leaderAndIsr1);
+
+        // Test getPartitionMetadataFromZkAsync
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(tablePath, partitionName);
+        CompletableFuture<PartitionMetadata> future =
+                zookeeperClient.getPartitionMetadataFromZkAsync(partitionPath);
+
+        PartitionMetadata partitionMetadata = future.get();
+
+        assertThat(partitionMetadata.getTableId()).isEqualTo(tableId);
+        assertThat(partitionMetadata.getPartitionName()).isEqualTo(partitionName);
+        assertThat(partitionMetadata.getPartitionId()).isEqualTo(partitionId);
+
+        List<BucketMetadata> bucketMetadataList = partitionMetadata.getBucketMetadataList();
+        assertThat(bucketMetadataList).hasSize(2);
+
+        Map<Integer, BucketMetadata> bucketMap =
+                bucketMetadataList.stream()
+                        .collect(Collectors.toMap(BucketMetadata::getBucketId, b -> b));
+
+        BucketMetadata bucket0Metadata = bucketMap.get(0);
+        assertThat(extractLeaderFromBucketMetadata(bucket0Metadata)).isEqualTo(1);
+        assertThat(bucket0Metadata.getReplicas()).containsExactly(1, 2);
+
+        BucketMetadata bucket1Metadata = bucketMap.get(1);
+        assertThat(extractLeaderFromBucketMetadata(bucket1Metadata)).isEqualTo(2);
+        assertThat(bucket1Metadata.getReplicas()).containsExactly(2, 3);
+    }
+
+    @Test
+    void testBatchGetPartitionMetadataFromZkAsync() throws Exception {
+        // Prepare test data with multiple tables and partitions
+        TablePath tablePath1 = TablePath.of("test_db", "table1");
+        TablePath tablePath2 = TablePath.of("test_db", "table2");
+        long tableId1 = 3001L;
+        long tableId2 = 3002L;
+
+        long currentMillis = System.currentTimeMillis();
+        TableRegistration tableReg1 =
+                createTestTableRegistration(tableId1, "table1", currentMillis);
+        TableRegistration tableReg2 =
+                createTestTableRegistration(tableId2, "table2", currentMillis);
+
+        zookeeperClient.registerTable(tablePath1, tableReg1);
+        zookeeperClient.registerTable(tablePath2, tableReg2);
+
+        // Create partitions for table1
+        long partitionId1 = 11L;
+        long partitionId2 = 12L;
+        String partitionName1 = "p1";
+        String partitionName2 = "p2";
+
+        PartitionAssignment partitionAssignment1 =
+                new PartitionAssignment(
+                        tableId1, Collections.singletonMap(0, BucketAssignment.of(1, 2)));
+        PartitionAssignment partitionAssignment2 =
+                new PartitionAssignment(
+                        tableId1, Collections.singletonMap(1, BucketAssignment.of(2, 3)));
+
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partitionId1, partitionName1, partitionAssignment1, tablePath1, tableId1);
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partitionId2, partitionName2, partitionAssignment2, tablePath1, tableId1);
+
+        // Create partition for table2
+        long partitionId3 = 21L;
+        String partitionName3 = "p1";
+
+        PartitionAssignment partitionAssignment3 =
+                new PartitionAssignment(
+                        tableId2, Collections.singletonMap(0, BucketAssignment.of(1, 3)));
+
+        zookeeperClient.registerPartitionAssignmentAndMetadata(
+                partitionId3, partitionName3, partitionAssignment3, tablePath2, tableId2);
+
+        // Create leader and isr for all partition buckets
+        TableBucket bucket1 = new TableBucket(tableId1, partitionId1, 0);
+        TableBucket bucket2 = new TableBucket(tableId1, partitionId2, 1);
+        TableBucket bucket3 = new TableBucket(tableId2, partitionId3, 0);
+
+        zookeeperClient.registerLeaderAndIsr(
+                bucket1, new LeaderAndIsr(1, 10, Arrays.asList(1, 2), 100, 1000));
+        zookeeperClient.registerLeaderAndIsr(
+                bucket2, new LeaderAndIsr(2, 20, Arrays.asList(2, 3), 200, 2000));
+        zookeeperClient.registerLeaderAndIsr(
+                bucket3, new LeaderAndIsr(1, 30, Arrays.asList(1, 3), 300, 3000));
+
+        // Test batchGetPartitionMetadataFromZkAsync
+        List<TablePath> tablePaths = Arrays.asList(tablePath1, tablePath2);
+        Set<Long> partitionIdSet =
+                new HashSet<>(Arrays.asList(partitionId1, partitionId2, partitionId3));
+
+        CompletableFuture<List<PartitionMetadata>> future =
+                zookeeperClient.batchGetPartitionMetadataFromZkAsync(tablePaths, partitionIdSet);
+
+        List<PartitionMetadata> partitionMetadataList = future.get();
+
+        assertThat(partitionMetadataList).hasSize(3);
+
+        // Verify partition metadata
+        Map<Long, PartitionMetadata> partitionMap =
+                partitionMetadataList.stream()
+                        .collect(Collectors.toMap(PartitionMetadata::getPartitionId, p -> p));
+
+        // Verify partition 1
+        PartitionMetadata partition1Metadata = partitionMap.get(partitionId1);
+        assertThat(partition1Metadata.getTableId()).isEqualTo(tableId1);
+        assertThat(partition1Metadata.getPartitionName()).isEqualTo(partitionName1);
+        assertThat(partition1Metadata.getBucketMetadataList()).hasSize(1);
+        assertThat(partition1Metadata.getBucketMetadataList().get(0).getBucketId()).isEqualTo(0);
+        assertThat(
+                        extractLeaderFromBucketMetadata(
+                                partition1Metadata.getBucketMetadataList().get(0)))
+                .isEqualTo(1);
+
+        // Verify partition 2
+        PartitionMetadata partition2Metadata = partitionMap.get(partitionId2);
+        assertThat(partition2Metadata.getTableId()).isEqualTo(tableId1);
+        assertThat(partition2Metadata.getPartitionName()).isEqualTo(partitionName2);
+        assertThat(partition2Metadata.getBucketMetadataList()).hasSize(1);
+        assertThat(partition2Metadata.getBucketMetadataList().get(0).getBucketId()).isEqualTo(1);
+        assertThat(
+                        extractLeaderFromBucketMetadata(
+                                partition2Metadata.getBucketMetadataList().get(0)))
+                .isEqualTo(2);
+
+        // Verify partition 3
+        PartitionMetadata partition3Metadata = partitionMap.get(partitionId3);
+        assertThat(partition3Metadata.getTableId()).isEqualTo(tableId2);
+        assertThat(partition3Metadata.getPartitionName()).isEqualTo(partitionName3);
+        assertThat(partition3Metadata.getBucketMetadataList()).hasSize(1);
+        assertThat(partition3Metadata.getBucketMetadataList().get(0).getBucketId()).isEqualTo(0);
+        assertThat(
+                        extractLeaderFromBucketMetadata(
+                                partition3Metadata.getBucketMetadataList().get(0)))
+                .isEqualTo(1);
+    }
+
+    @Test
+    void testBatchGetPartitionMetadataFromZkAsyncWithNonExistentPartition() {
+        // Test error handling when partition doesn't exist
+        TablePath tablePath = TablePath.of("test_db", "table1");
+        Set<Long> nonExistentPartitionIds = new HashSet<>(Arrays.asList(999L, 1000L));
+
+        CompletableFuture<List<PartitionMetadata>> future =
+                zookeeperClient.batchGetPartitionMetadataFromZkAsync(
+                        Collections.singletonList(tablePath), nonExistentPartitionIds);
+
+        assertThatThrownBy(future::get)
+                .hasCauseInstanceOf(org.apache.fluss.exception.PartitionNotExistException.class);
+    }
+
+    // --------------------------------------------------------------------------------------------
+    // Helper methods for test data creation
+    // --------------------------------------------------------------------------------------------
+
+    private TableRegistration createTestTableRegistration(
+            long tableId, String comment, long currentMillis) {
+        Map<String, String> options = new HashMap<>();
+        options.put("option-1", "100");
+        return new TableRegistration(
+                tableId,
+                comment,
+                Arrays.asList("a", "b"),
+                new TableDescriptor.TableDistribution(3, Collections.singletonList("a")),
+                options,
+                Collections.emptyMap(),
+                currentMillis,
+                currentMillis);
+    }
+
+    /**
+     * Helper method to extract leader ID from BucketMetadata, handling OptionalInt. Returns null if
+     * leader is not present.
+     */
+    private static Integer extractLeaderFromBucketMetadata(BucketMetadata bucketMetadata) {
+        return bucketMetadata.getLeaderId().isPresent()
+                ? bucketMetadata.getLeaderId().getAsInt()
+                : null;
     }
 }

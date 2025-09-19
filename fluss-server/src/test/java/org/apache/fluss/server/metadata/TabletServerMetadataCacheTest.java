@@ -306,7 +306,7 @@ public class TabletServerMetadataCacheTest {
             TableInfo expectedTableInfo,
             List<BucketMetadata> expectedBucketMetadataList) {
         TablePath tablePath = serverMetadataCache.getTablePath(tableId).get();
-        TableMetadata tableMetadata = serverMetadataCache.getTableMetadata(tablePath);
+        TableMetadata tableMetadata = serverMetadataCache.getTableMetadata(tablePath).get();
         assertThat(tableMetadata.getTableInfo()).isEqualTo(expectedTableInfo);
         assertThat(tableMetadata.getBucketMetadataList())
                 .hasSameElementsAs(expectedBucketMetadataList);
@@ -322,13 +322,204 @@ public class TabletServerMetadataCacheTest {
                 serverMetadataCache.getPhysicalTablePath(partitionId).get().getPartitionName();
         assertThat(actualPartitionName).isEqualTo(expectedPartitionName);
         PartitionMetadata partitionMetadata =
-                serverMetadataCache.getPartitionMetadata(
-                        PhysicalTablePath.of(partitionedTablePath, actualPartitionName));
+                serverMetadataCache
+                        .getPartitionMetadata(
+                                PhysicalTablePath.of(partitionedTablePath, actualPartitionName))
+                        .get();
         assertThat(partitionMetadata.getTableId()).isEqualTo(expectedTableId);
         assertThat(partitionMetadata.getPartitionId()).isEqualTo(expectedPartitionId);
         assertThat(partitionMetadata.getPartitionName()).isEqualTo(actualPartitionName);
         assertThat(partitionMetadata.getBucketMetadataList())
                 .hasSameElementsAs(expectedBucketMetadataList);
+    }
+
+    // Tests merged from TabletServerMetadataCacheExtendedTest - specific metadata operations
+
+    @Test
+    void testUpdateTableMetadata() {
+        // Given: a table metadata using existing test data
+        TableMetadata tableMetadata = new TableMetadata(DATA1_TABLE_INFO, initialBucketMetadata);
+
+        // When: update table metadata
+        serverMetadataCache.updateTableMetadata(tableMetadata);
+
+        // Then: verify the table metadata is cached correctly
+        assertThat(serverMetadataCache.getTablePath(DATA1_TABLE_ID)).isPresent();
+        assertThat(serverMetadataCache.getTablePath(DATA1_TABLE_ID).get())
+                .isEqualTo(DATA1_TABLE_PATH);
+
+        TableMetadata cachedMetadata = serverMetadataCache.getTableMetadata(DATA1_TABLE_PATH).get();
+        assertThat(cachedMetadata).isNotNull();
+        assertThat(cachedMetadata.getTableInfo()).isEqualTo(DATA1_TABLE_INFO);
+        assertThat(cachedMetadata.getBucketMetadataList()).hasSameElementsAs(initialBucketMetadata);
+    }
+
+    @Test
+    void testUpdateTableMetadataMergeWithExisting() {
+        // Given: existing table metadata in cache
+        TableMetadata existingMetadata = new TableMetadata(DATA1_TABLE_INFO, initialBucketMetadata);
+        serverMetadataCache.updateTableMetadata(existingMetadata);
+
+        // When: update with new bucket metadata
+        List<BucketMetadata> newBucketMetadata =
+                Arrays.asList(
+                        new BucketMetadata(0, 1, 1, Arrays.asList(1, 2, 3)),
+                        new BucketMetadata(2, 2, 0, Arrays.asList(2, 3, 4)));
+        TableMetadata newMetadata = new TableMetadata(DATA1_TABLE_INFO, newBucketMetadata);
+        serverMetadataCache.updateTableMetadata(newMetadata);
+
+        // Then: verify the new metadata replaces the old one
+        TableMetadata cachedMetadata = serverMetadataCache.getTableMetadata(DATA1_TABLE_PATH).get();
+        assertThat(cachedMetadata.getBucketMetadataList()).hasSameElementsAs(newBucketMetadata);
+        assertThat(cachedMetadata.getBucketMetadataList())
+                .doesNotContainAnyElementsOf(initialBucketMetadata);
+    }
+
+    @Test
+    void testUpdatePartitionMetadata() {
+        // Given: table metadata exists in cache (using existing partition table)
+        TableMetadata tableMetadata = new TableMetadata(partitionTableInfo, initialBucketMetadata);
+        serverMetadataCache.updateTableMetadata(tableMetadata);
+
+        // When: update partition metadata
+        String partitionName = "p_new";
+        long partitionId = 2001L;
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(partitionedTablePath, partitionName);
+        PartitionMetadata partitionMetadata =
+                new PartitionMetadata(
+                        partitionTableId, partitionName, partitionId, initialBucketMetadata);
+
+        serverMetadataCache.updatePartitionMetadata(partitionMetadata);
+
+        // Then: verify the partition metadata is cached correctly
+        assertThat(serverMetadataCache.getPhysicalTablePath(partitionId)).isPresent();
+        assertThat(serverMetadataCache.getPhysicalTablePath(partitionId).get())
+                .isEqualTo(partitionPath);
+
+        PartitionMetadata cachedMetadata =
+                serverMetadataCache.getPartitionMetadata(partitionPath).get();
+        assertThat(cachedMetadata).isNotNull();
+        assertThat(cachedMetadata.getTableId()).isEqualTo(partitionTableId);
+        assertThat(cachedMetadata.getPartitionId()).isEqualTo(partitionId);
+        assertThat(cachedMetadata.getPartitionName()).isEqualTo(partitionName);
+        assertThat(cachedMetadata.getBucketMetadataList()).hasSameElementsAs(initialBucketMetadata);
+    }
+
+    @Test
+    void testUpdatePartitionMetadataWithoutTable() {
+        // Given: no table metadata in cache
+        String partitionName = "p_no_table";
+        long partitionId = 2002L;
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(partitionedTablePath, partitionName);
+        PartitionMetadata partitionMetadata =
+                new PartitionMetadata(
+                        partitionTableId, partitionName, partitionId, initialBucketMetadata);
+
+        // When: update partition metadata without table
+        serverMetadataCache.updatePartitionMetadata(partitionMetadata);
+
+        // Then: partition metadata should not be cached
+        assertThat(serverMetadataCache.getPhysicalTablePath(partitionId)).isEmpty();
+        assertThat(serverMetadataCache.getPartitionMetadata(partitionPath)).isEmpty();
+    }
+
+    @Test
+    void testUpdatePartitionMetadataMergeWithExisting() {
+        // Given: existing partition metadata in cache (using existing partition table)
+        TableMetadata tableMetadata = new TableMetadata(partitionTableInfo, initialBucketMetadata);
+        serverMetadataCache.updateTableMetadata(tableMetadata);
+
+        String partitionName = "p_merge";
+        long partitionId = 2003L;
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(partitionedTablePath, partitionName);
+        PartitionMetadata existingPartitionMetadata =
+                new PartitionMetadata(
+                        partitionTableId, partitionName, partitionId, initialBucketMetadata);
+        serverMetadataCache.updatePartitionMetadata(existingPartitionMetadata);
+
+        // When: update with new bucket metadata
+        List<BucketMetadata> newBucketMetadata =
+                Arrays.asList(new BucketMetadata(0, 1, 1, Arrays.asList(1, 2, 3)));
+        PartitionMetadata newPartitionMetadata =
+                new PartitionMetadata(
+                        partitionTableId, partitionName, partitionId, newBucketMetadata);
+        serverMetadataCache.updatePartitionMetadata(newPartitionMetadata);
+
+        // Then: verify the new metadata replaces the old one
+        PartitionMetadata cachedMetadata =
+                serverMetadataCache.getPartitionMetadata(partitionPath).get();
+        assertThat(cachedMetadata.getBucketMetadataList()).hasSameElementsAs(newBucketMetadata);
+        assertThat(cachedMetadata.getBucketMetadataList())
+                .doesNotContainAnyElementsOf(initialBucketMetadata);
+    }
+
+    @Test
+    void testConcurrentUpdateTableMetadata() throws InterruptedException {
+        // Given: multiple threads updating table metadata with existing test data
+        int threadCount = 10;
+        Thread[] threads = new Thread[threadCount];
+
+        // When: concurrent updates
+        for (int i = 0; i < threadCount; i++) {
+            threads[i] =
+                    new Thread(
+                            () -> {
+                                // Use a different bucket configuration for each thread
+                                List<BucketMetadata> threadBucketMetadata =
+                                        Arrays.asList(
+                                                new BucketMetadata(
+                                                        0,
+                                                        0,
+                                                        Thread.currentThread().hashCode() % 3,
+                                                        Arrays.asList(0, 1, 2)));
+                                TableMetadata tableMetadata =
+                                        new TableMetadata(DATA1_TABLE_INFO, threadBucketMetadata);
+                                serverMetadataCache.updateTableMetadata(tableMetadata);
+                            });
+        }
+
+        for (Thread thread : threads) {
+            thread.start();
+        }
+
+        for (Thread thread : threads) {
+            thread.join();
+        }
+
+        // Then: verify the table path is still available (last update wins)
+        assertThat(serverMetadataCache.getTablePath(DATA1_TABLE_ID)).isPresent();
+        assertThat(serverMetadataCache.getTablePath(DATA1_TABLE_ID).get())
+                .isEqualTo(DATA1_TABLE_PATH);
+    }
+
+    @Test
+    void testClearTableMetadata() {
+        // Given: table and partition metadata in cache (using existing test data)
+        TableMetadata tableMetadata = new TableMetadata(DATA1_TABLE_INFO, initialBucketMetadata);
+        serverMetadataCache.updateTableMetadata(tableMetadata);
+
+        TableMetadata partitionTableMetadata =
+                new TableMetadata(partitionTableInfo, initialBucketMetadata);
+        serverMetadataCache.updateTableMetadata(partitionTableMetadata);
+
+        String partitionName = "p_clear";
+        long partitionId = 2004L;
+        PhysicalTablePath partitionPath = PhysicalTablePath.of(partitionedTablePath, partitionName);
+        PartitionMetadata partitionMetadata =
+                new PartitionMetadata(
+                        partitionTableId, partitionName, partitionId, initialBucketMetadata);
+        serverMetadataCache.updatePartitionMetadata(partitionMetadata);
+
+        // When: clear table metadata
+        serverMetadataCache.clearTableMetadata();
+
+        // Then: verify all table metadata is cleared
+        assertThat(serverMetadataCache.getTablePath(DATA1_TABLE_ID)).isEmpty();
+        assertThat(serverMetadataCache.getTableMetadata(DATA1_TABLE_PATH)).isEmpty();
+        assertThat(serverMetadataCache.getTablePath(partitionTableId)).isEmpty();
+        assertThat(serverMetadataCache.getTableMetadata(partitionedTablePath)).isEmpty();
+        assertThat(serverMetadataCache.getPhysicalTablePath(partitionId)).isEmpty();
+        assertThat(serverMetadataCache.getPartitionMetadata(partitionPath)).isEmpty();
     }
 
     private static final class TestingMetadataManager extends MetadataManager {
@@ -340,8 +531,13 @@ public class TabletServerMetadataCacheTest {
             tableInfos.forEach(tableInfo -> tableInfoMap.put(tableInfo.getTablePath(), tableInfo));
         }
 
+        @Override
         public TableInfo getTable(TablePath tablePath) throws TableNotExistException {
-            return tableInfoMap.get(tablePath);
+            TableInfo tableInfo = tableInfoMap.get(tablePath);
+            if (tableInfo == null) {
+                throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
+            }
+            return tableInfo;
         }
     }
 }

@@ -72,6 +72,7 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
+import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -122,6 +123,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final String serviceName;
     private final ReplicaManager replicaManager;
     private final TabletServerMetadataCache metadataCache;
+    private final TabletServerMetadataProvider metadataFunctionProvider;
 
     public TabletService(
             int serverId,
@@ -135,6 +137,8 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
         this.serviceName = "server-" + serverId;
         this.replicaManager = replicaManager;
         this.metadataCache = metadataCache;
+        this.metadataFunctionProvider =
+                new TabletServerMetadataProvider(zkClient, metadataCache, metadataManager);
     }
 
     @Override
@@ -282,16 +286,16 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
-        return CompletableFuture.completedFuture(
-                makeMetadataResponse(
-                        request,
-                        currentListenerName(),
-                        currentSession(),
-                        authorizer,
-                        metadataCache,
-                        metadataCache::getTableMetadata,
-                        metadataCache::getPhysicalTablePath,
-                        metadataCache::getPartitionMetadata));
+        CompletableFuture<MetadataResponse> response = new CompletableFuture<>();
+        processMetadataRequest(
+                request,
+                currentListenerName(),
+                currentSession(),
+                authorizer,
+                metadataCache,
+                metadataFunctionProvider,
+                response);
+        return response;
     }
 
     @Override
