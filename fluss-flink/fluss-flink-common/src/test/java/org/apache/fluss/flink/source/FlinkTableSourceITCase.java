@@ -17,21 +17,6 @@
 
 package org.apache.fluss.flink.source;
 
-import org.apache.fluss.client.Connection;
-import org.apache.fluss.client.ConnectionFactory;
-import org.apache.fluss.client.admin.Admin;
-import org.apache.fluss.client.metadata.KvSnapshots;
-import org.apache.fluss.client.table.Table;
-import org.apache.fluss.client.table.writer.UpsertWriter;
-import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.Configuration;
-import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.row.GenericRow;
-import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.server.testutils.FlussClusterExtension;
-import org.apache.fluss.utils.clock.ManualClock;
-
-import org.apache.commons.lang3.RandomUtils;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.api.common.typeinfo.Types;
 import org.apache.flink.api.java.typeutils.RowTypeInfo;
@@ -45,6 +30,21 @@ import org.apache.flink.table.api.config.ExecutionConfigOptions;
 import org.apache.flink.test.util.AbstractTestBase;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
+
+import org.apache.commons.lang3.RandomUtils;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.metadata.KvSnapshots;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.server.testutils.FlussClusterExtension;
+import org.apache.fluss.utils.clock.ManualClock;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;

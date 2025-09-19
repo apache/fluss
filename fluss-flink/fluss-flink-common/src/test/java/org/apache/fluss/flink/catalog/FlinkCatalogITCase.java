@@ -17,13 +17,6 @@
 
 package org.apache.fluss.flink.catalog;
 
-import org.apache.fluss.cluster.ServerNode;
-import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.InvalidTableException;
-import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.server.testutils.FlussClusterExtension;
-
 import org.apache.flink.table.api.DataTypes;
 import org.apache.flink.table.api.EnvironmentSettings;
 import org.apache.flink.table.api.Schema;
@@ -37,6 +30,13 @@ import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
+
+import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeAll;
@@ -82,7 +82,7 @@ abstract class FlinkCatalogITCase {
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
-    static Catalog catalog;
+    static FlinkCatalog catalog;
 
     protected TableEnvironment tEnv;
 
@@ -673,7 +673,7 @@ abstract class FlinkCatalogITCase {
                         "The configured default-database 'non-exist' does not exist in the Fluss cluster.");
     }
 
-    private static void assertOptionsEqual(
+    protected static void assertOptionsEqual(
             Map<String, String> actualOptions, Map<String, String> expectedOptions) {
         actualOptions.remove(ConfigOptions.BOOTSTRAP_SERVERS.key());
         actualOptions.remove(ConfigOptions.TABLE_REPLICATION_FACTOR.key());

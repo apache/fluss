@@ -17,6 +17,15 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.flink.configuration.Configuration;
+import org.apache.flink.table.catalog.CatalogDatabase;
+import org.apache.flink.table.catalog.CatalogTable;
+import org.apache.flink.table.catalog.Column;
+import org.apache.flink.table.catalog.ResolvedCatalogTable;
+import org.apache.flink.table.catalog.ResolvedSchema;
+import org.apache.flink.table.catalog.exceptions.CatalogException;
+import org.apache.flink.types.RowKind;
+
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.FlussConfigUtils;
@@ -34,15 +43,6 @@ import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.StringUtils;
 import org.apache.fluss.utils.TimeUtils;
-
-import org.apache.flink.configuration.Configuration;
-import org.apache.flink.table.catalog.CatalogDatabase;
-import org.apache.flink.table.catalog.CatalogTable;
-import org.apache.flink.table.catalog.Column;
-import org.apache.flink.table.catalog.ResolvedCatalogTable;
-import org.apache.flink.table.catalog.ResolvedSchema;
-import org.apache.flink.table.catalog.exceptions.CatalogException;
-import org.apache.flink.types.RowKind;
 
 import java.time.Duration;
 import java.util.ArrayList;

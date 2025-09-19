@@ -17,27 +17,6 @@
 
 package org.apache.fluss.flink.catalog;
 
-import org.apache.fluss.client.Connection;
-import org.apache.fluss.client.ConnectionFactory;
-import org.apache.fluss.client.admin.Admin;
-import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.FlussRuntimeException;
-import org.apache.fluss.exception.InvalidTableException;
-import org.apache.fluss.flink.lake.LakeCatalog;
-import org.apache.fluss.flink.procedure.ProcedureManager;
-import org.apache.fluss.flink.utils.CatalogExceptionUtils;
-import org.apache.fluss.flink.utils.DataLakeUtils;
-import org.apache.fluss.flink.utils.FlinkConversions;
-import org.apache.fluss.metadata.DatabaseDescriptor;
-import org.apache.fluss.metadata.PartitionInfo;
-import org.apache.fluss.metadata.PartitionSpec;
-import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.utils.ExceptionUtils;
-import org.apache.fluss.utils.IOUtils;
-
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.table.catalog.AbstractCatalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
@@ -69,6 +48,27 @@ import org.apache.flink.table.catalog.stats.CatalogTableStatistics;
 import org.apache.flink.table.expressions.Expression;
 import org.apache.flink.table.factories.Factory;
 import org.apache.flink.table.procedures.Procedure;
+
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.flink.lake.LakeCatalog;
+import org.apache.fluss.flink.procedure.ProcedureManager;
+import org.apache.fluss.flink.utils.CatalogExceptionUtils;
+import org.apache.fluss.flink.utils.DataLakeUtils;
+import org.apache.fluss.flink.utils.FlinkConversions;
+import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.utils.ExceptionUtils;
+import org.apache.fluss.utils.IOUtils;
 
 import javax.annotation.Nullable;
 
@@ -110,7 +110,7 @@ public class FlinkCatalog extends AbstractCatalog {
     protected final String catalogName;
     protected final String defaultDatabase;
     protected final String bootstrapServers;
-    private final Map<String, String> securityConfigs;
+    protected final Map<String, String> securityConfigs;
     protected Connection connection;
     protected Admin admin;
     private volatile @Nullable LakeCatalog lakeCatalog;
