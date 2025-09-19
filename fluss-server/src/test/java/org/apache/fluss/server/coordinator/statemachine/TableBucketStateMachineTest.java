@@ -53,14 +53,19 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.Executors;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
+import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.createServers;
+import static org.apache.fluss.server.coordinator.CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.NewBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.NonExistentBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionStrategy.CONTROLLED_SHUTDOWN_ELECTION;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -121,9 +126,8 @@ class TableBucketStateMachineTest {
         coordinatorContext.putTablePath(t1Id, TablePath.of("db1", "t1"));
         coordinatorContext.putTablePath(t2Id, TablePath.of("db1", "t2"));
 
-        coordinatorContext.setLiveTabletServers(
-                CoordinatorTestUtils.createServers(Arrays.asList(0, 1, 3)));
-        CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
+        coordinatorContext.setLiveTabletServers(createServers(Arrays.asList(0, 1, 3)));
+        makeSendLeaderAndStopRequestAlwaysSuccess(
                 coordinatorContext, testCoordinatorChannelManager);
         // set assignments
         coordinatorContext.updateBucketReplicaAssignment(t1b0, Arrays.asList(0, 1));
@@ -203,9 +207,8 @@ class TableBucketStateMachineTest {
         assertThat(coordinatorContext.getBucketState(tableBucket)).isEqualTo(NewBucket);
 
         // now, we set 3 live servers
-        coordinatorContext.setLiveTabletServers(
-                CoordinatorTestUtils.createServers(Arrays.asList(0, 1, 2)));
-        CoordinatorTestUtils.makeSendLeaderAndStopRequestAlwaysSuccess(
+        coordinatorContext.setLiveTabletServers(createServers(Arrays.asList(0, 1, 2)));
+        makeSendLeaderAndStopRequestAlwaysSuccess(
                 coordinatorContext, testCoordinatorChannelManager);
 
         // change to online again
@@ -217,8 +220,7 @@ class TableBucketStateMachineTest {
 
         // case2: assuming the leader replica fail(we remove it to server list),
         // we need elect another replica,
-        coordinatorContext.setLiveTabletServers(
-                CoordinatorTestUtils.createServers(Arrays.asList(1, 2)));
+        coordinatorContext.setLiveTabletServers(createServers(Arrays.asList(1, 2)));
 
         tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket), OnlineBucket);
         // check state is online
@@ -230,8 +232,7 @@ class TableBucketStateMachineTest {
 
         // case4: the leader replica fail, but non replicas is available
         coordinatorContext.putBucketState(tableBucket, OfflineBucket);
-        coordinatorContext.setLiveTabletServers(
-                CoordinatorTestUtils.createServers(Collections.emptyList()));
+        coordinatorContext.setLiveTabletServers(createServers(Collections.emptyList()));
         tableBucketStateMachine.handleStateChange(Collections.singleton(tableBucket), OnlineBucket);
         // the state will still be offline
         assertThat(coordinatorContext.getBucketState(tableBucket)).isEqualTo(OfflineBucket);
@@ -266,8 +267,7 @@ class TableBucketStateMachineTest {
                         coordinatorContext, coordinatorRequestBatch, zookeeperClient);
         eventManager.start();
 
-        coordinatorContext.setLiveTabletServers(
-                CoordinatorTestUtils.createServers(Arrays.asList(0, 1, 2)));
+        coordinatorContext.setLiveTabletServers(createServers(Arrays.asList(0, 1, 2)));
         CoordinatorTestUtils.makeSendLeaderAndStopRequestFailContext(
                 coordinatorContext, testCoordinatorChannelManager, Sets.newHashSet(0, 2));
         // init a table bucket assignment to coordinator context
@@ -317,6 +317,61 @@ class TableBucketStateMachineTest {
         tableBucketStateMachine.handleStateChange(
                 Collections.singleton(tableBucket1), NonExistentBucket);
         assertThat(coordinatorContext.getBucketState(tableBucket0)).isNull();
+    }
+
+    @Test
+    void testStateChangeForTabletServerControlledShutdown() {
+        TableBucketStateMachine tableBucketStateMachine = createTableBucketStateMachine();
+        long tableId = 7;
+        TablePath fakeTablePath = TablePath.of("db1", "t2");
+        TableBucket tb = new TableBucket(tableId, 0);
+
+        // init coordinator context.
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        fakeTablePath,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        coordinatorContext.putTablePath(tableId, fakeTablePath);
+        coordinatorContext.updateBucketReplicaAssignment(tb, Arrays.asList(0, 1, 2));
+        coordinatorContext.putBucketState(tb, NewBucket);
+
+        List<Integer> aliveServers = Arrays.asList(0, 1, 2);
+        coordinatorContext.setLiveTabletServers(createServers(aliveServers));
+        makeSendLeaderAndStopRequestAlwaysSuccess(
+                coordinatorContext, testCoordinatorChannelManager);
+
+        // check state is online.
+        tableBucketStateMachine.handleStateChange(Collections.singleton(tb), OnlineBucket);
+        assertThat(coordinatorContext.getBucketState(tb)).isEqualTo(OnlineBucket);
+        assertThat(coordinatorContext.liveTabletServerSet())
+                .containsExactlyInAnyOrderElementsOf(aliveServers);
+        assertThat(coordinatorContext.shuttingDownTabletServers()).isEmpty();
+        assertThat(coordinatorContext.liveOrShuttingDownTabletServers())
+                .containsExactlyInAnyOrderElementsOf(aliveServers);
+
+        int oldLeader = coordinatorContext.getBucketLeaderAndIsr(tb).get().leader();
+        aliveServers =
+                aliveServers.stream().filter(s -> s != oldLeader).collect(Collectors.toList());
+
+        // trigger controlled shutdown for oldLeader.
+        coordinatorContext.shuttingDownTabletServers().add(oldLeader);
+        assertThat(coordinatorContext.liveTabletServerSet())
+                .containsExactlyInAnyOrderElementsOf(aliveServers);
+        assertThat(coordinatorContext.shuttingDownTabletServers())
+                .containsExactlyInAnyOrder(oldLeader);
+        assertThat(coordinatorContext.liveOrShuttingDownTabletServers())
+                .containsExactlyInAnyOrder(0, 1, 2);
+
+        // handle state change for controlled shutdown.
+        tableBucketStateMachine.handleStateChange(
+                Collections.singleton(tb), OnlineBucket, CONTROLLED_SHUTDOWN_ELECTION);
+        assertThat(coordinatorContext.getBucketState(tb)).isEqualTo(OnlineBucket);
+        assertThat(coordinatorContext.getBucketLeaderAndIsr(tb).get().leader())
+                .isNotEqualTo(oldLeader);
     }
 
     private TableBucketStateMachine createTableBucketStateMachine() {

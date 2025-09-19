@@ -51,9 +51,8 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** The ITCase for tablet server failover. */
-class TabletServerFailOverITCase {
-
+/** The ITCase for tabletServer shutdown (controlled shutdown). */
+public class TabletServerShutdownITCase {
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
             FlussClusterExtension.builder().setNumOfTabletServers(3).build();
@@ -114,7 +113,42 @@ class TabletServerFailOverITCase {
     }
 
     @Test
-    void testKillServers() throws Exception {
+    void testControlledShutdown() throws Exception {
+        FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(Schema.newBuilder().column("a", DataTypes.INT()).build())
+                        .distributedBy(1)
+                        .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 3)
+                        .build();
+        TablePath tablePath = TablePath.of("test_shutdown", "test_controlled_shutdown");
+        long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
+        TableBucket tb = new TableBucket(tableId, 0);
+
+        LeaderAndIsr leaderAndIsr = FLUSS_CLUSTER_EXTENSION.waitLeaderAndIsrReady(tb);
+        int leader = leaderAndIsr.leader();
+
+        // test kill the tabletServers with leader on.
+        FLUSS_CLUSTER_EXTENSION.stopTabletServer(leader);
+        ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
+
+        // the leader should be removed from isr, and new leader should be elected.
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        assertThat(zkClient.getLeaderAndIsr(tb))
+                                .map(LeaderAndIsr::leader)
+                                .isNotEqualTo(leader));
+
+        // restart the shutdown server
+        FLUSS_CLUSTER_EXTENSION.startTabletServer(leader, true);
+    }
+
+    @Test
+    void testControlledShutdownRetriesFailover() throws Exception {
+        // This case is to test the scenario that the controlled shutdown request is retried and
+        // failed by cannot elect any new leader. In this case the controlled shutdown will finally
+        // go uncontrolled shutdown.
         FLUSS_CLUSTER_EXTENSION.assertHasTabletServerNumber(3);
         TableDescriptor tableDescriptor =
                 TableDescriptor.builder()
@@ -122,7 +156,7 @@ class TabletServerFailOverITCase {
                         .distributedBy(1)
                         .property(ConfigOptions.TABLE_REPLICATION_FACTOR, 2)
                         .build();
-        TablePath tablePath = TablePath.of("test_failover", "test_kill_servers");
+        TablePath tablePath = TablePath.of("test_failover", "test_controlled_shutdown_failed");
         long tableId = createTable(FLUSS_CLUSTER_EXTENSION, tablePath, tableDescriptor);
         TableBucket tb = new TableBucket(tableId, 0);
 
@@ -132,20 +166,22 @@ class TabletServerFailOverITCase {
         isr.remove(Integer.valueOf(leader));
         int follower = isr.get(0);
 
-        // let's kil follower
+        // Let's kil follower. Will go controlled shutdown.
         FLUSS_CLUSTER_EXTENSION.stopTabletServer(follower);
         ZooKeeperClient zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
 
         // the follower should be removed from isr
         LeaderAndIsr expectedLeaderAndIsr1 =
-                leaderAndIsr.newLeaderAndIsr(leader, Collections.singletonList(leader));
+                leaderAndIsr.newLeaderAndIsr(Collections.singletonList(leader));
         retry(
                 Duration.ofMinutes(1),
                 () ->
                         assertThat(zkClient.getLeaderAndIsr(tb).get())
                                 .isEqualTo(expectedLeaderAndIsr1));
 
-        // kill the leader again
+        // kill the leader. As we only have 1 replica, no leader can be elected as we send the
+        // controlled shutdown request to the leader. So the controlled shutdown will finally go
+        // uncontrolled shutdown.
         FLUSS_CLUSTER_EXTENSION.stopTabletServer(leader);
 
         // should be no leader

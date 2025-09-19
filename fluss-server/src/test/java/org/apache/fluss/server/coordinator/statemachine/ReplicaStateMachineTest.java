@@ -223,7 +223,7 @@ class ReplicaStateMachineTest {
         replicaStateMachine.handleStateChanges(replicas, OfflineReplica);
         leaderAndIsr = coordinatorContext.getBucketLeaderAndIsr(tableBucket).get();
         assertThat(leaderAndIsr)
-                .isEqualTo(new LeaderAndIsr(LeaderAndIsr.NO_LEADER, 0, Arrays.asList(2), 0, 3));
+                .isEqualTo(new LeaderAndIsr(LeaderAndIsr.NO_LEADER, 3, Arrays.asList(2), 0, 3));
     }
 
     @Test
@@ -274,7 +274,7 @@ class ReplicaStateMachineTest {
         assertThat(leaderAndIsr)
                 .isEqualTo(
                         new LeaderAndIsr(
-                                LeaderAndIsr.NO_LEADER, 0, Collections.singletonList(0), 0, 3));
+                                LeaderAndIsr.NO_LEADER, 1, Collections.singletonList(0), 0, 3));
     }
 
     private void toReplicaDeletionStartedState(

@@ -67,6 +67,7 @@ public class CoordinatorContext {
     private final Map<TableBucketReplica, Integer> failDeleteNumbers = new HashMap<>();
 
     private final Map<Integer, ServerInfo> liveTabletServers = new HashMap<>();
+    private final Set<Integer> shuttingDownTabletServers = new HashSet<>();
 
     // a map from the table bucket to the state of the bucket.
     private final Map<TableBucket, BucketState> bucketStates = new HashMap<>();
@@ -114,6 +115,24 @@ public class CoordinatorContext {
         return liveTabletServers;
     }
 
+    public Set<Integer> liveTabletServerSet() {
+        Set<Integer> liveTabletServers = new HashSet<>();
+        for (Integer brokerId : this.liveTabletServers.keySet()) {
+            if (!shuttingDownTabletServers.contains(brokerId)) {
+                liveTabletServers.add(brokerId);
+            }
+        }
+        return liveTabletServers;
+    }
+
+    public Set<Integer> shuttingDownTabletServers() {
+        return shuttingDownTabletServers;
+    }
+
+    public Set<Integer> liveOrShuttingDownTabletServers() {
+        return liveTabletServers.keySet();
+    }
+
     @VisibleForTesting
     public void setLiveTabletServers(List<ServerInfo> servers) {
         liveTabletServers.clear();
@@ -136,8 +155,8 @@ public class CoordinatorContext {
         this.liveTabletServers.remove(serverId);
     }
 
-    public boolean isReplicaAndServerOnline(int serverId, TableBucket tableBucket) {
-        return liveTabletServers.containsKey(serverId)
+    public boolean isReplicaOnline(int serverId, TableBucket tableBucket) {
+        return liveTabletServerSet().contains(serverId)
                 && !replicasOnOffline
                         .getOrDefault(serverId, Collections.emptySet())
                         .contains(tableBucket);
@@ -636,5 +655,6 @@ public class CoordinatorContext {
         clearTablesState();
         // clear the live tablet servers
         liveTabletServers.clear();
+        shuttingDownTabletServers.clear();
     }
 }

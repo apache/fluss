@@ -27,6 +27,7 @@ import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidUpdateVersionException;
+import org.apache.fluss.exception.TabletServerNotAvailableException;
 import org.apache.fluss.exception.UnknownTableOrBucketException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -38,6 +39,7 @@ import org.apache.fluss.rpc.messages.AdjustIsrResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
+import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
 import org.apache.fluss.rpc.messages.PbCommitLakeTableSnapshotRespForTable;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
@@ -45,6 +47,7 @@ import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
+import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEvent;
 import org.apache.fluss.server.coordinator.event.CoordinatorEventManager;
 import org.apache.fluss.server.coordinator.event.CreatePartitionEvent;
@@ -72,6 +75,7 @@ import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
+import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LakeTableSnapshot;
@@ -104,6 +108,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OfflineBucket;
 import static org.apache.fluss.server.coordinator.statemachine.BucketState.OnlineBucket;
+import static org.apache.fluss.server.coordinator.statemachine.ReplicaLeaderElectionStrategy.CONTROLLED_SHUTDOWN_ELECTION;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OfflineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.OnlineReplica;
 import static org.apache.fluss.server.coordinator.statemachine.ReplicaState.ReplicaDeletionStarted;
@@ -529,6 +534,11 @@ public class CoordinatorEventProcessor implements EventProcessor {
             completeFromCallable(
                     commitLakeTableSnapshotEvent.getRespCallback(),
                     () -> tryProcessCommitLakeTableSnapshot(commitLakeTableSnapshotEvent));
+        } else if (event instanceof ControlledShutdownEvent) {
+            ControlledShutdownEvent controlledShutdownEvent = (ControlledShutdownEvent) event;
+            completeFromCallable(
+                    controlledShutdownEvent.getRespCallback(),
+                    () -> tryProcessControlledShutdown(controlledShutdownEvent));
         } else if (event instanceof AccessContextEvent) {
             AccessContextEvent<?> accessContextEvent = (AccessContextEvent<?>) event;
             processAccessContext(accessContextEvent);
@@ -865,6 +875,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
         LOG.info("Tablet server failure callback for {}.", tabletServerId);
         coordinatorContext.removeOfflineBucketInServer(tabletServerId);
         coordinatorContext.removeLiveTabletServer(tabletServerId);
+        coordinatorContext.shuttingDownTabletServers().remove(tabletServerId);
         coordinatorChannelManager.removeTabletServer(tabletServerId);
 
         // Here, we will first update alive tabletServer info for all tabletServers and
@@ -1162,6 +1173,73 @@ public class CoordinatorEventProcessor implements EventProcessor {
         }
         coordinatorRequestBatch.sendNotifyLakeTableOffsetRequest(
                 coordinatorContext.getCoordinatorEpoch());
+        return response;
+    }
+
+    private ControlledShutdownResponse tryProcessControlledShutdown(
+            ControlledShutdownEvent controlledShutdownEvent) {
+        ControlledShutdownResponse response = new ControlledShutdownResponse();
+
+        // TODO here we need to check tabletServerEpoch, avoid to receive controlled shutdown
+        // request from an old tabletServer. Trace by https://github.com/alibaba/fluss/issues/1153
+        int tabletServerEpoch = controlledShutdownEvent.getTabletServerEpoch();
+
+        int tabletServerId = controlledShutdownEvent.getTabletServerId();
+        LOG.info(
+                "Try to process controlled shutdown for tabletServer: {} of tabletServer epoch: {}",
+                controlledShutdownEvent.getTabletServerId(),
+                tabletServerEpoch);
+
+        if (!coordinatorContext.liveOrShuttingDownTabletServers().contains(tabletServerId)) {
+            throw new TabletServerNotAvailableException(
+                    "TabletServer" + tabletServerId + " is not available.");
+        }
+
+        coordinatorContext.shuttingDownTabletServers().add(tabletServerId);
+        LOG.debug(
+                "All shutting down tabletServers: {}",
+                coordinatorContext.shuttingDownTabletServers());
+        LOG.debug("All live tabletServers: {}", coordinatorContext.liveTabletServerSet());
+
+        List<TableBucketReplica> replicasToActOn =
+                coordinatorContext.replicasOnTabletServer(tabletServerId).stream()
+                        .filter(
+                                replica -> {
+                                    TableBucket tableBucket = replica.getTableBucket();
+                                    return !coordinatorContext.getAssignment(tableBucket).isEmpty()
+                                            && coordinatorContext
+                                                    .getBucketLeaderAndIsr(tableBucket)
+                                                    .isPresent()
+                                            && !coordinatorContext.isToBeDeleted(tableBucket);
+                                })
+                        .collect(Collectors.toList());
+
+        Set<TableBucket> bucketsLedByServer = new HashSet<>();
+        Set<TableBucketReplica> replicasFollowedByServer = new HashSet<>();
+        for (TableBucketReplica replica : replicasToActOn) {
+            TableBucket tableBucket = replica.getTableBucket();
+            if (replica.getReplica()
+                    == coordinatorContext.getBucketLeaderAndIsr(tableBucket).get().leader()) {
+                bucketsLedByServer.add(tableBucket);
+            } else {
+                replicasFollowedByServer.add(replica);
+            }
+        }
+
+        tableBucketStateMachine.handleStateChange(
+                bucketsLedByServer, OnlineBucket, CONTROLLED_SHUTDOWN_ELECTION);
+
+        // TODO need send stop request to the leader?
+
+        // If the tabletServer is a follower, updates the isr in ZK and notifies the current leader.
+        replicaStateMachine.handleStateChanges(replicasFollowedByServer, OfflineReplica);
+
+        // Return the list of buckets that are still being managed by the controlled shutdown
+        // tabletServer after leader migration.
+        response.addAllRemainingLeaderBuckets(
+                coordinatorContext.getBucketsWithLeaderIn(tabletServerId).stream()
+                        .map(ServerRpcMessageUtils::fromTableBucket)
+                        .collect(Collectors.toList()));
         return response;
     }
 
