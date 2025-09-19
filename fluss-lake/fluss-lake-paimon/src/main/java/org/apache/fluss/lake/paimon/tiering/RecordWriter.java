@@ -59,7 +59,10 @@ public abstract class RecordWriter<T> implements AutoCloseable {
 
     CommitMessage complete() throws Exception {
         List<CommitMessage> commitMessages = tableWrite.prepareCommit();
-        checkState(commitMessages.size() == 1, "The size of CommitMessage must be 1.");
+        checkState(
+                commitMessages.size() == 1,
+                "The size of CommitMessage must be 1, but got %s.",
+                commitMessages);
         return commitMessages.get(0);
     }
 
