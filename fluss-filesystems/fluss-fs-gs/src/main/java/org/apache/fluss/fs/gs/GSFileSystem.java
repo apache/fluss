@@ -18,7 +18,9 @@
 package org.apache.fluss.fs.gs;
 
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.fs.gs.token.GSImpersonatedTokenProvider;
 import org.apache.fluss.fs.hdfs.HadoopFileSystem;
+import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
 import org.apache.hadoop.conf.Configuration;
 
@@ -34,6 +36,8 @@ public class GSFileSystem extends HadoopFileSystem {
     private final String scheme;
     private final Configuration conf;
 
+    private volatile GSImpersonatedTokenProvider tokenProvider;
+
     /**
      * Creates a GSFileSystem based on the given Hadoop Google Cloud Storage file system. The given
      * Hadoop file system object is expected to be initialized already.
@@ -47,5 +51,17 @@ public class GSFileSystem extends HadoopFileSystem {
         super(hadoopGSFileSystem);
         this.scheme = scheme;
         this.conf = conf;
+    }
+
+    @Override
+    public ObtainedSecurityToken obtainSecurityToken() {
+        if (tokenProvider == null) {
+            synchronized (this) {
+                if (tokenProvider == null) {
+                    tokenProvider = new GSImpersonatedTokenProvider(scheme, conf);
+                }
+            }
+        }
+        return tokenProvider.obtainSecurityToken();
     }
 }
