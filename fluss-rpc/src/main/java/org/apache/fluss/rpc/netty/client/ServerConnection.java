@@ -58,7 +58,7 @@ import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 
 import static org.apache.fluss.utils.IOUtils.closeQuietly;
 
@@ -104,15 +104,20 @@ final class ServerConnection {
             ServerNode node,
             ClientMetricGroup clientMetricGroup,
             ClientAuthenticator authenticator,
+            BiConsumer<ServerConnection, Throwable> closeCallback,
             boolean isInnerClient) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
         this.connectionMetricGroup = clientMetricGroup.createConnectionMetricGroup(node.uid());
+        this.authenticator = authenticator;
+        this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
+        whenClose(closeCallback);
+
+        // connect and handle should be last in case of other variables are nullable and close
+        // callback is not registered when connection established.
         bootstrap
                 .connect(node.host(), node.port())
                 .addListener(future -> establishConnection((ChannelFuture) future, isInnerClient));
-        this.authenticator = authenticator;
-        this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
     }
 
     public ServerNode getServerNode() {
@@ -131,8 +136,8 @@ final class ServerConnection {
     }
 
     /** Register a callback to be called when the connection is closed. */
-    public void whenClose(Consumer<Throwable> closeCallback) {
-        closeFuture.whenComplete((v, throwable) -> closeCallback.accept(throwable));
+    private void whenClose(BiConsumer<ServerConnection, Throwable> closeCallback) {
+        closeFuture.whenComplete((v, throwable) -> closeCallback.accept(this, throwable));
     }
 
     /** Close the connection. */

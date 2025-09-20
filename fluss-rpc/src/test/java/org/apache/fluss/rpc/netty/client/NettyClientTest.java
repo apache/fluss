@@ -234,6 +234,25 @@ final class NettyClientTest {
         }
     }
 
+    @Test
+    void testExceptionWhenInitializeServerConnection() throws Exception {
+        ApiVersionsRequest request =
+                new ApiVersionsRequest()
+                        .setClientSoftwareName("testing_client_100")
+                        .setClientSoftwareVersion("1.0");
+        // close the netty server.
+        nettyServer.close();
+
+        // send request and create server connection.
+        assertThatThrownBy(
+                        () ->
+                                nettyClient
+                                        .sendRequest(serverNode, ApiKeys.API_VERSIONS, request)
+                                        .get())
+                .hasMessageContaining("Disconnected from node");
+        assertThat(nettyClient.connections()).isEmpty();
+    }
+
     private void buildNettyServer(int serverId) throws Exception {
         try (NetUtils.Port availablePort = getAvailablePort()) {
             serverNode =
