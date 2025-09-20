@@ -59,6 +59,7 @@ import java.nio.file.Files;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -329,8 +330,25 @@ public abstract class FlinkPaimonTieringTestBase {
         return createPkTable(tablePath, 1);
     }
 
+    protected long createPkTable(
+            TablePath tablePath,
+            Map<String, String> tableProperties,
+            Map<String, String> tableCustomProperties)
+            throws Exception {
+        return createPkTable(tablePath, 1, tableProperties, tableCustomProperties);
+    }
+
     protected long createPkTable(TablePath tablePath, int bucketNum) throws Exception {
-        TableDescriptor table1Descriptor =
+        return createPkTable(tablePath, bucketNum, Collections.emptyMap(), Collections.emptyMap());
+    }
+
+    protected long createPkTable(
+            TablePath tablePath,
+            int bucketNum,
+            Map<String, String> tableProperties,
+            Map<String, String> tableCustomProperties)
+            throws Exception {
+        TableDescriptor.Builder tableDescriptor =
                 TableDescriptor.builder()
                         .schema(
                                 Schema.newBuilder()
@@ -340,9 +358,10 @@ public abstract class FlinkPaimonTieringTestBase {
                                         .build())
                         .distributedBy(bucketNum)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
-                        .build();
-        return createTable(tablePath, table1Descriptor);
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        tableDescriptor.customProperties(tableCustomProperties);
+        tableDescriptor.properties(tableProperties);
+        return createTable(tablePath, tableDescriptor.build());
     }
 
     protected void dropTable(TablePath tablePath) throws Exception {
@@ -422,7 +441,7 @@ public abstract class FlinkPaimonTieringTestBase {
                 "bucket " + tb + "not synced");
     }
 
-    protected void checkDataInPaimonPrimayKeyTable(
+    protected void checkDataInPaimonPrimaryKeyTable(
             TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
         Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
                 getPaimonRowCloseableIterator(tablePath);

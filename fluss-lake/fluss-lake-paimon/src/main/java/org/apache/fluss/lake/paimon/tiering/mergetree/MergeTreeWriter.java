@@ -22,6 +22,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
 
 import org.apache.paimon.KeyValue;
+import org.apache.paimon.disk.IOManager;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.RowKeyExtractor;
 import org.apache.paimon.table.sink.TableWriteImpl;
@@ -29,12 +30,16 @@ import org.apache.paimon.table.sink.TableWriteImpl;
 import javax.annotation.Nullable;
 
 import java.util.List;
+import java.util.Map;
 
 import static org.apache.fluss.lake.paimon.tiering.PaimonLakeTieringFactory.FLUSS_LAKE_TIERING_COMMIT_USER;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toRowKind;
 
 /** A {@link RecordWriter} to write to Paimon's primary-key table. */
 public class MergeTreeWriter extends RecordWriter<KeyValue> {
+
+    // the option key to configure the temporary directory used by fluss tiering
+    private static final String FLUSS_TIERING_TMP_DIR_KEY = "fluss.tiering.io-tmpdir";
 
     private final KeyValue keyValue = new KeyValue();
 
@@ -55,8 +60,18 @@ public class MergeTreeWriter extends RecordWriter<KeyValue> {
     }
 
     private static TableWriteImpl<KeyValue> createTableWrite(FileStoreTable fileStoreTable) {
+        // we allow users to configure the temporary directory used by fluss tiering
+        // since the default java.io.tmpdir may not be suitable.
+        // currently, we don't expose the option, as a workaround way, maybe in the future we can
+        // expose it if it's needed
+        Map<String, String> props = fileStoreTable.options();
+        String tmpDir =
+                props.getOrDefault(FLUSS_TIERING_TMP_DIR_KEY, System.getProperty("java.io.tmpdir"));
         //noinspection unchecked
-        return (TableWriteImpl<KeyValue>) fileStoreTable.newWrite(FLUSS_LAKE_TIERING_COMMIT_USER);
+        return (TableWriteImpl<KeyValue>)
+                fileStoreTable
+                        .newWrite(FLUSS_LAKE_TIERING_COMMIT_USER)
+                        .withIOManager(IOManager.create(tmpDir));
     }
 
     @Override

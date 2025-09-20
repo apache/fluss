@@ -73,7 +73,7 @@ class ReCreateSameTableAfterTieringTest extends FlinkPaimonTieringTestBase {
         // check the status of replica after synced
         assertReplicaStatus(t1Bucket, 3);
         // check data in paimon
-        checkDataInPaimonPrimayKeyTable(t1, rows);
+        checkDataInPaimonPrimaryKeyTable(t1, rows);
 
         // then drop the table
         dropTable(t1);
@@ -88,7 +88,7 @@ class ReCreateSameTableAfterTieringTest extends FlinkPaimonTieringTestBase {
         // check the status of replica after synced
         assertReplicaStatus(t2Bucket, 2);
         // check data in paimon
-        checkDataInPaimonPrimayKeyTable(t1, newRows);
+        checkDataInPaimonPrimaryKeyTable(t1, newRows);
 
         // stop the tiering job
         jobClient.cancel().get();

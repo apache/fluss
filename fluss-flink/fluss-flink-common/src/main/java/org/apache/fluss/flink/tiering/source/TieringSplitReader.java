@@ -234,7 +234,7 @@ public class TieringSplitReader<WriteResult>
             // instead of fail directly
             checkArgument(
                     currentTableInfo.getTableId() == split.getTableBucket().getTableId(),
-                    "The current table id %s for table path % is different from the table id %s in TieringSplit split.",
+                    "The current table id %s for table path %s is different from the table id %s in TieringSplit split.",
                     currentTableInfo.getTableId(),
                     tablePath,
                     split.getTableBucket().getTableId());
