@@ -419,8 +419,13 @@
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <!-- end exclude for flink tiering service -->
                                         <exclude>org.apache.flink.table.catalog.CatalogBaseTable</exclude>
+                                        <exclude>org.apache.flink.table.catalog.CatalogBaseTable.TableKind</exclude>
                                         <exclude>org.apache.flink.table.catalog.CatalogMaterializedTable</exclude>
+                                        <exclude>org.apache.flink.table.catalog.CatalogMaterializedTable.LogicalRefreshMode</exclude>
+                                        <exclude>org.apache.flink.table.catalog.CatalogMaterializedTable.RefreshMode</exclude>
+                                        <exclude>org.apache.flink.table.catalog.CatalogMaterializedTable.RefreshStatus</exclude>
                                         <exclude>org.apache.flink.table.catalog.IntervalFreshness</exclude>
+                                        <exclude>org.apache.flink.table.catalog.IntervalFreshness.TimeUnit</exclude>
                                     </excludes>
                                 </rule>
                             </rules>
