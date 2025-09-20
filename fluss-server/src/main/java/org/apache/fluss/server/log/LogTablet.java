@@ -346,6 +346,18 @@ public final class LogTablet {
         metricGroup.gauge(
                 MetricNames.LOG_NUM_SEGMENTS, () -> localLog.getSegments().numberOfSegments());
         metricGroup.gauge(MetricNames.LOG_END_OFFSET, localLog::getLocalLogEndOffset);
+        metricGroup.gauge(
+                MetricNames.LOG_LAKE_LAG_RECORDS,
+                () ->
+                        getLakeLogEndOffset() < 0L
+                                ? localLogEndOffset()
+                                : localLogEndOffset() - getLakeLogEndOffset());
+        metricGroup.gauge(
+                MetricNames.LOG_LAKE_LAG_TIME_MS,
+                () ->
+                        getLakeMaxTimestamp() < 0L
+                                ? localMaxTimestamp()
+                                : localMaxTimestamp() - getLakeMaxTimestamp());
     }
 
     public long logSize() {
