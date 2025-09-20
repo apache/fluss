@@ -36,13 +36,19 @@ import org.apache.fluss.utils.StringUtils;
 import org.apache.fluss.utils.TimeUtils;
 
 import org.apache.flink.configuration.Configuration;
+import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
-import org.apache.flink.table.catalog.CatalogTable;
+import org.apache.flink.table.catalog.CatalogMaterializedTable;
 import org.apache.flink.table.catalog.Column;
+import org.apache.flink.table.catalog.IntervalFreshness;
+import org.apache.flink.table.catalog.ResolvedCatalogBaseTable;
+import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.types.RowKind;
+
+import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.ArrayList;
@@ -56,9 +62,22 @@ import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.table.factories.FactoryUtil.CONNECTOR;
+import static org.apache.flink.table.utils.EncodingUtils.decodeBase64ToBytes;
+import static org.apache.flink.table.utils.EncodingUtils.encodeBytesToBase64;
+import static org.apache.flink.util.Preconditions.checkNotNull;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.apache.fluss.flink.adapter.CatalogTableAdapter.toCatalogTable;
+import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_DEFINITION_QUERY;
+import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_INTERVAL_FRESHNESS;
+import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT;
+import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE;
+import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_PREFIX;
+import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_REFRESH_HANDLER_BYTES;
+import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_REFRESH_HANDLER_DESCRIPTION;
+import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_REFRESH_MODE;
+import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_REFRESH_STATUS;
+import static org.apache.fluss.utils.PropertiesUtils.excludeByPrefix;
 
 /** Utils for conversion between Flink and Fluss. */
 public class FlinkConversions {
@@ -91,7 +110,7 @@ public class FlinkConversions {
     }
 
     /** Convert Fluss's table to Flink's table. */
-    public static CatalogTable toFlinkTable(TableInfo tableInfo) {
+    public static CatalogBaseTable toFlinkTable(TableInfo tableInfo) {
         Map<String, String> newOptions = new HashMap<>(tableInfo.getCustomProperties().toMap());
 
         // put fluss table properties into flink options, to make the properties visible to users
@@ -149,6 +168,16 @@ public class FlinkConversions {
 
         // deserialize watermark
         CatalogPropertiesUtils.deserializeWatermark(newOptions, schemaBuilder);
+
+        // Check if this is a materialized table based on specific options
+        if (isMaterializedTable(newOptions)) {
+            return toFlinkMaterializedTable(
+                    schemaBuilder.build(),
+                    tableInfo.getComment().orElse(null),
+                    tableInfo.getPartitionKeys(),
+                    newOptions);
+        }
+
         return toCatalogTable(
                 schemaBuilder.build(),
                 tableInfo.getComment().orElse(null),
@@ -157,8 +186,8 @@ public class FlinkConversions {
     }
 
     /** Convert Flink's table to Fluss's table. */
-    public static TableDescriptor toFlussTable(ResolvedCatalogTable catalogTable) {
-        Configuration flinkTableConf = Configuration.fromMap(catalogTable.getOptions());
+    public static TableDescriptor toFlussTable(ResolvedCatalogBaseTable<?> catalogBaseTable) {
+        Configuration flinkTableConf = Configuration.fromMap(catalogBaseTable.getOptions());
         String connector = flinkTableConf.get(CONNECTOR);
         if (!StringUtils.isNullOrWhitespaceOnly(connector)
                 && !FlinkCatalogFactory.IDENTIFIER.equals(connector)) {
@@ -170,7 +199,7 @@ public class FlinkConversions {
                             + " You can create TEMPORARY table instead if you want to create the table of other connector.");
         }
 
-        ResolvedSchema resolvedSchema = catalogTable.getResolvedSchema();
+        ResolvedSchema resolvedSchema = catalogBaseTable.getResolvedSchema();
 
         // now, build Fluss's table
         Schema.Builder schemBuilder = Schema.newBuilder();
@@ -202,13 +231,25 @@ public class FlinkConversions {
                                     "Metadata column " + col + " is not supported.");
                         });
 
+        CatalogBaseTable.TableKind tableKind = catalogBaseTable.getTableKind();
+        List<String> partitionKeys =
+                CatalogBaseTable.TableKind.TABLE == tableKind
+                        ? ((ResolvedCatalogTable) catalogBaseTable).getPartitionKeys()
+                        : ((ResolvedCatalogMaterializedTable) catalogBaseTable).getPartitionKeys();
+
         Map<String, String> customProperties = flinkTableConf.toMap();
         CatalogPropertiesUtils.serializeComputedColumns(
                 customProperties, resolvedSchema.getColumns());
         CatalogPropertiesUtils.serializeWatermarkSpecs(
-                customProperties, catalogTable.getResolvedSchema().getWatermarkSpecs());
+                customProperties, catalogBaseTable.getResolvedSchema().getWatermarkSpecs());
 
-        String comment = catalogTable.getComment();
+        // Set materialized table flags to fluss table custom properties
+        if (CatalogBaseTable.TableKind.MATERIALIZED_TABLE == tableKind) {
+            serializeMaterializedTableToCustomProperties(
+                    (CatalogMaterializedTable) catalogBaseTable, customProperties);
+        }
+
+        String comment = catalogBaseTable.getComment();
 
         // convert some flink options to fluss table configs.
         Map<String, String> properties = convertFlinkOptionsToFlussTableProperties(flinkTableConf);
@@ -228,7 +269,7 @@ public class FlinkConversions {
                                     pk -> {
                                         List<String> bucketKeys =
                                                 new ArrayList<>(pk.getColumnNames());
-                                        bucketKeys.removeAll(catalogTable.getPartitionKeys());
+                                        bucketKeys.removeAll(partitionKeys);
                                         return bucketKeys;
                                     })
                             .orElse(Collections.emptyList());
@@ -237,7 +278,7 @@ public class FlinkConversions {
 
         return TableDescriptor.builder()
                 .schema(schema)
-                .partitionedBy(catalogTable.getPartitionKeys())
+                .partitionedBy(partitionKeys)
                 .distributedBy(bucketNum, bucketKey)
                 .comment(comment)
                 .properties(properties)
@@ -351,5 +392,122 @@ public class FlinkConversions {
                 flinkOptions.put(option.key(), flussProperties.get(option.key()));
             }
         }
+    }
+
+    /**
+     * Determines if the given options represent a materialized table.
+     *
+     * @param options the table options to check
+     * @return true if this is a materialized table, false otherwise
+     */
+    private static boolean isMaterializedTable(Map<String, String> options) {
+        return options.keySet().stream().anyMatch(key -> key.startsWith(MATERIALIZED_TABLE_PREFIX));
+    }
+
+    private static void serializeMaterializedTableToCustomProperties(
+            CatalogMaterializedTable mt, Map<String, String> customProperties) {
+        // Serialize core materialized table properties
+        customProperties.put(MATERIALIZED_TABLE_DEFINITION_QUERY.key(), mt.getDefinitionQuery());
+        // Serialize freshness configuration
+        IntervalFreshness freshness = mt.getDefinitionFreshness();
+        customProperties.put(MATERIALIZED_TABLE_INTERVAL_FRESHNESS.key(), freshness.getInterval());
+        customProperties.put(
+                MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT.key(),
+                freshness.getTimeUnit().name());
+        // Serialize refresh configuration
+        customProperties.put(
+                MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE.key(), mt.getLogicalRefreshMode().name());
+        customProperties.put(MATERIALIZED_TABLE_REFRESH_MODE.key(), mt.getRefreshMode().name());
+        customProperties.put(MATERIALIZED_TABLE_REFRESH_STATUS.key(), mt.getRefreshStatus().name());
+        // Serialize optional refresh handler information
+        serializeRefreshHandler(mt, customProperties);
+    }
+
+    /**
+     * Serializes the refresh handler information if present.
+     *
+     * @param mt the materialized table
+     * @param customProperties the properties map to update
+     */
+    private static void serializeRefreshHandler(
+            CatalogMaterializedTable mt, Map<String, String> customProperties) {
+        // Serialize refresh handler description if present
+        mt.getRefreshHandlerDescription()
+                .ifPresent(
+                        desc ->
+                                customProperties.put(
+                                        MATERIALIZED_TABLE_REFRESH_HANDLER_DESCRIPTION.key(),
+                                        desc));
+        // Serialize refresh handler bytes if present
+        byte[] serializedRefreshHandler = mt.getSerializedRefreshHandler();
+        if (serializedRefreshHandler != null) {
+            customProperties.put(
+                    MATERIALIZED_TABLE_REFRESH_HANDLER_BYTES.key(),
+                    encodeBytesToBase64(serializedRefreshHandler));
+        }
+    }
+
+    private static CatalogMaterializedTable toFlinkMaterializedTable(
+            org.apache.flink.table.api.Schema schema,
+            String comment,
+            List<String> partitionKeys,
+            Map<String, String> options) {
+        // Validate required materialized table options first
+        String definitionQuery = options.get(MATERIALIZED_TABLE_DEFINITION_QUERY.key());
+        String intervalFreshness = options.get(MATERIALIZED_TABLE_INTERVAL_FRESHNESS.key());
+        String timeUnitStr = options.get(MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT.key());
+        String logicalRefreshModeStr = options.get(MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE.key());
+        String refreshModeStr = options.get(MATERIALIZED_TABLE_REFRESH_MODE.key());
+        String refreshStatusStr = options.get(MATERIALIZED_TABLE_REFRESH_STATUS.key());
+
+        // Validate required materialized table options first
+        checkNotNull(
+                definitionQuery, "Materialized table definition query is required but missing");
+        checkNotNull(
+                intervalFreshness, "Materialized table interval freshness is required but missing");
+        checkNotNull(
+                timeUnitStr,
+                "Materialized table interval freshness time unit is required but missing");
+        checkNotNull(
+                logicalRefreshModeStr,
+                "Materialized table logical refresh mode is required but missing");
+        checkNotNull(refreshModeStr, "Materialized table refresh mode is required but missing");
+        checkNotNull(refreshStatusStr, "Materialized table refresh status is required but missing");
+
+        // Parse validated values
+        IntervalFreshness.TimeUnit timeUnit = IntervalFreshness.TimeUnit.valueOf(timeUnitStr);
+        IntervalFreshness freshness = IntervalFreshness.of(intervalFreshness, timeUnit);
+        CatalogMaterializedTable.LogicalRefreshMode logicalRefreshMode =
+                CatalogMaterializedTable.LogicalRefreshMode.valueOf(logicalRefreshModeStr);
+        CatalogMaterializedTable.RefreshMode refreshMode =
+                CatalogMaterializedTable.RefreshMode.valueOf(refreshModeStr);
+        CatalogMaterializedTable.RefreshStatus refreshStatus =
+                CatalogMaterializedTable.RefreshStatus.valueOf(refreshStatusStr);
+
+        @Nullable
+        String refreshHandlerDesc =
+                options.get(MATERIALIZED_TABLE_REFRESH_HANDLER_DESCRIPTION.key());
+        @Nullable
+        String refreshHandlerStringBytes =
+                options.get(MATERIALIZED_TABLE_REFRESH_HANDLER_BYTES.key());
+        @Nullable
+        byte[] refreshHandlerBytes =
+                StringUtils.isNullOrWhitespaceOnly(refreshHandlerStringBytes)
+                        ? null
+                        : decodeBase64ToBytes(refreshHandlerStringBytes);
+
+        CatalogMaterializedTable.Builder builder = CatalogMaterializedTable.newBuilder();
+        builder.schema(schema)
+                .comment(comment)
+                .partitionKeys(partitionKeys)
+                .options(excludeByPrefix(options, MATERIALIZED_TABLE_PREFIX))
+                .definitionQuery(definitionQuery)
+                .freshness(freshness)
+                .logicalRefreshMode(logicalRefreshMode)
+                .refreshMode(refreshMode)
+                .refreshStatus(refreshStatus)
+                .refreshHandlerDescription(refreshHandlerDesc)
+                .serializedRefreshHandler(refreshHandlerBytes);
+        return builder.build();
     }
 }
