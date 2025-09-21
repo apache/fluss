@@ -67,18 +67,32 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
             try (Catalog catalog = getCatalog()) {
                 FileStoreTable fileStoreTable = getTable(catalog, tablePath, snapshotId);
                 InnerTableScan tableScan = fileStoreTable.newScan();
+                boolean isBucketAware = isBucketAware(fileStoreTable);
+
                 if (predicate != null) {
                     tableScan = tableScan.withFilter(predicate);
                 }
                 for (Split split : tableScan.plan().splits()) {
                     DataSplit dataSplit = (DataSplit) split;
-                    splits.add(new PaimonSplit(dataSplit));
+                    splits.add(new PaimonSplit(dataSplit, isBucketAware));
                 }
             }
             return splits;
         } catch (Exception e) {
             throw new RuntimeException("Failed to plan splits for paimon.", e);
         }
+    }
+
+    private boolean isBucketAware(FileStoreTable fileStoreTable) {
+        // Check whether the bucket key is explicitly set
+        String bucketKey = fileStoreTable.options().get(CoreOptions.BUCKET_KEY.key());
+        if (bucketKey != null && !bucketKey.isEmpty()) {
+            return true;
+        }
+
+        // Check whether it is a primary key table (the primary key table is bucket-aware by
+        // default)
+        return !fileStoreTable.primaryKeys().isEmpty();
     }
 
     private Catalog getCatalog() {

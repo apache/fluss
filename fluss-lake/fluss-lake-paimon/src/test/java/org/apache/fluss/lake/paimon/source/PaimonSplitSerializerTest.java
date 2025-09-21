@@ -27,11 +27,15 @@ import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.GenericRow;
+import org.apache.paimon.io.DataOutputViewStreamWrapper;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.table.Table;
+import org.apache.paimon.table.source.DataSplit;
 import org.apache.paimon.types.DataTypes;
+import org.apache.paimon.utils.InstantiationUtil;
 import org.junit.jupiter.api.Test;
 
+import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.List;
@@ -72,6 +76,18 @@ class PaimonSplitSerializerTest extends PaimonSourceTestBase {
         PaimonSplit deserialized = serializer.deserialize(serializer.getVersion(), serialized);
 
         assertThat(deserialized.dataSplit()).isEqualTo(originalPaimonSplit.dataSplit());
+        assertThat(deserialized.isBucketAware()).isEqualTo(originalPaimonSplit.isBucketAware());
+
+        // test version1 compatibility
+        // simulate the serialization format of version 1 (only DataSplit, no isBucketAware field)
+        byte[] version1Serialized = serializeAsVersion1(originalPaimonSplit.dataSplit());
+
+        PaimonSplit deserializedForVersion1 = serializer.deserialize(1, version1Serialized);
+
+        // the data of version1 should be considered bucket-aware by default
+        assertThat(deserializedForVersion1.isBucketAware()).isTrue();
+        assertThat(deserializedForVersion1.dataSplit()).isEqualTo(originalPaimonSplit.dataSplit());
+        assertThat(deserializedForVersion1.bucket()).isEqualTo(originalPaimonSplit.bucket());
     }
 
     @Test
@@ -79,5 +95,12 @@ class PaimonSplitSerializerTest extends PaimonSourceTestBase {
         byte[] invalidData = "invalid".getBytes();
         assertThatThrownBy(() -> serializer.deserialize(1, invalidData))
                 .isInstanceOf(IOException.class);
+    }
+
+    private byte[] serializeAsVersion1(DataSplit dataSplit) throws IOException {
+        ByteArrayOutputStream out = new ByteArrayOutputStream();
+        DataOutputViewStreamWrapper view = new DataOutputViewStreamWrapper(out);
+        InstantiationUtil.serializeObject(view, dataSplit);
+        return out.toByteArray();
     }
 }
