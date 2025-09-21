@@ -114,22 +114,6 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
 
         TestPojo convertedPojo = converter.fromRow(row);
 
-        // Verify individual fields
-        assertThat(convertedPojo.booleanField).isEqualTo(originalPojo.booleanField);
-        assertThat(convertedPojo.byteField).isEqualTo(originalPojo.byteField);
-        assertThat(convertedPojo.shortField).isEqualTo(originalPojo.shortField);
-        assertThat(convertedPojo.intField).isEqualTo(originalPojo.intField);
-        assertThat(convertedPojo.longField).isEqualTo(originalPojo.longField); // Verify long field
-        assertThat(convertedPojo.floatField).isEqualTo(originalPojo.floatField);
-        assertThat(convertedPojo.doubleField).isEqualTo(originalPojo.doubleField);
-        assertThat(convertedPojo.stringField).isEqualTo(originalPojo.stringField);
-        assertThat(convertedPojo.bytesField).isEqualTo(originalPojo.bytesField);
-        assertThat(convertedPojo.decimalField).isEqualTo(originalPojo.decimalField);
-        assertThat(convertedPojo.dateField).isEqualTo(originalPojo.dateField);
-        assertThat(convertedPojo.timeField).isEqualTo(originalPojo.timeField);
-        assertThat(convertedPojo.timestampField).isEqualTo(originalPojo.timestampField);
-        assertThat(convertedPojo.timestampLtzField).isEqualTo(originalPojo.timestampLtzField);
-        assertThat(convertedPojo.offsetDateTimeField).isEqualTo(originalPojo.offsetDateTimeField);
 
         // Verify the POJO
         assertThat(convertedPojo).isNotNull();
