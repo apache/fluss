@@ -76,8 +76,8 @@ import java.util.Set;
  *
  * @param <T> The POJO type to convert
  */
-public class ConverterUtils<T> {
-    private static final Logger LOG = LoggerFactory.getLogger(ConverterUtils.class);
+public class PojoConverterUtils<T> {
+    private static final Logger LOG = LoggerFactory.getLogger(PojoConverterUtils.class);
 
     /** Map of supported Java types for each DataTypeRoot. */
     private static final Map<DataTypeRoot, Set<Class<?>>> SUPPORTED_TYPES = new HashMap<>();
@@ -132,7 +132,7 @@ public class ConverterUtils<T> {
      * @param rowType The row schema to use for conversion
      */
     @SuppressWarnings("unchecked")
-    private ConverterUtils(Class<T> pojoClass, RowType rowType) {
+    private PojoConverterUtils(Class<T> pojoClass, RowType rowType) {
         this.pojoClass = pojoClass;
         this.rowType = rowType;
 
@@ -161,8 +161,8 @@ public class ConverterUtils<T> {
      * @return A converter for the specified POJO class and row type
      */
     @SuppressWarnings("unchecked")
-    public static <T> ConverterUtils<T> getConverter(Class<T> pojoClass, RowType rowType) {
-        return new ConverterUtils<>(pojoClass, rowType);
+    public static <T> PojoConverterUtils<T> getConverter(Class<T> pojoClass, RowType rowType) {
+        return new PojoConverterUtils<>(pojoClass, rowType);
     }
 
     /** Creates field converters for converting from POJO to Row for each field in the schema. */

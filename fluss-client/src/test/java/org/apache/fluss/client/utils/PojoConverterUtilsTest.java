@@ -36,8 +36,8 @@ import java.util.Objects;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Tests for {@link ConverterUtils}. */
-public class ConverterUtilsTest {
+/** Tests for {@link PojoConverterUtils}. */
+public class PojoConverterUtilsTest {
 
     private TestPojo createTestPojo() {
         return new TestPojo(
@@ -60,8 +60,8 @@ public class ConverterUtilsTest {
 
     @Test
     public void testToRow() {
-        ConverterUtils<TestPojo> converter =
-                ConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
+        PojoConverterUtils<TestPojo> converter =
+                PojoConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
 
         TestPojo pojo = createTestPojo();
 
@@ -93,8 +93,8 @@ public class ConverterUtilsTest {
 
     @Test
     public void testFromRow() {
-        ConverterUtils<TestPojo> converter =
-                ConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
+        PojoConverterUtils<TestPojo> converter =
+                PojoConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
 
         TestPojo originalPojo = createTestPojo();
 
@@ -108,8 +108,8 @@ public class ConverterUtilsTest {
 
     @Test
     public void testNullValues() {
-        ConverterUtils<TestPojo> converter =
-                ConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
+        PojoConverterUtils<TestPojo> converter =
+                PojoConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
 
         assertThat(converter.toRow(null)).isNull();
 
@@ -140,11 +140,11 @@ public class ConverterUtilsTest {
 
     @Test
     public void testCaching() {
-        ConverterUtils<TestPojo> converter1 =
-                ConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
+        PojoConverterUtils<TestPojo> converter1 =
+                PojoConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
 
-        ConverterUtils<TestPojo> converter2 =
-                ConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
+        PojoConverterUtils<TestPojo> converter2 =
+                PojoConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
 
         // As caching is removed, subsequent calls should produce new instances
         assertThat(converter2).isNotSameAs(converter1);
@@ -162,7 +162,7 @@ public class ConverterUtilsTest {
                         .build();
 
         // Expect an IllegalArgumentException when creating a converter with a field not in the POJO
-        assertThatThrownBy(() -> ConverterUtils.getConverter(PartialTestPojo.class, rowType))
+        assertThatThrownBy(() -> PojoConverterUtils.getConverter(PartialTestPojo.class, rowType))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("Field 'extraField' not found in POJO class");
     }
@@ -177,7 +177,7 @@ public class ConverterUtilsTest {
                         .field("stringField", DataTypes.STRING())
                         .build();
 
-        ConverterUtils<TestPojo> converter = ConverterUtils.getConverter(TestPojo.class, rowType);
+        PojoConverterUtils<TestPojo> converter = PojoConverterUtils.getConverter(TestPojo.class, rowType);
 
         TestPojo pojo = createTestPojo();
 
@@ -214,8 +214,8 @@ public class ConverterUtilsTest {
     public void testFieldAccessFailureThrows() {
         RowType rowType = RowType.builder().field("intField", DataTypes.INT()).build();
 
-        ConverterUtils<FinalFieldPojo> converter =
-                ConverterUtils.getConverter(FinalFieldPojo.class, rowType);
+        PojoConverterUtils<FinalFieldPojo> converter =
+                PojoConverterUtils.getConverter(FinalFieldPojo.class, rowType);
 
         GenericRow row = new GenericRow(1);
         row.setField(0, 42);
@@ -230,7 +230,7 @@ public class ConverterUtilsTest {
     public void testNoDefaultConstructorPojoThrows() {
         RowType rowType = RowType.builder().field("intField", DataTypes.INT()).build();
         assertThatThrownBy(
-                () -> ConverterUtils.getConverter(NoDefaultConstructorPojo.class, rowType))
+                () -> PojoConverterUtils.getConverter(NoDefaultConstructorPojo.class, rowType))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must have a default constructor");
     }
