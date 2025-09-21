@@ -31,6 +31,7 @@ import org.apache.fluss.types.RowType;
 import javax.annotation.Nullable;
 
 import java.lang.reflect.InvocationTargetException;
+import java.math.BigDecimal;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalTime;
@@ -121,95 +122,131 @@ public final class RowToPojoConverter<T> {
     private static RowToField createRowReader(DataType fieldType, PojoType.Property prop) {
         switch (fieldType.getTypeRoot()) {
             case BOOLEAN:
-                return (row, pos) -> row.getBoolean(pos);
+                return InternalRow::getBoolean;
             case TINYINT:
-                return (row, pos) -> row.getByte(pos);
+                return InternalRow::getByte;
             case SMALLINT:
-                return (row, pos) -> row.getShort(pos);
+                return InternalRow::getShort;
             case INTEGER:
-                return (row, pos) -> row.getInt(pos);
+                return InternalRow::getInt;
             case BIGINT:
-                return (row, pos) -> row.getLong(pos);
+                return InternalRow::getLong;
             case FLOAT:
-                return (row, pos) -> row.getFloat(pos);
+                return InternalRow::getFloat;
             case DOUBLE:
-                return (row, pos) -> row.getDouble(pos);
+                return InternalRow::getDouble;
             case CHAR:
             case STRING:
-                return (row, pos) -> {
-                    BinaryString s = row.getString(pos);
-                    String v = s.toString();
-                    if (prop.type == String.class) {
-                        if (fieldType.getTypeRoot() == DataTypeRoot.CHAR && v.length() != 1) {
-                            throw new IllegalArgumentException(
-                                    String.format(
-                                            "Field %s expects exactly one character for CHAR type, got length %d.",
-                                            prop.name, v.length()));
-                        }
-                        return v;
-                    } else if (prop.type == Character.class) {
-                        if (v.isEmpty()) {
-                            throw new IllegalArgumentException(
-                                    String.format(
-                                            "Field %s expects Character, but the string value is empty.",
-                                            prop.name));
-                        }
-                        if (fieldType.getTypeRoot() == DataTypeRoot.CHAR && v.length() != 1) {
-                            throw new IllegalArgumentException(
-                                    String.format(
-                                            "Field %s expects exactly one character for CHAR type, got length %d.",
-                                            prop.name, v.length()));
-                        }
-                        return v.charAt(0);
-                    }
-                    throw new IllegalArgumentException(
-                            String.format(
-                                    "Field %s is not a String or Character. Cannot convert from string.",
-                                    prop.name));
-                };
+                return (row, pos) -> convertTextValue(fieldType, prop, row.getString(pos));
             case BINARY:
             case BYTES:
-                return (row, pos) -> row.getBytes(pos);
+                return InternalRow::getBytes;
             case DECIMAL:
-                return (row, pos) -> {
-                    DecimalType dt = (DecimalType) fieldType;
-                    Decimal d = row.getDecimal(pos, dt.getPrecision(), dt.getScale());
-                    return d.toBigDecimal();
-                };
+                return (row, pos) -> convertDecimalValue((DecimalType) fieldType, row, pos);
             case DATE:
-                return (row, pos) -> LocalDate.ofEpochDay(row.getInt(pos));
+                return RowToPojoConverter::convertDateValue;
             case TIME_WITHOUT_TIME_ZONE:
-                return (row, pos) -> LocalTime.ofNanoOfDay(row.getInt(pos) * 1_000_000L);
+                return RowToPojoConverter::convertTimeValue;
             case TIMESTAMP_WITHOUT_TIME_ZONE:
-                {
-                    final int precision = DataTypeChecks.getPrecision(fieldType);
-                    return (row, pos) -> {
-                        TimestampNtz t = row.getTimestampNtz(pos, precision);
-                        return t.toLocalDateTime();
-                    };
-                }
+                return (row, pos) -> convertTimestampNtzValue(fieldType, row, pos);
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                {
-                    final int precision = DataTypeChecks.getPrecision(fieldType);
-                    return (row, pos) -> {
-                        TimestampLtz t = row.getTimestampLtz(pos, precision);
-                        if (prop.type == Instant.class) {
-                            return t.toInstant();
-                        } else if (prop.type == OffsetDateTime.class) {
-                            return OffsetDateTime.ofInstant(t.toInstant(), ZoneOffset.UTC);
-                        }
-                        throw new IllegalArgumentException(
-                                String.format(
-                                        "Field %s is not an Instant or OffsetDateTime. Cannot convert from TimestampData.",
-                                        prop.name));
-                    };
-                }
+                return (row, pos) -> convertTimestampLtzValue(fieldType, prop, row, pos);
             default:
                 throw new UnsupportedOperationException(
                         String.format(
                                 "Unsupported field type %s for field %s.",
                                 fieldType.getTypeRoot(), prop.name));
         }
+    }
+
+    /**
+     * Converts a text value (CHAR/STRING) read from an InternalRow into the target Java type
+     * declared by the POJO property.
+     *
+     * <p>Supported target types are String and Character. For CHAR columns, this enforces that the
+     * value has exactly one character. For Character targets, empty strings are rejected.
+     *
+     * @param fieldType Fluss column DataType (must be CHAR or STRING)
+     * @param prop The target POJO property (used for type and error messages)
+     * @param s The BinaryString read from the row
+     * @return Converted Java value (String or Character)
+     * @throws IllegalArgumentException if the target type is unsupported or constraints are
+     *     violated
+     */
+    private static Object convertTextValue(
+            DataType fieldType, PojoType.Property prop, BinaryString s) {
+        String v = s.toString();
+        String formattedMessage =
+                String.format(
+                        "Field %s expects exactly one character for CHAR type, got length %d.",
+                        prop.name, v.length());
+        if (prop.type == String.class) {
+            if (fieldType.getTypeRoot() == DataTypeRoot.CHAR && v.length() != 1) {
+                throw new IllegalArgumentException(formattedMessage);
+            }
+            return v;
+        } else if (prop.type == Character.class) {
+            if (v.isEmpty()) {
+                throw new IllegalArgumentException(
+                        String.format(
+                                "Field %s expects Character, but the string value is empty.",
+                                prop.name));
+            }
+            if (fieldType.getTypeRoot() == DataTypeRoot.CHAR && v.length() != 1) {
+                throw new IllegalArgumentException(formattedMessage);
+            }
+            return v.charAt(0);
+        }
+        throw new IllegalArgumentException(
+                String.format(
+                        "Field %s is not a String or Character. Cannot convert from string.",
+                        prop.name));
+    }
+
+    /**
+     * Converts a DECIMAL value from an InternalRow into a BigDecimal using the column's precision
+     * and scale. The row position is assumed non-null (caller checks), so this never returns null.
+     */
+    private static BigDecimal convertDecimalValue(
+            DecimalType decimalType, InternalRow row, int pos) {
+        Decimal d = row.getDecimal(pos, decimalType.getPrecision(), decimalType.getScale());
+        return d.toBigDecimal();
+    }
+
+    /** Converts a DATE value stored as int days since epoch to a LocalDate. */
+    private static LocalDate convertDateValue(InternalRow row, int pos) {
+        return LocalDate.ofEpochDay(row.getInt(pos));
+    }
+
+    /** Converts a TIME_WITHOUT_TIME_ZONE value stored as int millis of day to a LocalTime. */
+    private static LocalTime convertTimeValue(InternalRow row, int pos) {
+        return LocalTime.ofNanoOfDay(row.getInt(pos) * 1_000_000L);
+    }
+
+    /** Converts a TIMESTAMP_WITHOUT_TIME_ZONE value to a LocalDateTime honoring precision. */
+    private static Object convertTimestampNtzValue(DataType fieldType, InternalRow row, int pos) {
+        final int precision = DataTypeChecks.getPrecision(fieldType);
+        TimestampNtz t = row.getTimestampNtz(pos, precision);
+        return t.toLocalDateTime();
+    }
+
+    /**
+     * Converts a TIMESTAMP_WITH_LOCAL_TIME_ZONE value to either Instant or OffsetDateTime in UTC,
+     * depending on the target POJO property type.
+     */
+    private static Object convertTimestampLtzValue(
+            DataType fieldType, PojoType.Property prop, InternalRow row, int pos) {
+        final int precision = DataTypeChecks.getPrecision(fieldType);
+        TimestampLtz t = row.getTimestampLtz(pos, precision);
+        if (prop.type == Instant.class) {
+            return t.toInstant();
+        } else if (prop.type == OffsetDateTime.class) {
+            return OffsetDateTime.ofInstant(t.toInstant(), ZoneOffset.UTC);
+        }
+        throw new IllegalArgumentException(
+                String.format(
+                        "Field %s is not an Instant or OffsetDateTime. Cannot convert from TimestampData.",
+                        prop.name));
     }
 
     private interface RowToField {
