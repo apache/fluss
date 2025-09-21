@@ -25,10 +25,9 @@ import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DecimalType;
-import org.apache.fluss.types.LocalZonedTimestampType;
 import org.apache.fluss.types.RowType;
-import org.apache.fluss.types.TimestampType;
 
 import javax.annotation.Nullable;
 
@@ -423,20 +422,23 @@ public class PojoConverterUtils<T> {
                     int millis = row.getInt(pos);
                     return LocalTime.ofNanoOfDay(millis * 1_000_000L);
                 };
-            case TIMESTAMP_WITHOUT_TIME_ZONE:
+            case TIMESTAMP_WITHOUT_TIME_ZONE: {
+                final int precision = DataTypeChecks.getPrecision(fieldType);
                 return (row, pos) -> {
                     if (row.isNullAt(pos)) {
                         return null;
                     }
-                    TimestampNtz timestampNtz = row.getTimestampNtz(pos, getPrecision(fieldType));
+                    TimestampNtz timestampNtz = row.getTimestampNtz(pos, precision);
                     return timestampNtz.toLocalDateTime();
                 };
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+            }
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE: {
+                final int precision = DataTypeChecks.getPrecision(fieldType);
                 return (row, pos) -> {
                     if (row.isNullAt(pos)) {
                         return null;
                     }
-                    TimestampLtz timestampLtz = row.getTimestampLtz(pos, getPrecision(fieldType));
+                    TimestampLtz timestampLtz = row.getTimestampLtz(pos, precision);
                     if (fieldClass == Instant.class) {
                         return timestampLtz.toInstant();
                     } else if (fieldClass == OffsetDateTime.class) {
@@ -448,6 +450,7 @@ public class PojoConverterUtils<T> {
                                         field.getName()));
                     }
                 };
+            }
             default:
                 throw new UnsupportedOperationException(
                         String.format(
@@ -535,24 +538,6 @@ public class PojoConverterUtils<T> {
         }
     }
 
-    /**
-     * Gets the precision of a data type.
-     *
-     * @param dataType The data type
-     * @return The precision
-     */
-    private static int getPrecision(DataType dataType) {
-        switch (dataType.getTypeRoot()) {
-            case TIMESTAMP_WITHOUT_TIME_ZONE:
-                return ((TimestampType) dataType).getPrecision();
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                return ((LocalZonedTimestampType) dataType).getPrecision();
-            case DECIMAL:
-                return ((DecimalType) dataType).getPrecision();
-            default:
-                return 0;
-        }
-    }
 
     /**
      * Utility method to create a Set containing the specified Java type classes.
