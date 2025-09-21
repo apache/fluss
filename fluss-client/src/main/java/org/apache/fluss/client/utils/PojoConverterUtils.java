@@ -55,10 +55,7 @@ import java.util.Set;
  * #getConverter(Class, RowType)} creates a new instance.
  *
  * <p>Notes: - Nested POJOs are not supported. - If a row contains null for a field that maps to a
- * primitive type in the POJO, that field will not be set (it keeps the Java default). Prefer boxed
- * types if nulls are expected.
- *
- * <p>This class is intended for internal use only.
+ * primitive type in the POJO, that field will not be set (it keeps the Java default)
  *
  * @param <T> The POJO type to convert
  */
@@ -208,18 +205,7 @@ public final class PojoConverterUtils<T> {
                 }
 
                 // Validate Java field type compatibility with Fluss type
-                Set<Class<?>> supported = SUPPORTED_TYPES.get(fieldType.getTypeRoot());
-                Class<?> actual = field.getType();
-                if (supported == null || !supported.contains(actual)) {
-                    throw new IllegalArgumentException(
-                            String.format(
-                                    "Field '%s' in POJO %s has Java type %s which is incompatible with Fluss type %s. Supported Java types: %s",
-                                    field.getName(),
-                                    pojoClass.getName(),
-                                    actual.getName(),
-                                    fieldType.getTypeRoot(),
-                                    supported));
-                }
+                validateCompatibility(fieldType, field, pojoClass);
                 // Create the appropriate converter for this field
                 converters[i] = createFieldToRowConverter(fieldType, field);
             } else {
@@ -243,18 +229,7 @@ public final class PojoConverterUtils<T> {
 
             if (field != null) {
                 // Validate Java field type compatibility with Fluss type
-                Set<Class<?>> supported = SUPPORTED_TYPES.get(fieldType.getTypeRoot());
-                Class<?> actual = field.getType();
-                if (supported == null || !supported.contains(actual)) {
-                    throw new IllegalArgumentException(
-                            String.format(
-                                    "Field '%s' in POJO %s has Java type %s which is incompatible with Fluss type %s. Supported Java types: %s",
-                                    field.getName(),
-                                    pojoClass.getName(),
-                                    actual.getName(),
-                                    fieldType.getTypeRoot(),
-                                    supported));
-                }
+                validateCompatibility(fieldType, field, pojoClass);
                 // Create the appropriate converter for this field
                 converters[i] = createRowToFieldConverter(fieldType, field);
             } else {
@@ -292,6 +267,39 @@ public final class PojoConverterUtils<T> {
         return null;
     }
 
+    private static void validateCompatibility(DataType fieldType, Field field, Class<?> pojoClass) {
+        Set<Class<?>> supported = SUPPORTED_TYPES.get(fieldType.getTypeRoot());
+        Class<?> actual = field.getType();
+        if (supported == null || !supported.contains(actual)) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Field '%s' in POJO %s has Java type %s which is incompatible with Fluss type %s. Supported Java types: %s",
+                            field.getName(),
+                            pojoClass.getName(),
+                            actual.getName(),
+                            fieldType.getTypeRoot(),
+                            supported));
+        }
+    }
+
+    private static BinaryString toBinaryStringForText(Object v, Field field, DataTypeRoot root) {
+        final String s;
+        if (v instanceof Character) {
+            s = String.valueOf((Character) v);
+        } else if (v instanceof String) {
+            s = (String) v;
+        } else {
+            s = v.toString();
+        }
+        if (root == DataTypeRoot.CHAR && s.length() != 1) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Field %s expects exactly one character for CHAR type, got length %d.",
+                            field.getName(), s.length()));
+        }
+        return BinaryString.fromString(s);
+    }
+
     /**
      * Creates a field converter for converting from POJO to Row for a specific field based on its
      * data type.
@@ -317,24 +325,7 @@ public final class PojoConverterUtils<T> {
             case CHAR:
             case STRING:
                 return nullableFieldConverter(
-                        field,
-                        v -> {
-                            String s;
-                            if (v instanceof Character) {
-                                s = String.valueOf((Character) v);
-                            } else if (v instanceof String) {
-                                s = (String) v;
-                            } else {
-                                s = v.toString();
-                            }
-                            if (fieldType.getTypeRoot() == DataTypeRoot.CHAR && s.length() != 1) {
-                                throw new IllegalArgumentException(
-                                        String.format(
-                                                "Field %s expects exactly one character for CHAR type, got length %d.",
-                                                field.getName(), s.length()));
-                            }
-                            return BinaryString.fromString(s);
-                        });
+                        field, v -> toBinaryStringForText(v, field, fieldType.getTypeRoot()));
             case DECIMAL:
                 return nullableFieldConverter(
                         field,
