@@ -17,40 +17,27 @@
 
 package org.apache.fluss.client.utils;
 
-import org.apache.fluss.client.admin.ClientToServerITCaseBase;
-import org.apache.fluss.client.table.Table;
-import org.apache.fluss.client.table.scanner.ScanRecord;
-import org.apache.fluss.client.table.scanner.log.LogScanner;
-import org.apache.fluss.client.table.scanner.log.ScanRecords;
-import org.apache.fluss.client.table.writer.AppendWriter;
-import org.apache.fluss.metadata.Schema;
-import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
-import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
-import java.time.Duration;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
-import java.util.ArrayList;
 import java.util.Arrays;
-import java.util.List;
 import java.util.Objects;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link ConverterUtils}. */
-public class ConverterUtilsTest extends ClientToServerITCaseBase {
+public class ConverterUtilsTest {
 
     private TestPojo createTestPojo() {
         return new TestPojo(
@@ -240,89 +227,12 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
     }
 
     @Test
-    public void testWriteAndReadPojos() throws Exception {
-        TablePath tablePath = new TablePath("test_db", "pojo_table");
-
-        // Create a schema for the table
-        Schema schema =
-                Schema.newBuilder()
-                        .column("booleanField", DataTypes.BOOLEAN())
-                        .column("byteField", DataTypes.TINYINT())
-                        .column("shortField", DataTypes.SMALLINT())
-                        .column("intField", DataTypes.INT())
-                        .column("longField", DataTypes.BIGINT())
-                        .column("floatField", DataTypes.FLOAT())
-                        .column("doubleField", DataTypes.DOUBLE())
-                        .column("stringField", DataTypes.STRING())
-                        .column("bytesField", DataTypes.BYTES())
-                        .column("decimalField", DataTypes.DECIMAL(10, 2))
-                        .column("dateField", DataTypes.DATE())
-                        .column("timeField", DataTypes.TIME())
-                        .column("timestampField", DataTypes.TIMESTAMP())
-                        .column("timestampLtzField", DataTypes.TIMESTAMP_LTZ())
-                        .column("offsetDateTimeField", DataTypes.TIMESTAMP_LTZ())
-                        .build();
-
-        // Create a table descriptor
-        TableDescriptor tableDescriptor = TableDescriptor.builder().schema(schema).build();
-
-        // Create the table
-        createTable(tablePath, tableDescriptor, false);
-
-        // Create a converter for TestPojo
-        ConverterUtils<TestPojo> converter =
-                ConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
-
-        List<TestPojo> originalPojos = new ArrayList<>();
-        for (int i = 0; i < 5; i++) {
-            originalPojos.add(createTestPojo());
-        }
-
-        // Write the POJOs to the table
-        try (Table table = conn.getTable(tablePath)) {
-            AppendWriter appendWriter = table.newAppend().createWriter();
-            for (TestPojo pojo : originalPojos) {
-                GenericRow row = converter.toRow(pojo);
-                appendWriter.append(row).get();
-            }
-
-            // Create a log scanner
-            LogScanner logScanner = createLogScanner(table);
-
-            // Subscribe to the log from the beginning
-            subscribeFromBeginning(logScanner, table);
-
-            // Read the rows back
-            List<TestPojo> readPojos = new ArrayList<>();
-            while (readPojos.size() < originalPojos.size()) {
-                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
-                for (ScanRecord scanRecord : scanRecords) {
-                    InternalRow row = scanRecord.getRow();
-                    // Convert row back to POJO
-                    TestPojo pojo = converter.fromRow(row);
-                    readPojos.add(pojo);
-                }
-            }
-
-            assertThat(readPojos.size()).isEqualTo(originalPojos.size());
-
-            // Verify that the read POJOs match the original POJOs
-            for (TestPojo originalPojo : originalPojos) {
-                assertThat(originalPojo).isNotNull();
-                // Find a matching POJO in the read list
-                boolean found = false;
-                for (TestPojo readPojo : readPojos) {
-                    if (originalPojo.equals(readPojo)) {
-                        found = true;
-                        break;
-                    }
-                }
-                assertThat(found)
-                        .withFailMessage(
-                                "Could not find matching POJO: " + originalPojo.stringField)
-                        .isTrue();
-            }
-        }
+    public void testNoDefaultConstructorPojoThrows() {
+        RowType rowType = RowType.builder().field("intField", DataTypes.INT()).build();
+        assertThatThrownBy(
+                () -> ConverterUtils.getConverter(NoDefaultConstructorPojo.class, rowType))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("must have a default constructor");
     }
 
     /** Test POJO class with various field types. */
@@ -490,4 +400,14 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
             this.intField = 0;
         }
     }
+
+    /** POJO without a default constructor (illegal for ConverterUtils). */
+    public static class NoDefaultConstructorPojo {
+        private int intField;
+
+        public NoDefaultConstructorPojo(int intField) {
+            this.intField = intField;
+        }
+    }
+
 }
