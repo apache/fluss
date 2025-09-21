@@ -55,8 +55,8 @@ import java.util.Set;
  * Helper class for converting Java objects to Fluss's {@link InternalRow} format and vice versa.
  *
  * <p>This utility uses reflection to map fields from POJOs to InternalRow and back based on a given
- * schema. This implementation does not cache converters; getConverter creates a new instance each time.
- * types.
+ * schema. This implementation does not cache converters; getConverter creates a new instance each
+ * time. types.
  *
  * <p>Example usage:
  *
@@ -78,7 +78,6 @@ import java.util.Set;
  */
 public class ConverterUtils<T> {
     private static final Logger LOG = LoggerFactory.getLogger(ConverterUtils.class);
-
 
     /** Map of supported Java types for each DataTypeRoot. */
     private static final Map<DataTypeRoot, Set<Class<?>>> SUPPORTED_TYPES = new HashMap<>();
@@ -486,8 +485,7 @@ public class ConverterUtils<T> {
                 throw new IllegalStateException(
                         String.format(
                                 "Failed to access field %s in POJO class %s.",
-                                rowType.getFieldNames().get(i),
-                                pojoClass.getName()),
+                                rowType.getFieldNames().get(i), pojoClass.getName()),
                         e);
             }
             row.setField(i, value);
@@ -521,8 +519,7 @@ public class ConverterUtils<T> {
                         throw new IllegalStateException(
                                 String.format(
                                         "Failed to set field %s in POJO class %s.",
-                                        rowType.getFieldNames().get(i),
-                                        pojoClass.getName()),
+                                        rowType.getFieldNames().get(i), pojoClass.getName()),
                                 e);
                     }
                 }
@@ -574,5 +571,4 @@ public class ConverterUtils<T> {
         linkedHashSet.addAll(Arrays.asList(javaTypes));
         return linkedHashSet;
     }
-
 }

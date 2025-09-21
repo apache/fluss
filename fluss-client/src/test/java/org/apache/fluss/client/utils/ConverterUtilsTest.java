@@ -30,6 +30,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
+
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -113,8 +114,6 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
         GenericRow row = converter.toRow(originalPojo);
 
         TestPojo convertedPojo = converter.fromRow(row);
-
-
         // Verify the POJO
         assertThat(convertedPojo).isNotNull();
         assertThat(convertedPojo).isEqualTo(originalPojo);
@@ -135,13 +134,13 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
 
         // Verify the POJO
         assertThat(pojo).isNotNull();
-        assertThat(pojo.booleanField).isEqualTo(false); // Default value for boolean is false
-        assertThat(pojo.byteField).isEqualTo((byte) 0); // Default value for byte is 0
-        assertThat(pojo.shortField).isEqualTo((short) 0); // Default value for short is 0
-        assertThat(pojo.intField).isEqualTo(0); // Default value for int is 0
-        assertThat(pojo.longField).isEqualTo(0L); // Default value for long is 0
-        assertThat(pojo.floatField).isEqualTo(0.0f); // Default value for float is 0.0
-        assertThat(pojo.doubleField).isEqualTo(0.0); // Default value for double is 0.0
+        assertThat(pojo.booleanField).isNull();
+        assertThat(pojo.byteField).isNull();
+        assertThat(pojo.shortField).isNull();
+        assertThat(pojo.intField).isNull();
+        assertThat(pojo.longField).isNull();
+        assertThat(pojo.floatField).isNull();
+        assertThat(pojo.doubleField).isNull();
         assertThat(pojo.stringField).isNull();
         assertThat(pojo.bytesField).isNull();
         assertThat(pojo.decimalField).isNull();
@@ -209,12 +208,12 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
         assertThat(convertedPojo.booleanField).isEqualTo(true);
         assertThat(convertedPojo.intField).isEqualTo(123456);
         assertThat(convertedPojo.stringField).isEqualTo("Hello, World!");
-        // Other fields have default values
-        assertThat(convertedPojo.byteField).isEqualTo((byte) 0);
-        assertThat(convertedPojo.shortField).isEqualTo((short) 0);
-        assertThat(convertedPojo.longField).isEqualTo(0L);
-        assertThat(convertedPojo.floatField).isEqualTo(0.0f);
-        assertThat(convertedPojo.doubleField).isEqualTo(0.0);
+        // Other fields are null
+        assertThat(convertedPojo.byteField).isNull();
+        assertThat(convertedPojo.shortField).isNull();
+        assertThat(convertedPojo.longField).isNull();
+        assertThat(convertedPojo.floatField).isNull();
+        assertThat(convertedPojo.doubleField).isNull();
         assertThat(convertedPojo.bytesField).isNull();
         assertThat(convertedPojo.decimalField).isNull();
         assertThat(convertedPojo.dateField).isNull();
@@ -328,13 +327,13 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
 
     /** Test POJO class with various field types. */
     public static class TestPojo {
-        private boolean booleanField;
-        private byte byteField;
-        private short shortField;
-        private int intField;
-        private long longField;
-        private float floatField;
-        private double doubleField;
+        private Boolean booleanField;
+        private Byte byteField;
+        private Short shortField;
+        private Integer intField;
+        private Long longField;
+        private Float floatField;
+        private Double doubleField;
         private String stringField;
         private byte[] bytesField;
         private BigDecimal decimalField;
@@ -347,13 +346,13 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
         public TestPojo() {}
 
         public TestPojo(
-                boolean booleanField,
-                byte byteField,
-                short shortField,
-                int intField,
-                long longField,
-                float floatField,
-                double doubleField,
+                Boolean booleanField,
+                Byte byteField,
+                Short shortField,
+                Integer intField,
+                Long longField,
+                Float floatField,
+                Double doubleField,
                 String stringField,
                 byte[] bytesField,
                 BigDecimal decimalField,
@@ -388,13 +387,13 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
                 return false;
             }
             TestPojo testPojo = (TestPojo) o;
-            return booleanField == testPojo.booleanField
-                    && byteField == testPojo.byteField
-                    && shortField == testPojo.shortField
-                    && intField == testPojo.intField
-                    && longField == testPojo.longField
-                    && Float.compare(testPojo.floatField, floatField) == 0
-                    && Double.compare(testPojo.doubleField, doubleField) == 0
+            return Objects.equals(booleanField, testPojo.booleanField)
+                    && Objects.equals(byteField, testPojo.byteField)
+                    && Objects.equals(shortField, testPojo.shortField)
+                    && Objects.equals(intField, testPojo.intField)
+                    && Objects.equals(longField, testPojo.longField)
+                    && Objects.equals(floatField, testPojo.floatField)
+                    && Objects.equals(doubleField, testPojo.doubleField)
                     && Objects.equals(stringField, testPojo.stringField)
                     && Arrays.equals(bytesField, testPojo.bytesField)
                     && Objects.equals(decimalField, testPojo.decimalField)
