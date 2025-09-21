@@ -48,34 +48,31 @@ import java.util.Map;
 import java.util.Set;
 
 /**
- * Helper class for converting Java objects to Fluss's {@link InternalRow} format and vice versa.
+ * Internal helper for converting Java POJOs to Fluss {@link InternalRow} and back.
  *
- * <p>This utility uses reflection to map fields from POJOs to InternalRow and back based on a given
- * schema. This implementation does not cache converters; getConverter creates a new instance each
- * time. types.
+ * <p>This utility uses reflection to map fields between a POJO and an InternalRow according to a
+ * provided {@link RowType} schema. It does not cache converters; each call to {@link
+ * #getConverter(Class, RowType)} creates a new instance.
  *
- * <p>Example usage:
+ * <p>Notes: - Nested POJOs are not supported. - If a row contains null for a field that maps to a
+ * primitive type in the POJO, that field will not be set (it keeps the Java default). Prefer boxed
+ * types if nulls are expected.
  *
- * <pre>{@code
- * // Create a converter using the static factory method
- * ConverterUtils<Order> converter = ConverterUtils.getConverter(Order.class, rowType);
- *
- * // Convert a POJO to GenericRow
- * Order order = new Order(1001L, 5001L, 10, "123 Athens");
- * GenericRow row = converter.toRow(order);
- *
- * // Convert a GenericRow back to POJO
- * Order convertedOrder = converter.fromRow(row);
- * }</pre>
- *
- * <p>Note: Nested POJO fields are not supported in the current implementation.
+ * <p>This class is intended for internal use only.
  *
  * @param <T> The POJO type to convert
  */
-public class PojoConverterUtils<T> {
+public final class PojoConverterUtils<T> {
 
     /** Map of supported Java types for each DataTypeRoot. */
     private static final Map<DataTypeRoot, Set<Class<?>>> SUPPORTED_TYPES = new HashMap<>();
+
+    private final Class<T> pojoClass;
+    private final RowType rowType;
+    private final FieldToRowConverter[] fieldToRowConverters;
+    private final RowToFieldConverter[] rowToFieldConverters;
+    private final Field[] pojoFields;
+    private final Constructor<T> defaultConstructor;
 
     static {
         SUPPORTED_TYPES.put(DataTypeRoot.BOOLEAN, setOf(Boolean.class, boolean.class));
@@ -101,21 +98,53 @@ public class PojoConverterUtils<T> {
     }
 
     /** Interface for field conversion from POJO field to Fluss InternalRow field. */
+    @FunctionalInterface
     private interface FieldToRowConverter {
         Object convert(Object obj) throws Exception;
     }
 
     /** Interface for field conversion from Fluss InternalRow field to POJO field. */
+    @FunctionalInterface
     private interface RowToFieldConverter {
         Object convert(InternalRow row, int pos) throws Exception;
     }
 
-    private final Class<T> pojoClass;
-    private final RowType rowType;
-    private final FieldToRowConverter[] fieldToRowConverters;
-    private final RowToFieldConverter[] rowToFieldConverters;
-    private final Field[] pojoFields;
-    private final Constructor<T> defaultConstructor;
+    /**
+     * A converter that assumes the source field value is non-null when converting from POJO field
+     * value to row field value.
+     */
+    @FunctionalInterface
+    private interface NotNullFieldToRowConverter {
+        Object convert(Object nonNullFieldValue) throws Exception;
+    }
+
+    /**
+     * A converter that assumes the row value at a given position is non-null when converting to a
+     * POJO field value.
+     */
+    @FunctionalInterface
+    private interface NotNullRowToFieldConverter {
+        Object convert(InternalRow row, int pos) throws Exception;
+    }
+
+    /** Wraps a non-null field-to-row converter with null handling and reflective field access. */
+    private static FieldToRowConverter nullableFieldConverter(
+            Field field, NotNullFieldToRowConverter nonNullConverter) {
+        field.setAccessible(true);
+        return obj -> {
+            Object value = field.get(obj);
+            if (value == null) {
+                return null;
+            }
+            return nonNullConverter.convert(value);
+        };
+    }
+
+    /** Wraps a non-null row-to-field converter with row null checks. */
+    private static RowToFieldConverter nullableRowConverter(
+            NotNullRowToFieldConverter nonNullConverter) {
+        return (row, pos) -> row.isNullAt(pos) ? null : nonNullConverter.convert(row, pos);
+    }
 
     /**
      * Creates a new converter for the specified POJO class and row type.
@@ -144,8 +173,7 @@ public class PojoConverterUtils<T> {
     }
 
     /**
-     * Gets a cached converter for the specified POJO class and row type, or creates a new one if
-     * not found in the cache.
+     * Creates a converter for the specified POJO class and row type.
      *
      * @param pojoClass The class of POJOs to convert
      * @param rowType The row schema to use for conversion
@@ -172,13 +200,26 @@ public class PojoConverterUtils<T> {
 
                 // Check if the field type is supported
                 if (!SUPPORTED_TYPES.containsKey(fieldType.getTypeRoot())) {
-                    throw new UnsupportedOperationException(
+                    throw new IllegalArgumentException(
                             "Unsupported field type "
                                     + fieldType.getTypeRoot()
                                     + " for field "
                                     + field.getName());
                 }
 
+                // Validate Java field type compatibility with Fluss type
+                Set<Class<?>> supported = SUPPORTED_TYPES.get(fieldType.getTypeRoot());
+                Class<?> actual = field.getType();
+                if (supported == null || !supported.contains(actual)) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "Field '%s' in POJO %s has Java type %s which is incompatible with Fluss type %s. Supported Java types: %s",
+                                    field.getName(),
+                                    pojoClass.getName(),
+                                    actual.getName(),
+                                    fieldType.getTypeRoot(),
+                                    supported));
+                }
                 // Create the appropriate converter for this field
                 converters[i] = createFieldToRowConverter(fieldType, field);
             } else {
@@ -201,6 +242,19 @@ public class PojoConverterUtils<T> {
             Field field = pojoFields[i];
 
             if (field != null) {
+                // Validate Java field type compatibility with Fluss type
+                Set<Class<?>> supported = SUPPORTED_TYPES.get(fieldType.getTypeRoot());
+                Class<?> actual = field.getType();
+                if (supported == null || !supported.contains(actual)) {
+                    throw new IllegalArgumentException(
+                            String.format(
+                                    "Field '%s' in POJO %s has Java type %s which is incompatible with Fluss type %s. Supported Java types: %s",
+                                    field.getName(),
+                                    pojoClass.getName(),
+                                    actual.getName(),
+                                    fieldType.getTypeRoot(),
+                                    supported));
+                }
                 // Create the appropriate converter for this field
                 converters[i] = createRowToFieldConverter(fieldType, field);
             } else {
@@ -259,96 +313,101 @@ public class PojoConverterUtils<T> {
             case DOUBLE:
             case BINARY:
             case BYTES:
-                return field::get;
+                return nullableFieldConverter(field, v -> v);
             case CHAR:
             case STRING:
-                return obj -> {
-                    Object value = field.get(obj);
-                    return value == null ? null : BinaryString.fromString(value.toString());
-                };
+                return nullableFieldConverter(
+                        field,
+                        v -> {
+                            String s;
+                            if (v instanceof Character) {
+                                s = String.valueOf((Character) v);
+                            } else if (v instanceof String) {
+                                s = (String) v;
+                            } else {
+                                s = v.toString();
+                            }
+                            if (fieldType.getTypeRoot() == DataTypeRoot.CHAR && s.length() != 1) {
+                                throw new IllegalArgumentException(
+                                        String.format(
+                                                "Field %s expects exactly one character for CHAR type, got length %d.",
+                                                field.getName(), s.length()));
+                            }
+                            return BinaryString.fromString(s);
+                        });
             case DECIMAL:
-                return obj -> {
-                    Object value = field.get(obj);
-                    if (value == null) {
-                        return null;
-                    }
-                    if (value instanceof BigDecimal) {
-                        DecimalType decimalType = (DecimalType) fieldType;
-                        return Decimal.fromBigDecimal(
-                                (BigDecimal) value,
-                                decimalType.getPrecision(),
-                                decimalType.getScale());
-                    } else {
-                        throw new IllegalArgumentException(
-                                String.format(
-                                        "Field %s is not a BigDecimal. Cannot convert to DecimalData.",
-                                        field.getName()));
-                    }
-                };
+                return nullableFieldConverter(
+                        field,
+                        v -> {
+                            if (v instanceof BigDecimal) {
+                                DecimalType decimalType = (DecimalType) fieldType;
+                                return Decimal.fromBigDecimal(
+                                        (BigDecimal) v,
+                                        decimalType.getPrecision(),
+                                        decimalType.getScale());
+                            } else {
+                                throw new IllegalArgumentException(
+                                        String.format(
+                                                "Field %s is not a BigDecimal. Cannot convert to DecimalData.",
+                                                field.getName()));
+                            }
+                        });
             case DATE:
-                return obj -> {
-                    Object value = field.get(obj);
-                    if (value == null) {
-                        return null;
-                    }
-                    if (value instanceof LocalDate) {
-                        return (int) ((LocalDate) value).toEpochDay();
-                    } else {
-                        throw new IllegalArgumentException(
-                                String.format(
-                                        "Field %s is not a LocalDate. Cannot convert to int days.",
-                                        field.getName()));
-                    }
-                };
+                return nullableFieldConverter(
+                        field,
+                        v -> {
+                            if (v instanceof LocalDate) {
+                                return (int) ((LocalDate) v).toEpochDay();
+                            } else {
+                                throw new IllegalArgumentException(
+                                        String.format(
+                                                "Field %s is not a LocalDate. Cannot convert to int days.",
+                                                field.getName()));
+                            }
+                        });
             case TIME_WITHOUT_TIME_ZONE:
-                return obj -> {
-                    Object value = field.get(obj);
-                    if (value == null) {
-                        return null;
-                    }
-                    if (value instanceof LocalTime) {
-                        LocalTime localTime = (LocalTime) value;
-                        return (int) (localTime.toNanoOfDay() / 1_000_000);
-                    } else {
-                        throw new IllegalArgumentException(
-                                String.format(
-                                        "Field %s is not a LocalTime. Cannot convert to int millis.",
-                                        field.getName()));
-                    }
-                };
+                return nullableFieldConverter(
+                        field,
+                        v -> {
+                            if (v instanceof LocalTime) {
+                                LocalTime localTime = (LocalTime) v;
+                                return (int) (localTime.toNanoOfDay() / 1_000_000);
+                            } else {
+                                throw new IllegalArgumentException(
+                                        String.format(
+                                                "Field %s is not a LocalTime. Cannot convert to int millis.",
+                                                field.getName()));
+                            }
+                        });
             case TIMESTAMP_WITHOUT_TIME_ZONE:
-                return obj -> {
-                    Object value = field.get(obj);
-                    if (value == null) {
-                        return null;
-                    }
-                    if (value instanceof LocalDateTime) {
-                        return TimestampNtz.fromLocalDateTime((LocalDateTime) value);
-                    } else {
-                        throw new IllegalArgumentException(
-                                String.format(
-                                        "Field %s is not a LocalDateTime. Cannot convert to TimestampData.",
-                                        field.getName()));
-                    }
-                };
+                return nullableFieldConverter(
+                        field,
+                        v -> {
+                            if (v instanceof LocalDateTime) {
+                                return TimestampNtz.fromLocalDateTime((LocalDateTime) v);
+                            } else {
+                                throw new IllegalArgumentException(
+                                        String.format(
+                                                "Field %s is not a LocalDateTime. Cannot convert to TimestampNtz.",
+                                                field.getName()));
+                            }
+                        });
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                return obj -> {
-                    Object value = field.get(obj);
-                    if (value == null) {
-                        return null;
-                    }
-                    if (value instanceof Instant) {
-                        return TimestampLtz.fromInstant((Instant) value);
-                    } else if (value instanceof OffsetDateTime) {
-                        OffsetDateTime offsetDateTime = (OffsetDateTime) value;
-                        return TimestampLtz.fromInstant(offsetDateTime.toInstant());
-                    } else {
-                        throw new IllegalArgumentException(
-                                String.format(
-                                        "Field %s is not an Instant or OffsetDateTime. Cannot convert to TimestampData.",
-                                        field.getName()));
-                    }
-                };
+                return nullableFieldConverter(
+                        field,
+                        v -> {
+                            if (v instanceof Instant) {
+                                return TimestampLtz.fromInstant((Instant) v);
+                            } else if (v instanceof OffsetDateTime) {
+                                OffsetDateTime offsetDateTime = (OffsetDateTime) v;
+                                return TimestampLtz.fromInstant(offsetDateTime.toInstant());
+                            } else {
+                                throw new IllegalArgumentException(
+                                        String.format(
+                                                "Field %s is not an Instant or OffsetDateTime. Cannot convert to TimestampLtz.",
+                                                field.getName()));
+                            }
+                        });
             default:
                 throw new IllegalArgumentException(
                         String.format(
@@ -371,110 +430,113 @@ public class PojoConverterUtils<T> {
 
         switch (fieldType.getTypeRoot()) {
             case BOOLEAN:
-                return (row, pos) -> row.isNullAt(pos) ? null : row.getBoolean(pos);
+                return nullableRowConverter((row, pos) -> row.getBoolean(pos));
             case TINYINT:
-                return (row, pos) -> row.isNullAt(pos) ? null : row.getByte(pos);
+                return nullableRowConverter((row, pos) -> row.getByte(pos));
             case SMALLINT:
-                return (row, pos) -> row.isNullAt(pos) ? null : row.getShort(pos);
+                return nullableRowConverter((row, pos) -> row.getShort(pos));
             case INTEGER:
-                return (row, pos) -> row.isNullAt(pos) ? null : row.getInt(pos);
+                return nullableRowConverter((row, pos) -> row.getInt(pos));
             case BIGINT:
-                return (row, pos) -> row.isNullAt(pos) ? null : row.getLong(pos);
+                return nullableRowConverter((row, pos) -> row.getLong(pos));
             case FLOAT:
-                return (row, pos) -> row.isNullAt(pos) ? null : row.getFloat(pos);
+                return nullableRowConverter((row, pos) -> row.getFloat(pos));
             case DOUBLE:
-                return (row, pos) -> row.isNullAt(pos) ? null : row.getDouble(pos);
+                return nullableRowConverter((row, pos) -> row.getDouble(pos));
             case CHAR:
             case STRING:
-                return (row, pos) -> {
-                    if (row.isNullAt(pos)) {
-                        return null;
-                    }
-                    BinaryString binaryString = row.getString(pos);
-                    String value = binaryString.toString();
-                    if (fieldClass == String.class) {
-                        return value;
-                    } else if (fieldClass == Character.class || fieldClass == char.class) {
-                        if (value.isEmpty()) {
-                            throw new IllegalArgumentException(
-                                    String.format(
-                                            "Field %s expects Character/char, but the string value is empty.",
-                                            field.getName()));
-                        }
-                        return value.charAt(0);
-                    } else {
-                        // This should normally be prevented by constructor-time validation of
-                        // supported types.
-                        // Keep a defensive check here for clarity.
-                        throw new IllegalArgumentException(
-                                String.format(
-                                        "Field %s is not a String or Character/char. Cannot convert from string.",
-                                        field.getName()));
-                    }
-                };
+                return nullableRowConverter(
+                        (row, pos) -> {
+                            BinaryString binaryString = row.getString(pos);
+                            String value = binaryString.toString();
+                            if (fieldClass == String.class) {
+                                if (fieldType.getTypeRoot() == DataTypeRoot.CHAR
+                                        && value.length() != 1) {
+                                    throw new IllegalArgumentException(
+                                            String.format(
+                                                    "Field %s expects exactly one character for CHAR type, got length %d.",
+                                                    field.getName(), value.length()));
+                                }
+                                return value;
+                            } else if (fieldClass == Character.class || fieldClass == char.class) {
+                                if (value.isEmpty()) {
+                                    throw new IllegalArgumentException(
+                                            String.format(
+                                                    "Field %s expects Character/char, but the string value is empty.",
+                                                    field.getName()));
+                                }
+                                if (fieldType.getTypeRoot() == DataTypeRoot.CHAR
+                                        && value.length() != 1) {
+                                    throw new IllegalArgumentException(
+                                            String.format(
+                                                    "Field %s expects exactly one character for CHAR type, got length %d.",
+                                                    field.getName(), value.length()));
+                                }
+                                return value.charAt(0);
+                            } else {
+                                // Defensive check: should be prevented by validation elsewhere.
+                                throw new IllegalArgumentException(
+                                        String.format(
+                                                "Field %s is not a String or Character/char. Cannot convert from string.",
+                                                field.getName()));
+                            }
+                        });
             case BINARY:
             case BYTES:
-                return (row, pos) -> row.isNullAt(pos) ? null : row.getBytes(pos);
+                return nullableRowConverter((row, pos) -> row.getBytes(pos));
             case DECIMAL:
-                return (row, pos) -> {
-                    if (row.isNullAt(pos)) {
-                        return null;
-                    }
-                    DecimalType decimalType = (DecimalType) fieldType;
-                    Decimal decimal =
-                            row.getDecimal(pos, decimalType.getPrecision(), decimalType.getScale());
-                    return decimal.toBigDecimal();
-                };
+                return nullableRowConverter(
+                        (row, pos) -> {
+                            DecimalType decimalType = (DecimalType) fieldType;
+                            Decimal decimal =
+                                    row.getDecimal(
+                                            pos,
+                                            decimalType.getPrecision(),
+                                            decimalType.getScale());
+                            return decimal.toBigDecimal();
+                        });
             case DATE:
-                return (row, pos) -> {
-                    if (row.isNullAt(pos)) {
-                        return null;
-                    }
-                    int days = row.getInt(pos);
-                    return LocalDate.ofEpochDay(days);
-                };
+                return nullableRowConverter(
+                        (row, pos) -> {
+                            int days = row.getInt(pos);
+                            return LocalDate.ofEpochDay(days);
+                        });
             case TIME_WITHOUT_TIME_ZONE:
-                return (row, pos) -> {
-                    if (row.isNullAt(pos)) {
-                        return null;
-                    }
-                    int millis = row.getInt(pos);
-                    return LocalTime.ofNanoOfDay(millis * 1_000_000L);
-                };
+                return nullableRowConverter(
+                        (row, pos) -> {
+                            int millis = row.getInt(pos);
+                            return LocalTime.ofNanoOfDay(millis * 1_000_000L);
+                        });
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 {
                     final int precision = DataTypeChecks.getPrecision(fieldType);
-                    return (row, pos) -> {
-                        if (row.isNullAt(pos)) {
-                            return null;
-                        }
-                        TimestampNtz timestampNtz = row.getTimestampNtz(pos, precision);
-                        return timestampNtz.toLocalDateTime();
-                    };
+                    return nullableRowConverter(
+                            (row, pos) -> {
+                                TimestampNtz timestampNtz = row.getTimestampNtz(pos, precision);
+                                return timestampNtz.toLocalDateTime();
+                            });
                 }
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 {
                     final int precision = DataTypeChecks.getPrecision(fieldType);
-                    return (row, pos) -> {
-                        if (row.isNullAt(pos)) {
-                            return null;
-                        }
-                        TimestampLtz timestampLtz = row.getTimestampLtz(pos, precision);
-                        if (fieldClass == Instant.class) {
-                            return timestampLtz.toInstant();
-                        } else if (fieldClass == OffsetDateTime.class) {
-                            return OffsetDateTime.ofInstant(
-                                    timestampLtz.toInstant(), ZoneOffset.UTC);
-                        } else {
-                            throw new IllegalArgumentException(
-                                    String.format(
-                                            "Field %s is not an Instant or OffsetDateTime. Cannot convert from TimestampData.",
-                                            field.getName()));
-                        }
-                    };
+                    return nullableRowConverter(
+                            (row, pos) -> {
+                                TimestampLtz timestampLtz = row.getTimestampLtz(pos, precision);
+                                if (fieldClass == Instant.class) {
+                                    return timestampLtz.toInstant();
+                                } else if (fieldClass == OffsetDateTime.class) {
+                                    return OffsetDateTime.ofInstant(
+                                            timestampLtz.toInstant(), ZoneOffset.UTC);
+                                } else {
+                                    throw new IllegalArgumentException(
+                                            String.format(
+                                                    "Field %s is not an Instant or OffsetDateTime. Cannot convert from TimestampLtz.",
+                                                    field.getName()));
+                                }
+                            });
                 }
             default:
-                throw new UnsupportedOperationException(
+                throw new IllegalArgumentException(
                         String.format(
                                 "Unsupported type %s for field %s.",
                                 fieldType.getTypeRoot(), field.getName()));
