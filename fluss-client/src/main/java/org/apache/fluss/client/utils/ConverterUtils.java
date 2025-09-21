@@ -15,21 +15,20 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.utils;
+package org.apache.fluss.client.utils;
 
-import com.alibaba.fluss.row.BinaryString;
-import com.alibaba.fluss.row.Decimal;
-import com.alibaba.fluss.row.GenericRow;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.row.TimestampLtz;
-import com.alibaba.fluss.row.TimestampNtz;
-import com.alibaba.fluss.types.DataType;
-import com.alibaba.fluss.types.DataTypeRoot;
-import com.alibaba.fluss.types.DecimalType;
-import com.alibaba.fluss.types.LocalZonedTimestampType;
-import com.alibaba.fluss.types.RowType;
-import com.alibaba.fluss.types.TimestampType;
-import com.alibaba.fluss.utils.MapUtils;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeRoot;
+import org.apache.fluss.types.DecimalType;
+import org.apache.fluss.types.LocalZonedTimestampType;
+import org.apache.fluss.types.RowType;
+import org.apache.fluss.types.TimestampType;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -51,13 +50,12 @@ import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Helper class for converting Java objects to Fluss's {@link InternalRow} format and vice versa.
  *
  * <p>This utility uses reflection to map fields from POJOs to InternalRow and back based on a given
- * schema. It includes caching mechanisms to avoid repeated reflection operations for the same POJO
+ * schema. This implementation does not cache converters; getConverter creates a new instance each time.
  * types.
  *
  * <p>Example usage:
@@ -81,9 +79,6 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ConverterUtils<T> {
     private static final Logger LOG = LoggerFactory.getLogger(ConverterUtils.class);
 
-    /** Cache for converters to avoid repeated reflection operations. */
-    private static final ConcurrentHashMap<CacheKey, ConverterUtils<?>> CONVERTER_CACHE =
-            MapUtils.newConcurrentHashMap();
 
     /** Map of supported Java types for each DataTypeRoot. */
     private static final Map<DataTypeRoot, Set<Class<?>>> SUPPORTED_TYPES = new HashMap<>();
@@ -168,9 +163,7 @@ public class ConverterUtils<T> {
      */
     @SuppressWarnings("unchecked")
     public static <T> ConverterUtils<T> getConverter(Class<T> pojoClass, RowType rowType) {
-        CacheKey key = new CacheKey(pojoClass, rowType);
-        return (ConverterUtils<T>)
-                CONVERTER_CACHE.computeIfAbsent(key, k -> new ConverterUtils<>(pojoClass, rowType));
+        return new ConverterUtils<>(pojoClass, rowType);
     }
 
     /** Creates field converters for converting from POJO to Row for each field in the schema. */
@@ -580,31 +573,4 @@ public class ConverterUtils<T> {
         return linkedHashSet;
     }
 
-    /** Key for caching converters. */
-    private static class CacheKey {
-        private final Class<?> pojoClass;
-        private final RowType rowType;
-
-        public CacheKey(Class<?> pojoClass, RowType rowType) {
-            this.pojoClass = pojoClass;
-            this.rowType = rowType;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) {
-                return true;
-            }
-            if (o == null || getClass() != o.getClass()) {
-                return false;
-            }
-            CacheKey cacheKey = (CacheKey) o;
-            return pojoClass.equals(cacheKey.pojoClass) && rowType.equals(cacheKey.rowType);
-        }
-
-        @Override
-        public int hashCode() {
-            return 31 * pojoClass.hashCode() + rowType.hashCode();
-        }
-    }
 }

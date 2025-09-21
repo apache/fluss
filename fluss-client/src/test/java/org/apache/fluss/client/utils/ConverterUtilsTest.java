@@ -15,22 +15,21 @@
  * limitations under the License.
  */
 
-package com.alibaba.fluss.client.utils;
+package org.apache.fluss.client.utils;
 
-import com.alibaba.fluss.client.admin.ClientToServerITCaseBase;
-import com.alibaba.fluss.client.table.Table;
-import com.alibaba.fluss.client.table.scanner.ScanRecord;
-import com.alibaba.fluss.client.table.scanner.log.LogScanner;
-import com.alibaba.fluss.client.table.scanner.log.ScanRecords;
-import com.alibaba.fluss.client.table.writer.AppendWriter;
-import com.alibaba.fluss.metadata.Schema;
-import com.alibaba.fluss.metadata.TableDescriptor;
-import com.alibaba.fluss.metadata.TablePath;
-import com.alibaba.fluss.row.GenericRow;
-import com.alibaba.fluss.row.InternalRow;
-import com.alibaba.fluss.types.DataTypes;
-import com.alibaba.fluss.types.RowType;
-
+import org.apache.fluss.client.admin.ClientToServerITCaseBase;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
@@ -177,7 +176,8 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
         ConverterUtils<TestPojo> converter2 =
                 ConverterUtils.getConverter(TestPojo.class, createTestPojoRowType());
 
-        assertThat(converter2).isSameAs(converter1);
+        // As caching is removed, subsequent calls should produce new instances
+        assertThat(converter2).isNotSameAs(converter1);
     }
 
     @Test
