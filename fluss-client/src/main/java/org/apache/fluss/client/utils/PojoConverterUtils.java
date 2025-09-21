@@ -103,12 +103,12 @@ public class PojoConverterUtils<T> {
 
     /** Interface for field conversion from POJO field to Fluss InternalRow field. */
     private interface FieldToRowConverter {
-        Object convert(Object obj) throws IllegalAccessException;
+        Object convert(Object obj) throws Exception;
     }
 
     /** Interface for field conversion from Fluss InternalRow field to POJO field. */
     private interface RowToFieldConverter {
-        Object convert(InternalRow row, int pos) throws IllegalAccessException;
+        Object convert(InternalRow row, int pos) throws Exception;
     }
 
     private final Class<T> pojoClass;
@@ -473,7 +473,10 @@ public class PojoConverterUtils<T> {
             Object value = null;
             try {
                 value = fieldToRowConverters[i].convert(pojo);
-            } catch (IllegalAccessException e) {
+            } catch (Exception e) {
+                if (e instanceof IllegalArgumentException) {
+                    throw (IllegalArgumentException) e;
+                }
                 throw new IllegalStateException(
                         String.format(
                                 "Failed to access field %s in POJO class %s.",
@@ -507,7 +510,10 @@ public class PojoConverterUtils<T> {
                         if (value != null) {
                             pojoFields[i].set(pojo, value);
                         }
-                    } catch (IllegalAccessException e) {
+                    } catch (Exception e) {
+                        if (e instanceof IllegalArgumentException) {
+                            throw (IllegalArgumentException) e;
+                        }
                         throw new IllegalStateException(
                                 String.format(
                                         "Failed to set field %s in POJO class %s.",
