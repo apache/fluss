@@ -30,9 +30,6 @@ import org.apache.fluss.types.LocalZonedTimestampType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.TimestampType;
 
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-
 import javax.annotation.Nullable;
 
 import java.lang.reflect.Constructor;
@@ -77,7 +74,6 @@ import java.util.Set;
  * @param <T> The POJO type to convert
  */
 public class PojoConverterUtils<T> {
-    private static final Logger LOG = LoggerFactory.getLogger(PojoConverterUtils.class);
 
     /** Map of supported Java types for each DataTypeRoot. */
     private static final Map<DataTypeRoot, Set<Class<?>>> SUPPORTED_TYPES = new HashMap<>();
@@ -523,14 +519,13 @@ public class PojoConverterUtils<T> {
 
             return pojo;
         } catch (InstantiationException | IllegalAccessException | InvocationTargetException e) {
-            LOG.error(
-                    "Failed to create instance of POJO class {} using the default constructor. "
-                            + "Ensure the class has a public default constructor and that it is accessible. "
-                            + "Error: {}",
-                    pojoClass.getName(),
-                    e.getMessage(),
-                    e);
-            return null;
+            String message =
+                    String.format(
+                            "Failed to instantiate POJO class %s using the default constructor. "
+                                    + "Ensure the class has an accessible no-arg constructor that does not throw. "
+                                    + "Cause: %s",
+                            pojoClass.getName(), e.getMessage());
+            throw new IllegalStateException(message, e);
         }
     }
 

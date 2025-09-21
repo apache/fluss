@@ -239,6 +239,19 @@ public class PojoConverterUtilsTest {
                 .hasMessageContaining("must have a default constructor");
     }
 
+    @Test
+    public void testFromRowThrowsWhenDefaultConstructorThrows() {
+        RowType rowType = RowType.builder().field("intField", DataTypes.INT()).build();
+        PojoConverterUtils<ThrowingCtorPojo> converter =
+                PojoConverterUtils.getConverter(ThrowingCtorPojo.class, rowType);
+        GenericRow row = new GenericRow(1);
+        row.setField(0, 1);
+        assertThatThrownBy(() -> converter.fromRow(row))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Failed to instantiate POJO class")
+                .hasMessageContaining(ThrowingCtorPojo.class.getName());
+    }
+
     // ----------------------- Exception tests for strict converter behavior -----------------------
 
     @Test
@@ -338,6 +351,7 @@ public class PojoConverterUtilsTest {
     }
 
     // Helper POJOs for negative tests
+    /** Helper POJO to trigger DECIMAL field type mismatch. */
     public static class DecimalWrongTypePojo {
         private String decimalField;
 
@@ -346,6 +360,7 @@ public class PojoConverterUtilsTest {
         }
     }
 
+    /** Helper POJO to trigger DATE field type mismatch. */
     public static class DateWrongTypePojo {
         private String dateField;
 
@@ -354,6 +369,7 @@ public class PojoConverterUtilsTest {
         }
     }
 
+    /** Helper POJO to trigger TIME field type mismatch. */
     public static class TimeWrongTypePojo {
         private String timeField;
 
@@ -362,6 +378,7 @@ public class PojoConverterUtilsTest {
         }
     }
 
+    /** Helper POJO to trigger TIMESTAMP (without time zone) field type mismatch. */
     public static class TimestampWrongTypePojo {
         private String timestampField;
 
@@ -370,6 +387,7 @@ public class PojoConverterUtilsTest {
         }
     }
 
+    /** Helper POJO to trigger TIMESTAMP_LTZ field type mismatch. */
     public static class TimestampLtzWrongTypePojo {
         private String timestampLtzField;
 
@@ -378,6 +396,7 @@ public class PojoConverterUtilsTest {
         }
     }
 
+    /** Valid helper POJO using Instant for TIMESTAMP_LTZ conversions. */
     public static class ValidTimestampLtzInstantPojo {
         private Instant timestampLtzField;
 
@@ -386,12 +405,14 @@ public class PojoConverterUtilsTest {
         }
     }
 
+    /** Helper POJO using unsupported LocalDateTime for TIMESTAMP_LTZ to trigger errors. */
     public static class TimestampLtzLocalDateTimePojo {
         private LocalDateTime timestampLtzField;
 
         public TimestampLtzLocalDateTimePojo() {}
     }
 
+    /** Helper POJO used with an unsupported MAP schema field to assert constructor failure. */
     public static class MapPojo {
         private Map<String, Integer> mapField;
 
@@ -570,6 +591,15 @@ public class PojoConverterUtilsTest {
 
         public NoDefaultConstructorPojo(int intField) {
             this.intField = intField;
+        }
+    }
+
+    /** POJO whose default constructor throws to test instantiation error propagation. */
+    public static class ThrowingCtorPojo {
+        private Integer intField;
+
+        public ThrowingCtorPojo() {
+            throw new RuntimeException("ctor failure");
         }
     }
 }
