@@ -299,10 +299,10 @@ public class PojoConverterUtils<T> {
                     if (value instanceof LocalDate) {
                         return (int) ((LocalDate) value).toEpochDay();
                     } else {
-                        LOG.warn(
-                                "Field {} is not a LocalDate. Cannot convert to int days.",
-                                field.getName());
-                        return null;
+                        throw new IllegalArgumentException(
+                                String.format(
+                                        "Field %s is not a LocalDate. Cannot convert to int days.",
+                                        field.getName()));
                     }
                 };
             case TIME_WITHOUT_TIME_ZONE:
@@ -315,10 +315,10 @@ public class PojoConverterUtils<T> {
                         LocalTime localTime = (LocalTime) value;
                         return (int) (localTime.toNanoOfDay() / 1_000_000);
                     } else {
-                        LOG.warn(
-                                "Field {} is not a LocalTime. Cannot convert to int millis.",
-                                field.getName());
-                        return null;
+                        throw new IllegalArgumentException(
+                                String.format(
+                                        "Field %s is not a LocalTime. Cannot convert to int millis.",
+                                        field.getName()));
                     }
                 };
             case TIMESTAMP_WITHOUT_TIME_ZONE:
@@ -330,10 +330,10 @@ public class PojoConverterUtils<T> {
                     if (value instanceof LocalDateTime) {
                         return TimestampNtz.fromLocalDateTime((LocalDateTime) value);
                     } else {
-                        LOG.warn(
-                                "Field {} is not a LocalDateTime. Cannot convert to TimestampData.",
-                                field.getName());
-                        return null;
+                        throw new IllegalArgumentException(
+                                String.format(
+                                        "Field %s is not a LocalDateTime. Cannot convert to TimestampData.",
+                                        field.getName()));
                     }
                 };
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
@@ -348,10 +348,10 @@ public class PojoConverterUtils<T> {
                         OffsetDateTime offsetDateTime = (OffsetDateTime) value;
                         return TimestampLtz.fromInstant(offsetDateTime.toInstant());
                     } else {
-                        LOG.warn(
-                                "Field {} is not an Instant or OffsetDateTime. Cannot convert to TimestampData.",
-                                field.getName());
-                        return null;
+                        throw new IllegalArgumentException(
+                                String.format(
+                                        "Field %s is not an Instant or OffsetDateTime. Cannot convert to TimestampData.",
+                                        field.getName()));
                     }
                 };
             default:
@@ -446,18 +446,17 @@ public class PojoConverterUtils<T> {
                     } else if (fieldClass == OffsetDateTime.class) {
                         return OffsetDateTime.ofInstant(timestampLtz.toInstant(), ZoneOffset.UTC);
                     } else {
-                        LOG.warn(
-                                "Field {} is not an Instant or OffsetDateTime. Cannot convert from TimestampData.",
-                                field.getName());
-                        return null;
+                        throw new IllegalArgumentException(
+                                String.format(
+                                        "Field %s is not an Instant or OffsetDateTime. Cannot convert from TimestampData.",
+                                        field.getName()));
                     }
                 };
             default:
-                LOG.warn(
-                        "Unsupported type {} for field {}. Will use null for it.",
-                        fieldType.getTypeRoot(),
-                        field.getName());
-                return (row, pos) -> null;
+                throw new UnsupportedOperationException(
+                        String.format(
+                                "Unsupported type %s for field %s.",
+                                fieldType.getTypeRoot(), field.getName()));
         }
     }
 

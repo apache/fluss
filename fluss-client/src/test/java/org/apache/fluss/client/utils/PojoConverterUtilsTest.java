@@ -31,6 +31,7 @@ import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
+import java.util.Map;
 import java.util.Objects;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -236,6 +237,165 @@ public class PojoConverterUtilsTest {
                                         NoDefaultConstructorPojo.class, rowType))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must have a default constructor");
+    }
+
+    // ----------------------- Exception tests for strict converter behavior -----------------------
+
+    @Test
+    public void testToRowThrowsForNonBigDecimal() {
+        RowType rowType = RowType.builder().field("decimalField", DataTypes.DECIMAL(10, 2)).build();
+        PojoConverterUtils<DecimalWrongTypePojo> converter =
+                PojoConverterUtils.getConverter(DecimalWrongTypePojo.class, rowType);
+        DecimalWrongTypePojo pojo = new DecimalWrongTypePojo("not-a-decimal");
+        assertThatThrownBy(() -> converter.toRow(pojo))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not a BigDecimal")
+                .hasMessageContaining("decimalField");
+    }
+
+    @Test
+    public void testToRowThrowsForNonLocalDate() {
+        RowType rowType = RowType.builder().field("dateField", DataTypes.DATE()).build();
+        PojoConverterUtils<DateWrongTypePojo> converter =
+                PojoConverterUtils.getConverter(DateWrongTypePojo.class, rowType);
+        DateWrongTypePojo pojo = new DateWrongTypePojo("2025-01-01");
+        assertThatThrownBy(() -> converter.toRow(pojo))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not a LocalDate")
+                .hasMessageContaining("dateField");
+    }
+
+    @Test
+    public void testToRowThrowsForNonLocalTime() {
+        RowType rowType = RowType.builder().field("timeField", DataTypes.TIME()).build();
+        PojoConverterUtils<TimeWrongTypePojo> converter =
+                PojoConverterUtils.getConverter(TimeWrongTypePojo.class, rowType);
+        TimeWrongTypePojo pojo = new TimeWrongTypePojo("15:00:00");
+        assertThatThrownBy(() -> converter.toRow(pojo))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not a LocalTime")
+                .hasMessageContaining("timeField");
+    }
+
+    @Test
+    public void testToRowThrowsForNonLocalDateTime() {
+        RowType rowType = RowType.builder().field("timestampField", DataTypes.TIMESTAMP()).build();
+        PojoConverterUtils<TimestampWrongTypePojo> converter =
+                PojoConverterUtils.getConverter(TimestampWrongTypePojo.class, rowType);
+        TimestampWrongTypePojo pojo = new TimestampWrongTypePojo("2025-01-01T12:00:00");
+        assertThatThrownBy(() -> converter.toRow(pojo))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not a LocalDateTime")
+                .hasMessageContaining("timestampField");
+    }
+
+    @Test
+    public void testToRowThrowsForNonInstantOrOffsetDateTime() {
+        RowType rowType =
+                RowType.builder().field("timestampLtzField", DataTypes.TIMESTAMP_LTZ()).build();
+        PojoConverterUtils<TimestampLtzWrongTypePojo> converter =
+                PojoConverterUtils.getConverter(TimestampLtzWrongTypePojo.class, rowType);
+        TimestampLtzWrongTypePojo pojo = new TimestampLtzWrongTypePojo("2025-01-01T12:00:00Z");
+        assertThatThrownBy(() -> converter.toRow(pojo))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("not an Instant or OffsetDateTime")
+                .hasMessageContaining("timestampLtzField");
+    }
+
+    @Test
+    public void testFromRowThrowsForTimestampLtzUnsupportedTargetType() {
+        RowType rowType =
+                RowType.builder().field("timestampLtzField", DataTypes.TIMESTAMP_LTZ()).build();
+
+        // Create a valid row using a POJO with Instant
+        ValidTimestampLtzInstantPojo valid =
+                new ValidTimestampLtzInstantPojo(Instant.parse("2025-07-23T15:01:30Z"));
+        PojoConverterUtils<ValidTimestampLtzInstantPojo> validConverter =
+                PojoConverterUtils.getConverter(ValidTimestampLtzInstantPojo.class, rowType);
+        GenericRow row = validConverter.toRow(valid);
+
+        // Try to read with a POJO that uses unsupported LocalDateTime for TIMESTAMP_LTZ
+        PojoConverterUtils<TimestampLtzLocalDateTimePojo> invalidConverter =
+                PojoConverterUtils.getConverter(TimestampLtzLocalDateTimePojo.class, rowType);
+
+        assertThatThrownBy(() -> invalidConverter.fromRow(row))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("Cannot convert from TimestampData")
+                .hasMessageContaining("timestampLtzField");
+    }
+
+    @Test
+    public void testUnsupportedSchemaFieldTypeThrows() {
+        RowType rowType =
+                RowType.builder()
+                        .field("mapField", DataTypes.MAP(DataTypes.STRING(), DataTypes.INT()))
+                        .build();
+        assertThatThrownBy(() -> PojoConverterUtils.getConverter(MapPojo.class, rowType))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessageContaining("Unsupported field type")
+                .hasMessageContaining("MAP")
+                .hasMessageContaining("mapField");
+    }
+
+    // Helper POJOs for negative tests
+    public static class DecimalWrongTypePojo {
+        private String decimalField;
+
+        public DecimalWrongTypePojo(String decimalField) {
+            this.decimalField = decimalField;
+        }
+    }
+
+    public static class DateWrongTypePojo {
+        private String dateField;
+
+        public DateWrongTypePojo(String dateField) {
+            this.dateField = dateField;
+        }
+    }
+
+    public static class TimeWrongTypePojo {
+        private String timeField;
+
+        public TimeWrongTypePojo(String timeField) {
+            this.timeField = timeField;
+        }
+    }
+
+    public static class TimestampWrongTypePojo {
+        private String timestampField;
+
+        public TimestampWrongTypePojo(String timestampField) {
+            this.timestampField = timestampField;
+        }
+    }
+
+    public static class TimestampLtzWrongTypePojo {
+        private String timestampLtzField;
+
+        public TimestampLtzWrongTypePojo(String timestampLtzField) {
+            this.timestampLtzField = timestampLtzField;
+        }
+    }
+
+    public static class ValidTimestampLtzInstantPojo {
+        private Instant timestampLtzField;
+
+        public ValidTimestampLtzInstantPojo(Instant timestampLtzField) {
+            this.timestampLtzField = timestampLtzField;
+        }
+    }
+
+    public static class TimestampLtzLocalDateTimePojo {
+        private LocalDateTime timestampLtzField;
+
+        public TimestampLtzLocalDateTimePojo() {}
+    }
+
+    public static class MapPojo {
+        private Map<String, Integer> mapField;
+
+        public MapPojo() {}
     }
 
     /** Test POJO class with various field types. */
