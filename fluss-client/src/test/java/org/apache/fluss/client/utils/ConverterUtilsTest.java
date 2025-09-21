@@ -225,6 +225,22 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
     }
 
     @Test
+    public void testFieldAccessFailureThrows() {
+        RowType rowType = RowType.builder().field("intField", DataTypes.INT()).build();
+
+        ConverterUtils<FinalFieldPojo> converter =
+                ConverterUtils.getConverter(FinalFieldPojo.class, rowType);
+
+        GenericRow row = new GenericRow(1);
+        row.setField(0, 42);
+
+        assertThatThrownBy(() -> converter.fromRow(row))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("Failed to set field")
+                .hasMessageContaining("intField");
+    }
+
+    @Test
     public void testWriteAndReadPojos() throws Exception {
         TablePath tablePath = new TablePath("test_db", "pojo_table");
 
@@ -465,5 +481,14 @@ public class ConverterUtilsTest extends ClientToServerITCaseBase {
                 .field("timestampLtzField", DataTypes.TIMESTAMP_LTZ())
                 .field("offsetDateTimeField", DataTypes.TIMESTAMP_LTZ())
                 .build();
+    }
+
+    /** POJO with a final field to trigger IllegalAccessException on setting. */
+    public static class FinalFieldPojo {
+        private final int intField;
+
+        public FinalFieldPojo() {
+            this.intField = 0;
+        }
     }
 }

@@ -483,10 +483,11 @@ public class ConverterUtils<T> {
             try {
                 value = fieldToRowConverters[i].convert(pojo);
             } catch (IllegalAccessException e) {
-                LOG.warn(
-                        "Failed to access field {} in POJO class {}.",
-                        rowType.getFieldNames().get(i),
-                        pojoClass.getName(),
+                throw new IllegalStateException(
+                        String.format(
+                                "Failed to access field %s in POJO class %s.",
+                                rowType.getFieldNames().get(i),
+                                pojoClass.getName()),
                         e);
             }
             row.setField(i, value);
@@ -517,10 +518,11 @@ public class ConverterUtils<T> {
                             pojoFields[i].set(pojo, value);
                         }
                     } catch (IllegalAccessException e) {
-                        LOG.warn(
-                                "Failed to set field {} in POJO class {}.",
-                                rowType.getFieldNames().get(i),
-                                pojoClass.getName(),
+                        throw new IllegalStateException(
+                                String.format(
+                                        "Failed to set field %s in POJO class %s.",
+                                        rowType.getFieldNames().get(i),
+                                        pojoClass.getName()),
                                 e);
                     }
                 }
