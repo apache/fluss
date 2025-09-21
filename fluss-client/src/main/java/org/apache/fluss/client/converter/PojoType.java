@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.fluss.client.converter;
 
 import javax.annotation.Nullable;
@@ -169,12 +170,16 @@ final class PojoType<T> {
     }
 
     private static String capitalize(String s) {
-        if (s == null || s.isEmpty()) return s;
+        if (s == null || s.isEmpty()) {
+            return s;
+        }
         return s.substring(0, 1).toUpperCase(Locale.ROOT) + s.substring(1);
     }
 
     private static String decapitalize(String s) {
-        if (s == null || s.isEmpty()) return s;
+        if (s == null || s.isEmpty()) {
+            return s;
+        }
         return s.substring(0, 1).toLowerCase(Locale.ROOT) + s.substring(1);
     }
 

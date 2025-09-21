@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.fluss.client.converter;
 
 import org.apache.fluss.row.Decimal;
@@ -123,14 +124,18 @@ public final class PojoToRowConverter<T> {
             case STRING:
                 return (obj) -> {
                     Object v = prop.read(obj);
-                    if (v == null) return null;
+                    if (v == null) {
+                        return null;
+                    }
                     return ConverterCommons.toBinaryStringForText(
                             v, prop.name, fieldType.getTypeRoot());
                 };
             case DECIMAL:
                 return (obj) -> {
                     Object v = prop.read(obj);
-                    if (v == null) return null;
+                    if (v == null) {
+                        return null;
+                    }
                     if (!(v instanceof BigDecimal)) {
                         throw new IllegalArgumentException(
                                 String.format(
@@ -144,7 +149,9 @@ public final class PojoToRowConverter<T> {
             case DATE:
                 return (obj) -> {
                     Object v = prop.read(obj);
-                    if (v == null) return null;
+                    if (v == null) {
+                        return null;
+                    }
                     if (!(v instanceof LocalDate)) {
                         throw new IllegalArgumentException(
                                 String.format(
@@ -156,7 +163,9 @@ public final class PojoToRowConverter<T> {
             case TIME_WITHOUT_TIME_ZONE:
                 return (obj) -> {
                     Object v = prop.read(obj);
-                    if (v == null) return null;
+                    if (v == null) {
+                        return null;
+                    }
                     if (!(v instanceof LocalTime)) {
                         throw new IllegalArgumentException(
                                 String.format(
@@ -169,7 +178,9 @@ public final class PojoToRowConverter<T> {
             case TIMESTAMP_WITHOUT_TIME_ZONE:
                 return (obj) -> {
                     Object v = prop.read(obj);
-                    if (v == null) return null;
+                    if (v == null) {
+                        return null;
+                    }
                     if (!(v instanceof LocalDateTime)) {
                         throw new IllegalArgumentException(
                                 String.format(
@@ -181,7 +192,9 @@ public final class PojoToRowConverter<T> {
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 return (obj) -> {
                     Object v = prop.read(obj);
-                    if (v == null) return null;
+                    if (v == null) {
+                        return null;
+                    }
                     if (v instanceof Instant) {
                         return TimestampLtz.fromInstant((Instant) v);
                     } else if (v instanceof OffsetDateTime) {

@@ -14,6 +14,7 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.fluss.client.converter;
 
 import org.apache.fluss.row.BinaryString;
@@ -62,7 +63,9 @@ public final class RowToPojoConverter<T> {
     }
 
     public T fromRow(@Nullable InternalRow row) {
-        if (row == null) return null;
+        if (row == null) {
+            return null;
+        }
         try {
             T pojo = pojoType.getDefaultConstructor().newInstance();
             for (int i = 0; i < rowReaders.length; i++) {
