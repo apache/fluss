@@ -47,7 +47,7 @@ import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.LinkedHashSet;
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 
@@ -83,27 +83,24 @@ public class PojoConverterUtils<T> {
     private static final Map<DataTypeRoot, Set<Class<?>>> SUPPORTED_TYPES = new HashMap<>();
 
     static {
-        SUPPORTED_TYPES.put(DataTypeRoot.BOOLEAN, orderedSet(Boolean.class, boolean.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.TINYINT, orderedSet(Byte.class, byte.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.SMALLINT, orderedSet(Short.class, short.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.INTEGER, orderedSet(Integer.class, int.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.BIGINT, orderedSet(Long.class, long.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.FLOAT, orderedSet(Float.class, float.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.DOUBLE, orderedSet(Double.class, double.class));
-        SUPPORTED_TYPES.put(
-                DataTypeRoot.CHAR, orderedSet(String.class, Character.class, char.class));
-        SUPPORTED_TYPES.put(
-                DataTypeRoot.STRING, orderedSet(String.class, Character.class, char.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.BINARY, orderedSet(byte[].class));
-        SUPPORTED_TYPES.put(DataTypeRoot.BYTES, orderedSet(byte[].class));
-        SUPPORTED_TYPES.put(DataTypeRoot.DECIMAL, orderedSet(BigDecimal.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.DATE, orderedSet(LocalDate.class));
-        SUPPORTED_TYPES.put(DataTypeRoot.TIME_WITHOUT_TIME_ZONE, orderedSet(LocalTime.class));
-        SUPPORTED_TYPES.put(
-                DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE, orderedSet(LocalDateTime.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.BOOLEAN, setOf(Boolean.class, boolean.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.TINYINT, setOf(Byte.class, byte.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.SMALLINT, setOf(Short.class, short.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.INTEGER, setOf(Integer.class, int.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.BIGINT, setOf(Long.class, long.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.FLOAT, setOf(Float.class, float.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.DOUBLE, setOf(Double.class, double.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.CHAR, setOf(String.class, Character.class, char.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.STRING, setOf(String.class, Character.class, char.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.BINARY, setOf(byte[].class));
+        SUPPORTED_TYPES.put(DataTypeRoot.BYTES, setOf(byte[].class));
+        SUPPORTED_TYPES.put(DataTypeRoot.DECIMAL, setOf(BigDecimal.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.DATE, setOf(LocalDate.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.TIME_WITHOUT_TIME_ZONE, setOf(LocalTime.class));
+        SUPPORTED_TYPES.put(DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE, setOf(LocalDateTime.class));
         SUPPORTED_TYPES.put(
                 DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE,
-                orderedSet(Instant.class, OffsetDateTime.class));
+                setOf(Instant.class, OffsetDateTime.class));
 
         // TODO: Add more types when https://github.com/apache/fluss/issues/816 is merged
     }
@@ -558,17 +555,12 @@ public class PojoConverterUtils<T> {
     }
 
     /**
-     * Utility method to create an ordered {@link LinkedHashSet} containing the specified Java type
-     * classes.
-     *
-     * <p>The returned set maintains the insertion order of the provided classes.
+     * Utility method to create a Set containing the specified Java type classes.
      *
      * @param javaTypes The Java type classes to include in the set. May be one or more classes.
-     * @return A new {@link LinkedHashSet} containing the given classes, preserving their order.
+     * @return A new Set containing the given classes.
      */
-    private static LinkedHashSet<Class<?>> orderedSet(Class<?>... javaTypes) {
-        LinkedHashSet<Class<?>> linkedHashSet = new LinkedHashSet<>();
-        linkedHashSet.addAll(Arrays.asList(javaTypes));
-        return linkedHashSet;
+    private static Set<Class<?>> setOf(Class<?>... javaTypes) {
+        return new HashSet<>(Arrays.asList(javaTypes));
     }
 }

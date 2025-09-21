@@ -177,7 +177,8 @@ public class PojoConverterUtilsTest {
                         .field("stringField", DataTypes.STRING())
                         .build();
 
-        PojoConverterUtils<TestPojo> converter = PojoConverterUtils.getConverter(TestPojo.class, rowType);
+        PojoConverterUtils<TestPojo> converter =
+                PojoConverterUtils.getConverter(TestPojo.class, rowType);
 
         TestPojo pojo = createTestPojo();
 
@@ -230,7 +231,9 @@ public class PojoConverterUtilsTest {
     public void testNoDefaultConstructorPojoThrows() {
         RowType rowType = RowType.builder().field("intField", DataTypes.INT()).build();
         assertThatThrownBy(
-                () -> PojoConverterUtils.getConverter(NoDefaultConstructorPojo.class, rowType))
+                        () ->
+                                PojoConverterUtils.getConverter(
+                                        NoDefaultConstructorPojo.class, rowType))
                 .isInstanceOf(IllegalArgumentException.class)
                 .hasMessageContaining("must have a default constructor");
     }
@@ -409,5 +412,4 @@ public class PojoConverterUtilsTest {
             this.intField = intField;
         }
     }
-
 }
