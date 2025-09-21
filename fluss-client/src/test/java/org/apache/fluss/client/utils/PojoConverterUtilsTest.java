@@ -360,6 +360,52 @@ public class PojoConverterUtilsTest {
         }
     }
 
+    @Test
+    public void testCharacterAndCharFieldConversionRoundTrip() {
+        // Use STRING schema to test both Character and primitive char fields
+        RowType rowType = RowType.builder().field("charField", DataTypes.STRING()).build();
+
+        // Character wrapper field
+        PojoConverterUtils<CharacterFieldPojo> characterConverter =
+                PojoConverterUtils.getConverter(CharacterFieldPojo.class, rowType);
+        CharacterFieldPojo characterPojo = new CharacterFieldPojo('A');
+        GenericRow row1 = characterConverter.toRow(characterPojo);
+        assertThat(row1.getString(0).toString()).isEqualTo("A");
+        CharacterFieldPojo characterPojo2 = characterConverter.fromRow(row1);
+        assertThat(characterPojo2.charField).isEqualTo('A');
+
+        // primitive char field
+        PojoConverterUtils<PrimitiveCharFieldPojo> primitiveConverter =
+                PojoConverterUtils.getConverter(PrimitiveCharFieldPojo.class, rowType);
+        PrimitiveCharFieldPojo primitivePojo = new PrimitiveCharFieldPojo('Z');
+        GenericRow row2 = primitiveConverter.toRow(primitivePojo);
+        assertThat(row2.getString(0).toString()).isEqualTo("Z");
+        PrimitiveCharFieldPojo primitivePojo2 = primitiveConverter.fromRow(row2);
+        assertThat(primitivePojo2.charField).isEqualTo('Z');
+    }
+
+    /** POJO with a Character field for testing CHAR/STRING conversions to Character. */
+    public static class CharacterFieldPojo {
+        private Character charField;
+
+        public CharacterFieldPojo() {}
+
+        public CharacterFieldPojo(Character charField) {
+            this.charField = charField;
+        }
+    }
+
+    /** POJO with a primitive char field for testing CHAR/STRING conversions to char. */
+    public static class PrimitiveCharFieldPojo {
+        private char charField;
+
+        public PrimitiveCharFieldPojo() {}
+
+        public PrimitiveCharFieldPojo(char charField) {
+            this.charField = charField;
+        }
+    }
+
     /** Helper POJO to trigger DATE field type mismatch. */
     public static class DateWrongTypePojo {
         private String dateField;

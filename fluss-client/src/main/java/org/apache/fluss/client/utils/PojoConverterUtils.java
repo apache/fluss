@@ -24,8 +24,8 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.DataTypeChecks;
+import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.RowType;
 
@@ -391,7 +391,26 @@ public class PojoConverterUtils<T> {
                         return null;
                     }
                     BinaryString binaryString = row.getString(pos);
-                    return binaryString.toString();
+                    String value = binaryString.toString();
+                    if (fieldClass == String.class) {
+                        return value;
+                    } else if (fieldClass == Character.class || fieldClass == char.class) {
+                        if (value.isEmpty()) {
+                            throw new IllegalArgumentException(
+                                    String.format(
+                                            "Field %s expects Character/char, but the string value is empty.",
+                                            field.getName()));
+                        }
+                        return value.charAt(0);
+                    } else {
+                        // This should normally be prevented by constructor-time validation of
+                        // supported types.
+                        // Keep a defensive check here for clarity.
+                        throw new IllegalArgumentException(
+                                String.format(
+                                        "Field %s is not a String or Character/char. Cannot convert from string.",
+                                        field.getName()));
+                    }
                 };
             case BINARY:
             case BYTES:
@@ -422,35 +441,38 @@ public class PojoConverterUtils<T> {
                     int millis = row.getInt(pos);
                     return LocalTime.ofNanoOfDay(millis * 1_000_000L);
                 };
-            case TIMESTAMP_WITHOUT_TIME_ZONE: {
-                final int precision = DataTypeChecks.getPrecision(fieldType);
-                return (row, pos) -> {
-                    if (row.isNullAt(pos)) {
-                        return null;
-                    }
-                    TimestampNtz timestampNtz = row.getTimestampNtz(pos, precision);
-                    return timestampNtz.toLocalDateTime();
-                };
-            }
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE: {
-                final int precision = DataTypeChecks.getPrecision(fieldType);
-                return (row, pos) -> {
-                    if (row.isNullAt(pos)) {
-                        return null;
-                    }
-                    TimestampLtz timestampLtz = row.getTimestampLtz(pos, precision);
-                    if (fieldClass == Instant.class) {
-                        return timestampLtz.toInstant();
-                    } else if (fieldClass == OffsetDateTime.class) {
-                        return OffsetDateTime.ofInstant(timestampLtz.toInstant(), ZoneOffset.UTC);
-                    } else {
-                        throw new IllegalArgumentException(
-                                String.format(
-                                        "Field %s is not an Instant or OffsetDateTime. Cannot convert from TimestampData.",
-                                        field.getName()));
-                    }
-                };
-            }
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                {
+                    final int precision = DataTypeChecks.getPrecision(fieldType);
+                    return (row, pos) -> {
+                        if (row.isNullAt(pos)) {
+                            return null;
+                        }
+                        TimestampNtz timestampNtz = row.getTimestampNtz(pos, precision);
+                        return timestampNtz.toLocalDateTime();
+                    };
+                }
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                {
+                    final int precision = DataTypeChecks.getPrecision(fieldType);
+                    return (row, pos) -> {
+                        if (row.isNullAt(pos)) {
+                            return null;
+                        }
+                        TimestampLtz timestampLtz = row.getTimestampLtz(pos, precision);
+                        if (fieldClass == Instant.class) {
+                            return timestampLtz.toInstant();
+                        } else if (fieldClass == OffsetDateTime.class) {
+                            return OffsetDateTime.ofInstant(
+                                    timestampLtz.toInstant(), ZoneOffset.UTC);
+                        } else {
+                            throw new IllegalArgumentException(
+                                    String.format(
+                                            "Field %s is not an Instant or OffsetDateTime. Cannot convert from TimestampData.",
+                                            field.getName()));
+                        }
+                    };
+                }
             default:
                 throw new UnsupportedOperationException(
                         String.format(
@@ -537,7 +559,6 @@ public class PojoConverterUtils<T> {
             throw new IllegalStateException(message, e);
         }
     }
-
 
     /**
      * Utility method to create a Set containing the specified Java type classes.
