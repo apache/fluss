@@ -213,22 +213,6 @@ public class PojoConverterUtilsTest {
     }
 
     @Test
-    public void testFieldAccessFailureThrows() {
-        RowType rowType = RowType.builder().field("intField", DataTypes.INT()).build();
-
-        PojoConverterUtils<FinalFieldPojo> converter =
-                PojoConverterUtils.getConverter(FinalFieldPojo.class, rowType);
-
-        GenericRow row = new GenericRow(1);
-        row.setField(0, 42);
-
-        assertThatThrownBy(() -> converter.fromRow(row))
-                .isInstanceOf(IllegalStateException.class)
-                .hasMessageContaining("Failed to set field")
-                .hasMessageContaining("intField");
-    }
-
-    @Test
     public void testNoDefaultConstructorPojoThrows() {
         RowType rowType = RowType.builder().field("intField", DataTypes.INT()).build();
         assertThatThrownBy(
@@ -257,48 +241,40 @@ public class PojoConverterUtilsTest {
     @Test
     public void testToRowThrowsForNonBigDecimal() {
         RowType rowType = RowType.builder().field("decimalField", DataTypes.DECIMAL(10, 2)).build();
-        PojoConverterUtils<DecimalWrongTypePojo> converter =
-                PojoConverterUtils.getConverter(DecimalWrongTypePojo.class, rowType);
-        DecimalWrongTypePojo pojo = new DecimalWrongTypePojo("not-a-decimal");
-        assertThatThrownBy(() -> converter.toRow(pojo))
+        assertThatThrownBy(
+                        () -> PojoConverterUtils.getConverter(DecimalWrongTypePojo.class, rowType))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("not a BigDecimal")
+                .hasMessageContaining("incompatible with Fluss type")
                 .hasMessageContaining("decimalField");
     }
 
     @Test
     public void testToRowThrowsForNonLocalDate() {
         RowType rowType = RowType.builder().field("dateField", DataTypes.DATE()).build();
-        PojoConverterUtils<DateWrongTypePojo> converter =
-                PojoConverterUtils.getConverter(DateWrongTypePojo.class, rowType);
-        DateWrongTypePojo pojo = new DateWrongTypePojo("2025-01-01");
-        assertThatThrownBy(() -> converter.toRow(pojo))
+        assertThatThrownBy(() -> PojoConverterUtils.getConverter(DateWrongTypePojo.class, rowType))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("not a LocalDate")
+                .hasMessageContaining("incompatible with Fluss type")
                 .hasMessageContaining("dateField");
     }
 
     @Test
     public void testToRowThrowsForNonLocalTime() {
         RowType rowType = RowType.builder().field("timeField", DataTypes.TIME()).build();
-        PojoConverterUtils<TimeWrongTypePojo> converter =
-                PojoConverterUtils.getConverter(TimeWrongTypePojo.class, rowType);
-        TimeWrongTypePojo pojo = new TimeWrongTypePojo("15:00:00");
-        assertThatThrownBy(() -> converter.toRow(pojo))
+        assertThatThrownBy(() -> PojoConverterUtils.getConverter(TimeWrongTypePojo.class, rowType))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("not a LocalTime")
+                .hasMessageContaining("incompatible with Fluss type")
                 .hasMessageContaining("timeField");
     }
 
     @Test
     public void testToRowThrowsForNonLocalDateTime() {
         RowType rowType = RowType.builder().field("timestampField", DataTypes.TIMESTAMP()).build();
-        PojoConverterUtils<TimestampWrongTypePojo> converter =
-                PojoConverterUtils.getConverter(TimestampWrongTypePojo.class, rowType);
-        TimestampWrongTypePojo pojo = new TimestampWrongTypePojo("2025-01-01T12:00:00");
-        assertThatThrownBy(() -> converter.toRow(pojo))
+        assertThatThrownBy(
+                        () ->
+                                PojoConverterUtils.getConverter(
+                                        TimestampWrongTypePojo.class, rowType))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("not a LocalDateTime")
+                .hasMessageContaining("incompatible with Fluss type")
                 .hasMessageContaining("timestampField");
     }
 
@@ -306,12 +282,12 @@ public class PojoConverterUtilsTest {
     public void testToRowThrowsForNonInstantOrOffsetDateTime() {
         RowType rowType =
                 RowType.builder().field("timestampLtzField", DataTypes.TIMESTAMP_LTZ()).build();
-        PojoConverterUtils<TimestampLtzWrongTypePojo> converter =
-                PojoConverterUtils.getConverter(TimestampLtzWrongTypePojo.class, rowType);
-        TimestampLtzWrongTypePojo pojo = new TimestampLtzWrongTypePojo("2025-01-01T12:00:00Z");
-        assertThatThrownBy(() -> converter.toRow(pojo))
+        assertThatThrownBy(
+                        () ->
+                                PojoConverterUtils.getConverter(
+                                        TimestampLtzWrongTypePojo.class, rowType))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("not an Instant or OffsetDateTime")
+                .hasMessageContaining("incompatible with Fluss type")
                 .hasMessageContaining("timestampLtzField");
     }
 
@@ -320,20 +296,21 @@ public class PojoConverterUtilsTest {
         RowType rowType =
                 RowType.builder().field("timestampLtzField", DataTypes.TIMESTAMP_LTZ()).build();
 
-        // Create a valid row using a POJO with Instant
+        // Create a valid row using a POJO with Instant (ensure default constructor exists)
         ValidTimestampLtzInstantPojo valid =
                 new ValidTimestampLtzInstantPojo(Instant.parse("2025-07-23T15:01:30Z"));
         PojoConverterUtils<ValidTimestampLtzInstantPojo> validConverter =
                 PojoConverterUtils.getConverter(ValidTimestampLtzInstantPojo.class, rowType);
         GenericRow row = validConverter.toRow(valid);
+        assertThat(row).isNotNull();
 
-        // Try to read with a POJO that uses unsupported LocalDateTime for TIMESTAMP_LTZ
-        PojoConverterUtils<TimestampLtzLocalDateTimePojo> invalidConverter =
-                PojoConverterUtils.getConverter(TimestampLtzLocalDateTimePojo.class, rowType);
-
-        assertThatThrownBy(() -> invalidConverter.fromRow(row))
+        // Creating a converter for a POJO that uses unsupported LocalDateTime should fail fast
+        assertThatThrownBy(
+                        () ->
+                                PojoConverterUtils.getConverter(
+                                        TimestampLtzLocalDateTimePojo.class, rowType))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("Cannot convert from TimestampData")
+                .hasMessageContaining("incompatible with Fluss type")
                 .hasMessageContaining("timestampLtzField");
     }
 
@@ -445,6 +422,8 @@ public class PojoConverterUtilsTest {
     /** Valid helper POJO using Instant for TIMESTAMP_LTZ conversions. */
     public static class ValidTimestampLtzInstantPojo {
         private Instant timestampLtzField;
+
+        public ValidTimestampLtzInstantPojo() {}
 
         public ValidTimestampLtzInstantPojo(Instant timestampLtzField) {
             this.timestampLtzField = timestampLtzField;

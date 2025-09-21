@@ -197,7 +197,7 @@ public final class PojoConverterUtils<T> {
 
                 // Check if the field type is supported
                 if (!SUPPORTED_TYPES.containsKey(fieldType.getTypeRoot())) {
-                    throw new IllegalArgumentException(
+                    throw new UnsupportedOperationException(
                             "Unsupported field type "
                                     + fieldType.getTypeRoot()
                                     + " for field "
@@ -400,7 +400,7 @@ public final class PojoConverterUtils<T> {
                             }
                         });
             default:
-                throw new IllegalArgumentException(
+                throw new UnsupportedOperationException(
                         String.format(
                                 "Unsupported type %s for field %s.",
                                 fieldType.getTypeRoot(), field.getName()));
@@ -521,13 +521,13 @@ public final class PojoConverterUtils<T> {
                                 } else {
                                     throw new IllegalArgumentException(
                                             String.format(
-                                                    "Field %s is not an Instant or OffsetDateTime. Cannot convert from TimestampLtz.",
+                                                    "Field %s is not an Instant or OffsetDateTime. Cannot convert from TimestampData.",
                                                     field.getName()));
                                 }
                             });
                 }
             default:
-                throw new IllegalArgumentException(
+                throw new UnsupportedOperationException(
                         String.format(
                                 "Unsupported type %s for field %s.",
                                 fieldType.getTypeRoot(), field.getName()));
