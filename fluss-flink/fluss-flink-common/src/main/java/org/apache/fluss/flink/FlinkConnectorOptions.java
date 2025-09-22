@@ -95,11 +95,15 @@ public class FlinkConnectorOptions {
     public static final ConfigOption<Duration> SCAN_PARTITION_DISCOVERY_INTERVAL =
             ConfigOptions.key("scan.partition.discovery.interval")
                     .durationType()
-                    .defaultValue(Duration.ofSeconds(10))
+                    .defaultValue(Duration.ofMinutes(1))
                     .withDescription(
                             "The time interval for the Fluss source to discover "
                                     + "the new partitions for partitioned table while scanning."
-                                    + " A non-positive value disables the partition discovery.");
+                                    + " A non-positive value disables the partition discovery. The default value is 1 "
+                                    + "minute. Currently, since Fluss Admin#listPartitions(TablePath tablePath) requires a large "
+                                    + "number of requests to ZooKeeper in server, this option cannot be set too small, "
+                                    + "as a small value would cause frequent requests and increase server load. In the future, "
+                                    + "once list partitions is optimized, the default value of this parameter can be reduced.");
 
     public static final ConfigOption<Boolean> SINK_IGNORE_DELETE =
             ConfigOptions.key("sink.ignore-delete")
