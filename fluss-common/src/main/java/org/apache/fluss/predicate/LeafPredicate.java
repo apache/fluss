@@ -19,7 +19,6 @@ package org.apache.fluss.predicate;
 
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.LocalZonedTimestampType;
 import org.apache.fluss.types.TimestampType;
@@ -79,14 +78,6 @@ public class LeafPredicate implements Predicate {
 
     public List<Object> literals() {
         return literals;
-    }
-
-    public LeafPredicate copyWithNewIndex(int fieldIndex) {
-        return new LeafPredicate(function, type, fieldIndex, fieldName, literals);
-    }
-
-    public LeafPredicate copyWithNewLiterals(List<Object> literals) {
-        return new LeafPredicate(function, DataTypes.STRING(), fieldIndex, fieldName, literals);
     }
 
     @Override

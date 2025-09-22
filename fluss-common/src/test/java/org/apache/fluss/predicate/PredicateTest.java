@@ -325,7 +325,7 @@ public class PredicateTest {
     @Test
     public void testEndsWith() {
         PredicateBuilder builder = new PredicateBuilder(RowType.of(new StringType()));
-        Predicate predicate = builder.endsWith(0, ("bcc"));
+        Predicate predicate = builder.endsWith(0, fromString("bcc"));
         GenericRow row = GenericRow.of(fromString("aabbcc"));
         assertThat(predicate.test(row)).isEqualTo(true);
 
@@ -339,7 +339,7 @@ public class PredicateTest {
     @Test
     public void testStartWith() {
         PredicateBuilder builder = new PredicateBuilder(RowType.of(new StringType()));
-        Predicate predicate = builder.startsWith(0, ("aab"));
+        Predicate predicate = builder.startsWith(0, fromString("aab"));
         GenericRow row = GenericRow.of(fromString("aabbcc"));
         assertThat(predicate.test(row)).isEqualTo(true);
 
@@ -357,7 +357,7 @@ public class PredicateTest {
     @Test
     public void testContainsWith() {
         PredicateBuilder builder = new PredicateBuilder(RowType.of(new StringType()));
-        Predicate predicate = builder.contains(0, ("def"));
+        Predicate predicate = builder.contains(0, fromString("def"));
         GenericRow row1 = GenericRow.of(fromString("aabbdefcc"));
         GenericRow row2 = GenericRow.of(fromString("aabbdcefcc"));
         assertThat(predicate.test(row1)).isEqualTo(true);

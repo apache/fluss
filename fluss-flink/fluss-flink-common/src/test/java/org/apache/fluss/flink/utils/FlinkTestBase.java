@@ -257,7 +257,7 @@ public class FlinkTestBase extends AbstractTestBase {
     }
 
     public static List<String> writeRowsToPartition(
-            Connection connection, TablePath tablePath, Collection<Object> partitions)
+            Connection connection, TablePath tablePath, Collection<String> partitions)
             throws Exception {
         List<InternalRow> rows = new ArrayList<>();
         List<String> expectedRowValues = new ArrayList<>();

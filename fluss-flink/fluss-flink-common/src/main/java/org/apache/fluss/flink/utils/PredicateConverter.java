@@ -17,12 +17,16 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.flink.row.FlinkAsFlussRow;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.predicate.UnsupportedExpression;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.utils.TypeUtils;
 
+import org.apache.flink.table.data.GenericRowData;
 import org.apache.flink.table.data.conversion.DataStructureConverters;
 import org.apache.flink.table.expressions.CallExpression;
 import org.apache.flink.table.expressions.Expression;
@@ -34,7 +38,6 @@ import org.apache.flink.table.expressions.ValueLiteralExpression;
 import org.apache.flink.table.functions.BuiltInFunctionDefinitions;
 import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.types.DataType;
-import org.apache.flink.table.types.logical.BooleanType;
 import org.apache.flink.table.types.logical.LogicalType;
 import org.apache.flink.table.types.logical.LogicalTypeFamily;
 import org.apache.flink.table.types.logical.RowType;
@@ -62,12 +65,13 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
 
     private final PredicateBuilder builder;
 
-    public PredicateConverter(RowType type) {
-        this(new PredicateBuilder(FlinkConversions.toFlussRowType(type)));
-    }
-
     public PredicateConverter(PredicateBuilder builder) {
         this.builder = builder;
+    }
+
+    @VisibleForTesting
+    PredicateConverter(RowType type) {
+        this(new PredicateBuilder(FlinkConversions.toFlussRowType(type)));
     }
 
     /** Accepts simple LIKE patterns like "abc%". */
@@ -85,8 +89,6 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
             return PredicateBuilder.and(children.get(0).accept(this), children.get(1).accept(this));
         } else if (func == BuiltInFunctionDefinitions.OR) {
             return PredicateBuilder.or(children.get(0).accept(this), children.get(1).accept(this));
-        } else if (func == BuiltInFunctionDefinitions.NOT) {
-            return visitNotFunction(children, builder::equal, builder::equal);
         } else if (func == BuiltInFunctionDefinitions.EQUALS) {
             return visitBiFunction(children, builder::equal, builder::equal);
         } else if (func == BuiltInFunctionDefinitions.NOT_EQUALS) {
@@ -118,6 +120,12 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
                     .map(FieldReferenceExpression::getName)
                     .map(builder::indexOf)
                     .map(builder::isNotNull)
+                    .orElseThrow(UnsupportedExpression::new);
+        } else if (func == BuiltInFunctionDefinitions.NOT) {
+            return extractFieldReference(children.get(0))
+                    .map(FieldReferenceExpression::getName)
+                    .map(builder::indexOf)
+                    .map(idx -> builder.equal(idx, Boolean.FALSE))
                     .orElseThrow(UnsupportedExpression::new);
         } else if (func == BuiltInFunctionDefinitions.BETWEEN) {
             FieldReferenceExpression fieldRefExpr =
@@ -151,22 +159,28 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
                 if (escape == null) {
                     if (BEGIN_PATTERN.matcher(sqlPattern).matches()) {
                         String prefix = sqlPattern.substring(0, sqlPattern.length() - 1);
-                        return builder.startsWith(builder.indexOf(fieldRefExpr.getName()), prefix);
+                        return builder.startsWith(
+                                builder.indexOf(fieldRefExpr.getName()),
+                                BinaryString.fromString(prefix));
                     }
                     if (END_PATTERN.matcher(sqlPattern).matches()) {
                         String suffix = sqlPattern.substring(1);
-                        return builder.endsWith(builder.indexOf(fieldRefExpr.getName()), suffix);
+                        return builder.endsWith(
+                                builder.indexOf(fieldRefExpr.getName()),
+                                BinaryString.fromString(suffix));
                     }
                     if (CONTAINS_PATTERN.matcher(sqlPattern).matches()
                             && sqlPattern.indexOf('%', 1) == sqlPattern.length() - 1) {
                         String mid = sqlPattern.substring(1, sqlPattern.length() - 1);
-                        return builder.contains(builder.indexOf(fieldRefExpr.getName()), mid);
+                        return builder.contains(
+                                builder.indexOf(fieldRefExpr.getName()),
+                                BinaryString.fromString(mid));
                     }
                 }
             }
         }
 
-        // TODO is_xxx, between_xxx, similar, in, not_in, not?
+        // TODO is_true, is_false, between_xxx, similar, not_in?
 
         throw new UnsupportedExpression();
     }
@@ -186,24 +200,6 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
                 Object literal =
                         extractLiteral(fieldRefExpr.get().getOutputDataType(), children.get(0));
                 return visit2.apply(builder.indexOf(fieldRefExpr.get().getName()), literal);
-            }
-        }
-
-        throw new UnsupportedExpression();
-    }
-
-    private Predicate visitNotFunction(
-            List<Expression> children,
-            BiFunction<Integer, Object, Predicate> visit1,
-            BiFunction<Integer, Object, Predicate> visit2) {
-        Optional<FieldReferenceExpression> fieldRefExpr = extractFieldReference(children.get(0));
-        if (fieldRefExpr.isPresent() && builder.indexOf(fieldRefExpr.get().getName()) != -1) {
-
-            return visit1.apply(builder.indexOf(fieldRefExpr.get().getName()), false);
-        } else {
-            fieldRefExpr = extractFieldReference(children.get(1));
-            if (fieldRefExpr.isPresent()) {
-                return visit2.apply(builder.indexOf(fieldRefExpr.get().getName()), false);
             }
         }
 
@@ -235,7 +231,7 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
             if (valueOpt.isPresent()) {
                 Object value = valueOpt.get();
                 if (actualLogicalType.getTypeRoot().equals(expectedLogicalType.getTypeRoot())) {
-                    return FlinkAsFlussRow.fromFlinkObject(
+                    return fromFlinkObject(
                             DataStructureConverters.getConverter(expectedType)
                                     .toInternalOrNull(value),
                             expectedType);
@@ -252,14 +248,12 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
         throw new UnsupportedExpression();
     }
 
-    private boolean isStringType(LogicalType type) {
-        switch (type.getTypeRoot()) {
-            case CHAR:
-            case VARCHAR:
-                return true;
-            default:
-                return false;
+    private static Object fromFlinkObject(Object o, DataType type) {
+        if (o == null) {
+            return null;
         }
+        return InternalRow.createFieldGetter(FlinkConversions.toFlussType(type), 0)
+                .getFieldOrNull((new FlinkAsFlussRow()).replace(GenericRowData.of(o)));
     }
 
     private boolean supportsPredicate(LogicalType type) {
@@ -296,9 +290,6 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
 
     @Override
     public Predicate visit(FieldReferenceExpression fieldReferenceExpression) {
-        if (fieldReferenceExpression.getOutputDataType().getLogicalType() instanceof BooleanType) {
-            return builder.equal(builder.indexOf(fieldReferenceExpression.getName()), true);
-        }
         throw new UnsupportedExpression();
     }
 
@@ -318,11 +309,18 @@ public class PredicateConverter implements ExpressionVisitor<Predicate> {
      * @param filter a resolved expression
      * @return {@link Predicate} if no {@link UnsupportedExpression} thrown.
      */
-    public static Optional<Predicate> convert(RowType rowType, ResolvedExpression filter) {
+    public static Optional<Predicate> convertToFlussPredicate(
+            org.apache.fluss.types.RowType rowType, ResolvedExpression filter) {
         try {
-            return Optional.ofNullable(filter.accept(new PredicateConverter(rowType)));
+            return Optional.ofNullable(
+                    filter.accept(new PredicateConverter(new PredicateBuilder(rowType))));
         } catch (UnsupportedExpression e) {
             return Optional.empty();
         }
+    }
+
+    public static Optional<Predicate> convertToFlussPredicate(
+            RowType rowType, ResolvedExpression filter) {
+        return convertToFlussPredicate(FlinkConversions.toFlussRowType(rowType), filter);
     }
 }

@@ -26,7 +26,6 @@ import org.apache.fluss.flink.source.lookup.FlinkLookupFunction;
 import org.apache.fluss.flink.source.lookup.LookupNormalizer;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
-import org.apache.fluss.flink.utils.PredicateConverter;
 import org.apache.fluss.flink.utils.PushdownUtils;
 import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
 import org.apache.fluss.lake.source.LakeSource;
@@ -39,11 +38,9 @@ import org.apache.fluss.predicate.PartitionPredicateVisitor;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
 import org.apache.fluss.predicate.PredicateVisitor;
-import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
-import org.apache.fluss.utils.PartitionUtils;
 
 import org.apache.flink.annotation.VisibleForTesting;
 import org.apache.flink.api.common.typeinfo.TypeInformation;
@@ -91,11 +88,12 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
-import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
+import static org.apache.fluss.flink.utils.PredicateConverter.convertToFlussPredicate;
 import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
 import static org.apache.fluss.flink.utils.PushdownUtils.extractFieldEquals;
+import static org.apache.fluss.flink.utils.StringifyPredicateVisitor.stringifyPartitionPredicate;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -506,43 +504,32 @@ public class FlinkTableSource
             }
             singleRowFilter = lookupRow;
             return Result.of(acceptedFilters, remainingFilters);
-        } else if (isPartitioned()
-                && !RowLevelModificationType.UPDATE.equals(modificationScanType)) {
+        } else if (isPartitioned()) {
             // apply partition filter pushdown
             List<Predicate> converted = new ArrayList<>();
 
-            List<String> fieldNames = tableOutputType.getFieldNames();
-            List<String> partitionKeys =
-                    Arrays.stream(partitionKeyIndexes)
-                            .mapToObj(fieldNames::get)
-                            .collect(Collectors.toList());
+            RowType partitionRowType =
+                    FlinkConversions.toFlussRowType(tableOutputType).project(partitionKeyIndexes);
+            PredicateVisitor<Boolean> checksOnlyPartitionKeys =
+                    new PartitionPredicateVisitor(partitionRowType.getFieldNames());
 
-            PredicateVisitor<Boolean> partitionPredicateVisitor =
-                    new PartitionPredicateVisitor(partitionKeys);
-
-            LogicalType[] partitionKeyTypes =
-                    Arrays.stream(partitionKeyIndexes)
-                            .mapToObj(producedDataType.getChildren()::get)
-                            .toArray(LogicalType[]::new);
             for (ResolvedExpression filter : filters) {
 
                 Optional<Predicate> predicateOptional =
-                        PredicateConverter.convert(
-                                org.apache.flink.table.types.logical.RowType.of(
-                                        partitionKeyTypes, partitionKeys.toArray(new String[0])),
-                                filter);
+                        convertToFlussPredicate(partitionRowType, filter);
 
                 if (predicateOptional.isPresent()) {
                     Predicate p = predicateOptional.get();
-                    if (!p.visit(partitionPredicateVisitor)) {
+                    // partition pushdown can only guarantee to filter out partitions matches the
+                    // predicate, but can't guarantee to filter out all data matches to
+                    // non-partition filter in the partition
+                    if (!p.visit(checksOnlyPartitionKeys)) {
                         remainingFilters.add(filter);
                     } else {
                         acceptedFilters.add(filter);
                     }
-                    // Convert literals in the predicate to string using
-                    // PartitionUtils.convertValueOfType
-                    p = stringifyPredicate(p);
-                    converted.add(p);
+                    // Convert literals in the predicate to partition string
+                    converted.add(stringifyPartitionPredicate(p));
                 } else {
                     remainingFilters.add(filter);
                 }
@@ -553,7 +540,7 @@ public class FlinkTableSource
                 List<Predicate> lakePredicates = new ArrayList<>();
                 for (ResolvedExpression filter : filters) {
                     Optional<Predicate> predicateOptional =
-                            PredicateConverter.convert(tableOutputType, filter);
+                            convertToFlussPredicate(tableOutputType, filter);
                     predicateOptional.ifPresent(lakePredicates::add);
                 }
 
@@ -631,24 +618,6 @@ public class FlinkTableSource
         return pkTypes;
     }
 
-    private Map<Integer, LogicalType> getPartitionKeyTypes() {
-        Map<Integer, LogicalType> partitionKeyTypes = new HashMap<>();
-        for (int index : partitionKeyIndexes) {
-            partitionKeyTypes.put(index, tableOutputType.getTypeAt(index));
-        }
-        return partitionKeyTypes;
-    }
-
-    private List<FieldEqual> stringifyFieldEquals(List<FieldEqual> fieldEquals) {
-        List<FieldEqual> serialize = new ArrayList<>();
-        for (FieldEqual fieldEqual : fieldEquals) {
-            // revisit this again when we support more data types for partition key
-            serialize.add(
-                    new FieldEqual(fieldEqual.fieldIndex, (fieldEqual.equalValue).toString()));
-        }
-        return serialize;
-    }
-
     // projection from pk_field_index to index_in_pk
     private int[] getKeyRowProjection() {
         int[] projection = new int[tableOutputType.getFieldCount()];
@@ -672,35 +641,5 @@ public class FlinkTableSource
     @VisibleForTesting
     public int[] getBucketKeyIndexes() {
         return bucketKeyIndexes;
-    }
-
-    @VisibleForTesting
-    public int[] getPartitionKeyIndexes() {
-        return partitionKeyIndexes;
-    }
-
-    /**
-     * Converts literals in LeafPredicate to string representation using
-     * PartitionUtils.convertValueOfType. This is necessary because partition metadata is stored as
-     * string.
-     */
-    private Predicate stringifyPredicate(Predicate predicate) {
-        if (predicate instanceof LeafPredicate) {
-            // Convert literals to string using PartitionUtils.convertValueOfType
-            List<Object> convertedLiterals = new ArrayList<>();
-            for (Object literal : ((LeafPredicate) predicate).literals()) {
-                if (literal != null) {
-                    String stringValue =
-                            PartitionUtils.convertValueOfType(
-                                    literal, ((LeafPredicate) predicate).type().getTypeRoot());
-                    convertedLiterals.add(BinaryString.fromString(stringValue));
-                } else {
-                    convertedLiterals.add(null);
-                }
-            }
-            return ((LeafPredicate) predicate).copyWithNewLiterals(convertedLiterals);
-        }
-
-        return predicate;
     }
 }

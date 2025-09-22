@@ -17,5 +17,14 @@
 
 package org.apache.fluss.flink.source;
 
+import org.junit.jupiter.api.Disabled;
+
 /** IT case for {@link FlinkTableSource} in Flink 1.18. */
-public class Flink118TableSourceITCase extends FlinkTableSourceITCase {}
+class Flink118TableSourceITCase extends FlinkTableSourceITCase {
+
+    @Disabled("Flink 1.18 has a bug in timestamp_ltz type")
+    @Override
+    void testStreamingReadAllPartitionTypePushDown() throws Exception {
+        super.testStreamingReadAllPartitionTypePushDown();
+    }
+}

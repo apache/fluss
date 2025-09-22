@@ -27,6 +27,7 @@ import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 
 import org.apache.flink.table.api.DataTypes;
+import org.apache.flink.table.expressions.ApiExpressionUtils;
 import org.apache.flink.table.expressions.CallExpression;
 import org.apache.flink.table.expressions.FieldReferenceExpression;
 import org.apache.flink.table.expressions.ResolvedExpression;
@@ -52,7 +53,6 @@ import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import static org.apache.flink.table.api.DataTypes.STRING;
-import static org.apache.flink.table.planner.expressions.ExpressionBuilder.literal;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -577,6 +577,18 @@ public class PredicateConverterTest {
 
     private static FieldReferenceExpression field(int i, DataType type) {
         return new FieldReferenceExpression("f" + i, type, Integer.MAX_VALUE, Integer.MAX_VALUE);
+    }
+
+    private static ValueLiteralExpression literal(Object v, DataType type) {
+        if (v != null) {
+            return ApiExpressionUtils.valueLiteral(v, type.notNull());
+        } else {
+            return ApiExpressionUtils.valueLiteral(null, type.nullable());
+        }
+    }
+
+    private static ValueLiteralExpression literal(Object v) {
+        return new ValueLiteralExpression(v);
     }
 
     private static CallExpression call(FunctionDefinition function, ResolvedExpression... args) {

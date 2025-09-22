@@ -131,7 +131,17 @@
           color: #4c576c;
       }
     }
-    
+
+    li {
+        code {
+            border-radius: 4px;
+            background-color: #edf2fa;
+            border: none;
+            padding: 3px 4px;
+            font-size: 14px;
+            color: #4c576c;
+        }
+    }
 
 /*    pre {
         code {
