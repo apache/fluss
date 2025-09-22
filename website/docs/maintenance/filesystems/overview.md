@@ -28,7 +28,7 @@ Never use local file system as remote storage in production as it is not fault-t
 :::
 
 ## Pluggable File Systems
-The Fluss project supports the following file system:
+The Fluss project supports the following file systems:
 
 - **[HDFS](hdfs.md)** is supported by `fluss-fs-hadoop` and registered under the `hdfs://` URI scheme.
 
@@ -36,6 +36,6 @@ The Fluss project supports the following file system:
 
 - **[AWS S3](s3.md)** is supported by `fluss-fs-s3` and registered under the `s3://` URI scheme.
 
-- **[HuaweiCloud OBS](obs.md)** is supported by `fluss-fs-obs` and registered under the `obs://` URI scheme.
+For other cloud storage systems like HuaweiCloud OBS and Google Cloud Storage, you can manually install the corresponding plugins. See the individual documentation pages for installation instructions.
 
 The implementation is based on [Hadoop Project](https://hadoop.apache.org/) but is self-contained with no dependency footprint.
