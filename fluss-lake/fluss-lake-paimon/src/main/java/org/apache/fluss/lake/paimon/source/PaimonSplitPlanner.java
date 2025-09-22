@@ -28,6 +28,7 @@ import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.predicate.Predicate;
+import org.apache.paimon.table.BucketMode;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.source.DataSplit;
 import org.apache.paimon.table.source.InnerTableScan;
@@ -67,7 +68,7 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
             try (Catalog catalog = getCatalog()) {
                 FileStoreTable fileStoreTable = getTable(catalog, tablePath, snapshotId);
                 InnerTableScan tableScan = fileStoreTable.newScan();
-                boolean isBucketAware = isBucketAware(fileStoreTable);
+                boolean isBucketAware = fileStoreTable.bucketMode() == BucketMode.BUCKET_UNAWARE;
 
                 if (predicate != null) {
                     tableScan = tableScan.withFilter(predicate);
@@ -81,18 +82,6 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
         } catch (Exception e) {
             throw new RuntimeException("Failed to plan splits for paimon.", e);
         }
-    }
-
-    private boolean isBucketAware(FileStoreTable fileStoreTable) {
-        // Check whether the bucket key is explicitly set
-        String bucketKey = fileStoreTable.options().get(CoreOptions.BUCKET_KEY.key());
-        if (bucketKey != null && !bucketKey.isEmpty()) {
-            return true;
-        }
-
-        // Check whether it is a primary key table (the primary key table is bucket-aware by
-        // default)
-        return !fileStoreTable.primaryKeys().isEmpty();
     }
 
     private Catalog getCatalog() {

@@ -34,11 +34,6 @@ public class PaimonSplit implements LakeSplit {
 
     private final boolean isBucketAware;
 
-    public PaimonSplit(DataSplit dataSplit) {
-        // by default, bucket-aware
-        this(dataSplit, true);
-    }
-
     public PaimonSplit(DataSplit dataSplit, boolean isBucketAware) {
         this.dataSplit = dataSplit;
         this.isBucketAware = isBucketAware;

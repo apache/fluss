@@ -32,14 +32,11 @@ import java.io.IOException;
 /** Serializer for paimon split. */
 public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSplit> {
 
-    // Version 1: Original version with only DataSplit
-    // Version 2: Added isBucketAware field for bucket-unaware table support
     private static final int VERSION_1 = 1;
-    private static final int VERSION_2 = 2;
 
     @Override
     public int getVersion() {
-        return VERSION_2;
+        return VERSION_1;
     }
 
     @Override
@@ -60,8 +57,6 @@ public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSp
             dataSplit = InstantiationUtil.deserializeObject(in, getClass().getClassLoader());
 
             if (version == VERSION_1) {
-                return new PaimonSplit(dataSplit, true);
-            } else if (version == VERSION_2) {
                 DataInputStream dis = new DataInputStream(in);
                 boolean isBucketAware = dis.readBoolean();
                 return new PaimonSplit(dataSplit, isBucketAware);
