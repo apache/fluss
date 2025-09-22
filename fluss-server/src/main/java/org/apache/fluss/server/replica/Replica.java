@@ -201,6 +201,8 @@ public final class Replica {
     private Counter isrExpands;
     private Counter failedIsrUpdates;
 
+    private MetricGroup lakeTieringMetricGroup;
+
     public Replica(
             PhysicalTablePath physicalPath,
             TableBucket tableBucket,
@@ -530,6 +532,10 @@ public final class Replica {
     private void onBecomeNewLeader() {
         updateLeaderEndOffsetSnapshot();
 
+        if (isDataLakeEnabled()) {
+            registerLakeTieringMetrics();
+        }
+
         if (isKvTable()) {
             // if it's become new leader, we must
             // first destroy the old kv tablet
@@ -540,10 +546,29 @@ public final class Replica {
         }
     }
 
+    private void registerLakeTieringMetrics() {
+        lakeTieringMetricGroup = bucketMetricGroup.addGroup("lakeTiering");
+        lakeTieringMetricGroup.gauge(
+                MetricNames.LOG_LAKE_PENDING_RECORDS,
+                () ->
+                        getLakeLogEndOffset() < 0L
+                                ? getLogHighWatermark()
+                                : getLogHighWatermark() - getLakeLogEndOffset());
+        lakeTieringMetricGroup.gauge(
+                MetricNames.LOG_LAKE_TIMESTAMP_LAG,
+                () ->
+                        logTablet.getLakeMaxTimestamp() < 0L
+                                ? logTablet.getLakeMaxTimestamp()
+                                : logTablet.localMaxTimestamp() - logTablet.getLakeMaxTimestamp());
+    }
+
     private void onBecomeNewFollower() {
         if (isKvTable()) {
             // it should be from leader to follower, we need to destroy the kv tablet
             dropKv();
+        }
+        if (lakeTieringMetricGroup != null) {
+            lakeTieringMetricGroup.close();
         }
     }
 

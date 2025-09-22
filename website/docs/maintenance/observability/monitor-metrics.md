@@ -759,12 +759,13 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
      <tr>
-      <td>lakeLagRecords</td>
+      <td rowspan="2">table_bucket_lakeTiering</td>
+      <td>pendingRecords</td>
       <td>The number of records lag between local log and remote log for this table bucket.</td>
       <td>Gauge</td>
     </tr>
      <tr>
-      <td>lakeLagTimestampMs</td>
+      <td>timestampLag</td>
       <td>The timestamp lag between local log and remote log for this table bucket in milliseconds.</td>
       <td>Gauge</td>
     </tr>
