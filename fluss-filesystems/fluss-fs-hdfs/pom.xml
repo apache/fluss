@@ -25,7 +25,6 @@
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss-filesystems</artifactId>
         <version>0.8-SNAPSHOT</version>
-        <relativePath>../../pom.xml</relativePath>
     </parent>
 
     <artifactId>fluss-fs-hdfs</artifactId>
