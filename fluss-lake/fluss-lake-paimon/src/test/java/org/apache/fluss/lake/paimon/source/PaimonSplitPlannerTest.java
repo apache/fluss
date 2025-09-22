@@ -82,7 +82,7 @@ class PaimonSplitPlannerTest extends PaimonSourceTestBase {
 
     @Test
     void testPlannerCreatesCorrectSplitsForLogTableWithoutBucketKey() throws Exception {
-        // 测试没有bucket key的log表
+        // test log table without bucket key
         String tableName = "planner_log_table_without_bucket_key";
         TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
 
@@ -104,9 +104,7 @@ class PaimonSplitPlannerTest extends PaimonSourceTestBase {
         LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
         List<PaimonSplit> paimonSplits = lakeSource.createPlanner(snapshot::id).plan();
 
-        List<Split> actualSplits = ((FileStoreTable) table).newScan().plan().splits();
-
-        assertThat(actualSplits).isNotEmpty();
+        assertThat(paimonSplits).isNotEmpty();
         for (PaimonSplit split : paimonSplits) {
             assertThat(split.isBucketAware()).isFalse();
             assertThat(split.bucket()).isEqualTo(-1);
