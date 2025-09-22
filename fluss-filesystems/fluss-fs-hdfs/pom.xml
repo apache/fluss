@@ -29,7 +29,7 @@
     </parent>
 
     <artifactId>fluss-fs-hdfs</artifactId>
-    <name>Fluss : FileSystems : Hadoop FS COMMON</name>
+    <name>Fluss : FileSystems : HDFS FS</name>
 
     <packaging>jar</packaging>
 
