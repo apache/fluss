@@ -72,7 +72,7 @@ class PaimonSplitSerializerTest extends PaimonSourceTestBase {
         PaimonSplit deserialized = serializer.deserialize(serializer.getVersion(), serialized);
 
         assertThat(deserialized.dataSplit()).isEqualTo(originalPaimonSplit.dataSplit());
-        assertThat(deserialized.isBucketAware()).isEqualTo(originalPaimonSplit.isBucketAware());
+        assertThat(deserialized.isBucketUnAware()).isEqualTo(originalPaimonSplit.isBucketUnAware());
     }
 
     @Test

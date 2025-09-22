@@ -32,16 +32,16 @@ public class PaimonSplit implements LakeSplit {
 
     private final DataSplit dataSplit;
 
-    private final boolean isBucketAware;
+    private final boolean isBucketUnAware;
 
-    public PaimonSplit(DataSplit dataSplit, boolean isBucketAware) {
+    public PaimonSplit(DataSplit dataSplit, boolean isBucketUnAware) {
         this.dataSplit = dataSplit;
-        this.isBucketAware = isBucketAware;
+        this.isBucketUnAware = isBucketUnAware;
     }
 
     @Override
     public int bucket() {
-        if (!isBucketAware) {
+        if (isBucketUnAware) {
             // bucket-unaware table returns -1
             return -1;
         }
@@ -69,7 +69,7 @@ public class PaimonSplit implements LakeSplit {
         return dataSplit;
     }
 
-    public boolean isBucketAware() {
-        return isBucketAware;
+    public boolean isBucketUnAware() {
+        return isBucketUnAware;
     }
 }

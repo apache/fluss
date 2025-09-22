@@ -106,7 +106,7 @@ class PaimonSplitPlannerTest extends PaimonSourceTestBase {
 
         assertThat(paimonSplits).isNotEmpty();
         for (PaimonSplit split : paimonSplits) {
-            assertThat(split.isBucketAware()).isFalse();
+            assertThat(split.isBucketUnAware()).isTrue();
             assertThat(split.bucket()).isEqualTo(-1);
         }
     }

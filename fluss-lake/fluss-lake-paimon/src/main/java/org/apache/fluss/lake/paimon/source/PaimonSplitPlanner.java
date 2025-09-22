@@ -68,14 +68,14 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
             try (Catalog catalog = getCatalog()) {
                 FileStoreTable fileStoreTable = getTable(catalog, tablePath, snapshotId);
                 InnerTableScan tableScan = fileStoreTable.newScan();
-                boolean isBucketAware = fileStoreTable.bucketMode() == BucketMode.BUCKET_UNAWARE;
+                boolean isBucketUnAware = fileStoreTable.bucketMode() == BucketMode.BUCKET_UNAWARE;
 
                 if (predicate != null) {
                     tableScan = tableScan.withFilter(predicate);
                 }
                 for (Split split : tableScan.plan().splits()) {
                     DataSplit dataSplit = (DataSplit) split;
-                    splits.add(new PaimonSplit(dataSplit, isBucketAware));
+                    splits.add(new PaimonSplit(dataSplit, isBucketUnAware));
                 }
             }
             return splits;
