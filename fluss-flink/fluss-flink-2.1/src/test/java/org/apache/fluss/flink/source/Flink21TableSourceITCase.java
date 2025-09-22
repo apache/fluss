@@ -39,6 +39,8 @@ public class Flink21TableSourceITCase extends FlinkTableSourceITCase {
 
     @Test
     void testDeltaJoin() throws Exception {
+        // start two jobs for this test: one for DML involving the delta join, and the other for DQL
+        // to query the results of the sink table
         tEnv.getConfig().set(ExecutionConfigOptions.TABLE_EXEC_RESOURCE_DEFAULT_PARALLELISM, 2);
 
         String leftTableName = "left_table";
@@ -62,10 +64,9 @@ public class Flink21TableSourceITCase extends FlinkTableSourceITCase {
                 Arrays.asList(
                         row(1, "v1", 100L, 1, 10000L),
                         row(2, "v2", 200L, 2, 20000L),
-                        // dropped because of first row
                         row(3, "v1", 300L, 3, 30000L),
                         row(4, "v4", 400L, 4, 40000L));
-        // write records and wait generate snapshot.
+        // write records
         TablePath leftTablePath = TablePath.of(DEFAULT_DB, leftTableName);
         writeRows(conn, leftTablePath, rows1, false);
 
@@ -91,7 +92,6 @@ public class Flink21TableSourceITCase extends FlinkTableSourceITCase {
                         row(1, "v1", 100L, 1, 10000L),
                         row(2, "v3", 200L, 2, 20000L),
                         row(3, "v4", 300L, 4, 30000L),
-                        // dropped because of first row
                         row(4, "v4", 500L, 4, 50000L));
         // write records
         TablePath rightTablePath = TablePath.of(DEFAULT_DB, rightTableName);
@@ -137,7 +137,11 @@ public class Flink21TableSourceITCase extends FlinkTableSourceITCase {
         List<String> expected =
                 Arrays.asList(
                         "+I[1, v1, 100, 1, 10000, 1, v1, 100, 1, 10000]",
-                        "+I[2, v2, 200, 2, 20000, 2, v3, 200, 2, 20000]");
+                        "-U[1, v1, 100, 1, 10000, 1, v1, 100, 1, 10000]",
+                        "+U[1, v1, 100, 1, 10000, 1, v1, 100, 1, 10000]",
+                        "+I[2, v2, 200, 2, 20000, 2, v3, 200, 2, 20000]",
+                        "-U[2, v2, 200, 2, 20000, 2, v3, 200, 2, 20000]",
+                        "+U[2, v2, 200, 2, 20000, 2, v3, 200, 2, 20000]");
         assertResultsIgnoreOrder(collected, expected, true);
     }
 }
