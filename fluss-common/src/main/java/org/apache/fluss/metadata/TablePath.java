@@ -54,6 +54,10 @@ public class TablePath implements Serializable {
     // RecordAccumulator.ready)
     private Integer hash;
 
+    // Prefix reserved for internal system names. User-defined database and table and others names
+    // are not
+    // allowed to start with this prefix to prevent conflicts with system-generated identifiers.
+    // This convention aligns with and maintains compatibility with Apache Kafka's naming standards.
     private static final String INTERNAL_NAME_PREFIX = "__";
 
     public TablePath(String databaseName, String tableName) {
@@ -153,7 +157,10 @@ public class TablePath implements Serializable {
 
     public static String validatePrefix(String identifier) throws InvalidTableException {
         if (identifier != null && identifier.startsWith(INTERNAL_NAME_PREFIX)) {
-            return "'" + INTERNAL_NAME_PREFIX + "' is not allowed as prefix";
+            return "'"
+                    + INTERNAL_NAME_PREFIX
+                    + "' is not allowed as prefix, since it is reserved"
+                    + " for internal databases/internal tables/internal partitions in Fluss server";
         }
         return null;
     }

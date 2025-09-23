@@ -45,6 +45,7 @@ import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionValues;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link PartitionUtils}. */
@@ -67,7 +68,11 @@ class PartitionUtilsTest {
         assertThatThrownBy(() -> validatePartitionValues(Arrays.asList("__p1", "2"), true))
                 .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining(
-                        "The partition value __p1 is invalid: '__' is not allowed as prefix");
+                        "The partition value __p1 is invalid: '__' is not allowed as prefix, "
+                                + "since it is reserved for internal databases/internal tables/internal partitions in Fluss server");
+
+        assertThatNoException()
+                .isThrownBy(() -> validatePartitionValues(Arrays.asList("__p1", "2"), false));
 
         TableDescriptor descriptor =
                 TableDescriptor.builder()
