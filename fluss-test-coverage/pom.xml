@@ -354,6 +354,8 @@
                                             org.apache.fluss.flink.metrics.*
                                         </exclude>
                                         <!-- end exclude for flink-connector -->
+                                        <!-- exclude flink 1.18 compatibility class for sink -->
+                                        <exclude>org.apache.flink.streaming.api.functions.sink.v2.*</exclude>
                                         <exclude>org.apache.fluss.fs.hdfs.HadoopFsPlugin
                                         </exclude>
                                         <exclude>org.apache.fluss.fs.hdfs.HadoopSecurityTokenReceiver</exclude>
@@ -388,7 +390,6 @@
                                         <exclude>org.apache.fluss.lake.iceberg.*</exclude>
                                         <exclude>org.apache.fluss.row.encode.iceberg.*</exclude>
                                         <exclude>org.apache.fluss.bucketing.IcebergBucketingFunction</exclude>
-                                        <exclude>org.apache.iceberg.transforms.TransformUtils</exclude>
                                         <!-- start exclude for flink tiering service -->
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringSourceOptions</exclude>
                                         <exclude>org.apache.fluss.flink.tiering.source.TieringSource.Builder</exclude>
