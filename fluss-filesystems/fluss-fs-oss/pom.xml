@@ -52,12 +52,6 @@
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-fs-hadoop</artifactId>
             <version>${project.version}</version>
-            <exclusions>
-                <exclusion>
-                    <groupId>org.apache.hadoop</groupId>
-                    <artifactId>hadoop-hdfs-client</artifactId>
-                </exclusion>
-            </exclusions>
         </dependency>
 
         <dependency>
