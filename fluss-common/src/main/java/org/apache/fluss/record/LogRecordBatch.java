@@ -26,7 +26,7 @@ import org.apache.fluss.utils.CloseableIterator;
 
 import java.util.Iterator;
 
-import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 
 /**
@@ -36,8 +36,15 @@ import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
  */
 @PublicEvolving
 public interface LogRecordBatch {
-    /** The current "magic" value. */
-    byte CURRENT_LOG_MAGIC_VALUE = LOG_MAGIC_VALUE_V1;
+    /**
+     * The current "magic" value. Even though we already support LOG_MAGIC_VALUE_V1, for
+     * compatibility reasons — specifically, a higher-version Fluss Client (which supports
+     * LOG_MAGIC_VALUE_V1) cannot write to a lower-version Fluss Server (which only supports
+     * LOG_MAGIC_VALUE_V0) — we are unable to guarantee compatibility at this time. Therefore, we
+     * will keep the current log magic value set to LOG_MAGIC_VALUE_V0 for now, and only upgrade it
+     * to LOG_MAGIC_VALUE_V1 once the compatibility issue is resolved.
+     */
+    byte CURRENT_LOG_MAGIC_VALUE = LOG_MAGIC_VALUE_V0;
 
     /**
      * Check whether the checksum of this batch is correct.
