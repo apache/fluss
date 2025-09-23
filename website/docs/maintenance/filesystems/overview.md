@@ -36,6 +36,6 @@ The Fluss project supports the following file systems:
 
 - **[AWS S3](s3.md)** is supported by `fluss-fs-s3` and registered under the `s3://` URI scheme.
 
-For other cloud storage systems like HuaweiCloud OBS and Google Cloud Storage, you can manually install the corresponding plugins. See the individual documentation pages for installation instructions.
+- **[HuaweiCloud OBS](obs.md)** is supported by `fluss-fs-obs` and registered under the `obs://` URI scheme. Please make sure to [manually install the OBS plugin](obs.md#install-obs-plugin-manually).
 
 The implementation is based on [Hadoop Project](https://hadoop.apache.org/) but is self-contained with no dependency footprint.
