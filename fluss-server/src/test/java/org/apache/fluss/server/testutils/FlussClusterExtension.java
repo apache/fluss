@@ -26,6 +26,7 @@ import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.fs.local.LocalFileSystem;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.GatewayClientProxy;
@@ -450,6 +451,10 @@ public final class FlussClusterExtension
                                     node.rack());
                         })
                 .collect(Collectors.toList());
+    }
+
+    public TableInfo getTableInfo(TablePath tablePath) {
+        return metadataManager.getTable(tablePath);
     }
 
     public ZooKeeperClient getZooKeeperClient() {
