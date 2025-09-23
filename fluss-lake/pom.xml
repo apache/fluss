@@ -28,8 +28,8 @@
     </parent>
 
     <properties>
-        <flink.major.version>1.20</flink.major.version>
-        <flink.version>1.20.1</flink.version>
+        <flink.major.version>1.18</flink.major.version>
+        <flink.version>1.18.1</flink.version>
     </properties>
 
     <dependencyManagement>
