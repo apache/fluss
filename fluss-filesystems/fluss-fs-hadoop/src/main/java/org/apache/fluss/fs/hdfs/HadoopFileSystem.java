@@ -33,7 +33,8 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * additional information regarding copyright ownership. */
 
 /**
- * A {@link FileSystem} that wraps an {@link org.apache.hadoop.fs.FileSystem Hadoop File System}.
+ * An abstract {@link FileSystem} implementation that wraps a {@link org.apache.hadoop.fs.FileSystem
+ * Hadoop File System}.
  */
 public abstract class HadoopFileSystem extends FileSystem {
 

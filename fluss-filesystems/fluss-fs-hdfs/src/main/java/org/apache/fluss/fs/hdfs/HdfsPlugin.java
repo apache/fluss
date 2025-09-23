@@ -34,11 +34,10 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
- * A file system plugin for Hadoop-based file systems.
+ * A file system plugin for HDFS (Hadoop Distributed File System).
  *
- * <p>This plugin calls Hadoop's mechanism to find a file system implementation for a given file
- * system scheme (a {@link org.apache.hadoop.fs.FileSystem}) and wraps it as a Fluss file system (a
- * {@link FileSystem}).
+ * <p>This plugin uses Hadoop's mechanism to find an HDFS file system implementation (a {@link
+ * org.apache.hadoop.fs.FileSystem}) and wraps it as a Fluss file system (a {@link FileSystem}).
  */
 public class HdfsPlugin implements FileSystemPlugin {
 

@@ -25,7 +25,7 @@ import java.io.IOException;
 import java.util.Collections;
 
 /**
- * A {@link FileSystem} for HDFS that wraps an {@link HadoopFileSystem}, but overwrite method to
+ * A {@link FileSystem} for HDFS that wraps an {@link HadoopFileSystem}, but overrides method to
  * generate access security token.
  */
 public class HdfsFileSystem extends HadoopFileSystem {
