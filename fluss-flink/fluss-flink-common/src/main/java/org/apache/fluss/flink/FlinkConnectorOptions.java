@@ -102,7 +102,7 @@ public class FlinkConnectorOptions {
                                     + "minute. Currently, since Fluss Admin#listPartitions(TablePath tablePath) requires a large "
                                     + "number of requests to ZooKeeper in server, this option cannot be set too small, "
                                     + "as a small value would cause frequent requests and increase server load. In the future, "
-                                    + "once list partitions is optimized, the default value of this parameter can be reduced.");
+                                    + "once list partitions is optimized, the default value of this parameter can be reduced. 1");
 
     public static final ConfigOption<Boolean> SINK_IGNORE_DELETE =
             ConfigOptions.key("sink.ignore-delete")
