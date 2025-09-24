@@ -408,7 +408,10 @@ public final class Replica {
                                                 "the leader epoch %s in notify leader and isr data is smaller than the "
                                                         + "current leader epoch %s for table bucket %s",
                                                 requestLeaderEpoch, leaderEpoch, tableBucket);
-                                LOG.warn("Ignore make leader because {}", errorMessage);
+                                LOG.warn(
+                                        "Ignore make leader for bucket {} because {}",
+                                        tableBucket,
+                                        errorMessage);
                                 throw new FencedLeaderEpochException(errorMessage);
                             }
 
@@ -456,7 +459,10 @@ public final class Replica {
                                         "the leader epoch %s in notify leader and isr data is smaller than the "
                                                 + "current leader epoch %s for table bucket %s",
                                         requestLeaderEpoch, leaderEpoch, tableBucket);
-                        LOG.warn("Ignore make follower because {}", errorMessage);
+                        LOG.warn(
+                                "Ignore make follower for bucket {} because {}",
+                                tableBucket,
+                                errorMessage);
                         throw new FencedLeaderEpochException(errorMessage);
                     }
 
@@ -559,7 +565,10 @@ public final class Replica {
             // resister the closeable registry for kv
             closeableRegistry.registerCloseable(closeableRegistryForKv);
         } catch (IOException e) {
-            LOG.warn("Fail to registry closeable registry for kv, it may cause resource leak.", e);
+            LOG.warn(
+                    "Fail to registry closeable registry for kv for bucket {}, it may cause resource leak.",
+                    tableBucket,
+                    e);
         }
 
         // init kv tablet and get the snapshot it uses to init if have any
@@ -569,7 +578,11 @@ public final class Replica {
                 snapshotUsed = initKvTablet();
                 break;
             } catch (Exception e) {
-                LOG.warn("Fail to init kv tablet, retrying for {} times", i, e);
+                LOG.warn(
+                        "Fail to init kv tablet for bucket {}, retrying for {} times",
+                        tableBucket,
+                        i,
+                        e);
             }
         }
         // start periodic kv snapshot
@@ -642,7 +655,10 @@ public final class Replica {
                 checkNotNull(kvTablet, "kv tablet should not be null.");
                 restoreStartOffset = completedSnapshot.getLogOffset();
             } else {
-                LOG.info("No snapshot found, restore from log.");
+                LOG.info(
+                        "No snapshot found for {} of {}, restore from log.",
+                        tableBucket,
+                        physicalPath);
                 // actually, kv manager always create a kv tablet since we will drop the kv
                 // if it exists before init kv tablet
                 kvTablet =
@@ -830,7 +846,7 @@ public final class Replica {
             kvSnapshotManager.start();
             closeableRegistryForKv.registerCloseable(kvSnapshotManager);
         } catch (Exception e) {
-            LOG.error("init kv periodic snapshot failed.", e);
+            LOG.error("init kv periodic snapshot for {} failed.", tableBucket, e);
         }
     }
 
@@ -1003,7 +1019,11 @@ public final class Replica {
         Optional<LogOffsetMetadata> oldWatermark =
                 leaderLog.maybeIncrementHighWatermark(newHighWatermark);
         if (oldWatermark.isPresent()) {
-            LOG.debug("High watermark update from {} to {}.", oldWatermark.get(), newHighWatermark);
+            LOG.debug(
+                    "High watermark update from {} to {} for bucket {}.",
+                    oldWatermark.get(),
+                    newHighWatermark,
+                    tableBucket);
             return true;
         } else {
             return false;
@@ -1080,9 +1100,10 @@ public final class Replica {
         }
 
         LOG.debug(
-                "Recorded replica {} log end offset (LEO) position {}.",
+                "Recorded replica {} log end offset (LEO) position {} for bucket {}.",
                 localTabletServerId,
-                followerFetchOffsetMetadata.getMessageOffset());
+                followerFetchOffsetMetadata.getMessageOffset(),
+                tableBucket);
     }
 
     private FollowerReplica getFollowerReplicaOrThrown(int followerId) {
@@ -1534,7 +1555,7 @@ public final class Replica {
 
     private CompletableFuture<LeaderAndIsr> submitAdjustIsr(
             IsrState.PendingIsrState proposedIsrState, CompletableFuture<LeaderAndIsr> result) {
-        LOG.debug("Submitting ISR state change {}.", proposedIsrState);
+        LOG.debug("Submitting ISR state change {} for bucket {}.", proposedIsrState, tableBucket);
         adjustIsrManager
                 .submit(tableBucket, proposedIsrState.sentLeaderAndIsr())
                 .whenComplete(
@@ -1553,8 +1574,9 @@ public final class Replica {
                                             // exactly, but we do know this response is out of date,
                                             // so we ignore it.
                                             LOG.debug(
-                                                    "Ignoring failed ISR update to {} since we have already updated state to {}",
+                                                    "Ignoring failed ISR update to {} for bucket {} since we have already updated state to {}",
                                                     proposedIsrState,
+                                                    tableBucket,
                                                     isrState);
                                         } else if (leaderAndIsr != null) {
                                             hwIncremented.set(
@@ -1600,8 +1622,9 @@ public final class Replica {
         // Success from coordinator, still need to check a few things.
         if (leaderAndIsr.bucketEpoch() < bucketEpoch) {
             LOG.debug(
-                    "Ignoring new ISR {} since we have a newer replica epoch {}",
+                    "Ignoring new ISR {} for bucket {} since we have a newer replica epoch {}",
                     leaderAndIsr,
+                    tableBucket,
                     bucketEpoch);
             return false;
         } else {
@@ -1630,7 +1653,7 @@ public final class Replica {
             try {
                 return maybeIncrementLeaderHW(logTablet, clock.milliseconds());
             } catch (IOException e) {
-                LOG.error("Failed to increment leader HW", e);
+                LOG.error("Failed to increment leader HW for bucket {}", tableBucket, e);
                 return false;
             }
         }
@@ -1656,34 +1679,39 @@ public final class Replica {
                 // response.
                 isrState = proposedIsrState.lastCommittedState();
                 LOG.info(
-                        "Failed to adjust isr to {} since the adjust isr manager rejected the request with error {}. "
+                        "Failed to adjust isr to {} for bucket {} since the adjust isr manager rejected the request with error {}. "
                                 + "Replica state has been reset to the latest committed state {}",
                         proposedIsrState,
+                        tableBucket,
                         error,
                         isrState);
                 return false;
             case UNKNOWN_TABLE_OR_BUCKET_EXCEPTION:
                 LOG.debug(
-                        "Failed to adjust isr to {} since the coordinator doesn't know about this table or bucket. "
+                        "Failed to adjust isr to {} for bucket {} since the coordinator doesn't know about this table or bucket. "
                                 + "Replica state may be out of sync, awaiting new the latest metadata.",
-                        proposedIsrState);
+                        proposedIsrState,
+                        tableBucket);
                 return false;
             case INVALID_UPDATE_VERSION_EXCEPTION:
                 LOG.debug(
-                        "Failed to adjust isr to {} because the request is invalid. Replica state may be out of sync, "
+                        "Failed to adjust isr to {} for bucket {} because the request is invalid. Replica state may be out of sync, "
                                 + "awaiting new the latest metadata.",
-                        proposedIsrState);
+                        proposedIsrState,
+                        tableBucket);
                 return false;
             case FENCED_LEADER_EPOCH_EXCEPTION:
                 LOG.debug(
-                        "Failed to adjust isr to {} because the leader epoch is fenced which indicate this replica "
+                        "Failed to adjust isr to {} for bucket {} because the leader epoch is fenced which indicate this replica "
                                 + "maybe no long leader. Replica state may be out of sync, awaiting new the latest metadata.",
-                        proposedIsrState);
+                        proposedIsrState,
+                        tableBucket);
                 return false;
             default:
                 LOG.warn(
-                        "Failed to adjust isr to {} due to unexpected error {}. Retrying.",
+                        "Failed to adjust isr to {} for bucket {} due to unexpected error {}. Retrying.",
                         proposedIsrState,
+                        tableBucket,
                         error);
                 return true;
         }
@@ -1863,7 +1891,8 @@ public final class Replica {
                 });
 
         LOG.trace(
-                "Progress awaiting ISR acks for offset {}, acked replicas: {}, awaiting replicas: {}",
+                "Progress awaiting ISR acks for bucket {} for offset {}, acked replicas: {}, awaiting replicas: {}",
+                tableBucket,
                 requiredOffset,
                 ackedReplicas.stream()
                         .map(tuple -> "server-" + tuple.f0 + ":" + tuple.f1)

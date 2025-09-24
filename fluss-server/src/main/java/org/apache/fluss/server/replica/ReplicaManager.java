@@ -653,7 +653,9 @@ public class ReplicaManager {
                                                         + "The latest known leader epoch is %s for table bucket %s.",
                                                 requestLeaderEpoch, currentLeaderEpoch, tb);
                                 LOG.warn(
-                                        "Ignore the stop replica request because {}", errorMessage);
+                                        "Ignore the stop replica request for bucket {} because {}",
+                                        tb,
+                                        errorMessage);
                                 result.add(
                                         new StopReplicaResultForBucket(
                                                 tb,

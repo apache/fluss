@@ -149,7 +149,8 @@ final class LogLoader {
                         File logFile = FlussPaths.logFile(logTabletDir, offset);
                         if (!logFile.exists()) {
                             LOG.warn(
-                                    "Found an orphaned index file {}, with no corresponding log file.",
+                                    "Found an orphaned index file {} for bucket {}, with no corresponding log file.",
+                                    logSegments.getTableBucket(),
                                     file.getAbsolutePath());
                             Files.deleteIfExists(file.toPath());
                         }

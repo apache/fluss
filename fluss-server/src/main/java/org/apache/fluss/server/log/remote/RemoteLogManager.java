@@ -289,7 +289,10 @@ public class RemoteLogManager implements Closeable {
                                     remoteLogStorage,
                                     coordinatorGateway,
                                     clock);
-                    LOG.info("Created a new remote log task: {} and getting scheduled", task);
+                    LOG.info(
+                            "Created a new remote log task for table-bucket{}: {} and getting scheduled",
+                            tableBucket,
+                            task);
                     ScheduledFuture<?> future =
                             rlManagerScheduledThreadPool.scheduleWithFixedDelay(
                                     task,

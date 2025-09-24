@@ -362,10 +362,11 @@ public final class LocalLog {
             throws IOException {
         if (LOG.isTraceEnabled()) {
             LOG.trace(
-                    "Reading maximum {} bytes at offset {} from log with total length {} bytes",
+                    "Reading maximum {} bytes at offset {} from log with total length {} bytes for bucket {}",
                     maxLength,
                     readOffset,
-                    segments.sizeInBytes());
+                    segments.sizeInBytes(),
+                    tableBucket);
         }
 
         long startOffset = localLogStartOffset;
@@ -471,21 +472,22 @@ public final class LocalLog {
                 // true for an active segment of size zero because one of the indexes is
                 // "full" (due to _maxEntries == 0).
                 LOG.warn(
-                        "Trying to roll a new log segment with start offset "
-                                + newOffset
-                                + " =max(provided offset = "
-                                + expectedNextOffset
-                                + ", LEO = "
-                                + getLocalLogEndOffset()
-                                + ") while it already exists and is active with size 0."
-                                + ", size of offset index: "
-                                + activeSegment.offsetIndex().entries()
-                                + ".");
+                        "Trying to roll a new log segment for bucket {} with start offset {} "
+                                + "=max(provided offset = {}, LEO = {}) while it already exists "
+                                + "and is active with size 0, size of offset index: {}.",
+                        tableBucket,
+                        newOffset,
+                        expectedNextOffset,
+                        getLocalLogEndOffset(),
+                        activeSegment.offsetIndex().entries());
                 LogSegment newSegment =
                         createAndDeleteSegment(
                                 newOffset, activeSegment, SegmentDeletionReason.LOG_ROLL);
                 updateLogEndOffset(getLocalLogEndOffset());
-                LOG.info("Rolled new log segment at offset " + newOffset);
+                LOG.info(
+                        "Rolled new log segment for bucket {} at offset {}",
+                        tableBucket,
+                        newOffset);
                 return newSegment;
             } else {
                 throw new FlussRuntimeException(
@@ -520,9 +522,9 @@ public final class LocalLog {
             for (File file : Arrays.asList(logFile, offsetIdxFile, timeIndexFile)) {
                 if (file.exists()) {
                     LOG.warn(
-                            "Newly rolled segment file "
-                                    + file.getAbsolutePath()
-                                    + " already exists; deleting it first");
+                            "Newly rolled segment file {} for bucket {} already exists; deleting it first",
+                            tableBucket,
+                            file.getAbsolutePath());
                     Files.delete(file.toPath());
                 }
             }
@@ -536,7 +538,7 @@ public final class LocalLog {
         // metadata when log rolls.
         // The next offset should not change.
         updateLogEndOffset(getLocalLogEndOffset());
-        LOG.info("Rolled new log segment at offset " + newOffset);
+        LOG.info("Rolled new log segment for bucket {} at offset {}", tableBucket, newOffset);
         return newSegment;
     }
 
@@ -547,7 +549,7 @@ public final class LocalLog {
      * @return the list of segments that were scheduled for deletion
      */
     List<LogSegment> truncateFullyAndStartAt(long newOffset) throws IOException {
-        LOG.debug("Truncate and start at offset " + newOffset);
+        LOG.debug("Truncate and start at offset {} for bucket {}", newOffset, tableBucket);
 
         checkIfMemoryMappedBufferClosed();
         List<LogSegment> segmentsToDelete = segments.values();

@@ -430,14 +430,18 @@ public final class LogTablet {
         synchronized (lock) {
             if (newHighWatermark.getMessageOffset() < highWatermarkMetadata.getMessageOffset()) {
                 LOG.warn(
-                        "Non-monotonic update of high watermark from {} to {}",
+                        "Non-monotonic update of high watermark from {} to {} for bucket {}",
                         highWatermarkMetadata,
-                        newHighWatermark);
+                        newHighWatermark,
+                        localLog.getTableBucket());
             }
             highWatermarkMetadata = newHighWatermark;
             // TODO log offset listener to update log offset.
         }
-        LOG.trace("Setting high watermark {}", newHighWatermark);
+        LOG.trace(
+                "Setting high watermark {} for bucket {}",
+                newHighWatermark,
+                localLog.getTableBucket());
     }
 
     /**
@@ -567,8 +571,9 @@ public final class LogTablet {
         long localLogStartOffset = localLog.getLocalLogStartOffset();
         if (cleanUpToOffset < localLogStartOffset) {
             LOG.debug(
-                    "Ignore the delete segments action while the input cleanUpToOffset {} "
+                    "Ignore the delete segments action for bucket {} while the input cleanUpToOffset {} "
                             + "is smaller than the current localLogStartOffset {}",
+                    getTableBucket(),
                     cleanUpToOffset,
                     localLogStartOffset);
             return;
@@ -576,8 +581,9 @@ public final class LogTablet {
 
         if (cleanUpToOffset > getHighWatermark()) {
             LOG.warn(
-                    "Ignore the delete segments action while the input cleanUpToOffset {} "
+                    "Ignore the delete segments action for bucket {} while the input cleanUpToOffset {} "
                             + "is larger than the current highWatermark {}",
+                    getTableBucket(),
                     cleanUpToOffset,
                     getHighWatermark());
             return;
@@ -716,11 +722,13 @@ public final class LogTablet {
                 // todo update the first unstable offset (which is used to compute lso)
 
                 LOG.trace(
-                        "Appended message set with last offset: {}, first offset {}, next offset: {} and messages {}",
+                        "Appended message set with last offset: {}, first offset {}, next offset: {} "
+                                + "and messages {} for bucket {}",
                         appendInfo.lastOffset(),
                         appendInfo.firstOffset(),
                         localLog.getLocalLogEndOffset(),
-                        validRecords);
+                        validRecords,
+                        getTableBucket());
 
                 if (localLog.unflushedMessages() >= logFlushIntervalMessages) {
                     flush(false);
@@ -787,11 +795,12 @@ public final class LogTablet {
         if (flushOffset > localLog.getRecoveryPoint()) {
             if (LOG.isDebugEnabled()) {
                 LOG.debug(
-                        "Flushing log up to offset {} ({}) with recovery point {}, unflushed: {}",
+                        "Flushing log up to offset {} ({}) with recovery point {}, unflushed: {}, for bucket {}",
                         offset,
                         includingOffsetStr,
                         flushOffset,
-                        localLog.unflushedMessages());
+                        localLog.unflushedMessages(),
+                        getTableBucket());
             }
 
             localLog.flush(flushOffset);
@@ -810,7 +819,9 @@ public final class LogTablet {
                     new RollParams(maxSegmentFileSize, appendInfo.lastOffset(), messageSize))) {
                 if (LOG.isDebugEnabled()) {
                     LOG.debug(
-                            "Rolling new log segment (log_size = {}/{}), offset_index_size = {}/{}, time_index_size = {}/{}",
+                            "Rolling new log segment for bucket {} (log_size = {}/{}), offset_index_size = {}/{}, "
+                                    + "time_index_size = {}/{}",
+                            getTableBucket(),
                             segment.getSizeInBytes(),
                             maxSegmentFileSize,
                             segment.offsetIndex().entries(),
@@ -863,12 +874,13 @@ public final class LogTablet {
 
         if (targetOffset >= localLog.getLocalLogEndOffset()) {
             LOG.info(
-                    "Truncate to {} has no effect as the largest offset in the log is {}.",
+                    "Truncate to {} for bucket {} has no effect as the largest offset in the log is {}.",
                     targetOffset,
+                    getTableBucket(),
                     localLog.getLocalLogEndOffset() - 1);
             return false;
         } else {
-            LOG.info("Truncating to offset {}", targetOffset);
+            LOG.info("Truncating to offset {} for bucket {}", targetOffset, getTableBucket());
             synchronized (lock) {
                 try {
                     localLog.checkIfMemoryMappedBufferClosed();
@@ -902,7 +914,7 @@ public final class LogTablet {
 
     /** Delete all data in the log and start at the new offset. */
     void truncateFullyAndStartAt(long newOffset) throws LogStorageException {
-        LOG.debug("Truncate and start at offset {}", newOffset);
+        LOG.debug("Truncate and start at offset {} for bucket {}", newOffset, getTableBucket());
         synchronized (lock) {
             try {
                 localLog.truncateFullyAndStartAt(newOffset);
@@ -950,14 +962,14 @@ public final class LogTablet {
     }
 
     public void close() {
-        LOG.debug("close log tablet");
+        LOG.debug("close log tablet for bucket {}", getTableBucket());
         synchronized (lock) {
             localLog.checkIfMemoryMappedBufferClosed();
             writerExpireCheck.cancel(true);
             try {
                 writerStateManager.takeSnapshot();
             } catch (IOException e) {
-                LOG.error("Error while taking writer snapshot.", e);
+                LOG.error("Error while taking writer snapshot for bucket {}.", getTableBucket(), e);
             }
             localLog.close();
         }
