@@ -1,12 +1,13 @@
 /*
- * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
- * this work for additional information regarding copyright ownership.
- * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
  *
- *    http://www.apache.org/licenses/LICENSE-2.0
+ *     http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -28,7 +29,7 @@ import java.net.URL;
 import java.net.URLClassLoader;
 
 /** Tests that validate the behavior of the Hadoop File System Plugin. */
-class HadoopFreeFsPluginTest {
+class HdfsFreeFsPluginTest {
 
     /**
      * This test validates that the plugin can be instantiated and configured even when Hadoop
@@ -39,12 +40,12 @@ class HadoopFreeFsPluginTest {
         // we do reflection magic here to instantiate the test in another class
         // loader, to make sure no hadoop classes are in the classpath
 
-        final String testClassName = HadoopFreeTests.class.getCanonicalName();
+        final String testClassName = HdfsFreeTests.class.getCanonicalName();
 
         final URL[] urls = ClassLoaderUtils.getClasspathURLs();
 
         ClassLoader parent = getClass().getClassLoader();
-        ClassLoader hadoopFreeClassLoader = new HadoopFreeClassLoader(urls, parent);
+        ClassLoader hadoopFreeClassLoader = new HdfsFreeClassLoader(urls, parent);
         Class<?> testClass = Class.forName(testClassName, false, hadoopFreeClassLoader);
         Method m = testClass.getDeclaredMethod("test");
 
@@ -57,11 +58,11 @@ class HadoopFreeFsPluginTest {
 
     // ------------------------------------------------------------------------
 
-    private static final class HadoopFreeClassLoader extends URLClassLoader {
+    private static final class HdfsFreeClassLoader extends URLClassLoader {
 
         private final ClassLoader properParent;
 
-        HadoopFreeClassLoader(URL[] urls, ClassLoader parent) {
+        HdfsFreeClassLoader(URL[] urls, ClassLoader parent) {
             super(urls, null);
             properParent = parent;
         }

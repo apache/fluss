@@ -62,7 +62,7 @@ class HdfsBehaviorTest extends FileSystemBehaviorTestSuite {
         hdfsCluster = builder.build();
 
         org.apache.hadoop.fs.FileSystem hdfs = hdfsCluster.getFileSystem();
-        fs = new HadoopFileSystem(hdfs);
+        fs = new HdfsFileSystem(hdfs);
 
         basePath = new FsPath(hdfs.getUri().toString() + "/tests");
     }

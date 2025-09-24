@@ -40,7 +40,7 @@ class HadoopLocalFileSystemBehaviorTest extends FileSystemBehaviorTestSuite {
     protected FileSystem getFileSystem() throws Exception {
         org.apache.hadoop.fs.FileSystem fs = new RawLocalFileSystem();
         fs.initialize(LocalFileSystem.getLocalFsURI(), new Configuration());
-        return new HadoopFileSystem(fs);
+        return new HdfsFileSystem(fs);
     }
 
     @Override

@@ -33,10 +33,6 @@ import java.net.UnknownHostException;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
- * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
- * additional information regarding copyright ownership. */
-
 /**
  * A file system plugin for Hadoop-based file systems.
  *
@@ -44,11 +40,11 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * system scheme (a {@link org.apache.hadoop.fs.FileSystem}) and wraps it as a Fluss file system (a
  * {@link FileSystem}).
  */
-public class HadoopFsPlugin implements FileSystemPlugin {
+public class HdfsPlugin implements FileSystemPlugin {
 
     public static final String SCHEME = "hdfs";
 
-    private static final Logger LOG = LoggerFactory.getLogger(HadoopFsPlugin.class);
+    private static final Logger LOG = LoggerFactory.getLogger(HdfsPlugin.class);
 
     @Override
     public String getScheme() {
@@ -154,7 +150,7 @@ public class HadoopFsPlugin implements FileSystemPlugin {
                 throw new IOException(message, e);
             }
 
-            return new HadoopFileSystem(hadoopFs);
+            return new HdfsFileSystem(hadoopFs);
         } catch (ReflectiveOperationException | LinkageError e) {
             throw new UnsupportedFileSystemSchemeException(
                     "Cannot support file system for '"

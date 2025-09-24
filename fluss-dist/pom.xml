@@ -42,7 +42,7 @@
         <!--  filesystem plugin -->
         <dependency>
             <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-fs-hadoop</artifactId>
+            <artifactId>fluss-fs-hdfs</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>

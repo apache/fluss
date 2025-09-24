@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 // this class is only instantiated via reflection
 @SuppressWarnings("unused")
-public class HadoopFreeTests {
+public class HdfsFreeTests {
 
     public static void test() {
         // make sure no Hadoop FS classes are in the classpath
@@ -46,7 +46,7 @@ public class HadoopFreeTests {
                 .isInstanceOf(ClassNotFoundException.class);
 
         // this method should complete without a linkage error
-        final HadoopFsPlugin plugin = new HadoopFsPlugin();
+        final HdfsPlugin plugin = new HdfsPlugin();
 
         // this method should also complete without a linkage error
         assertThatThrownBy(

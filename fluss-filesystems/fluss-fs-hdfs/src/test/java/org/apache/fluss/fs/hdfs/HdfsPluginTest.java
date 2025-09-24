@@ -29,13 +29,13 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests that validate the behavior of the Hadoop File System Plugin. */
-class HadoopFsPluginTest {
+class HdfsPluginTest {
 
     @Test
     void testCreateHadoopFsWithoutConfig() throws Exception {
         final URI uri = URI.create("hdfs://localhost:12345/");
 
-        HadoopFsPlugin plugin = new HadoopFsPlugin();
+        HdfsPlugin plugin = new HdfsPlugin();
         FileSystem fs = plugin.create(uri, new Configuration());
 
         assertThat(fs.getUri().getScheme()).isEqualTo(uri.getScheme());
@@ -47,7 +47,7 @@ class HadoopFsPluginTest {
     void testCreateHadoopFsWithMissingAuthority() {
         final URI uri = URI.create("hdfs:///my/path");
 
-        HadoopFsPlugin plugin = new HadoopFsPlugin();
+        HdfsPlugin plugin = new HdfsPlugin();
 
         assertThatThrownBy(() -> plugin.create(uri, new Configuration()))
                 .isInstanceOf(IOException.class)

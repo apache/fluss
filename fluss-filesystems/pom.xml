@@ -35,6 +35,7 @@
         <module>fluss-fs-s3</module>
         <module>fluss-fs-gs</module>
         <module>fluss-fs-obs</module>
+        <module>fluss-fs-hdfs</module>
     </modules>
     <packaging>pom</packaging>
 

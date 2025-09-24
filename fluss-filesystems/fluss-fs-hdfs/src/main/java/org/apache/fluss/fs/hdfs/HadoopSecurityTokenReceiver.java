@@ -25,7 +25,7 @@ public class HadoopSecurityTokenReceiver implements SecurityTokenReceiver {
 
     @Override
     public String scheme() {
-        return HadoopFsPlugin.SCHEME;
+        return HdfsPlugin.SCHEME;
     }
 
     @Override

@@ -46,9 +46,9 @@
         <!-- filesystem -->
         <!-- output directory should correspond to the file system *schema* name, i.e., plugins/<schema>/  -->
         <file>
-            <source>../fluss-filesystems/fluss-fs-hadoop/target/fluss-fs-hadoop-${project.version}-with-dependencies.jar</source>
+            <source>../fluss-filesystems/fluss-fs-hdfs/target/fluss-fs-hdfs-${project.version}.jar</source>
             <outputDirectory>plugins/hdfs/</outputDirectory>
-            <destName>fluss-fs-hadoop-${project.version}.jar</destName>
+            <destName>fluss-fs-hdfs-${project.version}.jar</destName>
             <fileMode>0644</fileMode>
         </file>
 
