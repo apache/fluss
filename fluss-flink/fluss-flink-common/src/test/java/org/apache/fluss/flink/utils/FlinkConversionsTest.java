@@ -259,6 +259,43 @@ public class FlinkConversionsTest {
     }
 
     @Test
+    void testTableConversionForCustomProperties() {
+        Map<String, String> options = new HashMap<>();
+        // forward table option & enum type
+        options.put(ConfigOptions.TABLE_LOG_FORMAT.key(), "indexed");
+        // forward client memory option
+        options.put(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE.key(), "64mb");
+        // forward client duration option
+        options.put(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT.key(), "32s");
+
+        ResolvedSchema schema =
+                new ResolvedSchema(
+                        Collections.singletonList(
+                                Column.physical(
+                                        "order_id",
+                                        org.apache.flink.table.api.DataTypes.STRING().notNull())),
+                        Collections.emptyList(),
+                        null);
+        CatalogTable flinkTable =
+                CatalogTable.of(
+                        Schema.newBuilder().fromResolvedSchema(schema).build(),
+                        "test comment",
+                        Collections.emptyList(),
+                        options);
+
+        TableDescriptor flussTable =
+                FlinkConversions.toFlussTable(new ResolvedCatalogTable(flinkTable, schema));
+
+        assertThat(flussTable.getProperties())
+                .containsEntry(ConfigOptions.TABLE_LOG_FORMAT.key(), "indexed");
+
+        HashMap<String, String> customProperties = new HashMap<>();
+        customProperties.put(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE.key(), "64mb");
+        customProperties.put(ConfigOptions.CLIENT_WRITER_BATCH_TIMEOUT.key(), "32s");
+        assertThat(flussTable.getCustomProperties()).containsExactlyEntriesOf(customProperties);
+    }
+
+    @Test
     void testOptionConversions() {
         ConfigOption<?> flinkOption = FlinkConversions.toFlinkOption(ConfigOptions.TABLE_KV_FORMAT);
         assertThat(flinkOption)

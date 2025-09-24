@@ -236,11 +236,10 @@ public class FlinkConversions {
                         ? ((ResolvedCatalogTable) catalogBaseTable).getPartitionKeys()
                         : ((ResolvedCatalogMaterializedTable) catalogBaseTable).getPartitionKeys();
 
-        Map<String, String> customProperties = flinkTableConf.toMap();
-        CatalogPropertiesUtils.serializeComputedColumns(
-                customProperties, resolvedSchema.getColumns());
+        Map<String, String> properties = flinkTableConf.toMap();
+        CatalogPropertiesUtils.serializeComputedColumns(properties, resolvedSchema.getColumns());
         CatalogPropertiesUtils.serializeWatermarkSpecs(
-                customProperties, catalogBaseTable.getResolvedSchema().getWatermarkSpecs());
+                properties, catalogBaseTable.getResolvedSchema().getWatermarkSpecs());
 
         // Set materialized table flags to fluss table custom properties
         if (CatalogTableAdapter.isMaterializedTable(tableKind)) {
@@ -255,6 +254,11 @@ public class FlinkConversions {
         }
 
         String comment = catalogBaseTable.getComment();
+        // convert some flink options to fluss table configs.
+        Map<String, String> flussTableProperties =
+                convertFlinkOptionsToFlussTableProperties(flinkTableConf);
+        Map<String, String> customProperties =
+                extractCustomProperties(properties, flussTableProperties);
 
         // then set distributed by information
         List<String> bucketKey;
@@ -283,7 +287,7 @@ public class FlinkConversions {
                 .partitionedBy(partitionKeys)
                 .distributedBy(bucketNum, bucketKey)
                 .comment(comment)
-                .properties(properties)
+                .properties(flussTableProperties)
                 .customProperties(customProperties)
                 .build();
     }
@@ -643,5 +647,12 @@ public class FlinkConversions {
                 .refreshHandlerDescription(refreshHandlerDesc)
                 .serializedRefreshHandler(refreshHandlerBytes);
         return builder.build();
+    }
+
+    private static Map<String, String> extractCustomProperties(
+            Map<String, String> allProperties, Map<String, String> flussTableProperties) {
+        Map<String, String> customProperties = new HashMap<>(allProperties);
+        customProperties.keySet().removeAll(flussTableProperties.keySet());
+        return customProperties;
     }
 }
