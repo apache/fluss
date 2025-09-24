@@ -72,6 +72,10 @@ You can choose between two views of the table:
 
 #### Read Data Only in Paimon
 
+##### Prerequisites
+Download the [paimon-flink.jar](https://paimon.apache.org/docs/1.2/) that matches your Flink version, and place it in the `FLINK_HOME/lib` directory
+
+##### Read Paimon Data
 To read only data stored in Paimon, use the `$lake` suffix in the table name. The following example demonstrates this:
 
 ```sql title="Flink SQL"
@@ -92,14 +96,29 @@ For further information, refer to Paimon’s [SQL Query documentation](https://p
 
 #### Union Read of Data in Fluss and Paimon
 
+##### Prerequisites
+Download the [fluss-lake-paimon-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar), and place it into `${FLINK_HOME}/lib`.
+
+##### Union Read
 To read the full dataset, which includes both Fluss (fresh) and Paimon (historical) data, simply query the table without any suffix. The following example illustrates this:
 
 ```sql title="Flink SQL"
 -- Query will union data from Fluss and Paimon
 SELECT SUM(order_count) AS total_orders FROM ads_nation_purchase_power;
 ```
+It can run both in batch and streaming mode, with Paimon as historical data and Fluss as fresh data:
+- In batch mode
 
-This query may run slower than reading only from Paimon, but it returns the most up-to-date data. If you execute the query multiple times, you may observe different results due to continuous data ingestion.
+  The query may run slower than reading only from Paimon because it needs to merge rows from both Paimon and Fluss. However, it returns the most up-to-date results. Multiple executions of the query may produce different outputs due to continuous data ingestion.
+
+- In streaming mode
+
+  Flink first reads the latest snapshot of Paimon tiered via tiering service, then switches to Fluss starting from the log offset aligned with that snapshot, ensuring exactly-once semantics.
+  This design enables Fluss to store only a small portion of the dataset in the Fluss cluster, reducing costs, while Paimon serves as the source of complete historical data when needed. 
+
+  More precisely, if Fluss log data is removed due to TTL expiration—controlled by the `table.log.ttl` configuration—it can still be read by Flink through its Union Read capability, as long as the data has already been tiered to Paimon.
+  For partitioned tables, if a partition is cleaned up—controlled by the `table.auto-partition.num-retention` configuration—the data in that partition remains accessible from Paimon, provided it has been tiered there beforehand. 
+
 
 ### Reading with other Engines
 
