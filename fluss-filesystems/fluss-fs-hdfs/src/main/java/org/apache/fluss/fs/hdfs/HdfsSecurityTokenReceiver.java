@@ -21,7 +21,7 @@ import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.fs.token.SecurityTokenReceiver;
 
 /** Security token receiver for hdfs filesystems. */
-public class HadoopSecurityTokenReceiver implements SecurityTokenReceiver {
+public class HdfsSecurityTokenReceiver implements SecurityTokenReceiver {
 
     @Override
     public String scheme() {

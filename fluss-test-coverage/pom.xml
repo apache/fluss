@@ -358,7 +358,7 @@
                                         <exclude>org.apache.flink.streaming.api.functions.sink.v2.*</exclude>
                                         <exclude>org.apache.fluss.fs.hdfs.HdfsPlugin
                                         </exclude>
-                                        <exclude>org.apache.fluss.fs.hdfs.HadoopSecurityTokenReceiver</exclude>
+                                        <exclude>org.apache.fluss.fs.hdfs.HdfsSecurityTokenReceiver</exclude>
                                         <exclude>org.apache.fluss.fs.oss.*</exclude>
                                         <exclude>org.apache.fluss.fs.s3.*</exclude>
                                         <exclude>org.apache.fluss.fs.obs.*</exclude>

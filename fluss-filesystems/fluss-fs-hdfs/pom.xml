@@ -54,6 +54,7 @@
             <artifactId>fluss-fs-hadoop-shaded</artifactId>
             <version>${project.version}</version>
             <exclusions>
+                <!-- exclude hadoop-common to avoid dependency conflict with fluss-fs-hadoop-shaded -->
                 <exclusion>
                     <artifactId>hadoop-common</artifactId>
                     <groupId>org.apache.hadoop</groupId>
