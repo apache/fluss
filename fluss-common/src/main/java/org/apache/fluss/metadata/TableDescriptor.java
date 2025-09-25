@@ -238,6 +238,21 @@ public final class TableDescriptor implements Serializable {
 
     /**
      * Returns a new TableDescriptor instance that is a copy of this TableDescriptor with a new
+     * properties and new customProperties.
+     */
+    public TableDescriptor withProperties(
+            Map<String, String> newProperties, Map<String, String> newCustomProperties) {
+        return new TableDescriptor(
+                schema,
+                comment,
+                partitionKeys,
+                tableDistribution,
+                newProperties,
+                newCustomProperties);
+    }
+
+    /**
+     * Returns a new TableDescriptor instance that is a copy of this TableDescriptor with a new
      * replication factor property.
      */
     public TableDescriptor withReplicationFactor(int newReplicationFactor) {

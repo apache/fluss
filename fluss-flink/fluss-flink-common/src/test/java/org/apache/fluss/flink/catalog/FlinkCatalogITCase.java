@@ -21,7 +21,9 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
@@ -78,6 +80,7 @@ abstract class FlinkCatalogITCase {
         Configuration clusterConf = new Configuration();
         // use a small check interval to cleanup partitions quickly
         clusterConf.set(ConfigOptions.AUTO_PARTITION_CHECK_INTERVAL, Duration.ofSeconds(3));
+        clusterConf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON);
         return clusterConf;
     }
 
@@ -190,7 +193,7 @@ abstract class FlinkCatalogITCase {
                 "create table test_alter_table_append_only ("
                         + "a string, "
                         + "b int) "
-                        + "with ('bucket.num' = '5')";
+                        + "with ('bucket.num' = '5', 'table.datalake.enabled' = 'true')";
         tEnv.executeSql(ddl);
         Schema.Builder schemaBuilder = Schema.newBuilder();
         schemaBuilder.column("a", DataTypes.STRING()).column("b", DataTypes.INT());
@@ -202,6 +205,8 @@ abstract class FlinkCatalogITCase {
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
         Map<String, String> expectedOptions = new HashMap<>();
         expectedOptions.put("bucket.num", "5");
+        expectedOptions.put("table.datalake.enabled", "true");
+        expectedOptions.put("table.datalake.format", "paimon");
         assertOptionsEqual(table.getOptions(), expectedOptions);
 
         // alter table
@@ -213,10 +218,8 @@ abstract class FlinkCatalogITCase {
                         catalog.getTable(
                                 new ObjectPath(DEFAULT_DB, "test_alter_table_append_only"));
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
-        expectedOptions = new HashMap<>();
 
         // bucket.num is unchanged, but timeout should change
-        expectedOptions.put("bucket.num", "5");
         expectedOptions.put("client.connect-timeout", "240s"); // updated
         assertOptionsEqual(table.getOptions(), expectedOptions);
 
@@ -228,14 +231,43 @@ abstract class FlinkCatalogITCase {
                 .rootCause()
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessage(
-                        "The option 'table.auto-partition.enabled' is not supported to alter set.");
+                        "The option 'table.auto-partition.enabled' is not supported to alter yet.");
 
         String unSupportedDml2 =
                 "alter table test_alter_table_append_only set ('k1' = 'v1', 'table.kv.format' = 'indexed')";
         assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml2))
                 .rootCause()
                 .isInstanceOf(InvalidAlterTableException.class)
-                .hasMessage("The option 'table.kv.format' is not supported to alter set.");
+                .hasMessage("The option 'table.kv.format' is not supported to alter yet.");
+
+        String unSupportedDml3 =
+                "alter table test_alter_table_append_only set ('bucket.num' = '1000')";
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml3))
+                .rootCause()
+                .isInstanceOf(CatalogException.class)
+                .hasMessage("The option 'bucket.num' is not supported to alter yet.");
+
+        String unSupportedDml4 =
+                "alter table test_alter_table_append_only set ('bucket.key' = 'a')";
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml4))
+                .rootCause()
+                .isInstanceOf(CatalogException.class)
+                .hasMessage("The option 'bucket.key' is not supported to alter yet.");
+
+        String unSupportedDml5 =
+                "alter table test_alter_table_append_only reset ('bootstrap.servers')";
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml5))
+                .rootCause()
+                .isInstanceOf(CatalogException.class)
+                .hasMessage("The option 'bootstrap.servers' is not supported to alter yet.");
+
+        String unSupportedDml6 =
+                "alter table test_alter_table_append_only set ('paimon.file.format' = 'orc')";
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml6))
+                .rootCause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessage(
+                        "Property 'paimon.file.format' is not supported to alter which is for datalake table.");
     }
 
     @Test
@@ -732,7 +764,6 @@ abstract class FlinkCatalogITCase {
             Map<String, String> actualOptions, Map<String, String> expectedOptions) {
         actualOptions.remove(ConfigOptions.BOOTSTRAP_SERVERS.key());
         actualOptions.remove(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
-        assertThat(actualOptions.size()).isEqualTo(expectedOptions.size());
         assertThat(actualOptions).isEqualTo(expectedOptions);
     }
 }

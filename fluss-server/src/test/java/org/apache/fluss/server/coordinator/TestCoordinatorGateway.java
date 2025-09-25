@@ -23,8 +23,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
-import org.apache.fluss.rpc.messages.AlterTableConfigsRequest;
-import org.apache.fluss.rpc.messages.AlterTableConfigsResponse;
+import org.apache.fluss.rpc.messages.AlterTablePropertiesRequest;
+import org.apache.fluss.rpc.messages.AlterTablePropertiesResponse;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
@@ -142,8 +142,8 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     }
 
     @Override
-    public CompletableFuture<AlterTableConfigsResponse> alterTableConfigs(
-            AlterTableConfigsRequest request) {
+    public CompletableFuture<AlterTablePropertiesResponse> alterTableProperties(
+            AlterTablePropertiesRequest request) {
         throw new UnsupportedOperationException();
     }
 

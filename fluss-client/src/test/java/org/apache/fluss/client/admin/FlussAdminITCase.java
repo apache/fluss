@@ -249,6 +249,9 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .get())
                 .cause()
                 .isInstanceOf(TableNotExistException.class);
+        // should success if ignore not exist
+        admin.alterTable(TablePath.of("test_db", "alter_table_not_exist"), tableChanges, true)
+                .get();
 
         // throw exception if database not exist
         assertThatThrownBy(
@@ -261,7 +264,13 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                                 false)
                                         .get())
                 .cause()
-                .isInstanceOf(DatabaseNotExistException.class);
+                .isInstanceOf(TableNotExistException.class);
+        // should success if ignore not exist
+        admin.alterTable(
+                        TablePath.of("test_db_not_exist", "alter_table_not_exist"),
+                        tableChanges,
+                        true)
+                .get();
     }
 
     @Test

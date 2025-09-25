@@ -72,7 +72,7 @@ public enum ApiKeys {
     DROP_ACLS(1041, 0, 0, PUBLIC),
     LAKE_TIERING_HEARTBEAT(1042, 0, 0, PRIVATE),
     CONTROLLED_SHUTDOWN(1043, 0, 0, PRIVATE),
-    ALTER_TABLE_CONFIGS(1044, 0, 0, PUBLIC);
+    ALTER_TABLE_PROPERTIES(1044, 0, 0, PUBLIC);
 
     private static final Map<Integer, ApiKeys> ID_TO_TYPE =
             Arrays.stream(ApiKeys.values())

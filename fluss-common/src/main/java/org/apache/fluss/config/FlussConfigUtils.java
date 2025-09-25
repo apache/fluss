@@ -32,6 +32,7 @@ public class FlussConfigUtils {
 
     public static final Map<String, ConfigOption<?>> TABLE_OPTIONS;
     public static final Map<String, ConfigOption<?>> CLIENT_OPTIONS;
+    public static final String TABLE_PREFIX = "table.";
     public static final String CLIENT_PREFIX = "client.";
     public static final String CLIENT_SECURITY_PREFIX = "client.security.";
 
@@ -41,6 +42,10 @@ public class FlussConfigUtils {
         TABLE_OPTIONS = extractConfigOptions("table.");
         CLIENT_OPTIONS = extractConfigOptions("client.");
         ALTERABLE_TABLE_CONFIG = Collections.emptyList();
+    }
+
+    public static boolean isTableStorageConfig(String key) {
+        return key.startsWith(TABLE_PREFIX);
     }
 
     @VisibleForTesting

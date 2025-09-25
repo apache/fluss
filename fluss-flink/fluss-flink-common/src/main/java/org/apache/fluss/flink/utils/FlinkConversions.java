@@ -19,14 +19,12 @@ package org.apache.fluss.flink.utils;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOption;
-import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.config.MemorySize;
 import org.apache.fluss.config.Password;
-import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.catalog.FlinkCatalogFactory;
-import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.record.ChangeType;
@@ -52,10 +50,10 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.stream.Collectors;
 
 import static org.apache.flink.table.factories.FactoryUtil.CONNECTOR;
+import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.apache.fluss.flink.adapter.CatalogTableAdapter.toCatalogTable;
@@ -96,20 +94,6 @@ public class FlinkConversions {
 
         // put fluss table properties into flink options, to make the properties visible to users
         convertFlussTablePropertiesToFlinkOptions(tableInfo.getProperties().toMap(), newOptions);
-
-        // put lake related options to table options
-        Optional<DataLakeFormat> optDataLakeFormat = tableInfo.getTableConfig().getDataLakeFormat();
-        if (optDataLakeFormat.isPresent()) {
-            DataLakeFormat dataLakeFormat = optDataLakeFormat.get();
-            String dataLakePrefix = "table.datalake." + dataLakeFormat + ".";
-
-            for (Map.Entry<String, String> tableProperty :
-                    tableInfo.getProperties().toMap().entrySet()) {
-                if (tableProperty.getKey().startsWith(dataLakePrefix)) {
-                    newOptions.put(tableProperty.getKey(), tableProperty.getValue());
-                }
-            }
-        }
 
         org.apache.flink.table.api.Schema.Builder schemaBuilder =
                 org.apache.flink.table.api.Schema.newBuilder();
@@ -335,21 +319,51 @@ public class FlinkConversions {
     private static Map<String, String> convertFlinkOptionsToFlussTableProperties(
             Configuration options) {
         Map<String, String> properties = new HashMap<>();
-        for (org.apache.flink.configuration.ConfigOption<?> option :
-                FlinkConnectorOptions.TABLE_OPTIONS) {
-            if (options.containsKey(option.key())) {
-                properties.put(option.key(), options.getValue(option));
-            }
-        }
+        options.toMap()
+                .forEach(
+                        (k, v) -> {
+                            if (isTableStorageConfig(k)) {
+                                properties.put(k, v);
+                            }
+                        });
         return properties;
     }
 
     private static void convertFlussTablePropertiesToFlinkOptions(
             Map<String, String> flussProperties, Map<String, String> flinkOptions) {
-        for (ConfigOption<?> option : FlussConfigUtils.TABLE_OPTIONS.values()) {
-            if (flussProperties.containsKey(option.key())) {
-                flinkOptions.put(option.key(), flussProperties.get(option.key()));
-            }
+        flussProperties.forEach(
+                (k, v) -> {
+                    if (isTableStorageConfig(k)) {
+                        flinkOptions.put(k, v);
+                    }
+                });
+    }
+
+    public static TableChange toFlussTableChange(
+            org.apache.flink.table.catalog.TableChange tableChange) {
+        TableChange flussTableChange;
+        if (tableChange instanceof org.apache.flink.table.catalog.TableChange.SetOption) {
+            flussTableChange =
+                    convertSetOption(
+                            (org.apache.flink.table.catalog.TableChange.SetOption) tableChange);
+        } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.ResetOption) {
+            flussTableChange =
+                    convertResetOption(
+                            (org.apache.flink.table.catalog.TableChange.ResetOption) tableChange);
+        } else {
+            throw new UnsupportedOperationException(
+                    String.format("Unsupported flink table change: %s.", tableChange));
         }
+        return flussTableChange;
+    }
+
+    private static TableChange.SetOption convertSetOption(
+            org.apache.flink.table.catalog.TableChange.SetOption flinkSetOption) {
+        return TableChange.set(flinkSetOption.getKey(), flinkSetOption.getValue());
+    }
+
+    private static TableChange.ResetOption convertResetOption(
+            org.apache.flink.table.catalog.TableChange.ResetOption flinkResetOption) {
+        return TableChange.reset(flinkResetOption.getKey());
     }
 }

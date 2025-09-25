@@ -17,8 +17,8 @@
 
 package org.apache.fluss.metadata;
 
-/** The operation type of altering table configurations. */
-public enum AlterTableConfigsOpType {
+/** The operation type of altering configurations. */
+public enum AlterConfigOpType {
     SET(0),
     DELETE(1),
     APPEND(2),
@@ -26,11 +26,11 @@ public enum AlterTableConfigsOpType {
 
     public final int value;
 
-    AlterTableConfigsOpType(int value) {
+    AlterConfigOpType(int value) {
         this.value = value;
     }
 
-    public static AlterTableConfigsOpType from(int opType) {
+    public static AlterConfigOpType from(int opType) {
         switch (opType) {
             case 0:
                 return SET;
@@ -41,8 +41,7 @@ public enum AlterTableConfigsOpType {
             case 3:
                 return SUBTRACT;
             default:
-                throw new IllegalArgumentException(
-                        "Unsupported AlterTableConfigsOpType: " + opType);
+                throw new IllegalArgumentException("Unsupported AlterConfigOpType: " + opType);
         }
     }
 

@@ -40,6 +40,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.utils.LakeStorageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
@@ -57,7 +58,6 @@ import javax.annotation.Nullable;
 
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -308,33 +308,44 @@ public class MetadataManager {
             TablePath tablePath,
             TablePropertyChanges tablePropertyChanges,
             boolean ignoreIfNotExists) {
-        if (!databaseExists(tablePath.getDatabaseName())) {
-            throw new DatabaseNotExistException(
-                    "Database " + tablePath.getDatabaseName() + " does not exist.");
-        }
-        if (!tableExists(tablePath)) {
-            if (ignoreIfNotExists) {
-                return;
-            } else {
-                throw new TableNotExistException("Table " + tablePath + " does not exists.");
-            }
-        }
-
         try {
-            TableRegistration updatedTableRegistration =
-                    getUpdatedTableRegistration(tablePath, tablePropertyChanges);
-            if (updatedTableRegistration != null) {
+            // it throws TableNotExistException if the table or database not exists
+            TableRegistration tableReg = getTableRegistration(tablePath);
+            SchemaInfo schemaInfo = getLatestSchema(tablePath);
+            // we can't use MetadataManager#getTable here, because it will add the default
+            // lake options to the table properties, which may cause the validation failure
+            TableInfo tableInfo = tableReg.toTableInfo(tablePath, schemaInfo);
+
+            // validate the changes
+            validateAlterTableProperties(
+                    tableInfo,
+                    tablePropertyChanges.tableKeysToChange(),
+                    tablePropertyChanges.customKeysToChange());
+
+            TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
+            TableDescriptor newDescriptor =
+                    getUpdatedTableDescriptor(tableDescriptor, tablePropertyChanges);
+
+            if (newDescriptor != null) {
+                // reuse the same validate logic with the createTable() method
+                validateTableDescriptor(tableDescriptor, maxBucketNum);
+                // update the table to zk
+                TableRegistration updatedTableRegistration =
+                        tableReg.newProperties(
+                                newDescriptor.getProperties(), newDescriptor.getCustomProperties());
                 zookeeperClient.updateTable(tablePath, updatedTableRegistration);
             } else {
-                LOG.debug(
+                LOG.info(
                         "No properties changed when alter table {}, skip update table.", tablePath);
             }
         } catch (Exception e) {
-            if (e instanceof KeeperException.NoNodeException) {
+            if (e instanceof TableNotExistException) {
                 if (ignoreIfNotExists) {
                     return;
                 }
-                throw new TableNotExistException("Table " + tablePath + " does not exists.");
+                throw (TableNotExistException) e;
+            } else if (e instanceof RuntimeException) {
+                throw (RuntimeException) e;
             } else {
                 throw new FlussRuntimeException("Failed to alter table: " + tablePath, e);
             }
@@ -342,18 +353,17 @@ public class MetadataManager {
     }
 
     /**
-     * Get a new TableRegistration with updated properties.
+     * Get a new TableDescriptor with updated properties.
      *
-     * @param tablePath the table path.
+     * @param tableDescriptor the current table descriptor.
      * @param tablePropertyChanges the changes for the table properties
-     * @return the updated TableRegistration, or null if no properties updated.
+     * @return the updated TableDescriptor, or null if no properties updated.
      */
-    private @Nullable TableRegistration getUpdatedTableRegistration(
-            TablePath tablePath, TablePropertyChanges tablePropertyChanges) {
-        TableRegistration existTableReg = getTableRegistration(tablePath);
-
-        Map<String, String> newProperties = new HashMap<>(existTableReg.properties);
-        Map<String, String> newCustomProperties = new HashMap<>(existTableReg.customProperties);
+    private @Nullable TableDescriptor getUpdatedTableDescriptor(
+            TableDescriptor tableDescriptor, TablePropertyChanges tablePropertyChanges) {
+        Map<String, String> newProperties = new HashMap<>(tableDescriptor.getProperties());
+        Map<String, String> newCustomProperties =
+                new HashMap<>(tableDescriptor.getCustomProperties());
 
         // set properties
         newProperties.putAll(tablePropertyChanges.tablePropertiesToSet);
@@ -369,13 +379,12 @@ public class MetadataManager {
         }
 
         // no properties change happen
-        if (newProperties.equals(existTableReg.properties)
-                && newCustomProperties.equals(existTableReg.customProperties)) {
+        if (newProperties.equals(tableDescriptor.getProperties())
+                && newCustomProperties.equals(tableDescriptor.getCustomProperties())) {
             return null;
+        } else {
+            return tableDescriptor.withProperties(newProperties, newCustomProperties);
         }
-
-        validateAlterTableProperties(newProperties);
-        return existTableReg.newProperties(newProperties, newCustomProperties);
     }
 
     public TableInfo getTable(TablePath tablePath) throws TableNotExistException {
@@ -625,64 +634,6 @@ public class MetadataManager {
             runnable.run();
         } catch (Exception e) {
             throw new FlussRuntimeException(errorMsg, e);
-        }
-    }
-
-    /** To describe the changes of the properties of a table. */
-    public static class TablePropertyChanges {
-
-        private final Map<String, String> tablePropertiesToSet;
-        private final Set<String> tablePropertiesToReset;
-
-        private final Map<String, String> customPropertiesToSet;
-        private final Set<String> customPropertiesToReset;
-
-        private TablePropertyChanges(
-                Map<String, String> tablePropertiesToSet,
-                Set<String> tablePropertiesToReset,
-                Map<String, String> customPropertiesToSet,
-                Set<String> customPropertiesToReset) {
-            this.tablePropertiesToSet = tablePropertiesToSet;
-            this.tablePropertiesToReset = tablePropertiesToReset;
-            this.customPropertiesToSet = customPropertiesToSet;
-            this.customPropertiesToReset = customPropertiesToReset;
-        }
-
-        public static Builder builder() {
-            return new Builder();
-        }
-
-        /** The builder for {@link TablePropertyChanges}. */
-        public static class Builder {
-            private final Map<String, String> tablePropertiesToSet = new HashMap<>();
-            private final Set<String> tablePropertiesToReset = new HashSet<>();
-
-            private final Map<String, String> customPropertiesToSet = new HashMap<>();
-            private final Set<String> customPropertiesToReset = new HashSet<>();
-
-            public void setTableProperty(String key, String value) {
-                tablePropertiesToSet.put(key, value);
-            }
-
-            public void resetTableProperty(String key) {
-                tablePropertiesToReset.add(key);
-            }
-
-            public void setCustomProperty(String key, String value) {
-                customPropertiesToSet.put(key, value);
-            }
-
-            public void resetCustomProperty(String key) {
-                customPropertiesToReset.add(key);
-            }
-
-            public TablePropertyChanges build() {
-                return new TablePropertyChanges(
-                        tablePropertiesToSet,
-                        tablePropertiesToReset,
-                        customPropertiesToSet,
-                        customPropertiesToReset);
-            }
         }
     }
 }

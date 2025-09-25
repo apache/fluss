@@ -21,9 +21,10 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
-import org.apache.fluss.metadata.AlterTableConfigsOpType;
+import org.apache.fluss.metadata.AlterConfigOpType;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -82,7 +83,7 @@ import org.apache.fluss.rpc.messages.PbAdjustIsrReqForBucket;
 import org.apache.fluss.rpc.messages.PbAdjustIsrReqForTable;
 import org.apache.fluss.rpc.messages.PbAdjustIsrRespForBucket;
 import org.apache.fluss.rpc.messages.PbAdjustIsrRespForTable;
-import org.apache.fluss.rpc.messages.PbAlterConfigsRequestInfo;
+import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
 import org.apache.fluss.rpc.messages.PbCreateAclRespInfo;
 import org.apache.fluss.rpc.messages.PbDropAclsFilterResult;
@@ -147,6 +148,7 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
+import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
@@ -170,12 +172,14 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -241,24 +245,59 @@ public class ServerRpcMessageUtils {
                 pbServerNode.hasRack() ? pbServerNode.getRack() : null);
     }
 
-    public static TableChange toFlussTableChange(
-            PbAlterConfigsRequestInfo pbAlterConfigsRequestInfo) {
-        AlterTableConfigsOpType opType =
-                AlterTableConfigsOpType.from(pbAlterConfigsRequestInfo.getOpType());
+    public static TableChange toTableChange(PbAlterConfig pbAlterConfig) {
+        AlterConfigOpType opType = AlterConfigOpType.from(pbAlterConfig.getOpType());
         switch (opType) {
             case SET: // SET_OPTION
                 return TableChange.set(
-                        pbAlterConfigsRequestInfo.getConfigKey(),
-                        pbAlterConfigsRequestInfo.getConfigValue());
+                        pbAlterConfig.getConfigKey(), pbAlterConfig.getConfigValue());
             case DELETE: // RESET_OPTION
-                return TableChange.reset(pbAlterConfigsRequestInfo.getConfigKey());
+                return TableChange.reset(pbAlterConfig.getConfigKey());
             case APPEND:
             case SUBTRACT:
             default:
                 throw new IllegalArgumentException(
-                        "Unsupported alter configs op type "
-                                + pbAlterConfigsRequestInfo.getOpType());
+                        "Unsupported alter configs op type " + pbAlterConfig.getOpType());
         }
+    }
+
+    public static TablePropertyChanges toTablePropertyChanges(List<PbAlterConfig> alterConfigs) {
+        TablePropertyChanges.Builder builder = TablePropertyChanges.builder();
+        if (alterConfigs.isEmpty()) {
+            return builder.build();
+        }
+
+        List<TableChange> tableChanges =
+                alterConfigs.stream()
+                        .filter(Objects::nonNull)
+                        .map(ServerRpcMessageUtils::toTableChange)
+                        .collect(Collectors.toList());
+
+        for (TableChange tableChange : tableChanges) {
+            if (tableChange instanceof TableChange.SetOption) {
+                TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
+                String optionKey = setOption.getKey();
+                if (isTableStorageConfig(optionKey)) {
+                    builder.setTableProperty(optionKey, setOption.getValue());
+                } else {
+                    // otherwise, it's considered as custom property
+                    builder.setCustomProperty(optionKey, setOption.getValue());
+                }
+            } else if (tableChange instanceof TableChange.ResetOption) {
+                TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
+                String optionKey = resetOption.getKey();
+                if (isTableStorageConfig(optionKey)) {
+                    builder.resetTableProperty(optionKey);
+                } else {
+                    // otherwise, it's considered as custom property
+                    builder.resetCustomProperty(optionKey);
+                }
+            } else {
+                throw new InvalidAlterTableException(
+                        "Unsupported alter table change: " + tableChange);
+            }
+        }
+        return builder.build();
     }
 
     public static MetadataResponse buildMetadataResponse(

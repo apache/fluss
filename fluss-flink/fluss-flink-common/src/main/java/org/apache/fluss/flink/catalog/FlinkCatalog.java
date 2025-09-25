@@ -29,7 +29,6 @@ import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
 import org.apache.fluss.flink.utils.DataLakeUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
-import org.apache.fluss.flink.utils.FlinkTableChangeToFlussTableChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -86,6 +85,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
+import static org.apache.fluss.flink.FlinkConnectorOptions.ALTER_DISALLOW_OPTIONS;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionAlreadyExists;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionInvalid;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionNotExist;
@@ -413,8 +413,23 @@ public class FlinkCatalog extends AbstractCatalog {
         List<TableChange> flussTableChanges =
                 tableChanges.stream()
                         .filter(Objects::nonNull)
-                        .map(FlinkTableChangeToFlussTableChange::toFlussTableChange)
+                        .map(FlinkConversions::toFlussTableChange)
                         .collect(Collectors.toList());
+
+        // some connector options are table storage related, not allowed to alter
+        for (TableChange change : flussTableChanges) {
+            String key = null;
+            if (change instanceof TableChange.SetOption) {
+                key = ((TableChange.SetOption) change).getKey();
+            } else if (change instanceof TableChange.ResetOption) {
+                key = ((TableChange.ResetOption) change).getKey();
+            }
+            if (key != null && ALTER_DISALLOW_OPTIONS.contains(key)) {
+                throw new CatalogException(
+                        "The option '" + key + "' is not supported to alter yet.");
+            }
+        }
+
         try {
             admin.alterTable(tablePath, flussTableChanges, ignoreIfNotExists).get();
         } catch (Exception e) {

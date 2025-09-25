@@ -21,7 +21,6 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
@@ -37,7 +36,6 @@ import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
@@ -45,8 +43,8 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
-import org.apache.fluss.rpc.messages.AlterTableConfigsRequest;
-import org.apache.fluss.rpc.messages.AlterTableConfigsResponse;
+import org.apache.fluss.rpc.messages.AlterTablePropertiesRequest;
+import org.apache.fluss.rpc.messages.AlterTablePropertiesResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -75,7 +73,6 @@ import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
-import org.apache.fluss.rpc.messages.PbAlterConfigsRequestInfo;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
 import org.apache.fluss.rpc.netty.server.Session;
@@ -103,7 +100,6 @@ import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metadata.TableMetadata;
-import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
@@ -120,13 +116,10 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
-import java.util.stream.Collectors;
 
-import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
@@ -137,6 +130,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionSp
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePropertyChanges;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -304,70 +298,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     @Override
-    public CompletableFuture<AlterTableConfigsResponse> alterTableConfigs(
-            AlterTableConfigsRequest request) {
+    public CompletableFuture<AlterTablePropertiesResponse> alterTableProperties(
+            AlterTablePropertiesRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
         tablePath.validate();
         if (authorizer != null) {
             authorizer.authorize(currentSession(), OperationType.ALTER, Resource.table(tablePath));
         }
 
-        AlterTableConfigsResponse alterTableResponse = new AlterTableConfigsResponse();
-
-        handleFlussTableChanges(
-                tablePath, request.getConfigChangesList(), request.isIgnoreIfNotExists());
-
-        return CompletableFuture.completedFuture(alterTableResponse);
-    }
-
-    private void handleFlussTableChanges(
-            TablePath tablePath,
-            List<PbAlterConfigsRequestInfo> configsRequestInfos,
-            boolean ignoreIfNotExists) {
-        if (configsRequestInfos.isEmpty()) {
-            return;
-        }
-
-        List<TableChange> tableChanges =
-                configsRequestInfos.stream()
-                        .filter(Objects::nonNull)
-                        .map(ServerRpcMessageUtils::toFlussTableChange)
-                        .collect(Collectors.toList());
-
-        MetadataManager.TablePropertyChanges.Builder propertyChangesBuilder =
-                MetadataManager.TablePropertyChanges.builder();
-
-        for (TableChange tableChange : tableChanges) {
-            if (tableChange instanceof TableChange.SetOption) {
-                TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
-                String optionKey = setOption.getKey();
-                if (TABLE_OPTIONS.containsKey(optionKey)) {
-                    // currently, we don't support alter any table options understand by Fluss
-                    throw new InvalidAlterTableException(
-                            "The option '" + optionKey + "' is not supported to alter set.");
-                } else {
-                    // otherwise, it's considered as custom property
-                    propertyChangesBuilder.setCustomProperty(optionKey, setOption.getValue());
-                }
-            } else if (tableChange instanceof TableChange.ResetOption) {
-                TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
-                String optionKey = resetOption.getKey();
-                if (TABLE_OPTIONS.containsKey(optionKey)) {
-                    // currently, we don't support alter any table options understand by Fluss
-                    throw new InvalidAlterTableException(
-                            "The option " + optionKey + " is not supported to alter reset.");
-                } else {
-                    // otherwise, it's considered as custom property
-                    propertyChangesBuilder.resetCustomProperty(optionKey);
-                }
-            } else {
-                throw new InvalidAlterTableException(
-                        "Unsupported alter table change: " + tableChange);
-            }
-        }
-
         metadataManager.alterTableProperties(
-                tablePath, propertyChangesBuilder.build(), ignoreIfNotExists);
+                tablePath,
+                toTablePropertyChanges(request.getConfigChangesList()),
+                request.isIgnoreIfNotExists());
+
+        return CompletableFuture.completedFuture(new AlterTablePropertiesResponse());
     }
 
     private TableDescriptor applySystemDefaults(TableDescriptor tableDescriptor) {

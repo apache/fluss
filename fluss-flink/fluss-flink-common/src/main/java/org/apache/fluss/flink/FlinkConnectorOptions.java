@@ -26,6 +26,7 @@ import org.apache.flink.configuration.DescribedEnum;
 import org.apache.flink.configuration.description.InlineElement;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.apache.flink.configuration.description.TextElement.text;
@@ -131,6 +132,13 @@ public class FlinkConnectorOptions {
 
     public static final List<ConfigOption<?>> CLIENT_OPTIONS =
             FlinkConversions.toFlinkOptions(FlussConfigUtils.CLIENT_OPTIONS.values());
+
+    // --------------------------------------------------------------------------------------------
+    // modification disallowed connector options
+    // --------------------------------------------------------------------------------------------
+
+    public static final List<String> ALTER_DISALLOW_OPTIONS =
+            Arrays.asList(BUCKET_NUMBER.key(), BUCKET_KEY.key(), BOOTSTRAP_SERVERS.key());
 
     // ------------------------------------------------------------------------------------------
 

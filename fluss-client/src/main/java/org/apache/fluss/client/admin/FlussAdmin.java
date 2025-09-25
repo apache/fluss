@@ -22,7 +22,6 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
-import org.apache.fluss.client.utils.FlussTableChangeProtoConverter;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.exception.LeaderNotAvailableException;
@@ -43,7 +42,7 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
-import org.apache.fluss.rpc.messages.AlterTableConfigsRequest;
+import org.apache.fluss.rpc.messages.AlterTablePropertiesRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
@@ -65,7 +64,7 @@ import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
-import org.apache.fluss.rpc.messages.PbAlterConfigsRequestInfo;
+import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
@@ -244,11 +243,11 @@ public class FlussAdmin implements Admin {
     public CompletableFuture<Void> alterTable(
             TablePath tablePath, List<TableChange> tableChanges, boolean ignoreIfNotExists) {
         tablePath.validate();
-        AlterTableConfigsRequest request = new AlterTableConfigsRequest();
+        AlterTablePropertiesRequest request = new AlterTablePropertiesRequest();
 
-        List<PbAlterConfigsRequestInfo> pbFlussTableChanges =
+        List<PbAlterConfig> pbFlussTableChanges =
                 tableChanges.stream()
-                        .map(FlussTableChangeProtoConverter::toPbAlterConfigsRequestInfo)
+                        .map(ClientRpcMessageUtils::toPbAlterConfigs)
                         .collect(Collectors.toList());
 
         request.addAllConfigChanges(pbFlussTableChanges)
@@ -256,7 +255,7 @@ public class FlussAdmin implements Admin {
                 .setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
-        return gateway.alterTableConfigs(request).thenApply(r -> null);
+        return gateway.alterTableProperties(request).thenApply(r -> null);
     }
 
     @Override
