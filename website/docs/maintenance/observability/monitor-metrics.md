@@ -646,7 +646,7 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="28"><strong>tabletserver</strong></th>
+      <th rowspan="30"><strong>tabletserver</strong></th>
       <td rowspan="20">table</td>
       <td>messagesInPerSecond</td>
       <td>The number of messages written per second to this table.</td>
@@ -772,6 +772,17 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
      <tr>
       <td>size</td>
       <td>The number of bytes written per second to this table.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
+      <td rowspan="2">table_bucket_logicalStorage</td>
+      <td>logSize</td>
+      <td>The logical storage size of log for this table bucket. </td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
+      <td>kvSize</td>
+      <td>The logical storage size of kv for this table bucket.</td>
       <td>Gauge</td>
     </tr>
   </tbody>
