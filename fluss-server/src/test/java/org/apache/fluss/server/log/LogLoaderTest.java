@@ -44,6 +44,7 @@ import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -64,7 +65,7 @@ final class LogLoaderTest extends LogTestBase {
 
     @BeforeEach
     public void setup() throws Exception {
-        conf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("1kb"));
+        conf.set(ConfigOptions.LOG_SEGMENT_FILE_SIZE, MemorySize.parse("10kb"));
         conf.set(ConfigOptions.LOG_INDEX_INTERVAL_SIZE, MemorySize.parse("1b"));
 
         logDir =
@@ -89,14 +90,16 @@ final class LogLoaderTest extends LogTestBase {
         LogTablet logTablet = createLogTablet(true);
         appendRecords(logTablet, numRecords);
         // collect all the index files
-        List<File> indexFiles = collectIndexFiles(logTablet);
+        List<File> indexFiles = collectIndexFiles(logTablet.logSegments());
         logTablet.close();
 
         // corrupt all the index files
         for (File indexFile : indexFiles) {
             try (FileChannel fileChannel =
                     FileChannel.open(indexFile.toPath(), StandardOpenOption.APPEND)) {
-                fileChannel.write(ByteBuffer.wrap(new byte[] {0}));
+                for (int i = 0; i < 12; i++) {
+                    fileChannel.write(ByteBuffer.wrap(new byte[] {0}));
+                }
             }
         }
 
@@ -105,9 +108,29 @@ final class LogLoaderTest extends LogTestBase {
         for (LogSegment segment : logTablet.logSegments()) {
             if (segment.getBaseOffset() != logTablet.activeLogSegment().getBaseOffset()) {
                 assertThatThrownBy(segment.offsetIndex()::sanityCheck)
-                        .isInstanceOf(CorruptIndexException.class);
+                        .isInstanceOf(CorruptIndexException.class)
+                        .hasMessage(
+                                String.format(
+                                        "Index file %s is corrupt, found %d bytes which is neither positive nor a multiple of %d",
+                                        segment.offsetIndex().file().getAbsolutePath(),
+                                        segment.offsetIndex().length(),
+                                        segment.offsetIndex().entrySize()));
                 assertThatThrownBy(segment.timeIndex()::sanityCheck)
-                        .isInstanceOf(CorruptIndexException.class);
+                        .isInstanceOf(CorruptIndexException.class)
+                        .hasMessageContaining(
+                                String.format(
+                                        "Corrupt time index found, time index file (%s) has non-zero size but the last timestamp is 0 which is less than the first timestamp",
+                                        segment.timeIndex().file().getAbsolutePath()));
+            } else {
+                // the active segment will be resized, which case no corruption exception when doing
+                // sanity check
+                segment.offsetIndex().sanityCheck();
+                assertThatThrownBy(segment.timeIndex()::sanityCheck)
+                        .isInstanceOf(CorruptIndexException.class)
+                        .hasMessageContaining(
+                                String.format(
+                                        "Corrupt time index found, time index file (%s) has non-zero size but the last timestamp is 0 which is less than the first timestamp",
+                                        segment.timeIndex().file().getAbsolutePath()));
             }
         }
         logTablet.close();
@@ -127,13 +150,63 @@ final class LogLoaderTest extends LogTestBase {
     }
 
     @Test
+    void testCorruptIndexRebuildWithRecoveryPoint() throws Exception {
+        // publish the records and close the log
+        int numRecords = 200;
+        LogTablet logTablet = createLogTablet(true);
+        appendRecords(logTablet, numRecords);
+        // collect all the index files
+        long recoveryPoint = logTablet.localLogEndOffset() / 2;
+        List<File> indexFiles = collectIndexFiles(logTablet.logSegments());
+        logTablet.close();
+
+        // corrupt all the index files
+        for (File indexFile : indexFiles) {
+            try (FileChannel fileChannel =
+                    FileChannel.open(indexFile.toPath(), StandardOpenOption.APPEND)) {
+                for (int i = 0; i < 12; i++) {
+                    fileChannel.write(ByteBuffer.wrap(new byte[] {0}));
+                }
+            }
+        }
+
+        // test reopen the log with recovery point
+        logTablet = createLogTablet(false, recoveryPoint);
+        List<LogSegment> logSegments = logTablet.logSegments(recoveryPoint, Long.MAX_VALUE);
+        assertThat(logSegments.size() < logTablet.logSegments().size()).isTrue();
+        Set<Long> recoveredSegments =
+                logSegments.stream().map(LogSegment::getBaseOffset).collect(Collectors.toSet());
+        for (LogSegment segment : logTablet.logSegments()) {
+            if (recoveredSegments.contains(segment.getBaseOffset())) {
+                segment.offsetIndex().sanityCheck();
+                segment.timeIndex().sanityCheck();
+            } else {
+                assertThatThrownBy(segment.offsetIndex()::sanityCheck)
+                        .isInstanceOf(CorruptIndexException.class)
+                        .hasMessage(
+                                String.format(
+                                        "Index file %s is corrupt, found %d bytes which is neither positive nor a multiple of %d",
+                                        segment.offsetIndex().file().getAbsolutePath(),
+                                        segment.offsetIndex().length(),
+                                        segment.offsetIndex().entrySize()));
+                assertThatThrownBy(segment.timeIndex()::sanityCheck)
+                        .isInstanceOf(CorruptIndexException.class)
+                        .hasMessageContaining(
+                                String.format(
+                                        "Corrupt time index found, time index file (%s) has non-zero size but the last timestamp is 0 which is less than the first timestamp",
+                                        segment.timeIndex().file().getAbsolutePath()));
+            }
+        }
+    }
+
+    @Test
     void testIndexRebuild() throws Exception {
         // publish the records and close the log
         int numRecords = 200;
         LogTablet logTablet = createLogTablet(true);
         appendRecords(logTablet, numRecords);
         // collect all index files
-        List<File> indexFiles = collectIndexFiles(logTablet);
+        List<File> indexFiles = collectIndexFiles(logTablet.logSegments());
         logTablet.close();
 
         // delete all the index files
@@ -153,12 +226,17 @@ final class LogLoaderTest extends LogTestBase {
     }
 
     private LogTablet createLogTablet(boolean isCleanShutdown) throws Exception {
+        return createLogTablet(isCleanShutdown, 0);
+    }
+
+    private LogTablet createLogTablet(boolean isCleanShutdown, long recoveryPoint)
+            throws Exception {
         return LogTablet.create(
                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                 logDir,
                 conf,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
-                0,
+                recoveryPoint,
                 scheduler,
                 LogFormat.ARROW,
                 1,
@@ -195,9 +273,9 @@ final class LogLoaderTest extends LogTestBase {
         }
     }
 
-    private List<File> collectIndexFiles(LogTablet logTablet) throws IOException {
+    private List<File> collectIndexFiles(List<LogSegment> logSegments) throws IOException {
         List<File> indexFiles = new ArrayList<>();
-        for (LogSegment segment : logTablet.logSegments()) {
+        for (LogSegment segment : logSegments) {
             indexFiles.add(segment.offsetIndex().file());
             indexFiles.add(segment.timeIndex().file());
         }
