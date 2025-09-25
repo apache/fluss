@@ -1,7 +1,7 @@
 
 # Fluss Helm Chart
 
-This chart deploys a Fluss cluster with a Coordinator and a StatefulSet of Tablets.
+This chart deploys a Fluss cluster with a CoordinatorServer and TabletServer as StatefulSets.
 It requires a Zookeeper ensemble to be running in the same Kubernetes cluster.
 
 
