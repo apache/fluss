@@ -256,10 +256,16 @@ public abstract class FlinkPaimonTieringTestBase {
     }
 
     protected long createLogTable(TablePath tablePath, int bucketNum) throws Exception {
-        return createLogTable(tablePath, bucketNum, false);
+        return createLogTable(
+                tablePath, bucketNum, false, Collections.emptyMap(), Collections.emptyMap());
     }
 
-    protected long createLogTable(TablePath tablePath, int bucketNum, boolean isPartitioned)
+    protected long createLogTable(
+            TablePath tablePath,
+            int bucketNum,
+            boolean isPartitioned,
+            Map<String, String> properties,
+            Map<String, String> customProperties)
             throws Exception {
         Schema.Builder schemaBuilder =
                 Schema.newBuilder().column("a", DataTypes.INT()).column("b", DataTypes.STRING());
@@ -277,6 +283,8 @@ public abstract class FlinkPaimonTieringTestBase {
             tableBuilder.property(
                     ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR);
         }
+        tableBuilder.properties(properties);
+        tableBuilder.customProperties(customProperties);
         tableBuilder.schema(schemaBuilder.build());
         return createTable(tablePath, tableBuilder.build());
     }

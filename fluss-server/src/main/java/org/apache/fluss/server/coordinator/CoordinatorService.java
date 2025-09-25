@@ -35,6 +35,7 @@ import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
@@ -90,6 +91,7 @@ import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
+import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
@@ -103,6 +105,7 @@ import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.concurrent.FutureUtils;
 
 import javax.annotation.Nullable;
+
 import java.io.UncheckedIOException;
 import java.util.HashMap;
 import java.util.List;
@@ -296,40 +299,88 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             authorizer.authorize(currentSession(), OperationType.ALTER, Resource.table(tablePath));
         }
 
+        TablePropertyChanges tablePropertyChanges =
+                toTablePropertyChanges(request.getConfigChangesList());
+
         TableInfo existTableInfo = metadataManager.getTable(tablePath);
         TableDescriptor existTableDescriptor = existTableInfo.toTableDescriptor();
+        TableDescriptor updatedTableDescriptor =
+                getUpdatedTableDescriptor(existTableDescriptor, tablePropertyChanges);
 
-        metadataManager.alterTableProperties(
-                tablePath,
-                toTablePropertyChanges(request.getConfigChangesList()),
-                request.isIgnoreIfNotExists());
+        if (updatedTableDescriptor != null) {
+            boolean toEnableDataLake =
+                    !isDataLakeEnabled(existTableDescriptor)
+                            && isDataLakeEnabled(updatedTableDescriptor);
+            boolean toDisableDataLake =
+                    isDataLakeEnabled(existTableDescriptor)
+                            && !isDataLakeEnabled(updatedTableDescriptor);
 
-        TableInfo alteredTableInfo = metadataManager.getTable(tablePath);
-        TableDescriptor alteredTableDescriptor = alteredTableInfo.toTableDescriptor();
-        // enable lake table
-        if (!isDataLakeEnabled(existTableDescriptor) && isDataLakeEnabled(alteredTableDescriptor)) {
-            // TODO: should tolerate if the lake exist but matches our schema. This ensures
-            // eventually
-            //  consistent by idempotently creating the table multiple times. See #846
-            // before create table in fluss, we may create in lake
-            try {
-                checkNotNull(lakeCatalog).createTable(tablePath, alteredTableDescriptor);
-            } catch (TableAlreadyExistException e) {
-                throw new LakeTableAlreadyExistException(
-                        String.format(
-                                "The table %s already exists in %s catalog, please "
-                                        + "first drop the table in %s catalog or use a new table name.",
-                                tablePath, dataLakeFormat, dataLakeFormat));
+            // enable lake table
+            if (toEnableDataLake) {
+                // TODO: should tolerate if the lake exist but matches our schema. This ensures
+                // eventually
+                //  consistent by idempotently creating the table multiple times. See #846
+                // before create table in fluss, we may create in lake
+                try {
+                    checkNotNull(lakeCatalog).createTable(tablePath, updatedTableDescriptor);
+                } catch (TableAlreadyExistException e) {
+                    throw new LakeTableAlreadyExistException(
+                            String.format(
+                                    "The table %s already exists in %s catalog, please "
+                                            + "first drop the table in %s catalog or use a new table name.",
+                                    tablePath, dataLakeFormat, dataLakeFormat));
+                }
             }
-            // if the table is lake table, we need to add it to lake table tiering manager
-            lakeTableTieringManager.addNewLakeTable(alteredTableInfo);
-        } else if (isDataLakeEnabled(existTableDescriptor)
-                && !isDataLakeEnabled((alteredTableDescriptor))) {
-            // remove tiering
-            lakeTableTieringManager.removeLakeTable(alteredTableInfo.getTableId());
+
+            metadataManager.alterTableProperties(
+                    tablePath, tablePropertyChanges, request.isIgnoreIfNotExists());
+
+            TableInfo alteredTableInfo = metadataManager.getTable(tablePath);
+            if (toEnableDataLake) {
+                // if the table is lake table, we need to add it to lake table tiering manager
+                lakeTableTieringManager.addNewLakeTable(alteredTableInfo);
+            } else if (toDisableDataLake) {
+                lakeTableTieringManager.removeLakeTable(alteredTableInfo.getTableId());
+            }
         }
 
         return CompletableFuture.completedFuture(new AlterTablePropertiesResponse());
+    }
+
+    /**
+     * Get a new TableDescriptor with updated properties.
+     *
+     * @param existTableDescriptor the existing table descriptor.
+     * @param tablePropertyChanges the changes for the table properties
+     * @return the updated TableDescription, or null if no properties updated.
+     */
+    private @Nullable TableDescriptor getUpdatedTableDescriptor(
+            TableDescriptor existTableDescriptor, TablePropertyChanges tablePropertyChanges) {
+
+        Map<String, String> newProperties = new HashMap<>(existTableDescriptor.getProperties());
+        Map<String, String> newCustomProperties =
+                new HashMap<>(existTableDescriptor.getCustomProperties());
+
+        // set properties
+        newProperties.putAll(tablePropertyChanges.tablePropertiesToSet);
+        newCustomProperties.putAll(tablePropertyChanges.customPropertiesToSet);
+
+        // reset properties
+        for (String key : tablePropertyChanges.tablePropertiesToReset) {
+            newProperties.remove(key);
+        }
+
+        for (String key : tablePropertyChanges.customPropertiesToReset) {
+            newCustomProperties.remove(key);
+        }
+
+        // no properties change happen
+        if (newProperties.equals(existTableDescriptor.getProperties())
+                && newCustomProperties.equals(existTableDescriptor.getCustomProperties())) {
+            return null;
+        }
+
+        return existTableDescriptor.withProperties(newProperties, newCustomProperties);
     }
 
     private TableDescriptor applySystemDefaults(TableDescriptor tableDescriptor) {

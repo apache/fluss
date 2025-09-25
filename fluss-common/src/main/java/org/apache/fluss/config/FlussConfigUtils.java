@@ -49,6 +49,10 @@ public class FlussConfigUtils {
         return key.startsWith(TABLE_PREFIX);
     }
 
+    public static boolean isAlterableTableOption(String key) {
+        return ALTERABLE_TABLE_OPTIONS.contains(key);
+    }
+
     @VisibleForTesting
     static Map<String, ConfigOption<?>> extractConfigOptions(String prefix) {
         Map<String, ConfigOption<?>> options = new HashMap<>();

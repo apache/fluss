@@ -47,6 +47,7 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
+import static org.apache.fluss.config.FlussConfigUtils.isAlterableTableOption;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
@@ -108,7 +109,7 @@ public class TableDescriptorValidation {
             TableInfo currentTable, Set<String> tableKeysToChange, Set<String> customKeysToChange) {
         tableKeysToChange.forEach(
                 k -> {
-                    if (isTableStorageConfig(k)) {
+                    if (isTableStorageConfig(k) && !isAlterableTableOption(k)) {
                         throw new InvalidAlterTableException(
                                 "The option '" + k + "' is not supported to alter yet.");
                     }
