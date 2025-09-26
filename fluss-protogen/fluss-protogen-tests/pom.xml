@@ -59,6 +59,13 @@
             <artifactId>fluss-test-utils</artifactId>
         </dependency>
 
+        <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-protogen-generator</artifactId>
+            <version>${project.version}</version>
+            <scope>test</scope>
+        </dependency>
+
         <!-- Tests depends on ByteBufChannel -->
         <dependency>
             <groupId>org.apache.fluss</groupId>

@@ -388,7 +388,7 @@ public class DefaultAuthorizer extends AbstractAuthorizer implements FatalErrorH
 
                 } else {
                     LOG.trace("Deleting path for {} because it had no ACLs remaining", resource);
-                    zooKeeperClient.contitionalDeleteResourceAcl(
+                    zooKeeperClient.conditionalDeleteResourceAcl(
                             resource, currentVersionedAcls.zkVersion);
                 }
                 writeComplete = true;

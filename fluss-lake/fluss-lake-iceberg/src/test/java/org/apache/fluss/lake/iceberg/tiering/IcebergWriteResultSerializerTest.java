@@ -79,7 +79,9 @@ class IcebergWriteResultSerializerTest {
         // with rewrite result
         RewriteDataFileResult rewriteDataFileResult =
                 new RewriteDataFileResult(
-                        Collections.singletonList(dataFile), Collections.singletonList(dataFile));
+                        1L,
+                        Collections.singletonList(dataFile),
+                        Collections.singletonList(dataFile));
         originalResult = new IcebergWriteResult(writeResult, rewriteDataFileResult);
         serializedData = serializer.serialize(originalResult);
         deserializedResult = serializer.deserialize(serializer.getVersion(), serializedData);

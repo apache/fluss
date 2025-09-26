@@ -150,12 +150,17 @@ public class RemoteLogManager implements Closeable {
         }
         remoteLog.getRemoteLogEndOffset().ifPresent(log::updateRemoteLogEndOffset);
         log.updateRemoteLogStartOffset(remoteLog.getRemoteLogStartOffset());
+        log.updateRemoteLogSize(remoteLog.getRemoteSizeInBytes());
         // leader needs to register the remote log metrics
         remoteLog.registerMetrics(replica.bucketMetrics());
         remoteLogs.put(tableBucket, remoteLog);
 
         doHandleLeaderReplica(replica, remoteLog, tableBucket);
         LOG.debug("Added the remote log tiering task for replica {}", tableBucket);
+    }
+
+    public long getRemoteLogSize() {
+        return remoteLogs.values().stream().mapToLong(RemoteLogTablet::getRemoteSizeInBytes).sum();
     }
 
     /** Stop the log tiering task for the given replica. */

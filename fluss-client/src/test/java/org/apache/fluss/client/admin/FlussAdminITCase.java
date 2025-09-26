@@ -648,29 +648,6 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testCreateIllegalPartitionTable() {
-        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
-        TableDescriptor partitionedTable =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("id", DataTypes.STRING())
-                                        .column("name", DataTypes.STRING())
-                                        .column("dt", DataTypes.DATE())
-                                        .build())
-                        .distributedBy(3, "id")
-                        .partitionedBy("name", "dt")
-                        .build();
-        TablePath tablePath = TablePath.of(dbName, "test_create_illegal_partitioned_table_1");
-        assertThatThrownBy(() -> admin.createTable(tablePath, partitionedTable, true).get())
-                .cause()
-                .isInstanceOf(InvalidTableException.class)
-                .hasMessageContaining(
-                        "Currently, partitioned table supported partition key type are [STRING], "
-                                + "but got partition key 'dt' with data type DATE.");
-    }
-
-    @Test
     void testAddAndDropPartitions() throws Exception {
         String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
         TableDescriptor partitionedTable =

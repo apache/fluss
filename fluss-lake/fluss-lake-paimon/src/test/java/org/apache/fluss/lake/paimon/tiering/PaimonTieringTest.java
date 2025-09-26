@@ -41,7 +41,6 @@ import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.InternalRow;
-import org.apache.paimon.io.DataFileMeta;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.table.FileStoreTable;
@@ -80,7 +79,6 @@ import static org.apache.fluss.record.ChangeType.DELETE;
 import static org.apache.fluss.record.ChangeType.INSERT;
 import static org.apache.fluss.record.ChangeType.UPDATE_AFTER;
 import static org.apache.fluss.record.ChangeType.UPDATE_BEFORE;
-import static org.apache.fluss.utils.Preconditions.checkState;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** The UT for tiering to Paimon via {@link PaimonLakeTieringFactory}. */
@@ -624,12 +622,17 @@ class PaimonTieringTest {
             // for log table, we can't filter by bucket directly, filter file by __bucket column
             for (Split split : readBuilder.newScan().plan().splits()) {
                 DataSplit dataSplit = (DataSplit) split;
-                List<DataFileMeta> dataFileMetas = dataSplit.dataFiles();
-                checkState(dataFileMetas.size() == 1);
-                DataFileMeta dataFileMeta = dataFileMetas.get(0);
-                // filter by __bucket column
-                if (dataFileMeta.valueStats().maxValues().getInt(3) == bucket
-                        && dataFileMeta.valueStats().minValues().getInt(3) == bucket) {
+                // bucket is always 0
+                assertThat(dataSplit.bucket()).isEqualTo(0);
+                // filter by __bucket column, remove any data file that don't belone to this bucket
+                dataSplit
+                        .dataFiles()
+                        .removeIf(
+                                dataFileMeta ->
+                                        !(dataFileMeta.valueStats().maxValues().getInt(3) == bucket
+                                                && dataFileMeta.valueStats().minValues().getInt(3)
+                                                        == bucket));
+                if (!dataSplit.dataFiles().isEmpty()) {
                     splits.add(split);
                 }
             }

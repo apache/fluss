@@ -294,8 +294,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="9"><strong>coordinator</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="9">-</td>
+      <th rowspan="12"><strong>coordinator</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="7">-</td>
       <td>activeCoordinatorCount</td>
       <td>The number of active CoordinatorServer in this cluster.</td>
       <td>Gauge</td>
@@ -331,19 +331,37 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
-      <td>eventQueueSize</td>
-      <td>The number of events waiting to be processed in the queue.</td>
-      <td>Gauge</td>
-    </tr>
-    <tr>
       <td>eventQueueTimeMs</td>
       <td>The time that an event spent waiting in the queue to be processed.</td>
       <td>Histogram</td>
     </tr>
     <tr>
+      <td rowspan="2">event</td>
+      <td>eventQueueSize</td>
+      <td>The number of events currently waiting to be processed in the coordinator event queue. This metric is labeled with <code>event_type</code> to distinguish between different types of coordinator events.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
       <td>eventProcessingTimeMs</td>
-      <td>The time that an event took to be processed.</td>
+      <td>The time that an event took to be processed by the coordinator event processor. This metric is labeled with <code>event_type</code> to distinguish between different types of coordinator events.</td>
       <td>Histogram</td>
+    </tr>
+    <tr>
+      <td rowspan="1">physicalStorage</td>
+      <td>remoteKvSize</td>
+      <td>The physical storage size of remote KV store.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
+      <td rowspan="2">table_bucket</td>
+      <td>numKvSnapshots</td>
+      <td>number of kv snapshots of each table bucket.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
+      <td>allKvSnapshotSize</td>
+      <td>all kv snapshot size of each table bucket.</td>
+      <td>Gauge</td>
     </tr>
   </tbody>
 </table>
@@ -362,8 +380,23 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="10"><strong>tabletserver</strong></th>
-      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="10">-</td>
+      <th rowspan="29"><strong>tabletserver</strong></th>
+      <td style={{textAlign: 'center', verticalAlign: 'middle' }} rowspan="25">-</td>
+      <td>messagesInPerSecond</td>
+      <td>The number of messages written per second to this server.</td>
+      <td>Meter</td>
+    </tr>
+     <tr>
+      <td>bytesInPerSecond</td>
+      <td>The number of bytes written per second to this server.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td>bytesOutPerSecond</td>
+      <td>The number of bytes read per second from this server.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
       <td>replicationBytesInPerSecond</td>
       <td>The bytes of data write into follower replica for data sync.</td>
       <td>Meter</td>
@@ -412,6 +445,88 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>delayedFetchFromClientExpiresPerSecond</td>
       <td>The delayed fetch log operation from client expire count per second in this TabletServer.</td>
       <td>Meter</td>
+    </tr>
+    <tr>
+      <td>underMinIsr</td>
+      <td>The count of buckets who is under min isr in this server.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
+      <td>underReplicated</td>
+      <td>The count of buckets who is under replication factor in this server.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
+      <td>atMinIsr</td>
+      <td>The count of buckets who is at min isr in this server.</td>
+      <td>Gauge</td>
+    </tr>
+     <tr>
+      <td>isrExpandsPerSecond</td>
+      <td>The number of isr expands per second.</td>
+      <td>Meter</td>
+    </tr>
+     <tr>
+      <td>isrShrinksPerSecond</td>
+      <td>The number of isr shrinks per second.</td>
+      <td>Meter</td>
+    </tr>
+     <tr>
+      <td>failedIsrUpdatesPerSecond</td>
+      <td>The failed isr updates per second.</td>
+      <td>Meter</td>
+    </tr>
+     <tr>
+      <td>logFlushPerSecond</td>
+      <td>The log flush count per second.</td>
+      <td>Meter</td>
+    </tr>
+     <tr>
+      <td>logFlushLatencyMs</td>
+      <td>The log flush latency in ms.</td>
+      <td>Histogram</td>
+    </tr>
+    <tr>
+      <td>kvFlushPerSecond</td>
+      <td>The kv pre-write buffer flush to underlying RocksDB count per second.</td>
+      <td>Meter</td>
+    </tr>
+     <tr>
+      <td>kvFlushLatencyMs</td>
+      <td>The kv pre-write buffer flush to underlying RocksDB latency in ms.</td>
+      <td>Histogram</td>
+    </tr>
+     <tr>
+      <td>preWriteBufferTruncateAsDuplicatedPerSecond</td>
+      <td>The number of kv pre-write buffer truncate due to the batch duplicated per second.</td>
+      <td>Meter</td>
+    </tr>
+     <tr>
+      <td>preWriteBufferTruncateAsErrorPerSecond</td>
+      <td>The number of kv pre-write buffer truncate due to the error happened when writing cdc to log per second.</td>
+      <td>Meter</td>
+    </tr>
+    <tr>
+      <td rowspan="2">logicalStorage</td>
+      <td>logSize</td>
+      <td>The logical storage size of log managed by this TabletServer.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>kvSize</td>
+      <td>The logical storage size of kv managed by this TabletServer.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td rowspan="2">physicalStorage</td>
+      <td>localSize</td>
+      <td>The physical local storage size of this TabletServer.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>remoteLogSize</td>
+      <td>The physical remote log size managed by this TabletServer.</td>
+      <td>Gauge</td>
     </tr>
   </tbody>
 </table>
@@ -536,10 +651,10 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </thead>
   <tbody>
     <tr>
-      <th rowspan="39"><strong>tabletserver</strong></th>
+      <th rowspan="28"><strong>tabletserver</strong></th>
       <td rowspan="20">table</td>
       <td>messagesInPerSecond</td>
-      <td>The number of messages written per second to this table</td>
+      <td>The number of messages written per second to this table.</td>
       <td>Meter</td>
     </tr>
      <tr>
@@ -637,44 +752,8 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>The number of failed delete remote log requests to delete remote log after log ttl per second.</td>
       <td>Meter</td>
     </tr>
-    <tr>
-      <td rowspan="7">table_bucket</td>
-      <td>inSyncReplicasCount</td>
-      <td>The inSync replicas count of this table bucket.</td>
-      <td>Gauge</td>
-    </tr>
      <tr>
-      <td>underMinIsr</td>
-      <td>If this bucket is under min isr, this value is 1, otherwise 0.</td>
-      <td>Gauge</td>
-    </tr>
-     <tr>
-      <td>underReplicated</td>
-      <td>If this bucket is under replication factor, this value is 1, otherwise 0.</td>
-      <td>Gauge</td>
-    </tr>
-     <tr>
-      <td>atMinIsr</td>
-      <td>If this bucket is at min isr, this value is 1, otherwise 0.</td>
-      <td>Gauge</td>
-    </tr>
-     <tr>
-      <td>isrExpandsPerSecond</td>
-      <td>The number of isr expands per second.</td>
-      <td>Meter</td>
-    </tr>
-     <tr>
-      <td>isrShrinksPerSecond</td>
-      <td>The number of isr shrinks per second.</td>
-      <td>Meter</td>
-    </tr>
-     <tr>
-      <td>failedIsrUpdatesPerSecond</td>
-      <td>The failed isr updates per second.</td>
-      <td>Meter</td>
-    </tr>
-     <tr>
-      <td rowspan="5">table_bucket_log</td>
+      <td rowspan="2">table_bucket_log</td>
       <td>numSegments</td>
       <td>The number of segments in local storage for this table bucket.</td>
       <td>Gauge</td>
@@ -683,21 +762,6 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>endOffset</td>
       <td>The end offset in local storage for this table bucket.</td>
       <td>Gauge</td>
-    </tr>
-     <tr>
-      <td>size</td>
-      <td>The total log sizes in local storage for this table bucket.</td>
-      <td>Gauge</td>
-    </tr>
-     <tr>
-      <td>flushPerSecond</td>
-      <td>The log flush count per second.</td>
-      <td>Meter</td>
-    </tr>
-     <tr>
-      <td>flushLatencyMs</td>
-      <td>The log flush latency in ms.</td>
-      <td>Histogram</td>
     </tr>
     <tr>
       <td rowspan="3">table_bucket_remoteLog</td>
@@ -713,33 +777,6 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
      <tr>
       <td>size</td>
       <td>The number of bytes written per second to this table.</td>
-      <td>Gauge</td>
-    </tr>
-    <tr>
-      <td rowspan="4">table_bucket_kv</td>
-      <td>preWriteBufferFlushPerSecond</td>
-      <td>The kv pre-write buffer flush count per second.</td>
-      <td>Meter</td>
-    </tr>
-     <tr>
-      <td>preWriteBufferFlushLatencyMs</td>
-      <td>The kv pre-write buffer latency in ms.</td>
-      <td>Histogram</td>
-    </tr>
-     <tr>
-      <td>preWriteBufferTruncateAsDuplicatedPerSecond</td>
-      <td>The number of kv pre-write buffer truncate due to the batch duplicated per second.</td>
-      <td>Meter</td>
-    </tr>
-     <tr>
-      <td>preWriteBufferTruncateAsErrorPerSecond</td>
-      <td>The number of kv pre-write buffer truncate due to the error happened when writing cdc to log per second.</td>
-      <td>Meter</td>
-    </tr>
-    <tr>
-      <td rowspan="1">table_bucket_kv_snapshot</td>
-      <td>latestSnapshotSize</td>
-      <td>The latest kv snapshot size in bytes for this table bucket.</td>
       <td>Gauge</td>
     </tr>
   </tbody>

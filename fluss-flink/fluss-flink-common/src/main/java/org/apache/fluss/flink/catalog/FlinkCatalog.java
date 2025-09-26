@@ -108,7 +108,7 @@ public class FlinkCatalog extends AbstractCatalog {
     protected final ClassLoader classLoader;
 
     protected final String catalogName;
-    protected final @Nullable String defaultDatabase;
+    protected final String defaultDatabase;
     protected final String bootstrapServers;
     private final Map<String, String> securityConfigs;
     protected Connection connection;
@@ -117,7 +117,7 @@ public class FlinkCatalog extends AbstractCatalog {
 
     public FlinkCatalog(
             String name,
-            @Nullable String defaultDatabase,
+            String defaultDatabase,
             String bootstrapServers,
             ClassLoader classLoader,
             Map<String, String> securityConfigs) {
@@ -142,6 +142,12 @@ public class FlinkCatalog extends AbstractCatalog {
 
         connection = ConnectionFactory.createConnection(Configuration.fromMap(flussConfigs));
         admin = connection.getAdmin();
+        if (!databaseExists(defaultDatabase)) {
+            throw new CatalogException(
+                    String.format(
+                            "The configured default-database '%s' does not exist in the Fluss cluster.",
+                            defaultDatabase));
+        }
     }
 
     @Override

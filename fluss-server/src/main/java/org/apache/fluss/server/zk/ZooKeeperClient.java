@@ -18,6 +18,8 @@
 package org.apache.fluss.server.zk;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
@@ -29,6 +31,10 @@ import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.security.acl.ResourceType;
 import org.apache.fluss.server.authorizer.DefaultAuthorizer.VersionedAcls;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
+import org.apache.fluss.server.zk.ZkAsyncRequest.ZkGetChildrenRequest;
+import org.apache.fluss.server.zk.ZkAsyncRequest.ZkGetDataRequest;
+import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetChildrenResponse;
+import org.apache.fluss.server.zk.ZkAsyncResponse.ZkGetDataResponse;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
@@ -66,6 +72,8 @@ import org.apache.fluss.server.zk.data.ZkData.TableZNode;
 import org.apache.fluss.server.zk.data.ZkData.TablesZNode;
 import org.apache.fluss.server.zk.data.ZkData.WriterIdZNode;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.BackgroundCallback;
+import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.CuratorEvent;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.api.transaction.CuratorOp;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.CreateMode;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
@@ -78,6 +86,8 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
@@ -86,6 +96,11 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.OptionalLong;
 import java.util.Set;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.Semaphore;
+import java.util.function.Function;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.fromPartitionName;
 
@@ -106,13 +121,21 @@ public class ZooKeeperClient implements AutoCloseable {
     private final ZkSequenceIDCounter partitionIdCounter;
     private final ZkSequenceIDCounter writerIdCounter;
 
-    public ZooKeeperClient(CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper) {
+    private final Semaphore inFlightRequests;
+
+    public ZooKeeperClient(
+            CuratorFrameworkWithUnhandledErrorListener curatorFrameworkWrapper,
+            Configuration configuration) {
         this.curatorFrameworkWrapper = curatorFrameworkWrapper;
         this.zkClient = curatorFrameworkWrapper.asCuratorFramework();
         this.tableIdCounter = new ZkSequenceIDCounter(zkClient, TableSequenceIdZNode.path());
         this.partitionIdCounter =
                 new ZkSequenceIDCounter(zkClient, PartitionSequenceIdZNode.path());
         this.writerIdCounter = new ZkSequenceIDCounter(zkClient, WriterIdZNode.path());
+
+        int maxInFlightRequests =
+                configuration.getInt(ConfigOptions.ZOOKEEPER_MAX_INFLIGHT_REQUESTS);
+        this.inFlightRequests = new Semaphore(maxInFlightRequests);
     }
 
     public Optional<byte[]> getOrEmpty(String path) throws Exception {
@@ -121,6 +144,57 @@ public class ZooKeeperClient implements AutoCloseable {
         } catch (KeeperException.NoNodeException e) {
             return Optional.empty();
         }
+    }
+
+    /**
+     * Send a pipelined sequence of requests and wait for all of their responses.
+     *
+     * <p>The watch flag on each outgoing request will be set if we've already registered a handler
+     * for the path associated with the request.
+     *
+     * @param requests a sequence of requests to send and wait on.
+     * @return the responses for the requests. If all requests have the same type, the responses
+     *     will have the respective response type.
+     */
+    private <Resp extends ZkAsyncResponse, Req extends ZkAsyncRequest>
+            List<Resp> handleRequestAsync(
+                    List<Req> requests, Function<CuratorEvent, Resp> respCreator) throws Exception {
+        if (requests == null || requests.isEmpty()) {
+            return Collections.emptyList();
+        }
+
+        ArrayBlockingQueue<Resp> responseQueue = new ArrayBlockingQueue<>(requests.size());
+        CountDownLatch countDownLatch = new CountDownLatch(requests.size());
+
+        BackgroundCallback callback =
+                (client, event) -> {
+                    Resp response = respCreator.apply(event);
+                    responseQueue.add(response);
+                    inFlightRequests.release();
+                    countDownLatch.countDown();
+                };
+
+        for (Req request : requests) {
+            try {
+                inFlightRequests.acquire();
+                if (request instanceof ZkGetDataRequest) {
+                    zkClient.getData().inBackground(callback).forPath(request.getPath());
+
+                } else if (request instanceof ZkGetChildrenRequest) {
+                    zkClient.getChildren().inBackground(callback).forPath(request.getPath());
+
+                } else {
+                    throw new IllegalArgumentException(
+                            "Unsupported request type: " + request.getClass());
+                }
+            } catch (Exception e) {
+                inFlightRequests.release();
+                throw e;
+            }
+        }
+
+        countDownLatch.await();
+        return new ArrayList<>(responseQueue);
     }
 
     // --------------------------------------------------------------------------------------------
@@ -169,6 +243,32 @@ public class ZooKeeperClient implements AutoCloseable {
         return bytes.map(ServerIdZNode::decode);
     }
 
+    /** Get the tablet servers registered in ZK. */
+    public Map<Integer, TabletServerRegistration> getTabletServers(int[] tabletServerIds)
+            throws Exception {
+        Map<String, Integer> path2IdMap =
+                Arrays.stream(tabletServerIds)
+                        .boxed()
+                        .collect(Collectors.toMap(ServerIdZNode::path, id -> id));
+
+        List<ZkGetDataResponse> responses = getDataAsync(path2IdMap.keySet());
+        // tablet server id -> TabletServerRegistration
+        Map<Integer, TabletServerRegistration> result = new HashMap<>();
+        for (ZkGetDataResponse response : responses) {
+            if (response.getResultCode() == KeeperException.Code.OK) {
+                result.put(
+                        path2IdMap.get(response.getPath()),
+                        ServerIdZNode.decode(response.getData()));
+            } else {
+                LOG.warn(
+                        "Failed to get data for path {}: {}",
+                        response.getPath(),
+                        response.getResultCode());
+            }
+        }
+        return result;
+    }
+
     /** Gets the list of sorted server Ids. */
     public int[] getSortedTabletServerList() throws Exception {
         List<String> tabletServers = getChildren(ServerIdsZNode.path());
@@ -201,10 +301,60 @@ public class ZooKeeperClient implements AutoCloseable {
                         data.length == 0 ? null : TableIdZNode.decode(data));
     }
 
+    /** Get the tables assignments in ZK. */
+    public Map<Long, TableAssignment> getTablesAssignments(List<Long> tableIds) throws Exception {
+        Map<String, Long> path2TableIdMap =
+                tableIds.stream().collect(Collectors.toMap(TableIdZNode::path, id -> id));
+
+        List<ZkGetDataResponse> responses = getDataAsync(path2TableIdMap.keySet());
+        // tabletId -> TableAssignment
+        Map<Long, TableAssignment> result = new HashMap<>();
+        for (ZkGetDataResponse response : responses) {
+            if (response.getResultCode() == KeeperException.Code.OK
+                    && response.getData().length > 0) {
+                result.put(
+                        path2TableIdMap.get(response.getPath()),
+                        TableIdZNode.decode(response.getData()));
+            } else {
+                LOG.warn(
+                        "Failed to get data for path {}: {}, data length = {}",
+                        response.getPath(),
+                        response.getResultCode(),
+                        response.getData() == null ? 0 : response.getData().length);
+            }
+        }
+
+        return result;
+    }
+
     /** Get the partition assignment in ZK. */
     public Optional<PartitionAssignment> getPartitionAssignment(long partitionId) throws Exception {
         Optional<byte[]> bytes = getOrEmpty(PartitionIdZNode.path(partitionId));
         return bytes.map(PartitionIdZNode::decode);
+    }
+
+    /** Get the partitions assignments in ZK. */
+    public Map<Long, PartitionAssignment> getPartitionsAssignments(List<Long> partitionIds)
+            throws Exception {
+        Map<String, Long> path2PartitionIdMap =
+                partitionIds.stream().collect(Collectors.toMap(PartitionIdZNode::path, id -> id));
+
+        List<ZkGetDataResponse> responses = getDataAsync(path2PartitionIdMap.keySet());
+        // tabletId -> PartitionAssignment
+        Map<Long, PartitionAssignment> result = new HashMap<>();
+        for (ZkGetDataResponse response : responses) {
+            if (response.getResultCode() == KeeperException.Code.OK) {
+                result.put(
+                        path2PartitionIdMap.get(response.getPath()),
+                        PartitionIdZNode.decode(response.getData()));
+            } else {
+                LOG.warn(
+                        "Failed to get data for path {}: {}",
+                        response.getPath(),
+                        response.getResultCode());
+            }
+        }
+        return result;
     }
 
     public void updateTableAssignment(long tableId, TableAssignment tableAssignment)
@@ -292,6 +442,31 @@ public class ZooKeeperClient implements AutoCloseable {
     public Optional<LeaderAndIsr> getLeaderAndIsr(TableBucket tableBucket) throws Exception {
         Optional<byte[]> bytes = getOrEmpty(LeaderAndIsrZNode.path(tableBucket));
         return bytes.map(LeaderAndIsrZNode::decode);
+    }
+
+    /** Get the buckets LeaderAndIsr in ZK. */
+    public Map<TableBucket, LeaderAndIsr> getLeaderAndIsrs(Collection<TableBucket> tableBuckets)
+            throws Exception {
+        Map<String, TableBucket> path2TableBucketMap =
+                tableBuckets.stream()
+                        .collect(Collectors.toMap(LeaderAndIsrZNode::path, bucket -> bucket));
+
+        List<ZkGetDataResponse> responses = getDataAsync(path2TableBucketMap.keySet());
+        // TableBucket -> LeaderAndIsr
+        Map<TableBucket, LeaderAndIsr> result = new HashMap<>();
+        for (ZkGetDataResponse response : responses) {
+            if (response.getResultCode() == KeeperException.Code.OK) {
+                result.put(
+                        path2TableBucketMap.get(response.getPath()),
+                        LeaderAndIsrZNode.decode(response.getData()));
+            } else {
+                LOG.warn(
+                        "Failed to get data for path {}: {}",
+                        response.getPath(),
+                        response.getResultCode());
+            }
+        }
+        return result;
     }
 
     public void updateLeaderAndIsr(TableBucket tableBucket, LeaderAndIsr leaderAndIsr)
@@ -422,6 +597,30 @@ public class ZooKeeperClient implements AutoCloseable {
         return bytes.map(TableZNode::decode);
     }
 
+    /** Get the tables in ZK. */
+    public Map<TablePath, TableRegistration> getTables(Collection<TablePath> tablePaths)
+            throws Exception {
+        Map<String, TablePath> path2TablePathMap =
+                tablePaths.stream().collect(Collectors.toMap(TableZNode::path, path -> path));
+
+        List<ZkGetDataResponse> responses = getDataAsync(path2TablePathMap.keySet());
+        // TablePath -> TableRegistration
+        Map<TablePath, TableRegistration> result = new HashMap<>();
+        for (ZkGetDataResponse response : responses) {
+            if (response.getResultCode() == KeeperException.Code.OK) {
+                result.put(
+                        path2TablePathMap.get(response.getPath()),
+                        TableZNode.decode(response.getData()));
+            } else {
+                LOG.warn(
+                        "Failed to get data for path {}: {}",
+                        response.getPath(),
+                        response.getResultCode());
+            }
+        }
+        return result;
+    }
+
     /** Update the table in ZK. */
     public void updateTable(TablePath tablePath, TableRegistration tableRegistration)
             throws Exception {
@@ -455,6 +654,27 @@ public class ZooKeeperClient implements AutoCloseable {
         return new HashSet<>(getChildren(path));
     }
 
+    /** Get the partitions of tables in ZK. */
+    public Map<TablePath, List<String>> getPartitionsForTables(List<TablePath> tablePaths)
+            throws Exception {
+        Map<String, TablePath> path2TablePathMap =
+                tablePaths.stream().collect(Collectors.toMap(PartitionsZNode::path, path -> path));
+
+        List<ZkGetChildrenResponse> responses = getChildrenAsync(path2TablePathMap.keySet());
+        Map<TablePath, List<String>> result = new HashMap<>();
+        for (ZkGetChildrenResponse response : responses) {
+            if (response.getResultCode() == KeeperException.Code.OK) {
+                result.put(path2TablePathMap.get(response.getPath()), response.getChildren());
+            } else {
+                LOG.warn(
+                        "Failed to get children for path {}: {}",
+                        response.getPath(),
+                        response.getResultCode());
+            }
+        }
+        return result;
+    }
+
     /** Get the partition and the id for the partitions of a table in ZK. */
     public Map<String, Long> getPartitionNameAndIds(TablePath tablePath) throws Exception {
         Map<String, Long> partitions = new HashMap<>();
@@ -464,6 +684,45 @@ public class ZooKeeperClient implements AutoCloseable {
                     partition -> partitions.put(partitionName, partition.getPartitionId()));
         }
         return partitions;
+    }
+
+    /** Get the partition and the id for the partitions of tables in ZK. */
+    public Map<TablePath, Map<String, Long>> getPartitionNameAndIdsForTables(
+            List<TablePath> tablePaths) throws Exception {
+        Map<TablePath, Map<String, Long>> result = new HashMap<>();
+
+        Map<TablePath, List<String>> tablePath2Partitions = getPartitionsForTables(tablePaths);
+
+        // each TablePath has a list of partitions
+        Map<String, TablePath> zkPath2TablePath = new HashMap<>();
+        Map<String, String> zkPath2PartitionName = new HashMap<>();
+        for (Map.Entry<TablePath, List<String>> entry : tablePath2Partitions.entrySet()) {
+            TablePath tablePath = entry.getKey();
+            List<String> partitions = entry.getValue();
+            for (String partitionName : partitions) {
+                zkPath2TablePath.put(PartitionZNode.path(tablePath, partitionName), tablePath);
+                zkPath2PartitionName.put(
+                        PartitionZNode.path(tablePath, partitionName), partitionName);
+            }
+        }
+
+        List<ZkGetDataResponse> responses = getDataAsync(zkPath2TablePath.keySet());
+        for (ZkGetDataResponse response : responses) {
+            if (response.getResultCode() == KeeperException.Code.OK) {
+                String zkPath = response.getPath();
+                TablePath tablePath = zkPath2TablePath.get(zkPath);
+                String partitionName = zkPath2PartitionName.get(zkPath);
+                long partitionId = PartitionZNode.decode(response.getData()).getPartitionId();
+                result.computeIfAbsent(tablePath, k -> new HashMap<>())
+                        .put(partitionName, partitionId);
+            } else {
+                LOG.warn(
+                        "Failed to get data for path {}: {}",
+                        response.getPath(),
+                        response.getResultCode());
+            }
+        }
+        return result;
     }
 
     /** Get the partition and the id for the partitions of a table in ZK by partition spec. */
@@ -887,7 +1146,7 @@ public class ZooKeeperClient implements AutoCloseable {
      * @param resource the resource whose ACL should be deleted
      * @throws Exception if there is an error accessing ZooKeeper
      */
-    public void contitionalDeleteResourceAcl(Resource resource, int zkVersion) throws Exception {
+    public void conditionalDeleteResourceAcl(Resource resource, int zkVersion) throws Exception {
         String path = ResourceAclNode.path(resource);
         zkClient.delete().withVersion(zkVersion).forPath(path);
     }
@@ -918,6 +1177,32 @@ public class ZooKeeperClient implements AutoCloseable {
         } catch (KeeperException.NoNodeException e) {
             return Collections.emptyList();
         }
+    }
+
+    /**
+     * Gets the child nodes at given zk node paths asynchronously.
+     *
+     * @param paths the paths to list children
+     * @return list of async responses for each path
+     * @throws Exception if there is an error during the operation
+     */
+    public List<ZkGetChildrenResponse> getChildrenAsync(Collection<String> paths) throws Exception {
+        List<ZkGetChildrenRequest> requests =
+                paths.stream().map(ZkGetChildrenRequest::new).collect(Collectors.toList());
+        return handleRequestAsync(requests, ZkGetChildrenResponse::create);
+    }
+
+    /**
+     * Gets the data of given zk node paths asynchronously.
+     *
+     * @param paths the paths to fetch data
+     * @return list of async responses for each path
+     * @throws Exception if there is an error during the operation
+     */
+    public List<ZkGetDataResponse> getDataAsync(Collection<String> paths) throws Exception {
+        List<ZkGetDataRequest> requests =
+                paths.stream().map(ZkGetDataRequest::new).collect(Collectors.toList());
+        return handleRequestAsync(requests, ZkGetDataResponse::create);
     }
 
     /** Gets the data and stat of a given zk node path. */

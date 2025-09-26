@@ -9,7 +9,7 @@ Lakehouse represents a new, open architecture that combines the best elements of
 Lakehouse combines data lake scalability and cost-effectiveness with data warehouse reliability and performance.
 
 Fluss leverages the well-known Lakehouse storage solutions like Apache Paimon, Apache Iceberg, Apache Hudi, Delta Lake as
-the tiered storage layer. Currently, only Apache Paimon is supported, but more kinds of Lakehouse storage support are on the way.
+the tiered storage layer. Currently, only Apache Paimon, Apache Iceberg, Lance are supported, with more kinds of Lakehouse storage support are on the way.
 
 Fluss's datalake tiering service will tier Fluss's data to the Lakehouse storage continuously. The data in Lakehouse storage can be read both by Fluss's client in a streaming manner and accessed directly
 by external systems such as Flink, Spark, StarRocks and others. With data tiered in Lakehouse storage, Fluss

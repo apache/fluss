@@ -48,6 +48,11 @@ public class MetricNames {
     public static final String EVENT_QUEUE_TIME_MS = "eventQueueTimeMs";
     public static final String EVENT_PROCESSING_TIME_MS = "eventProcessingTimeMs";
 
+    // for kv tablet which reported by coordinator
+    public static final String KV_NUM_SNAPSHOTS = "numKvSnapshots";
+    public static final String KV_ALL_SNAPSHOT_SIZE = "allKvSnapshotSize";
+    public static final String SERVER_PHYSICAL_STORAGE_REMOTE_KV_SIZE = "remoteKvSize";
+
     // --------------------------------------------------------------------------------------------
     // metrics for tablet server
     // --------------------------------------------------------------------------------------------
@@ -63,6 +68,11 @@ public class MetricNames {
             "delayedFetchFromFollowerExpiresPerSecond";
     public static final String DELAYED_FETCH_FROM_CLIENT_EXPIRES_RATE =
             "delayedFetchFromClientExpiresPerSecond";
+
+    public static final String SERVER_LOGICAL_STORAGE_LOG_SIZE = "logSize";
+    public static final String SERVER_LOGICAL_STORAGE_KV_SIZE = "kvSize";
+    public static final String SERVER_PHYSICAL_STORAGE_LOCAL_SIZE = "localSize";
+    public static final String SERVER_PHYSICAL_STORAGE_REMOTE_LOG_SIZE = "remoteLogSize";
 
     // --------------------------------------------------------------------------------------------
     // metrics for table
@@ -95,13 +105,8 @@ public class MetricNames {
     public static final String FAILED_PREFIX_LOOKUP_REQUESTS_RATE =
             "failedPrefixLookupRequestsPerSecond";
 
-    // --------------------------------------------------------------------------------------------
-    // metrics for table bucket
-    // --------------------------------------------------------------------------------------------
-
     // for replica
     public static final String UNDER_REPLICATED = "underReplicated";
-    public static final String IN_SYNC_REPLICAS = "inSyncReplicasCount";
     public static final String UNDER_MIN_ISR = "underMinIsr";
     public static final String AT_MIN_ISR = "atMinIsr";
     public static final String ISR_EXPANDS_RATE = "isrExpandsPerSecond";
@@ -109,21 +114,29 @@ public class MetricNames {
     public static final String FAILED_ISR_UPDATES_RATE = "failedIsrUpdatesPerSecond";
 
     // for log tablet
-    public static final String LOG_NUM_SEGMENTS = "numSegments";
-    public static final String LOG_END_OFFSET = "endOffset";
-    public static final String LOG_SIZE = "size";
-    public static final String LOG_FLUSH_RATE = "flushPerSecond";
-    public static final String LOG_FLUSH_LATENCY_MS = "flushLatencyMs";
+    public static final String LOG_FLUSH_RATE = "logFlushPerSecond";
+    public static final String LOG_FLUSH_LATENCY_MS = "logFlushLatencyMs";
 
     // for kv tablet
-    public static final String KV_LATEST_SNAPSHOT_SIZE = "latestSnapshotSize";
+    public static final String KV_FLUSH_RATE = "kvFlushPerSecond";
+    public static final String KV_FLUSH_LATENCY_MS = "kvFlushLatencyMs";
     public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_DUPLICATED_RATE =
             "preWriteBufferTruncateAsDuplicatedPerSecond";
     public static final String KV_PRE_WRITE_BUFFER_TRUNCATE_AS_ERROR_RATE =
             "preWriteBufferTruncateAsErrorPerSecond";
-    public static final String KV_PRE_WRITE_BUFFER_FLUSH_RATE = "preWriteBufferFlushPerSecond";
-    public static final String KV_PRE_WRITE_BUFFER_FLUSH_LATENCY_MS =
-            "preWriteBufferFlushLatencyMs";
+
+    // --------------------------------------------------------------------------------------------
+    // metrics for table bucket
+    // --------------------------------------------------------------------------------------------
+
+    // for log tablet
+    public static final String LOG_NUM_SEGMENTS = "numSegments";
+    public static final String LOG_END_OFFSET = "endOffset";
+    public static final String REMOTE_LOG_SIZE = "size";
+
+    // for logic storage
+    public static final String LOCAL_STORAGE_LOG_SIZE = "logSize";
+    public static final String LOCAL_STORAGE_KV_SIZE = "kvSize";
 
     // --------------------------------------------------------------------------------------------
     // metrics for rpc client

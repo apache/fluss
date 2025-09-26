@@ -19,24 +19,29 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.MetricNames;
+import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandleStore;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotStore;
 import org.apache.fluss.server.kv.snapshot.SharedKvFileRegistry;
 import org.apache.fluss.server.kv.snapshot.ZooKeeperCompletedSnapshotHandleStore;
+import org.apache.fluss.server.metrics.group.CoordinatorMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import javax.annotation.concurrent.NotThreadSafe;
+import javax.annotation.concurrent.ThreadSafe;
 
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.function.Function;
 
@@ -48,28 +53,30 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * {@link CompletedSnapshotStore} not exist for a {@link TableBucket}, it will create a new {@link
  * CompletedSnapshotStore} for it.
  */
-@NotThreadSafe
+@ThreadSafe
 public class CompletedSnapshotStoreManager {
 
     private static final Logger LOG = LoggerFactory.getLogger(CompletedSnapshotStoreManager.class);
     private final int maxNumberOfSnapshotsToRetain;
     private final ZooKeeperClient zooKeeperClient;
-    private final Map<TableBucket, CompletedSnapshotStore> bucketCompletedSnapshotStores;
+    private final ConcurrentHashMap<TableBucket, CompletedSnapshotStore>
+            bucketCompletedSnapshotStores;
     private final Executor ioExecutor;
     private final Function<ZooKeeperClient, CompletedSnapshotHandleStore>
             makeZookeeperCompletedSnapshotHandleStore;
+    private final CoordinatorMetricGroup coordinatorMetricGroup;
 
     public CompletedSnapshotStoreManager(
             int maxNumberOfSnapshotsToRetain,
             Executor ioExecutor,
-            ZooKeeperClient zooKeeperClient) {
-        checkArgument(
-                maxNumberOfSnapshotsToRetain > 0, "maxNumberOfSnapshotsToRetain must be positive");
-        this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
-        this.zooKeeperClient = zooKeeperClient;
-        this.bucketCompletedSnapshotStores = new HashMap<>();
-        this.ioExecutor = ioExecutor;
-        this.makeZookeeperCompletedSnapshotHandleStore = ZooKeeperCompletedSnapshotHandleStore::new;
+            ZooKeeperClient zooKeeperClient,
+            CoordinatorMetricGroup coordinatorMetricGroup) {
+        this(
+                maxNumberOfSnapshotsToRetain,
+                ioExecutor,
+                zooKeeperClient,
+                ZooKeeperCompletedSnapshotHandleStore::new,
+                coordinatorMetricGroup);
     }
 
     @VisibleForTesting
@@ -78,17 +85,43 @@ public class CompletedSnapshotStoreManager {
             Executor ioExecutor,
             ZooKeeperClient zooKeeperClient,
             Function<ZooKeeperClient, CompletedSnapshotHandleStore>
-                    makeZookeeperCompletedSnapshotHandleStore) {
+                    makeZookeeperCompletedSnapshotHandleStore,
+            CoordinatorMetricGroup coordinatorMetricGroup) {
         checkArgument(
                 maxNumberOfSnapshotsToRetain > 0, "maxNumberOfSnapshotsToRetain must be positive");
         this.maxNumberOfSnapshotsToRetain = maxNumberOfSnapshotsToRetain;
         this.zooKeeperClient = zooKeeperClient;
-        this.bucketCompletedSnapshotStores = new HashMap<>();
+        this.bucketCompletedSnapshotStores = MapUtils.newConcurrentHashMap();
         this.ioExecutor = ioExecutor;
         this.makeZookeeperCompletedSnapshotHandleStore = makeZookeeperCompletedSnapshotHandleStore;
+        this.coordinatorMetricGroup = coordinatorMetricGroup;
+
+        registerMetrics();
     }
 
-    public CompletedSnapshotStore getOrCreateCompletedSnapshotStore(TableBucket tableBucket) {
+    private void registerMetrics() {
+        MetricGroup physicalStorage = coordinatorMetricGroup.addGroup("physicalStorage");
+        physicalStorage.gauge(
+                MetricNames.SERVER_PHYSICAL_STORAGE_REMOTE_KV_SIZE,
+                this::physicalStorageRemoteKvSize);
+    }
+
+    private long physicalStorageRemoteKvSize() {
+        return bucketCompletedSnapshotStores.values().stream()
+                .map(CompletedSnapshotStore::getPhysicalStorageRemoteKvSize)
+                .reduce(0L, Long::sum);
+    }
+
+    private long getNumSnapshots(TableBucket tableBucket) {
+        return bucketCompletedSnapshotStores.get(tableBucket).getNumSnapshots();
+    }
+
+    private long getAllSnapshotSize(TableBucket tableBucket) {
+        return bucketCompletedSnapshotStores.get(tableBucket).getPhysicalStorageRemoteKvSize();
+    }
+
+    public CompletedSnapshotStore getOrCreateCompletedSnapshotStore(
+            TablePath tablePath, TableBucket tableBucket) {
         return bucketCompletedSnapshotStores.computeIfAbsent(
                 tableBucket,
                 (bucket) -> {
@@ -102,6 +135,22 @@ public class CompletedSnapshotStoreManager {
                                 "Created snapshot store for table bucket {} in {} ms.",
                                 bucket,
                                 end - start);
+
+                        MetricGroup bucketMetricGroup =
+                                coordinatorMetricGroup.getTableBucketMetricGroup(
+                                        tablePath, tableBucket);
+                        if (bucketMetricGroup != null) {
+                            LOG.info("Add bucketMetricGroup for tableBucket {}.", bucket);
+                            bucketMetricGroup.gauge(
+                                    MetricNames.KV_NUM_SNAPSHOTS, () -> getNumSnapshots(bucket));
+                            bucketMetricGroup.gauge(
+                                    MetricNames.KV_ALL_SNAPSHOT_SIZE,
+                                    () -> getAllSnapshotSize(bucket));
+                        } else {
+                            LOG.warn(
+                                    "Failed to add bucketMetricGroup for tableBucket {} when creating completed snapshot.",
+                                    bucket);
+                        }
                         return snapshotStore;
                     } catch (Exception e) {
                         throw new RuntimeException(
@@ -191,7 +240,8 @@ public class CompletedSnapshotStoreManager {
                 ioExecutor);
     }
 
-    public Map<TableBucket, CompletedSnapshotStore> getBucketCompletedSnapshotStores() {
+    @VisibleForTesting
+    Map<TableBucket, CompletedSnapshotStore> getBucketCompletedSnapshotStores() {
         return bucketCompletedSnapshotStores;
     }
 }

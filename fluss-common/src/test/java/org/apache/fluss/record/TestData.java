@@ -32,11 +32,13 @@ import org.apache.fluss.utils.types.Tuple2;
 import java.util.Arrays;
 import java.util.List;
 
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+
 /** utils to create test data. */
 public final class TestData {
     public static final short DEFAULT_SCHEMA_ID = 1;
     public static final long BASE_OFFSET = 0L;
-    public static final byte DEFAULT_MAGIC = (byte) 0;
+    public static final byte DEFAULT_MAGIC = CURRENT_LOG_MAGIC_VALUE;
     // ---------------------------- data1 and related table info begin ---------------------------
     public static final List<Object[]> DATA1 =
             Arrays.asList(

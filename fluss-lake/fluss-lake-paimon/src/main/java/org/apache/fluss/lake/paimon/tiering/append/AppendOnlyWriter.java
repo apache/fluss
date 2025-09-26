@@ -22,6 +22,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecord;
 
 import org.apache.paimon.data.InternalRow;
+import org.apache.paimon.table.BucketMode;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.sink.TableWriteImpl;
 
@@ -33,6 +34,8 @@ import static org.apache.fluss.lake.paimon.tiering.PaimonLakeTieringFactory.FLUS
 
 /** A {@link RecordWriter} to write to Paimon's append-only table. */
 public class AppendOnlyWriter extends RecordWriter<InternalRow> {
+
+    private final FileStoreTable fileStoreTable;
 
     public AppendOnlyWriter(
             FileStoreTable fileStoreTable,
@@ -48,6 +51,7 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
                 tableBucket,
                 partition,
                 partitionKeys); // Pass to parent
+        this.fileStoreTable = fileStoreTable;
     }
 
     @Override
@@ -56,6 +60,11 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
         // hacky, call internal method tableWrite.getWrite() to support
         // to write to given partition, otherwise, it'll always extract a partition from Paimon row
         // which may be costly
-        tableWrite.getWrite().write(partition, bucket, flussRecordAsPaimonRow);
+        int writtenBucket = bucket;
+        // if bucket-unaware mode, we have to use bucket = 0 to write to follow paimon best practice
+        if (fileStoreTable.store().bucketMode() == BucketMode.BUCKET_UNAWARE) {
+            writtenBucket = 0;
+        }
+        tableWrite.getWrite().write(partition, writtenBucket, flussRecordAsPaimonRow);
     }
 }

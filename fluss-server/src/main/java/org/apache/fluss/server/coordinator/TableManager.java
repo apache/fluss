@@ -38,6 +38,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.ExecutorService;
 
 /** A manager for tables. */
 public class TableManager {
@@ -48,18 +49,21 @@ public class TableManager {
     private final CoordinatorContext coordinatorContext;
     private final ReplicaStateMachine replicaStateMachine;
     private final TableBucketStateMachine tableBucketStateMachine;
+    private final ExecutorService ioExecutor;
 
     public TableManager(
             MetadataManager metadataManager,
             CoordinatorContext coordinatorContext,
             ReplicaStateMachine replicaStateMachine,
             TableBucketStateMachine tableBucketStateMachine,
-            RemoteStorageCleaner remoteStorageCleaner) {
+            RemoteStorageCleaner remoteStorageCleaner,
+            ExecutorService ioExecutor) {
         this.metadataManager = metadataManager;
         this.remoteStorageCleaner = remoteStorageCleaner;
         this.coordinatorContext = coordinatorContext;
         this.replicaStateMachine = replicaStateMachine;
         this.tableBucketStateMachine = tableBucketStateMachine;
+        this.ioExecutor = ioExecutor;
     }
 
     public void startup() {
@@ -250,12 +254,8 @@ public class TableManager {
     private void completeDeleteTable(long tableId) {
         Set<TableBucketReplica> replicas = coordinatorContext.getAllReplicasForTable(tableId);
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NonExistentReplica);
-        deleteRemoteDirectory(tableId);
-        try {
-            metadataManager.completeDeleteTable(tableId);
-        } catch (Exception e) {
-            LOG.error("Fail to complete table deletion for table {}.", tableId, e);
-        }
+        asyncDeleteRemoteDirectory(tableId);
+        asyncDeleteTableMetadata(tableId);
         coordinatorContext.removeTable(tableId);
     }
 
@@ -264,26 +264,22 @@ public class TableManager {
                 coordinatorContext.getAllReplicasForPartition(
                         tablePartition.getTableId(), tablePartition.getPartitionId());
         replicaStateMachine.handleStateChanges(replicas, ReplicaState.NonExistentReplica);
-        deleteRemoteDirectory(tablePartition);
-        try {
-            metadataManager.completeDeletePartition(tablePartition.getPartitionId());
-        } catch (Exception e) {
-            LOG.error("Fail to complete partition {} deletion.", tablePartition, e);
-        }
+        asyncDeleteRemoteDirectory(tablePartition);
+        asyncDeletePartitionMetadata(tablePartition.getPartitionId());
         coordinatorContext.removePartition(tablePartition);
     }
 
-    private void deleteRemoteDirectory(long tableId) {
+    private void asyncDeleteRemoteDirectory(long tableId) {
         // delete table remote dir, when restore the coordinator, the table info will be null
         // we can't delete the remote dir since we don't know tablePath now
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tableId);
         if (tableInfo != null) {
-            remoteStorageCleaner.deleteTableRemoteDir(
+            remoteStorageCleaner.asyncDeleteTableRemoteDir(
                     tableInfo.getTablePath(), tableInfo.hasPrimaryKey(), tableId);
         }
     }
 
-    private void deleteRemoteDirectory(TablePartition tablePartition) {
+    private void asyncDeleteRemoteDirectory(TablePartition tablePartition) {
         // delete partition remote dir, when restore the coordinator, the table info will be null
         // we can't delete the remote dir since we don't tablePath and partition name now
         TableInfo tableInfo = coordinatorContext.getTableInfoById(tablePartition.getTableId());
@@ -291,12 +287,37 @@ public class TableManager {
             String partitionName =
                     coordinatorContext.getPartitionName(tablePartition.getPartitionId());
             if (partitionName != null) {
-                remoteStorageCleaner.deletePartitionRemoteDir(
+                remoteStorageCleaner.asyncDeletePartitionRemoteDir(
                         PhysicalTablePath.of(tableInfo.getTablePath(), partitionName),
                         tableInfo.hasPrimaryKey(),
                         tablePartition);
             }
         }
+    }
+
+    private void asyncDeleteTableMetadata(long tableId) {
+        ioExecutor.submit(
+                () -> {
+                    try {
+                        metadataManager.completeDeleteTable(tableId);
+                    } catch (Exception e) {
+                        LOG.error("Fail to delete ZooKeeper metadata for table id {}.", tableId, e);
+                    }
+                });
+    }
+
+    private void asyncDeletePartitionMetadata(long partitionId) {
+        ioExecutor.submit(
+                () -> {
+                    try {
+                        metadataManager.completeDeletePartition(partitionId);
+                    } catch (Exception e) {
+                        LOG.error(
+                                "Fail to delete ZooKeeper metadata for partition id {}.",
+                                partitionId,
+                                e);
+                    }
+                });
     }
 
     private boolean isEligibleForDeletion(long tableId) {

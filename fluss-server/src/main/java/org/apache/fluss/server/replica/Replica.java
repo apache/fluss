@@ -38,9 +38,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.Counter;
-import org.apache.fluss.metrics.MeterView;
 import org.apache.fluss.metrics.MetricNames;
-import org.apache.fluss.metrics.SimpleCounter;
+import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.record.DefaultValueRecordBatch;
 import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.LogRecords;
@@ -76,7 +75,8 @@ import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
 import org.apache.fluss.server.log.remote.RemoteLogManager;
 import org.apache.fluss.server.metadata.ServerMetadataCache;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
-import org.apache.fluss.server.metrics.group.PhysicalTableMetricGroup;
+import org.apache.fluss.server.metrics.group.TableMetricGroup;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.replica.delay.DelayedFetchLog;
 import org.apache.fluss.server.replica.delay.DelayedOperationManager;
 import org.apache.fluss.server.replica.delay.DelayedTableBucketKey;
@@ -194,6 +194,7 @@ public final class Replica {
     // null if table without pk or haven't become leader
     private volatile @Nullable KvTablet kvTablet;
     private volatile @Nullable CloseableRegistry closeableRegistryForKv;
+    private @Nullable PeriodicSnapshotManager kvSnapshotManager;
 
     // ------- metrics
     private Counter isrShrinks;
@@ -246,19 +247,37 @@ public final class Replica {
     }
 
     private void registerMetrics() {
-        bucketMetricGroup.gauge(MetricNames.UNDER_REPLICATED, () -> isUnderReplicated() ? 1 : 0);
-        bucketMetricGroup.gauge(
-                MetricNames.IN_SYNC_REPLICAS, () -> isLeader() ? isrState.isr().size() : 0);
-        bucketMetricGroup.gauge(MetricNames.UNDER_MIN_ISR, () -> isUnderMinIsr() ? 1 : 0);
-        bucketMetricGroup.gauge(MetricNames.AT_MIN_ISR, () -> isAtMinIsr() ? 1 : 0);
+        // get root metric in the reference: bucket -> table -> tabletServer
+        TabletServerMetricGroup serverMetrics =
+                bucketMetricGroup.getTableMetricGroup().getServerMetricGroup();
+        isrExpands = serverMetrics.isrExpands();
+        isrShrinks = serverMetrics.isrShrinks();
+        failedIsrUpdates = serverMetrics.failedIsrUpdates();
 
-        isrExpands = new SimpleCounter();
-        bucketMetricGroup.meter(MetricNames.ISR_EXPANDS_RATE, new MeterView(isrExpands));
-        isrShrinks = new SimpleCounter();
-        bucketMetricGroup.meter(MetricNames.ISR_SHRINKS_RATE, new MeterView(isrShrinks));
-        failedIsrUpdates = new SimpleCounter();
-        bucketMetricGroup.meter(
-                MetricNames.FAILED_ISR_UPDATES_RATE, new MeterView(failedIsrUpdates));
+        // logical storage metrics.
+        MetricGroup logicalStorageMetrics = bucketMetricGroup.addGroup("logicalStorage");
+        logicalStorageMetrics.gauge(
+                MetricNames.LOCAL_STORAGE_LOG_SIZE, this::logicalStorageLogSize);
+        logicalStorageMetrics.gauge(MetricNames.LOCAL_STORAGE_KV_SIZE, this::logicalStorageKvSize);
+    }
+
+    public long logicalStorageLogSize() {
+        if (isLeader()) {
+            return logTablet.logicalStorageSize();
+        } else {
+            // follower doesn't need to report the logical storage size.
+            return 0L;
+        }
+    }
+
+    public long logicalStorageKvSize() {
+        if (isLeader() && isKvTable()) {
+            checkNotNull(kvSnapshotManager, "kvSnapshotManager is null");
+            return kvSnapshotManager.getSnapshotSize();
+        } else {
+            // follower doesn't need to report the logical storage size.
+            return 0L;
+        }
     }
 
     public boolean isKvTable() {
@@ -349,8 +368,8 @@ public final class Replica {
         return bucketMetricGroup;
     }
 
-    public PhysicalTableMetricGroup tableMetrics() {
-        return bucketMetricGroup.getPhysicalTableMetricGroup();
+    public TableMetricGroup tableMetrics() {
+        return bucketMetricGroup.getTableMetricGroup();
     }
 
     public void makeLeader(NotifyLeaderAndIsrData data) throws IOException {
@@ -637,8 +656,6 @@ public final class Replica {
                                 arrowCompressionInfo);
             }
 
-            kvTablet.registerMetrics(bucketMetricGroup);
-
             logTablet.updateMinRetainOffset(restoreStartOffset);
             recoverKvTablet(restoreStartOffset);
         } catch (Exception e) {
@@ -803,7 +820,7 @@ public final class Replica {
                             coordinatorEpochSupplier,
                             lastCompletedSnapshotLogOffset,
                             snapshotSize);
-            PeriodicSnapshotManager kvSnapshotManager =
+            this.kvSnapshotManager =
                     PeriodicSnapshotManager.create(
                             tableBucket,
                             kvTabletSnapshotTarget,
@@ -814,6 +831,14 @@ public final class Replica {
             closeableRegistryForKv.registerCloseable(kvSnapshotManager);
         } catch (Exception e) {
             LOG.error("init kv periodic snapshot failed.", e);
+        }
+    }
+
+    public long getLatestKvSnapshotSize() {
+        if (kvSnapshotManager == null) {
+            return 0L;
+        } else {
+            return kvSnapshotManager.getSnapshotSize();
         }
     }
 
@@ -1431,10 +1456,11 @@ public final class Replica {
                                                 new ArrayList<>(currentIstState.isr());
                                         newIsr.removeAll(outOfSyncFollowerReplicas);
                                         LOG.info(
-                                                "Shrink ISR From {} to {}. Leader: (high watermark: {}, "
+                                                "Shrink ISR From {} to {} for bucket {}. Leader: (high watermark: {}, "
                                                         + "end offset: {}, out of sync replicas: {})",
                                                 currentIstState.isr(),
                                                 newIsr,
+                                                tableBucket,
                                                 logTablet.getHighWatermark(),
                                                 logTablet.localLogEndOffset(),
                                                 outOfSyncFollowerReplicas);
@@ -1749,12 +1775,12 @@ public final class Replica {
         }
     }
 
-    private boolean isUnderReplicated() {
+    public boolean isUnderReplicated() {
         // is leader and isr size less than numReplicas
         return isLeader() && isrState.isr().size() < tableConfig.getReplicationFactor();
     }
 
-    private boolean isUnderMinIsr() {
+    public boolean isUnderMinIsr() {
         return isLeader() && isrState.isr().size() < minInSyncReplicas;
     }
 

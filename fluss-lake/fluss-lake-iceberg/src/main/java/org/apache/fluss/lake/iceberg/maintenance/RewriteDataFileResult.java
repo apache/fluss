@@ -28,10 +28,13 @@ public class RewriteDataFileResult implements Serializable {
 
     private static final long serialVersionUID = 1L;
 
+    private final long snapshotId;
     private final List<DataFile> deletedDataFiles;
     private final List<DataFile> addedDataFiles;
 
-    public RewriteDataFileResult(List<DataFile> deletedDataFiles, List<DataFile> addedDataFiles) {
+    public RewriteDataFileResult(
+            long snapshotId, List<DataFile> deletedDataFiles, List<DataFile> addedDataFiles) {
+        this.snapshotId = snapshotId;
         this.deletedDataFiles = deletedDataFiles;
         this.addedDataFiles = addedDataFiles;
     }
@@ -44,10 +47,16 @@ public class RewriteDataFileResult implements Serializable {
         return addedDataFiles;
     }
 
+    public long snapshotId() {
+        return snapshotId;
+    }
+
     @Override
     public String toString() {
         return "RewriteDataFileResult{"
-                + "deletedDataFiles="
+                + "snapshotId="
+                + snapshotId
+                + ", deletedDataFiles="
                 + deletedDataFiles
                 + ", addedDataFiles="
                 + addedDataFiles

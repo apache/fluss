@@ -20,6 +20,7 @@ package org.apache.fluss.server;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LogStorageException;
+import org.apache.fluss.exception.SchemaNotExistException;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
@@ -203,7 +204,7 @@ public abstract class TabletManagerBase {
         Optional<SchemaInfo> schemaInfoOpt = zkClient.getSchemaById(tablePath, schemaId);
         SchemaInfo schemaInfo;
         if (!schemaInfoOpt.isPresent()) {
-            throw new LogStorageException(
+            throw new SchemaNotExistException(
                     String.format(
                             "Failed to load table '%s': Table schema not found in zookeeper metadata.",
                             tablePath));

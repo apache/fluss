@@ -44,4 +44,4 @@ Some powerful features it provided are:
 - **Analytical Streams**: The union reads help data streams to have the powerful analytics capabilities. This reduces complexity when developing streaming applications, simplifies debugging, and allows for immediate access to live data insights.
 - **Connect to Lakehouse Ecosystem**: Fluss keeps the table metadata in sync with data lake catalogs while compacting data into Lakehouse. This allows external engines like Spark, StarRocks, Flink, Trino to read the data directly by connecting to the data lake catalog.
 
-Currently, Fluss supports [Paimon](integrate-data-lakes/paimon.md) and [Lance](integrate-data-lakes/lance.md) as Lakehouse Storage, more kinds of data lake formats are on the roadmap.
+Currently, Fluss supports [Paimon](integrate-data-lakes/paimon.md), [Iceberg](integrate-data-lakes/iceberg.md), and [Lance](integrate-data-lakes/lance.md) as Lakehouse Storage, more kinds of data lake formats are on the roadmap.

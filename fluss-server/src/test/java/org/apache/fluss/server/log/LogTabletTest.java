@@ -28,6 +28,7 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.clock.SystemClock;
@@ -89,6 +90,7 @@ final class LogTabletTest extends LogTestBase {
                         PhysicalTablePath.of(DATA1_TABLE_PATH),
                         logDir,
                         conf,
+                        TestingMetricGroups.TABLET_SERVER_METRICS,
                         0,
                         scheduler,
                         LogFormat.ARROW,
@@ -491,6 +493,7 @@ final class LogTabletTest extends LogTestBase {
                 PhysicalTablePath.of(DATA1_TABLE_PATH),
                 logDir,
                 config,
+                TestingMetricGroups.TABLET_SERVER_METRICS,
                 0,
                 scheduler,
                 LogFormat.ARROW,

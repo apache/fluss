@@ -31,17 +31,21 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
+import org.apache.flink.core.execution.SavepointFormatType;
 import org.apache.flink.table.api.TableResult;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
 import org.junit.jupiter.api.BeforeAll;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
+import java.io.File;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -50,6 +54,7 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.function.Function;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
@@ -59,6 +64,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 /** The IT case for Flink union data in lake and fluss for primary key table. */
 class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
+
+    @TempDir public static File savepointDir;
 
     @BeforeAll
     protected static void beforeAll() {
@@ -592,6 +599,122 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testUnionReadPrimaryKeyTableFailover(boolean isPartitioned) throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName1 =
+                "restore_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String resultTableName =
+                "result_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
+
+        TablePath table1 = TablePath.of(DEFAULT_DB, tableName1);
+        TablePath resultTable = TablePath.of(DEFAULT_DB, resultTableName);
+
+        // create table and write data
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+        Function<String, List<InternalRow>> rowGenerator =
+                (partition) ->
+                        Arrays.asList(
+                                row(3, "string", partition), row(30, "another_string", partition));
+        long tableId =
+                prepareSimplePKTable(
+                        table1,
+                        DEFAULT_BUCKET_NUM,
+                        isPartitioned,
+                        rowGenerator,
+                        bucketLogEndOffset);
+
+        // check the status of replica after synced
+        assertReplicaStatus(table1, tableId, DEFAULT_BUCKET_NUM, isPartitioned, bucketLogEndOffset);
+
+        // create result table
+        createSimplePkTable(resultTable, DEFAULT_BUCKET_NUM, isPartitioned, false);
+        // union read lake data
+        StreamTableEnvironment streamTEnv = buildStreamTEnv(null);
+        TableResult insertResult =
+                streamTEnv.executeSql(
+                        "insert into " + resultTableName + " select * from " + tableName1);
+
+        // will read paimon snapshot, should only +I since no change log
+        List<Row> expectedRows = new ArrayList<>();
+        if (isPartitioned) {
+            for (String partition : waitUntilPartitions(table1).values()) {
+                expectedRows.add(Row.of(3, "string", partition));
+                expectedRows.add(Row.of(30, "another_string", partition));
+            }
+        } else {
+            expectedRows =
+                    Arrays.asList(Row.of(3, "string", null), Row.of(30, "another_string", null));
+        }
+
+        CloseableIterator<Row> actual =
+                streamTEnv.executeSql("select * from " + resultTableName).collect();
+
+        if (isPartitioned) {
+            assertRowResultsIgnoreOrder(actual, expectedRows, false);
+        } else {
+            assertResultsExactOrder(actual, expectedRows, false);
+        }
+
+        // now, stop the job with save point
+        String savepointPath =
+                insertResult
+                        .getJobClient()
+                        .get()
+                        .stopWithSavepoint(
+                                false,
+                                savepointDir.getAbsolutePath(),
+                                SavepointFormatType.CANONICAL)
+                        .get();
+
+        // re buildStreamTEnv
+        streamTEnv = buildStreamTEnv(savepointPath);
+        insertResult =
+                streamTEnv.executeSql(
+                        "insert into " + resultTableName + " select * from " + tableName1);
+
+        // write some log data again
+        // write a row again
+        if (isPartitioned) {
+            Map<Long, String> partitionNameById = waitUntilPartitions(table1);
+            for (String partition : partitionNameById.values()) {
+                writeRows(
+                        table1,
+                        Collections.singletonList(row(30, "another_string_2", partition)),
+                        false);
+            }
+        } else {
+            writeRows(table1, Collections.singletonList(row(30, "another_string_2", null)), false);
+        }
+
+        // should generate -U & +U
+        List<Row> expectedRows2 = new ArrayList<>();
+        if (isPartitioned) {
+            for (String partition : waitUntilPartitions(table1).values()) {
+                expectedRows2.add(
+                        Row.ofKind(RowKind.UPDATE_BEFORE, 30, "another_string", partition));
+                expectedRows2.add(
+                        Row.ofKind(RowKind.UPDATE_AFTER, 30, "another_string_2", partition));
+            }
+        } else {
+            expectedRows2.add(Row.ofKind(RowKind.UPDATE_BEFORE, 30, "another_string", null));
+            expectedRows2.add(Row.ofKind(RowKind.UPDATE_AFTER, 30, "another_string_2", null));
+        }
+
+        if (isPartitioned) {
+            assertRowResultsIgnoreOrder(actual, expectedRows2, true);
+        } else {
+            assertResultsExactOrder(actual, expectedRows2, true);
+        }
+
+        // cancel jobs
+        insertResult.getJobClient().get().cancel().get();
+        jobClient.cancel().get();
+    }
+
     private List<Row> sortedRows(List<Row> rows) {
         rows.sort(Comparator.comparing(Row::toString));
         return rows;
@@ -626,6 +749,37 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         } else {
             for (int i = 0; i < 2; i++) {
                 List<InternalRow> rows = generateKvRowsFullType(null);
+                // write records
+                writeRows(tablePath, rows, false);
+            }
+            bucketLogEndOffset.putAll(getBucketLogEndOffset(tableId, bucketNum, null));
+        }
+        return tableId;
+    }
+
+    private long prepareSimplePKTable(
+            TablePath tablePath,
+            int bucketNum,
+            boolean isPartitioned,
+            Function<String, List<InternalRow>> rowGenerator,
+            Map<TableBucket, Long> bucketLogEndOffset)
+            throws Exception {
+        long tableId = createSimplePkTable(tablePath, bucketNum, isPartitioned, true);
+        if (isPartitioned) {
+            Map<Long, String> partitionNameById = waitUntilPartitions(tablePath);
+            for (String partition : partitionNameById.values()) {
+                for (int i = 0; i < 2; i++) {
+                    List<InternalRow> rows = rowGenerator.apply(partition);
+                    // write records
+                    writeRows(tablePath, rows, false);
+                }
+            }
+            for (Long partitionId : partitionNameById.keySet()) {
+                bucketLogEndOffset.putAll(getBucketLogEndOffset(tableId, bucketNum, partitionId));
+            }
+        } else {
+            for (int i = 0; i < 2; i++) {
+                List<InternalRow> rows = rowGenerator.apply(null);
                 // write records
                 writeRows(tablePath, rows, false);
             }
@@ -705,20 +859,47 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
                         .column("c15", DataTypes.BINARY(4))
                         .column("c16", DataTypes.STRING());
 
-        TableDescriptor.Builder tableBuilder =
-                TableDescriptor.builder()
-                        .distributedBy(bucketNum)
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        return createPkTable(tablePath, bucketNum, isPartitioned, true, schemaBuilder, "c4", "c16");
+    }
+
+    protected long createSimplePkTable(
+            TablePath tablePath, int bucketNum, boolean isPartitioned, boolean lakeEnabled)
+            throws Exception {
+        Schema.Builder schemaBuilder =
+                Schema.newBuilder()
+                        .column("c1", DataTypes.INT())
+                        .column("c2", DataTypes.STRING())
+                        .column("c3", DataTypes.STRING());
+
+        return createPkTable(
+                tablePath, bucketNum, isPartitioned, lakeEnabled, schemaBuilder, "c1", "c3");
+    }
+
+    protected long createPkTable(
+            TablePath tablePath,
+            int bucketNum,
+            boolean isPartitioned,
+            boolean lakeEnabled,
+            Schema.Builder schemaBuilder,
+            String primaryKey,
+            String partitionKeys)
+            throws Exception {
+
+        TableDescriptor.Builder tableBuilder = TableDescriptor.builder().distributedBy(bucketNum);
+        if (lakeEnabled) {
+            tableBuilder
+                    .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        }
 
         if (isPartitioned) {
             tableBuilder.property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
-            tableBuilder.partitionedBy("c16");
-            schemaBuilder.primaryKey("c4", "c16");
+            tableBuilder.partitionedBy(partitionKeys);
+            schemaBuilder.primaryKey(primaryKey, partitionKeys);
             tableBuilder.property(
                     ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR);
         } else {
-            schemaBuilder.primaryKey("c4");
+            schemaBuilder.primaryKey(primaryKey);
         }
         tableBuilder.schema(schemaBuilder.build());
         return createTable(tablePath, tableBuilder.build());
@@ -747,7 +928,7 @@ class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
         writeRows(tablePath, rows, false);
     }
 
-    private List<InternalRow> generateKvRowsFullType(@Nullable String partition) {
+    private static List<InternalRow> generateKvRowsFullType(@Nullable String partition) {
         return Arrays.asList(
                 row(
                         false,

@@ -30,7 +30,7 @@ public class LakeSnapshotSplit extends SourceSplitBase {
 
     private final LakeSplit lakeSplit;
 
-    private final long recordsToSplit;
+    private final long recordsToSkip;
 
     private final int splitIndex;
 
@@ -47,19 +47,19 @@ public class LakeSnapshotSplit extends SourceSplitBase {
             @Nullable String partitionName,
             LakeSplit lakeSplit,
             int splitIndex,
-            long recordsToSplit) {
+            long recordsToSkip) {
         super(tableBucket, partitionName);
         this.lakeSplit = lakeSplit;
         this.splitIndex = splitIndex;
-        this.recordsToSplit = recordsToSplit;
+        this.recordsToSkip = recordsToSkip;
     }
 
     public LakeSplit getLakeSplit() {
         return lakeSplit;
     }
 
-    public long getRecordsToSplit() {
-        return recordsToSplit;
+    public long getRecordsToSkip() {
+        return recordsToSkip;
     }
 
     public int getSplitIndex() {
@@ -93,8 +93,8 @@ public class LakeSnapshotSplit extends SourceSplitBase {
         return "LakeSnapshotSplit{"
                 + "lakeSplit="
                 + lakeSplit
-                + ", recordsToSplit="
-                + recordsToSplit
+                + ", recordsToSkip="
+                + recordsToSkip
                 + ", splitIndex="
                 + splitIndex
                 + ", tableBucket="

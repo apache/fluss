@@ -90,7 +90,7 @@ class FlinkCatalogTest {
                     .build();
 
     private static final String CATALOG_NAME = "test-catalog";
-    private static final String DEFAULT_DB = "default";
+    private static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
     static Catalog catalog;
     private final ObjectPath tableInDefaultDb = new ObjectPath(DEFAULT_DB, "t1");
 
@@ -440,8 +440,7 @@ class FlinkCatalogTest {
         CatalogTable expectedTable = addOptions(table, addedOptions);
         checkEqualsRespectSchema((CatalogTable) tableCreated, expectedTable);
         assertThat(catalog.listTables("db1")).isEqualTo(Collections.singletonList("t1"));
-        assertThat(catalog.listDatabases())
-                .isEqualTo(Arrays.asList(DEFAULT_DB, "db1", "db2", "fluss"));
+        assertThat(catalog.listDatabases()).isEqualTo(Arrays.asList("db1", "db2", DEFAULT_DB));
         // test drop db1;
         // should throw exception since db1 is not empty and we set cascade = false
         assertThatThrownBy(() -> catalog.dropDatabase("db1", false, false))
@@ -457,10 +456,10 @@ class FlinkCatalogTest {
         // should be ok since we set ignoreIfNotExists = true
         catalog.dropDatabase("db1", true, true);
         // test list db
-        assertThat(catalog.listDatabases()).isEqualTo(Arrays.asList(DEFAULT_DB, "db2", "fluss"));
+        assertThat(catalog.listDatabases()).isEqualTo(Arrays.asList("db2", DEFAULT_DB));
         catalog.dropDatabase("db2", false, true);
         // should be empty
-        assertThat(catalog.listDatabases()).isEqualTo(Arrays.asList(DEFAULT_DB, "fluss"));
+        assertThat(catalog.listDatabases()).isEqualTo(Collections.singletonList(DEFAULT_DB));
         // should throw exception since the db is not exist and we set ignoreIfNotExists = false
         assertThatThrownBy(() -> catalog.listTables("unknown"))
                 .isInstanceOf(DatabaseNotExistException.class)
@@ -498,7 +497,7 @@ class FlinkCatalogTest {
         catalog.createTable(path1, table, false);
         assertThatThrownBy(() -> catalog.listPartitions(path1))
                 .isInstanceOf(TableNotPartitionedException.class)
-                .hasMessage("Table default.t1 in catalog test-catalog is not partitioned.");
+                .hasMessage("Table fluss.t1 in catalog test-catalog is not partitioned.");
 
         // create partition table and list partitions.
         ObjectPath path2 = new ObjectPath(DEFAULT_DB, "partitioned_t1");
@@ -534,7 +533,7 @@ class FlinkCatalogTest {
         assertThatThrownBy(() -> catalog.listPartitions(path2, invalidTestSpec))
                 .isInstanceOf(CatalogException.class)
                 .hasMessage(
-                        "Failed to list partitions of table default.partitioned_t1 in test-catalog, by partitionSpec CatalogPartitionSpec{{second=}}");
+                        "Failed to list partitions of table fluss.partitioned_t1 in test-catalog, by partitionSpec CatalogPartitionSpec{{second=}}");
 
         // NEW: Test dropPartition functionality
         CatalogPartitionSpec firstPartSpec = catalogPartitionSpecs.get(0);
@@ -553,7 +552,7 @@ class FlinkCatalogTest {
                 .isInstanceOf(
                         org.apache.flink.table.catalog.exceptions.PartitionNotExistException.class)
                 .hasMessage(
-                        "Partition CatalogPartitionSpec{{first=999}} of table default.partitioned_t1 in catalog test-catalog does not exist.");
+                        "Partition CatalogPartitionSpec{{first=999}} of table fluss.partitioned_t1 in catalog test-catalog does not exist.");
 
         // Should not throw with ignoreIfNotExists = true
         catalog.dropPartition(path2, nonExistentSpec, true);
