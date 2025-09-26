@@ -179,6 +179,7 @@ class FlinkSourceReaderTest extends FlinkTestBase {
                 sourceOutputType,
                 context,
                 null,
+                null,
                 new FlinkSourceReaderMetrics(context.metricGroup()),
                 recordEmitter,
                 null);

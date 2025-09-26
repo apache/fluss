@@ -18,6 +18,7 @@
 package org.apache.fluss.record;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.CorruptMessageException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.LogFormat;
@@ -33,15 +34,17 @@ import org.apache.fluss.utils.crc.Crc32C;
 
 import java.nio.ByteBuffer;
 import java.util.NoSuchElementException;
+import java.util.Optional;
 
 import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.COMMIT_TIMESTAMP_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V2;
 import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
 import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_LEADER_EPOCH;
-import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.STATISTICS_FLAG_MASK;
 import static org.apache.fluss.record.LogRecordBatchFormat.attributeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.batchSequenceOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.crcOffset;
@@ -50,6 +53,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.leaderEpochOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordsCountOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.schemaIdOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.statisticsOffsetOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.writeClientIdOffset;
 
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
@@ -78,10 +82,15 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     private int position;
     private byte magic;
 
+    // Cache for statistics to avoid repeated parsing
+    private Optional<LogRecordBatchStatistics> cachedStatistics = null;
+
     public void pointTo(MemorySegment segment, int position) {
         this.segment = segment;
         this.position = position;
         this.magic = segment.get(position + MAGIC_OFFSET);
+        // Reset cache when pointing to new memory segment
+        this.cachedStatistics = null;
     }
 
     public void setBaseLogOffset(long baseLogOffset) {
@@ -207,6 +216,10 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         return segment.getInt(position + recordsCountOffset(magic));
     }
 
+    public int getStatisticsOffset() {
+        return segment.getInt(position + statisticsOffsetOffset(magic));
+    }
+
     @Override
     public CloseableIterator<LogRecord> records(ReadContext context) {
         if (getRecordCount() == 0) {
@@ -299,12 +312,14 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         } else {
             // with change type, decode the change type vector first,
             // the arrow data starts after the change type vector
-            int changeTypeOffset = position + arrowChangeTypeOffset(magic);
+            int changeTypeOffset = position + LogRecordBatchFormat.arrowChangeTypeOffset(magic);
             ChangeTypeVector changeTypeVector =
                     new ChangeTypeVector(segment, changeTypeOffset, getRecordCount());
             int arrowOffset = changeTypeOffset + changeTypeVector.sizeInBytes();
             int arrowLength =
-                    sizeInBytes() - arrowChangeTypeOffset(magic) - changeTypeVector.sizeInBytes();
+                    sizeInBytes()
+                            - LogRecordBatchFormat.arrowChangeTypeOffset(magic)
+                            - changeTypeVector.sizeInBytes();
             ArrowReader reader =
                     ArrowUtils.createArrowReader(
                             segment, arrowOffset, arrowLength, root, allocator, rowType);
@@ -411,5 +426,84 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         public void remove() {
             throw new UnsupportedOperationException();
         }
+    }
+
+    @Override
+    public Optional<LogRecordBatchStatistics> getStatistics(ReadContext context) {
+        if (context == null) {
+            return Optional.empty();
+        }
+
+        // Return cached statistics if already parsed
+        if (cachedStatistics != null) {
+            return cachedStatistics;
+        }
+
+        try {
+            if (magic < LOG_MAGIC_VALUE_V2) {
+                // Cache the empty result to avoid repeated checks
+                cachedStatistics = Optional.empty();
+                return cachedStatistics;
+            }
+
+            byte attribute = attributes();
+            if ((attribute & STATISTICS_FLAG_MASK) == 0) {
+                // Cache the empty result to avoid repeated checks
+                cachedStatistics = Optional.empty();
+                return cachedStatistics;
+            }
+
+            // Get the statistics offset from header
+            int statisticsOffset = segment.getInt(position + statisticsOffsetOffset(magic));
+            if (statisticsOffset == 0) {
+                // Cache the empty result to avoid repeated checks
+                cachedStatistics = Optional.empty();
+                return cachedStatistics;
+            }
+
+            // Get row type from context
+            RowType rowType = context.getRowType(schemaId());
+            if (rowType == null) {
+                // Cache the empty result to avoid repeated checks
+                cachedStatistics = Optional.empty();
+                return cachedStatistics;
+            }
+            // Parse statistics directly from memory segment without creating heap objects
+            LogRecordBatchStatistics statistics =
+                    LogRecordBatchStatisticsParser.parseStatistics(
+                            segment, position + statisticsOffset, rowType, schemaId());
+
+            // Cache the parsed statistics
+            cachedStatistics = Optional.ofNullable(statistics);
+            return cachedStatistics;
+        } catch (Exception e) {
+            // Cache the empty result to avoid repeated parsing attempts
+            cachedStatistics = Optional.empty();
+            return cachedStatistics;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Methods for testing only
+    // -----------------------------------------------------------------------
+
+    /**
+     * Get the memory segment for testing purposes only.
+     *
+     * @return The memory segment
+     */
+    @VisibleForTesting
+    MemorySegment segment() {
+        return segment;
+    }
+
+    /**
+     * Get the position for testing purposes only.
+     *
+     * @return The position
+     */
+    @VisibleForTesting
+    int position() {
+        return position;
     }
 }

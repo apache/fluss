@@ -41,6 +41,16 @@ public final class DataTypeChecks {
         return dataType.accept(SCALE_EXTRACTOR);
     }
 
+    /**
+     * Check if the given data type is a binary type (BINARY or BYTES).
+     *
+     * @param dataType the data type to check
+     * @return true if the data type is binary, false otherwise
+     */
+    public static boolean isBinaryType(DataType dataType) {
+        return dataType.isAnyOf(DataTypeRoot.BINARY, DataTypeRoot.BYTES);
+    }
+
     private DataTypeChecks() {
         // no instantiation
     }

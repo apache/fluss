@@ -181,14 +181,101 @@ public class LogRecordBatchFormat {
     private static final int V0_ARROW_CHANGETYPE_OFFSET = V0_RECORD_BATCH_HEADER_SIZE;
 
     // ----------------------------------------------------------------------------------------
+    // Format of Magic Version: V2
+    // ----------------------------------------------------------------------------------------
+
+    /**
+     * LogRecordBatch implementation for magic 2 (V2). The schema of {@link LogRecordBatch} is given
+     * below:
+     *
+     * <ul>
+     *   RecordBatch =>
+     *   <li>BaseOffset => Int64
+     *   <li>Length => Int32
+     *   <li>Magic => Int8
+     *   <li>CommitTimestamp => Int64
+     *   <li>LeaderEpoch => Int32
+     *   <li>CRC => Uint32
+     *   <li>SchemaId => Int16
+     *   <li>Attributes => Int8
+     *   <li>LastOffsetDelta => Int32
+     *   <li>WriterID => Int64
+     *   <li>SequenceID => Int32
+     *   <li>RecordCount => Int32
+     *   <li>StatisticsOffset => Int32 (New in V2, offset from header start to statistics data)
+     *   <li>Records => [Record]
+     *   <li>Statistics => [StatisticsData] (New in V2, optional based on StatisticsOffset, appended
+     *       after Records)
+     * </ul>
+     *
+     * <p>V2 introduces statistics support for filter pushdown optimization. The statistics include:
+     * - Row count (already available in RecordCount) - Min values for each column - Max values for
+     * each column - Null counts for each column
+     *
+     * <p>The StatisticsOffset field indicates the offset from the header start to the statistics
+     * data. If StatisticsOffset is 0, no statistics are present. The Statistics data is appended
+     * after the Records section.
+     *
+     * <p>The current attributes are given below:
+     *
+     * <pre>
+     * -----------------------------------------------------------------------
+     * |  Unused (2-7)   |  Statistics Flag (1) |  AppendOnly Flag (0) |
+     * -----------------------------------------------------------------------
+     * </pre>
+     *
+     * <p>Bit 1 (Statistics Flag): Set to 1 if statistics are present, 0 otherwise Bit 0 (AppendOnly
+     * Flag): Set to 1 if batch is append-only, 0 otherwise
+     *
+     * @since 0.8
+     */
+    public static final byte LOG_MAGIC_VALUE_V2 = 2;
+
+    private static final int STATISTICS_OFFSET_LENGTH = 4;
+    // STATISTICS_LENGTH_LENGTH was removed as it can be calculated from total length and statistics
+    // offset
+
+    private static final int V2_COMMIT_TIMESTAMP_OFFSET = MAGIC_OFFSET + MAGIC_LENGTH;
+    private static final int V2_LEADER_EPOCH_OFFSET =
+            V2_COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH;
+    private static final int V2_CRC_OFFSET = V2_LEADER_EPOCH_OFFSET + LEADER_EPOCH_LENGTH;
+    private static final int V2_SCHEMA_ID_OFFSET = V2_CRC_OFFSET + CRC_LENGTH;
+    private static final int V2_ATTRIBUTES_OFFSET = V2_SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
+    private static final int V2_LAST_OFFSET_DELTA_OFFSET = V2_ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
+    private static final int V2_WRITE_CLIENT_ID_OFFSET =
+            V2_LAST_OFFSET_DELTA_OFFSET + LAST_OFFSET_DELTA_LENGTH;
+    private static final int V2_BATCH_SEQUENCE_OFFSET =
+            V2_WRITE_CLIENT_ID_OFFSET + WRITE_CLIENT_ID_LENGTH;
+    private static final int V2_RECORDS_COUNT_OFFSET =
+            V2_BATCH_SEQUENCE_OFFSET + BATCH_SEQUENCE_LENGTH;
+    private static final int V2_STATISTICS_OFFSET_OFFSET =
+            V2_RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
+    public static final int V2_RECORDS_OFFSET =
+            V2_STATISTICS_OFFSET_OFFSET + STATISTICS_OFFSET_LENGTH;
+
+    // V2 record batch header size (without statistics)
+    public static final int V2_RECORD_BATCH_HEADER_SIZE = V2_RECORDS_OFFSET;
+    private static final int V2_ARROW_CHANGETYPE_OFFSET = V2_RECORD_BATCH_HEADER_SIZE;
+
+    // Attribute flags for V2
+    public static final byte STATISTICS_FLAG_MASK = 0x02; // bit 1
+
+    // Statistics format version
+    public static final byte STATISTICS_VERSION = 1;
+
+    // ----------------------------------------------------------------------------------------
     // Static Methods
     // ----------------------------------------------------------------------------------------
 
     public static int leaderEpochOffset(byte magic) {
-        if (magic == LOG_MAGIC_VALUE_V1) {
-            return V1_LEADER_EPOCH_OFFSET;
+        switch (magic) {
+            case LOG_MAGIC_VALUE_V1:
+                return V1_LEADER_EPOCH_OFFSET;
+            case LOG_MAGIC_VALUE_V2:
+                return V2_LEADER_EPOCH_OFFSET;
+            default:
+                throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
-        throw new IllegalArgumentException("Unsupported magic value " + magic);
     }
 
     public static int crcOffset(byte magic) {
@@ -197,6 +284,8 @@ public class LogRecordBatchFormat {
                 return V1_CRC_OFFSET;
             case LOG_MAGIC_VALUE_V0:
                 return V0_CRC_OFFSET;
+            case LOG_MAGIC_VALUE_V2:
+                return V2_CRC_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -208,6 +297,8 @@ public class LogRecordBatchFormat {
                 return V1_SCHEMA_ID_OFFSET;
             case LOG_MAGIC_VALUE_V0:
                 return V0_SCHEMA_ID_OFFSET;
+            case LOG_MAGIC_VALUE_V2:
+                return V2_SCHEMA_ID_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -219,6 +310,8 @@ public class LogRecordBatchFormat {
                 return V1_ATTRIBUTES_OFFSET;
             case LOG_MAGIC_VALUE_V0:
                 return V0_ATTRIBUTES_OFFSET;
+            case LOG_MAGIC_VALUE_V2:
+                return V2_ATTRIBUTES_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -230,6 +323,8 @@ public class LogRecordBatchFormat {
                 return V1_LAST_OFFSET_DELTA_OFFSET;
             case LOG_MAGIC_VALUE_V0:
                 return V0_LAST_OFFSET_DELTA_OFFSET;
+            case LOG_MAGIC_VALUE_V2:
+                return V2_LAST_OFFSET_DELTA_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -241,6 +336,8 @@ public class LogRecordBatchFormat {
                 return V1_WRITE_CLIENT_ID_OFFSET;
             case LOG_MAGIC_VALUE_V0:
                 return V0_WRITE_CLIENT_ID_OFFSET;
+            case LOG_MAGIC_VALUE_V2:
+                return V2_WRITE_CLIENT_ID_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -252,6 +349,8 @@ public class LogRecordBatchFormat {
                 return V1_BATCH_SEQUENCE_OFFSET;
             case LOG_MAGIC_VALUE_V0:
                 return V0_BATCH_SEQUENCE_OFFSET;
+            case LOG_MAGIC_VALUE_V2:
+                return V2_BATCH_SEQUENCE_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -263,6 +362,8 @@ public class LogRecordBatchFormat {
                 return V1_RECORDS_COUNT_OFFSET;
             case LOG_MAGIC_VALUE_V0:
                 return V0_RECORDS_COUNT_OFFSET;
+            case LOG_MAGIC_VALUE_V2:
+                return V2_RECORDS_COUNT_OFFSET;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -274,6 +375,74 @@ public class LogRecordBatchFormat {
                 return V1_RECORD_BATCH_HEADER_SIZE;
             case LOG_MAGIC_VALUE_V0:
                 return V0_RECORD_BATCH_HEADER_SIZE;
+            case LOG_MAGIC_VALUE_V2:
+                return V2_RECORD_BATCH_HEADER_SIZE;
+            default:
+                throw new IllegalArgumentException("Unsupported magic value " + magic);
+        }
+    }
+
+    /**
+     * Get the statistics offset offset for the given magic version. Only available for V2 and
+     * later.
+     */
+    public static int statisticsOffsetOffset(byte magic) {
+        switch (magic) {
+            case LOG_MAGIC_VALUE_V0:
+            case LOG_MAGIC_VALUE_V1:
+                return 0;
+            case LOG_MAGIC_VALUE_V2:
+                return V2_STATISTICS_OFFSET_OFFSET;
+            default:
+                throw new IllegalArgumentException("Unsupported magic value " + magic);
+        }
+    }
+
+    /**
+     * Get the statistics data offset for the given magic version. Only available for V2 and later.
+     */
+    public static int statisticsDataOffset(byte magic) {
+        switch (magic) {
+            case LOG_MAGIC_VALUE_V0:
+            case LOG_MAGIC_VALUE_V1:
+                throw new IllegalArgumentException(
+                        "Statistics not supported in magic version " + magic);
+            case LOG_MAGIC_VALUE_V2:
+                return V2_RECORDS_OFFSET;
+            default:
+                throw new IllegalArgumentException("Unsupported magic value " + magic);
+        }
+    }
+
+    /**
+     * Get the statistics data offset for the given magic version with records length. For V2, this
+     * requires the records length since statistics are appended after records.
+     */
+    public static int statisticsDataOffsetWithRecordsLength(byte magic, int recordsLength) {
+        switch (magic) {
+            case LOG_MAGIC_VALUE_V0:
+            case LOG_MAGIC_VALUE_V1:
+                throw new IllegalArgumentException(
+                        "Statistics not supported in magic version " + magic);
+            case LOG_MAGIC_VALUE_V2:
+                return V2_RECORDS_OFFSET + recordsLength;
+            default:
+                throw new IllegalArgumentException("Unsupported magic value " + magic);
+        }
+    }
+
+    /**
+     * Get the record batch header size including statistics for the given magic version. For V2,
+     * this requires the statistics length.
+     */
+    public static int recordBatchHeaderSizeWithStats(byte magic, int statisticsLength) {
+        switch (magic) {
+            case LOG_MAGIC_VALUE_V0:
+                return V0_RECORD_BATCH_HEADER_SIZE;
+            case LOG_MAGIC_VALUE_V1:
+                return V1_RECORD_BATCH_HEADER_SIZE;
+            case LOG_MAGIC_VALUE_V2:
+                return V2_RECORD_BATCH_HEADER_SIZE;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }
@@ -285,6 +454,25 @@ public class LogRecordBatchFormat {
                 return V1_ARROW_CHANGETYPE_OFFSET;
             case LOG_MAGIC_VALUE_V0:
                 return V0_ARROW_CHANGETYPE_OFFSET;
+            case LOG_MAGIC_VALUE_V2:
+                return V2_ARROW_CHANGETYPE_OFFSET;
+            default:
+                throw new IllegalArgumentException("Unsupported magic value " + magic);
+        }
+    }
+
+    /**
+     * Get the arrow change type offset for the given magic version with statistics length. For V2,
+     * this includes the statistics length.
+     */
+    public static int arrowChangeTypeOffsetWithStats(byte magic, int statisticsLength) {
+        switch (magic) {
+            case LOG_MAGIC_VALUE_V0:
+                return V0_ARROW_CHANGETYPE_OFFSET;
+            case LOG_MAGIC_VALUE_V1:
+                return V1_ARROW_CHANGETYPE_OFFSET;
+            case LOG_MAGIC_VALUE_V2:
+                return V2_RECORD_BATCH_HEADER_SIZE;
             default:
                 throw new IllegalArgumentException("Unsupported magic value " + magic);
         }

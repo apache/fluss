@@ -35,6 +35,7 @@ public class FetchLogResultForBucket extends ResultForBucket {
     private final @Nullable RemoteLogFetchInfo remoteLogFetchInfo;
     private final @Nullable LogRecords records;
     private final long highWatermark;
+    private final long skipToNextFetchOffset;
 
     public FetchLogResultForBucket(
             TableBucket tableBucket, LogRecords records, long highWatermark) {
@@ -43,11 +44,12 @@ public class FetchLogResultForBucket extends ResultForBucket {
                 null,
                 checkNotNull(records, "records can not be null"),
                 highWatermark,
+                -1L,
                 ApiError.NONE);
     }
 
     public FetchLogResultForBucket(TableBucket tableBucket, ApiError error) {
-        this(tableBucket, null, null, -1L, error);
+        this(tableBucket, null, null, -1L, -1L, error);
     }
 
     public FetchLogResultForBucket(
@@ -57,7 +59,18 @@ public class FetchLogResultForBucket extends ResultForBucket {
                 checkNotNull(remoteLogFetchInfo, "remote log fetch info can not be null"),
                 null,
                 highWatermark,
+                -1L,
                 ApiError.NONE);
+    }
+
+    /**
+     * Create a filtered empty response with the correct next fetch offset. This is used when all
+     * batches are filtered out but we need to inform the client about the correct offset to
+     * continue fetching from.
+     */
+    public FetchLogResultForBucket(
+            TableBucket tableBucket, long highWatermark, long skipToNextFetchOffset) {
+        this(tableBucket, null, null, highWatermark, skipToNextFetchOffset, ApiError.NONE);
     }
 
     private FetchLogResultForBucket(
@@ -65,11 +78,13 @@ public class FetchLogResultForBucket extends ResultForBucket {
             @Nullable RemoteLogFetchInfo remoteLogFetchInfo,
             @Nullable LogRecords records,
             long highWatermark,
+            long skipToNextFetchOffset,
             ApiError error) {
         super(tableBucket, error);
         this.remoteLogFetchInfo = remoteLogFetchInfo;
         this.records = records;
         this.highWatermark = highWatermark;
+        this.skipToNextFetchOffset = skipToNextFetchOffset;
     }
 
     /**
@@ -101,5 +116,9 @@ public class FetchLogResultForBucket extends ResultForBucket {
 
     public long getHighWatermark() {
         return highWatermark;
+    }
+
+    public long getSkipToNextFetchOffset() {
+        return skipToNextFetchOffset;
     }
 }

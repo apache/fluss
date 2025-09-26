@@ -95,6 +95,7 @@ import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
 import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
+import org.apache.fluss.server.coordinator.validate.TableConfigValidator;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -152,6 +153,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final Supplier<EventManager> eventManagerSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
     private final ServerMetadataCache metadataCache;
+    private final TableConfigValidator tableConfigValidator;
 
     // null if the cluster hasn't configured datalake format
     private final @Nullable DataLakeFormat dataLakeFormat;
@@ -181,6 +183,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.lakeCatalog = lakeCatalog;
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.metadataCache = metadataCache;
+        this.tableConfigValidator = new TableConfigValidator();
         checkState(
                 (dataLakeFormat == null) == (lakeCatalog == null),
                 "dataLakeFormat and lakeCatalog must both be null or both non-null, but dataLakeFormat is %s, lakeCatalog is %s.",
@@ -266,6 +269,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // apply system defaults if the config is not set
         tableDescriptor = applySystemDefaults(tableDescriptor);
+
+        // validate statistics configuration
+        tableConfigValidator.validateCreateTableOrThrow(tableDescriptor);
 
         // the distribution and bucket count must be set now
         //noinspection OptionalGetWithoutIsPresent

@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.source.deserializer.FlussDeserializationSchema;
 import org.apache.fluss.flink.source.enumerator.initializer.OffsetsInitializer;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
@@ -66,6 +67,7 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
             boolean isPartitioned,
             RowType sourceOutputType,
             @Nullable int[] projectedFields,
+            @Nullable Predicate logRecordBatchFilter,
             OffsetsInitializer offsetsInitializer,
             long scanPartitionDiscoveryIntervalMs,
             FlussDeserializationSchema<OUT> deserializationSchema,
@@ -78,6 +80,7 @@ public class FlussSource<OUT> extends FlinkSource<OUT> {
                 isPartitioned,
                 sourceOutputType,
                 projectedFields,
+                logRecordBatchFilter,
                 offsetsInitializer,
                 scanPartitionDiscoveryIntervalMs,
                 deserializationSchema,

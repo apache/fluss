@@ -20,11 +20,13 @@ package org.apache.fluss.server.log;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.record.FileLogProjection;
+import org.apache.fluss.record.Filter;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
 
+import java.util.Map;
 import java.util.Objects;
 
 /** Fetch data params. */
@@ -61,19 +63,19 @@ public final class FetchParams {
     private long fetchOffset;
     // whether column projection is enabled
     private boolean projectionEnabled = false;
+    private Map<Long, Filter> tableFilterMap;
     // the lazily initialized projection util to read and project file logs
     @Nullable private FileLogProjection fileLogProjection;
-
     private final int minFetchBytes;
     private final long maxWaitMs;
     // TODO: add more params like epoch etc.
 
     public FetchParams(int replicaId, int maxFetchBytes) {
-        this(replicaId, true, maxFetchBytes, DEFAULT_MIN_FETCH_BYTES, DEFAULT_MAX_WAIT_MS);
+        this(replicaId, true, maxFetchBytes, DEFAULT_MIN_FETCH_BYTES, DEFAULT_MAX_WAIT_MS, null);
     }
 
     public FetchParams(int replicaId, int maxFetchBytes, int minFetchBytes, long maxWaitMs) {
-        this(replicaId, true, maxFetchBytes, minFetchBytes, maxWaitMs);
+        this(replicaId, true, maxFetchBytes, minFetchBytes, maxWaitMs, null);
     }
 
     @VisibleForTesting
@@ -82,7 +84,8 @@ public final class FetchParams {
             boolean fetchOnlyLeader,
             int maxFetchBytes,
             int minFetchBytes,
-            long maxWaitMs) {
+            long maxWaitMs,
+            @Nullable Map<Long, Filter> tableFilterMap) {
         this.replicaId = replicaId;
         this.fetchOnlyLeader = fetchOnlyLeader;
         this.maxFetchBytes = maxFetchBytes;
@@ -91,6 +94,7 @@ public final class FetchParams {
         this.fetchOffset = -1;
         this.minFetchBytes = minFetchBytes;
         this.maxWaitMs = maxWaitMs;
+        this.tableFilterMap = tableFilterMap;
     }
 
     public void setCurrentFetch(
@@ -125,6 +129,14 @@ public final class FetchParams {
         } else {
             return null;
         }
+    }
+
+    @Nullable
+    public Filter gatTableFilter(long tableId) {
+        if (null == tableFilterMap) {
+            return null;
+        }
+        return tableFilterMap.get(tableId);
     }
 
     /**
