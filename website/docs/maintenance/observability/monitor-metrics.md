@@ -321,6 +321,11 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
       <td>Gauge</td>
     </tr>
     <tr>
+      <td>partitionCount</td>
+      <td>The total number of partitions in this cluster.</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
       <td>replicasToDeleteCount</td>
       <td>The total number of replicas in the progress to be deleted in this cluster.</td>
       <td>Gauge</td>
