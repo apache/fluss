@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.UnknownServerException;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
@@ -236,6 +237,49 @@ abstract class FlinkCatalogITCase {
                 .rootCause()
                 .isInstanceOf(InvalidAlterTableException.class)
                 .hasMessage("The option 'table.kv.format' is not supported to alter set.");
+    }
+
+    @Test
+    void testAlterTableBucket() throws Exception {
+        String ddl =
+                "create table test_alter_table_bucket ("
+                        + "a string, "
+                        + "b int) "
+                        + "with ('bucket.num' = '5')";
+        tEnv.executeSql(ddl);
+
+        CatalogTable table =
+                (CatalogTable)
+                        catalog.getTable(new ObjectPath(DEFAULT_DB, "test_alter_table_bucket"));
+        Map<String, String> expectedOptions = new HashMap<>();
+        expectedOptions.put("bucket.num", "5");
+        assertOptionsEqual(table.getOptions(), expectedOptions);
+
+        // test alter add bucket number
+        String alter = "alter table test_alter_table_bucket set ('bucket.num' = '10')";
+        tEnv.executeSql(alter);
+        table =
+                (CatalogTable)
+                        catalog.getTable(new ObjectPath(DEFAULT_DB, "test_alter_table_bucket"));
+        expectedOptions.put("bucket.num", "10");
+        assertOptionsEqual(table.getOptions(), expectedOptions);
+
+        String alterSub = "alter table test_alter_table_bucket set ('bucket.num' = '5')";
+        assertThatThrownBy(() -> tEnv.executeSql(alterSub))
+                .cause()
+                .cause()
+                // TODO: add exception
+                .isInstanceOf(UnknownServerException.class)
+                .hasMessageContaining(
+                        "org.apache.fluss.exception.InvalidBucketsException: Table currently has 10 buckets, which is higher than the requested 5.");
+
+        // test alter invalid bucket number
+        alter = "alter table test_alter_table_bucket set ('bucket.num' = 'x')";
+        String finalAlter = alter;
+        assertThatThrownBy(() -> tEnv.executeSql(finalAlter))
+                .cause()
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("Invalid bucket num: x.");
     }
 
     @Test

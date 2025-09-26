@@ -32,6 +32,7 @@ import javax.annotation.Nullable;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Optional;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -133,13 +134,15 @@ public class TableRegistration {
     }
 
     public TableRegistration newProperties(
-            Map<String, String> newProperties, Map<String, String> newCustomProperties) {
+            Optional<Integer> bucketCountOp,
+            Map<String, String> newProperties,
+            Map<String, String> newCustomProperties) {
         final long currentMillis = System.currentTimeMillis();
         return new TableRegistration(
                 tableId,
                 comment,
                 partitionKeys,
-                new TableDistribution(bucketCount, bucketKeys),
+                new TableDistribution(bucketCountOp.orElse(bucketCount), bucketKeys),
                 newProperties,
                 newCustomProperties,
                 createdTime,
