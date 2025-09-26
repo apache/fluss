@@ -297,6 +297,7 @@ abstract class FlinkCatalogITCase {
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
         Map<String, String> expectedOptions = new HashMap<>();
         expectedOptions.put("bucket.num", "10");
+        expectedOptions.put("table.datalake.format", "paimon");
         assertOptionsEqual(table.getOptions(), expectedOptions);
     }
 
@@ -564,6 +565,7 @@ abstract class FlinkCatalogITCase {
         expectedOptions.put("k1", "v1");
         expectedOptions.put(BUCKET_KEY.key(), "user");
         expectedOptions.put(BUCKET_NUMBER.key(), "1");
+        expectedOptions.put("table.datalake.format", "paimon");
         assertOptionsEqual(table.getOptions(), expectedOptions);
     }
 
