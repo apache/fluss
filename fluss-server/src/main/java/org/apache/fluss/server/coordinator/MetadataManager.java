@@ -42,6 +42,7 @@ import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.utils.LakeStorageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
@@ -341,6 +342,40 @@ public class MetadataManager {
         }
     }
 
+    public void alterTableAssignment(
+            long tableId, TableAssignment existingAssignment, TableAssignment newAssignment) {
+        try {
+            Map<Integer, BucketAssignment> combinedAssignment = new HashMap<>();
+            combinedAssignment.putAll(existingAssignment.getBucketAssignments());
+            combinedAssignment.putAll(newAssignment.getBucketAssignments());
+            zookeeperClient.updateTableAssignment(tableId, new TableAssignment(combinedAssignment));
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    "Failed to update table assignment for table id " + tableId, e);
+        }
+    }
+
+    public void alterPartitionAssignment(
+            long tableId,
+            long partitionId,
+            TableAssignment existingAssignment,
+            TableAssignment newAssignment) {
+        try {
+            Map<Integer, BucketAssignment> combinedAssignment = new HashMap<>();
+            combinedAssignment.putAll(existingAssignment.getBucketAssignments());
+            combinedAssignment.putAll(newAssignment.getBucketAssignments());
+            zookeeperClient.updatePartitionAssignment(
+                    partitionId, new PartitionAssignment(tableId, combinedAssignment));
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    "Failed to update partition assignment for table id "
+                            + tableId
+                            + " partition id "
+                            + partitionId,
+                    e);
+        }
+    }
+
     /**
      * Get a new TableRegistration with updated properties.
      *
@@ -370,12 +405,14 @@ public class MetadataManager {
 
         // no properties change happen
         if (newProperties.equals(existTableReg.properties)
-                && newCustomProperties.equals(existTableReg.customProperties)) {
+                && newCustomProperties.equals(existTableReg.customProperties)
+                && tablePropertyChanges.getBucketNum().isEmpty()) {
             return null;
         }
 
         validateAlterTableProperties(newProperties);
-        return existTableReg.newProperties(newProperties, newCustomProperties);
+        return existTableReg.newProperties(
+                tablePropertyChanges.getBucketNum(), newProperties, newCustomProperties);
     }
 
     public TableInfo getTable(TablePath tablePath) throws TableNotExistException {
@@ -428,6 +465,32 @@ public class MetadataManager {
             throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
         }
         return optionalTable.get();
+    }
+
+    public TableAssignment getTableAssignment(long tableId) {
+        Optional<TableAssignment> optionalTableAssignment;
+        try {
+            optionalTableAssignment = zookeeperClient.getTableAssignment(tableId);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        if (!optionalTableAssignment.isPresent()) {
+            throw new TableNotExistException("Table '" + tableId + "' does not exist.");
+        }
+        return optionalTableAssignment.get();
+    }
+
+    public PartitionAssignment getPartitionAssignment(long partitionId) {
+        Optional<PartitionAssignment> optionalPartitionAssignment;
+        try {
+            optionalPartitionAssignment = zookeeperClient.getPartitionAssignment(partitionId);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        if (!optionalPartitionAssignment.isPresent()) {
+            throw new PartitionNotExistException("Partition '" + partitionId + "' does not exist.");
+        }
+        return optionalPartitionAssignment.get();
     }
 
     public SchemaInfo getLatestSchema(TablePath tablePath) throws SchemaNotExistException {
@@ -631,6 +694,8 @@ public class MetadataManager {
     /** To describe the changes of the properties of a table. */
     public static class TablePropertyChanges {
 
+        private final Integer bucketNum;
+
         private final Map<String, String> tablePropertiesToSet;
         private final Set<String> tablePropertiesToReset;
 
@@ -638,14 +703,20 @@ public class MetadataManager {
         private final Set<String> customPropertiesToReset;
 
         private TablePropertyChanges(
+                Integer bucketNum,
                 Map<String, String> tablePropertiesToSet,
                 Set<String> tablePropertiesToReset,
                 Map<String, String> customPropertiesToSet,
                 Set<String> customPropertiesToReset) {
+            this.bucketNum = bucketNum;
             this.tablePropertiesToSet = tablePropertiesToSet;
             this.tablePropertiesToReset = tablePropertiesToReset;
             this.customPropertiesToSet = customPropertiesToSet;
             this.customPropertiesToReset = customPropertiesToReset;
+        }
+
+        public Optional<Integer> getBucketNum() {
+            return Optional.ofNullable(bucketNum);
         }
 
         public static Builder builder() {
@@ -654,11 +725,18 @@ public class MetadataManager {
 
         /** The builder for {@link TablePropertyChanges}. */
         public static class Builder {
+
+            private Integer bucketNum;
+
             private final Map<String, String> tablePropertiesToSet = new HashMap<>();
             private final Set<String> tablePropertiesToReset = new HashSet<>();
 
             private final Map<String, String> customPropertiesToSet = new HashMap<>();
             private final Set<String> customPropertiesToReset = new HashSet<>();
+
+            public void setBucketNum(Integer bucketNum) {
+                this.bucketNum = bucketNum;
+            }
 
             public void setTableProperty(String key, String value) {
                 tablePropertiesToSet.put(key, value);
@@ -678,6 +756,7 @@ public class MetadataManager {
 
             public TablePropertyChanges build() {
                 return new TablePropertyChanges(
+                        bucketNum,
                         tablePropertiesToSet,
                         tablePropertiesToReset,
                         customPropertiesToSet,

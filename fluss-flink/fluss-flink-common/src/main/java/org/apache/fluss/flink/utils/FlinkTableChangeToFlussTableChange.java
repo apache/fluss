@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.utils;
 
+import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.metadata.TableChange;
 
 /** convert Flink's TableChange class to {@link TableChange}. */
@@ -26,9 +27,17 @@ public class FlinkTableChangeToFlussTableChange {
             org.apache.flink.table.catalog.TableChange tableChange) {
         TableChange flussTableChange;
         if (tableChange instanceof org.apache.flink.table.catalog.TableChange.SetOption) {
-            flussTableChange =
-                    convertSetOption(
-                            (org.apache.flink.table.catalog.TableChange.SetOption) tableChange);
+            org.apache.flink.table.catalog.TableChange.SetOption setOption =
+                    (org.apache.flink.table.catalog.TableChange.SetOption) tableChange;
+            if (setOption.getKey().equals(FlinkConnectorOptions.BUCKET_NUMBER.key())) {
+                flussTableChange =
+                        convertBucketNumOption(
+                                (org.apache.flink.table.catalog.TableChange.SetOption) tableChange);
+            } else {
+                flussTableChange =
+                        convertSetOption(
+                                (org.apache.flink.table.catalog.TableChange.SetOption) tableChange);
+            }
         } else if (tableChange instanceof org.apache.flink.table.catalog.TableChange.ResetOption) {
             flussTableChange =
                     convertResetOption(
@@ -38,6 +47,16 @@ public class FlinkTableChangeToFlussTableChange {
                     String.format("Unsupported flink table change: %s.", tableChange));
         }
         return flussTableChange;
+    }
+
+    private static TableChange.BucketNumOption convertBucketNumOption(
+            org.apache.flink.table.catalog.TableChange.SetOption flinkBucketNumOption) {
+        try {
+            return TableChange.bucketNum(Integer.parseInt(flinkBucketNumOption.getValue()));
+        } catch (NumberFormatException e) {
+            throw new IllegalArgumentException(
+                    String.format("Invalid bucket num: %s.", flinkBucketNumOption.getValue()), e);
+        }
     }
 
     private static TableChange.SetOption convertSetOption(

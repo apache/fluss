@@ -26,7 +26,12 @@ public class FlussTableChangeProtoConverter {
 
     public static PbAlterConfigsRequestInfo toPbAlterConfigsRequestInfo(TableChange tableChange) {
         PbAlterConfigsRequestInfo info = new PbAlterConfigsRequestInfo();
-        if (tableChange instanceof TableChange.SetOption) {
+        if (tableChange instanceof TableChange.BucketNumOption) {
+            TableChange.BucketNumOption bucketNumOption = (TableChange.BucketNumOption) tableChange;
+            info.setConfigKey("");
+            info.setConfigValue(String.valueOf(bucketNumOption.getBucketNum()));
+            info.setOpType(AlterTableConfigsOpType.BUCKET_NUM.value());
+        } else if (tableChange instanceof TableChange.SetOption) {
             TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
             info.setConfigKey(setOption.getKey());
             info.setConfigValue(setOption.getValue());
