@@ -97,6 +97,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
+                            null,
                             null);
 
             enumerator.start();
@@ -144,6 +145,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
+                            null,
                             null);
             enumerator.start();
             // register all read
@@ -215,6 +217,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
+                            null,
                             null);
 
             enumerator.start();
@@ -261,6 +264,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
+                            null,
                             null);
 
             enumerator.start();
@@ -297,6 +301,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
+                            null,
                             null);
 
             enumerator.start();
@@ -405,7 +410,9 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 OffsetsInitializer.full(),
                                 DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                                 streaming,
-                                null)) {
+                                null,
+                                null,
+                                workExecutor)) {
             Map<Long, String> partitionNameByIds =
                     waitUntilPartitions(zooKeeperClient, DEFAULT_TABLE_PATH);
             enumerator.start();
@@ -520,6 +527,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 OffsetsInitializer.full(),
                                 DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                                 streaming,
+                                null,
                                 null)) {
 
             // test splits for same non-partitioned bucket, should assign to same task
