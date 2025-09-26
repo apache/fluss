@@ -29,25 +29,48 @@ mkdir lib
 
 # Copy Fluss connector JARs (these need to be built first)
 echo "Copying Fluss connector JARs..."
-cp "$PROJECT_ROOT/fluss-flink/fluss-flink-1.20/target/fluss-flink-1.20-*.jar" ./lib/fluss-flink-1.20.jar
-cp "$PROJECT_ROOT/fluss-lake/fluss-lake-paimon/target/fluss-lake-paimon-*.jar" ./lib/fluss-lake-paimon.jar
+cp $PROJECT_ROOT/fluss-flink/fluss-flink-1.20/target/fluss-flink-1.20-*.jar ./lib/fluss-flink-1.20.jar
+cp $PROJECT_ROOT/fluss-lake/fluss-lake-paimon/target/fluss-lake-paimon-*.jar ./lib/fluss-lake-paimon.jar
 
 # Download external dependencies
 echo "Downloading external dependencies..."
 
 # Download flink-faker for data generation
 wget -O ./lib/flink-faker-0.5.3.jar "https://github.com/knaufk/flink-faker/releases/download/v0.5.3/flink-faker-0.5.3.jar"
+if [ ! -s ./lib/flink-faker-0.5.3.jar ]; then
+    echo "❌ Failed to download flink-faker-0.5.3.jar"
+    exit 1
+fi
+echo "✅ Downloaded flink-faker-0.5.3.jar"
 
 # Download flink-shaded-hadoop-2-uber for Hadoop integration
+EXPECTED_HASH="5dd57b5d38965c0f70e3f63d2581755df6c296bb"
 wget -O ./lib/flink-shaded-hadoop-2-uber.jar "https://repo.maven.apache.org/maven2/org/apache/flink/flink-shaded-hadoop-2-uber/2.8.3-10.0/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar"
+ACTUAL_HASH=$(sha1sum ./lib/flink-shaded-hadoop-2-uber.jar | awk '{print $1}')
+if [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
+  echo "Checksum mismatch!"
+  echo "Expected: $EXPECTED_HASH"
+  echo "Actual:   $ACTUAL_HASH"
+  exit 1
+fi
+echo "✅ Downloaded flink-shaded-hadoop-2-uber-2.8.3-10.0.jar"
 
-# Download paimon-flink connector (commented out as it might not be needed)
+# Download paimon-flink connector
+EXPECTED_HASH=b9f8762c6e575f6786f1d156a18d51682ffc975c
 wget -O ./lib/paimon-flink-1.20-1.2.0.jar "https://repo1.maven.org/maven2/org/apache/paimon/paimon-flink-1.20/1.2.0/paimon-flink-1.20-1.2.0.jar"
+ACTUAL_HASH=$(sha1sum ./lib/paimon-flink-1.20-1.2.0.jar | awk '{print $1}')
+if [ "$EXPECTED_HASH" != "$ACTUAL_HASH" ]; then
+  echo "Checksum mismatch!"
+  echo "Expected: $EXPECTED_HASH"
+  echo "Actual:   $ACTUAL_HASH"
+  exit 1
+fi
+echo "✅ Downloaded paimon-flink-1.20-1.2.0.jar"
 
 # Prepare lake tiering JAR and put it into opt/ directory
 echo "Preparing lake tiering JAR..."
 rm -rf opt
 mkdir opt
-cp "$PROJECT_ROOT/fluss-flink/fluss-flink-tiering/target/fluss-flink-tiering-*.jar" ./opt/fluss-flink-tiering.jar
+cp $PROJECT_ROOT/fluss-flink/fluss-flink-tiering/target/fluss-flink-tiering-*.jar ./opt/fluss-flink-tiering.jar
 
 echo "Jar files preparation completed!"
