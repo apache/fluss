@@ -19,16 +19,19 @@ package org.apache.fluss.server.lakehouse;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
 import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 /** A plugin of paimon just for testing purpose. */
@@ -77,6 +80,12 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
                 throw new TableAlreadyExistException("Table " + tablePath + " already exists");
             }
             tableByPath.put(tablePath, tableDescriptor);
+        }
+
+        @Override
+        public void alterTable(TablePath tablePath, List<TableChange> tableChanges)
+                throws TableNotExistException {
+            // do nothing
         }
 
         public TableDescriptor getTable(TablePath tablePath) {

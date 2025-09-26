@@ -307,6 +307,7 @@ public class MetadataManager {
     public void alterTableProperties(
             TablePath tablePath,
             TablePropertyChanges tablePropertyChanges,
+            Runnable alterLakeTablePropertiesFunc,
             boolean ignoreIfNotExists) {
         try {
             // it throws TableNotExistException if the table or database not exists
@@ -329,6 +330,11 @@ public class MetadataManager {
             if (newDescriptor != null) {
                 // reuse the same validate logic with the createTable() method
                 validateTableDescriptor(tableDescriptor, maxBucketNum);
+
+                if (tableInfo.getTableConfig().isDataLakeEnabled()) {
+                    alterLakeTablePropertiesFunc.run();
+                }
+
                 // update the table to zk
                 TableRegistration updatedTableRegistration =
                         tableReg.newProperties(
