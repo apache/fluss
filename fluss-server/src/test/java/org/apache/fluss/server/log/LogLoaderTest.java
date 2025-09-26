@@ -122,8 +122,8 @@ final class LogLoaderTest extends LogTestBase {
                                         "Corrupt time index found, time index file (%s) has non-zero size but the last timestamp is 0 which is less than the first timestamp",
                                         segment.timeIndex().file().getAbsolutePath()));
             } else {
-                // the active segment will be resized, which case no corruption exception when doing
-                // sanity check
+                // the offset index file of active segment will be resized, which case no corruption
+                // exception when doing sanity check
                 segment.offsetIndex().sanityCheck();
                 assertThatThrownBy(segment.timeIndex()::sanityCheck)
                         .isInstanceOf(CorruptIndexException.class)
@@ -181,6 +181,8 @@ final class LogLoaderTest extends LogTestBase {
                 segment.offsetIndex().sanityCheck();
                 segment.timeIndex().sanityCheck();
             } else {
+                // the segments before recovery point will not be recovered, so sanity check should
+                // still throw corrupt exception
                 assertThatThrownBy(segment.offsetIndex()::sanityCheck)
                         .isInstanceOf(CorruptIndexException.class)
                         .hasMessage(
@@ -223,6 +225,45 @@ final class LogLoaderTest extends LogTestBase {
                     .isEqualTo(logTablet.lookupOffsetForTimestamp(clock.milliseconds() + i * 10));
         }
         logTablet.close();
+    }
+
+    @Test
+    void testInvalidOffsetRebuild() throws Exception {
+        // publish the records and close the log
+        int numRecords = 200;
+        LogTablet logTablet = createLogTablet(true);
+        appendRecords(logTablet, numRecords);
+
+        List<LogSegment> logSegments = logTablet.logSegments();
+        int corruptSegmentIndex = logSegments.size() / 2;
+        assertThat(corruptSegmentIndex < logSegments.size()).isTrue();
+        LogSegment corruptSegment = logSegments.get(corruptSegmentIndex);
+
+        // append an invalid offset batch
+        List<Object[]> objects = Collections.singletonList(new Object[] {1, "a"});
+        List<ChangeType> changeTypes =
+                objects.stream().map(row -> ChangeType.APPEND_ONLY).collect(Collectors.toList());
+        MemoryLogRecords memoryLogRecords =
+                createBasicMemoryLogRecords(
+                        DATA1_ROW_TYPE,
+                        DEFAULT_SCHEMA_ID,
+                        corruptSegment.getBaseOffset(),
+                        clock.milliseconds(),
+                        magic,
+                        System.currentTimeMillis(),
+                        0,
+                        changeTypes,
+                        objects,
+                        LogFormat.ARROW,
+                        ArrowCompressionInfo.DEFAULT_COMPRESSION);
+        corruptSegment.getFileLogRecords().append(memoryLogRecords);
+        logTablet.close();
+
+        logTablet = createLogTablet(false);
+        // the corrupt segment should be truncated to base offset
+        assertThat(logTablet.localLogEndOffset()).isEqualTo(corruptSegment.getBaseOffset());
+        // segments after the corrupt segment should be removed
+        assertThat(logTablet.logSegments().size()).isEqualTo(corruptSegmentIndex + 1);
     }
 
     private LogTablet createLogTablet(boolean isCleanShutdown) throws Exception {
