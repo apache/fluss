@@ -59,7 +59,7 @@ public class MockWorkExecutor extends WorkerExecutor implements AutoCloseable {
                         throw new RuntimeException(e);
                     }
                     // wait for the call to complete
-                    latch.countDown();
+                    latch.await();
                     return null;
                 });
     }

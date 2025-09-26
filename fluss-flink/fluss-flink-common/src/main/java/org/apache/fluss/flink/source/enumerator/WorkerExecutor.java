@@ -18,7 +18,9 @@
 package org.apache.fluss.flink.source.enumerator;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.flink.source.split.SourceSplitBase;
+import org.apache.fluss.utils.concurrent.ExecutorThreadFactory;
 
 import org.apache.flink.api.connector.source.SplitEnumeratorContext;
 
@@ -43,13 +45,15 @@ import java.util.function.BiConsumer;
  * <p>TODO: This class is a workaround and should be removed once FLINK-38335 is completed.
  */
 @Internal
-public class WorkerExecutor {
+public class WorkerExecutor implements AutoCloseable {
     protected final SplitEnumeratorContext<SourceSplitBase> context;
     private final ScheduledExecutorService scheduledExecutor;
 
     public WorkerExecutor(SplitEnumeratorContext<SourceSplitBase> context) {
         this.context = context;
-        this.scheduledExecutor = Executors.newScheduledThreadPool(1);
+        this.scheduledExecutor =
+                Executors.newScheduledThreadPool(
+                        1, new ExecutorThreadFactory("SplitEnumeratorContextWrapper"));
     }
 
     public <T> void callAsync(Callable<T> callable, BiConsumer<T, Throwable> handler) {
@@ -60,7 +64,7 @@ public class WorkerExecutor {
             Callable<T> callable, BiConsumer<T, Throwable> handler, long initialDelay, long delay) {
         scheduledExecutor.scheduleWithFixedDelay(
                 () -> {
-                    CountDownLatch latch = new CountDownLatch(1);
+                    final CountDownLatch latch = new CountDownLatch(1);
                     context.callAsync(
                             () -> {
                                 try {
@@ -71,10 +75,20 @@ public class WorkerExecutor {
                             },
                             handler);
                     // wait for the call to complete
-                    latch.countDown();
+                    try {
+                        latch.await();
+                    } catch (InterruptedException e) {
+                        throw new FlussRuntimeException(
+                                "Interrupted while waiting for async call to complete", e);
+                    }
                 },
                 initialDelay,
                 delay,
                 TimeUnit.MILLISECONDS);
+    }
+
+    @Override
+    public void close() throws Exception {
+        scheduledExecutor.shutdownNow();
     }
 }

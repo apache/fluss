@@ -885,6 +885,9 @@ public class FlinkSourceEnumerator
     public void close() throws IOException {
         try {
             closed = true;
+            if (workerExecutor != null) {
+                workerExecutor.close();
+            }
             if (flussAdmin != null) {
                 flussAdmin.close();
             }
