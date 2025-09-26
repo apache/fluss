@@ -340,19 +340,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             newDescriptor = newDescriptor.withProperties(newProperties);
         }
 
-        // override the datalake format if the table hasn't set it and the cluster configured
-        if (dataLakeFormat != null
-                && !properties.containsKey(ConfigOptions.TABLE_DATALAKE_FORMAT.key())) {
-            newDescriptor = newDescriptor.withDataLakeFormat(dataLakeFormat);
-        }
-
         // lake table can only be enabled when the cluster configures datalake format
         boolean dataLakeEnabled = isDataLakeEnabled(tableDescriptor);
-        if (dataLakeEnabled && dataLakeFormat == null) {
-            throw new InvalidTableException(
-                    String.format(
-                            "'%s' is enabled for the table, but the Fluss cluster doesn't enable datalake tables.",
-                            ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+        if (dataLakeEnabled) {
+            if (dataLakeFormat == null) {
+                throw new InvalidTableException(
+                        String.format(
+                                "'%s' is enabled for the table, but the Fluss cluster doesn't enable datalake tables.",
+                                ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+            }
+
+            // override the datalake format if the table hasn't set it and the cluster configured
+            if (!properties.containsKey(ConfigOptions.TABLE_DATALAKE_FORMAT.key())) {
+                newDescriptor = newDescriptor.withDataLakeFormat(dataLakeFormat);
+            }
         }
 
         return newDescriptor;

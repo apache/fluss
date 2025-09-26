@@ -638,10 +638,23 @@ abstract class FlinkCatalogITCase {
 
     @Test
     void testCreateTableWithUnknownOptions() {
-        // create fluss table with unknown options whose prefix is 'table.*' or 'client.*'
+        // create fluss table with unknown table.* options is invalid
+        assertThatThrownBy(
+                        () -> {
+                            tEnv.executeSql(
+                                    "create table test_table_unknown_options (a int, b int)"
+                                            + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092', "
+                                            + "'table.unknown.option' = 'table-unknown-val')");
+                        })
+                .hasRootCauseInstanceOf(InvalidConfigException.class)
+                .hasRootCauseMessage(
+                        "'table.unknown.option' is not a recognized Fluss table property in the current cluster version. "
+                                + "You may be using an older Fluss cluster that does not support this property.");
+
+        // create fluss table with unknown client.* options is ok
         tEnv.executeSql(
                 "create table test_table_unknown_options (a int, b int)"
-                        + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092', 'table.unknown.option' = 'table-unknown-val', 'client.unknown.option' = 'client-unknown-val')");
+                        + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092', 'client.unknown.option' = 'client-unknown-val')");
 
         // test table as source
         String sourcePlan = tEnv.explainSql("select * from test_table_unknown_options");
