@@ -51,3 +51,50 @@ The following metrics are changed:
 - Correction addresses reporting errors in metric names by changing the `table` level metric prefix from `fluss_tabletserver_table__` (used a double underscore (__)) to `fluss_tabletserver_table_`. 
   - The affected metrics are all metrics with [Scope: tableserver, infix: table](docs/maintenance/observability/monitor-metrics.md#tablebucket)
   - For example, change `fluss_tabletserver_table__messagesInPerSecond` to `fluss_tabletserver_table_messagesInPerSecond`.
+
+## Fluss Datalake Tiering Service
+
+### Disables Auto-Compaction By Default
+
+⚠️ **Breaking Change**: Beginning with Fluss v0.8, auto-compaction during datalake tiering is **disabled by default**. This is a significant behavioral change that may affect your existing workflows.
+
+#### What Changed
+
+| Version                 | Auto-Compaction Behavior                                                                          |
+|-------------------------|---------------------------------------------------------------------------------------------------|
+| **v0.7 and earlier**    | ✅ **Enabled by default** - Compaction runs automatically during tiering                          |
+| **v0.8**                | ❌ **Disabled by default** - Only data movement occurs; compaction must be explicitly enabled     |
+
+#### Impact Assessment
+
+**If you rely on automatic compaction for storage optimization**, you will need to take action to maintain the same behavior.
+
+#### How to Enable Auto-Compaction
+
+To restore the previous behavior, configure auto-compaction on a per-table basis via setting the table option `'table.datalake.auto-compaction' = 'true'`:
+
+```sql title="Flink SQL"
+-- Enable auto-compaction for a specific table
+CREATE TABLE your_table_name (
+    col1 INT,
+    col2 INT
+) WITH (
+    'table.datalake.auto-compaction' = 'true'
+);
+```
+
+#### Why This Change Was Made
+
+This change prioritizes **tiering service stability and performance**:
+
+- **🚀 Better Performance**: Compaction is CPU/IO intensive and can slow down the core tiering process
+- **🎯 Focused Functionality**: The tiering service now focuses solely on reliable data movement
+- **⚙️ Granular Control**: You can now optimize compaction strategy per table based on your specific needs
+- **🔧 Resource Management**: Better control over when and where resource-intensive operations occur
+
+#### Best Practices
+
+- **Enable auto-compaction** for tables with high write frequency and storage cost concerns
+- **Disable auto-compaction** for tables where tiering speed is more important than storage optimization
+- **Monitor resource usage** when enabling auto-compaction to ensure it doesn't impact tiering performance
+- **Consider manual compaction** for large tables during maintenance windows
