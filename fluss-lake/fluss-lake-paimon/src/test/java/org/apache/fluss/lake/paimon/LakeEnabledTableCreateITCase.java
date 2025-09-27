@@ -25,6 +25,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -49,6 +50,7 @@ import javax.annotation.Nullable;
 import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
@@ -361,6 +363,218 @@ class LakeEnabledTableCreateITCase {
                             TIMESTAMP_COLUMN_NAME
                         }),
                 null,
+                BUCKET_NUM);
+    }
+
+    @Test
+    void testAlterLakeEnabledLogTable() throws Exception {
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("k1", "v1");
+        customProperties.put("paimon.file.format", "parquet");
+
+        // log table with lake disabled
+        TableDescriptor logTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("log_c1", DataTypes.INT())
+                                        .column("log_c2", DataTypes.STRING())
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, false)
+                        .customProperties(customProperties)
+                        .distributedBy(BUCKET_NUM, "log_c1", "log_c2")
+                        .build();
+        TablePath logTablePath = TablePath.of(DATABASE, "log_table_alter");
+        admin.createTable(logTablePath, logTable, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                paimonCatalog.getTable(
+                                        Identifier.create(DATABASE, logTablePath.getTableName())))
+                .isInstanceOf(Catalog.TableNotExistException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Table %s.%s does not exist.",
+                                DATABASE, logTablePath.getTableName()));
+
+        // enable lake
+        TableChange.SetOption enableLake =
+                TableChange.set(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+        List<TableChange> changes = Arrays.asList(enableLake);
+
+        admin.alterTable(logTablePath, changes, false).get();
+
+        Table enabledPaimonLogTable =
+                paimonCatalog.getTable(Identifier.create(DATABASE, logTablePath.getTableName()));
+
+        Map<String, String> updatedProperties = new HashMap<>();
+        updatedProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+        TableDescriptor updatedLogTable = logTable.withProperties(updatedProperties);
+        // check the gotten log table
+        verifyPaimonTable(
+                enabledPaimonLogTable,
+                updatedLogTable,
+                RowType.of(
+                        new DataType[] {
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.STRING(),
+                            // for __bucket, __offset, __timestamp
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.BIGINT(),
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                        },
+                        new String[] {
+                            "log_c1",
+                            "log_c2",
+                            BUCKET_COLUMN_NAME,
+                            OFFSET_COLUMN_NAME,
+                            TIMESTAMP_COLUMN_NAME
+                        }),
+                "log_c1,log_c2",
+                BUCKET_NUM);
+    }
+
+    @Test
+    void testAlterPkLakeEnabledTable() throws Exception {
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("k1", "v1");
+        customProperties.put("paimon.file.format", "parquet");
+
+        // test pk table
+        TableDescriptor pkTable =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("pk_c1", DataTypes.INT())
+                                        .column("pk_c2", DataTypes.STRING())
+                                        .primaryKey("pk_c1")
+                                        .build())
+                        .distributedBy(BUCKET_NUM)
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, false)
+                        .customProperties(customProperties)
+                        .build();
+        TablePath pkTablePath = TablePath.of(DATABASE, "pk_table_alter");
+        admin.createTable(pkTablePath, pkTable, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                paimonCatalog.getTable(
+                                        Identifier.create(DATABASE, pkTablePath.getTableName())))
+                .isInstanceOf(Catalog.TableNotExistException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Table %s.%s does not exist.",
+                                DATABASE, pkTablePath.getTableName()));
+
+        // enable lake
+        TableChange.SetOption enableLake =
+                TableChange.set(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+        List<TableChange> changes = Arrays.asList(enableLake);
+
+        admin.alterTable(pkTablePath, changes, false).get();
+
+        Table enabledPaimonPkTable =
+                paimonCatalog.getTable(Identifier.create(DATABASE, pkTablePath.getTableName()));
+
+        Map<String, String> updatedProperties = new HashMap<>();
+        updatedProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+        TableDescriptor updatedPkTable = pkTable.withProperties(updatedProperties);
+        // check the gotten log table
+        verifyPaimonTable(
+                enabledPaimonPkTable,
+                updatedPkTable,
+                RowType.of(
+                        new DataType[] {
+                            org.apache.paimon.types.DataTypes.INT().notNull(),
+                            org.apache.paimon.types.DataTypes.STRING(),
+                            // for __bucket, __offset, __timestamp
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.BIGINT(),
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                        },
+                        new String[] {
+                            "pk_c1",
+                            "pk_c2",
+                            BUCKET_COLUMN_NAME,
+                            OFFSET_COLUMN_NAME,
+                            TIMESTAMP_COLUMN_NAME
+                        }),
+                "pk_c1",
+                BUCKET_NUM);
+    }
+
+    @Test
+    void testAlterPartitionedLakeEnabledTable() throws Exception {
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("k1", "v1");
+        customProperties.put("paimon.file.format", "parquet");
+
+        // test partitioned table
+        TableDescriptor partitionedTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .column("c3", DataTypes.STRING())
+                                        .primaryKey("c1", "c3")
+                                        .build())
+                        .distributedBy(BUCKET_NUM)
+                        .partitionedBy("c3")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, false)
+                        .customProperties(customProperties)
+                        .build();
+        TablePath partitionedTablePath = TablePath.of(DATABASE, "partitioned_table_alter");
+        admin.createTable(partitionedTablePath, partitionedTableDescriptor, false).get();
+
+        assertThatThrownBy(
+                        () ->
+                                paimonCatalog.getTable(
+                                        Identifier.create(
+                                                DATABASE, partitionedTablePath.getTableName())))
+                .isInstanceOf(Catalog.TableNotExistException.class)
+                .hasMessageContaining(
+                        String.format(
+                                "Table %s.%s does not exist.",
+                                DATABASE, partitionedTablePath.getTableName()));
+
+        // enable lake
+        TableChange.SetOption enableLake =
+                TableChange.set(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+        List<TableChange> changes = Arrays.asList(enableLake);
+        admin.alterTable(partitionedTablePath, changes, false).get();
+
+        Table enabledPaimonPartitionedTable =
+                paimonCatalog.getTable(
+                        Identifier.create(DATABASE, partitionedTablePath.getTableName()));
+
+        Map<String, String> updatedProperties = new HashMap<>();
+        updatedProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+        TableDescriptor updatedPartitionedTable =
+                partitionedTableDescriptor.withProperties(updatedProperties);
+
+        verifyPaimonTable(
+                enabledPaimonPartitionedTable,
+                updatedPartitionedTable,
+                RowType.of(
+                        new DataType[] {
+                            org.apache.paimon.types.DataTypes.INT().notNull(),
+                            org.apache.paimon.types.DataTypes.STRING(),
+                            org.apache.paimon.types.DataTypes.STRING().notNull(),
+                            // for __bucket, __offset, __timestamp
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.BIGINT(),
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                        },
+                        new String[] {
+                            "c1",
+                            "c2",
+                            "c3",
+                            BUCKET_COLUMN_NAME,
+                            OFFSET_COLUMN_NAME,
+                            TIMESTAMP_COLUMN_NAME
+                        }),
+                "c1",
                 BUCKET_NUM);
     }
 

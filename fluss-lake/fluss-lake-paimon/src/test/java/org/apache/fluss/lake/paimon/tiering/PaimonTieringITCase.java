@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
@@ -188,6 +189,138 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
     }
 
     @Test
+    void testTieringForAlterTable() throws Exception {
+        TablePath t1 = TablePath.of(DEFAULT_DB, "pkTableAlter");
+        Map<String, String> tableProperties = new HashMap<>();
+        tableProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false");
+        tableProperties.put(ConfigOptions.TABLE_DATALAKE_FRESHNESS.key(), "500 ms");
+
+        long t1Id = createPkTable(t1, 1, tableProperties, Collections.emptyMap());
+
+        TableChange.SetOption setOption =
+                TableChange.set(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+        List<TableChange> changes = Collections.singletonList(setOption);
+        admin.alterTable(t1, changes, false).get();
+
+        TableBucket t1Bucket = new TableBucket(t1Id, 0);
+
+        // write records
+        List<InternalRow> rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+        writeRows(t1, rows, false);
+        waitUntilSnapshot(t1Id, 1, 0);
+
+        // then start tiering job
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        try {
+            // check the status of replica after synced
+            assertReplicaStatus(t1Bucket, 3);
+            // check data in paimon
+            checkDataInPaimonPrimaryKeyTable(t1, rows);
+            // check snapshot property in paimon
+            Map<String, String> properties =
+                    new HashMap<String, String>() {
+                        {
+                            put(
+                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                    "[{\"bucket_id\":0,\"log_offset\":3}]");
+                        }
+                    };
+            checkSnapshotPropertyInPaimon(t1, properties);
+
+            // then, create another log table
+            TablePath t2 = TablePath.of(DEFAULT_DB, "logTableAlter");
+
+            Map<String, String> logTableProperties = new HashMap<>();
+            logTableProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false");
+            long t2Id = createLogTable(t2, 1, false, logTableProperties, Collections.emptyMap());
+            // enable lake
+            admin.alterTable(t2, changes, false).get();
+
+            TableBucket t2Bucket = new TableBucket(t2Id, 0);
+            List<InternalRow> flussRows = new ArrayList<>();
+            // write records
+            for (int i = 0; i < 10; i++) {
+                rows = Arrays.asList(row(1, "v1"), row(2, "v2"), row(3, "v3"));
+                flussRows.addAll(rows);
+                // write records
+                writeRows(t2, rows, true);
+            }
+            // check the status of replica after synced;
+            // note: we can't update log start offset for unaware bucket mode log table
+            assertReplicaStatus(t2Bucket, 30);
+
+            // check data in paimon
+            checkDataInPaimonAppendOnlyTable(t2, flussRows, 0);
+
+            // then write data to the pk tables
+            // write records
+            rows = Arrays.asList(row(1, "v111"), row(2, "v222"), row(3, "v333"));
+            // write records
+            writeRows(t1, rows, false);
+
+            // check the status of replica of t2 after synced
+            // not check start offset since we won't
+            // update start log offset for primary key table
+            assertReplicaStatus(t1Bucket, 9);
+
+            checkDataInPaimonPrimaryKeyTable(t1, rows);
+
+            // then create partitioned table and wait partitions are ready
+            TablePath partitionedTablePath = TablePath.of(DEFAULT_DB, "partitionedTableAlter");
+            Map<String, String> partitionTableProperties = new HashMap<>();
+            partitionTableProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false");
+
+            Tuple2<Long, TableDescriptor> tableIdAndDescriptor =
+                    createPartitionedTable(
+                            partitionedTablePath, partitionTableProperties, Collections.emptyMap());
+
+            admin.alterTable(partitionedTablePath, changes, false).get();
+
+            Map<Long, String> partitionNameByIds = waitUntilPartitions(partitionedTablePath);
+
+            // now, write rows into partitioned table
+            TableDescriptor partitionedTableDescriptor = tableIdAndDescriptor.f1;
+            Map<String, List<InternalRow>> writtenRowsByPartition =
+                    writeRowsIntoPartitionedTable(
+                            partitionedTablePath, partitionedTableDescriptor, partitionNameByIds);
+            long tableId = tableIdAndDescriptor.f0;
+
+            // wait until synced to paimon
+            for (Long partitionId : partitionNameByIds.keySet()) {
+                TableBucket tableBucket = new TableBucket(tableId, partitionId, 0);
+                assertReplicaStatus(tableBucket, 3);
+            }
+
+            // now, let's check data in paimon per partition
+            // check data in paimon
+            String partitionCol = partitionedTableDescriptor.getPartitionKeys().get(0);
+            for (String partitionName : partitionNameByIds.values()) {
+                checkDataInPaimonAppendOnlyPartitionedTable(
+                        partitionedTablePath,
+                        Collections.singletonMap(partitionCol, partitionName),
+                        writtenRowsByPartition.get(partitionName),
+                        0);
+            }
+
+            properties =
+                    new HashMap<String, String>() {
+                        {
+                            put(
+                                    FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                    "["
+                                            + "{\"partition_id\":0,\"bucket_id\":0,\"partition_name\":\"date=2025\",\"log_offset\":3},"
+                                            + "{\"partition_id\":1,\"bucket_id\":0,\"partition_name\":\"date=2026\",\"log_offset\":3}"
+                                            + "]");
+                        }
+                    };
+            checkSnapshotPropertyInPaimon(partitionedTablePath, properties);
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
+    @Test
     void testTieringToDvEnabledTable() throws Exception {
         TablePath t1 = TablePath.of(DEFAULT_DB, "pkTableWithDv");
         long t1Id =
@@ -214,6 +347,15 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
 
     private Tuple2<Long, TableDescriptor> createPartitionedTable(TablePath partitionedTablePath)
             throws Exception {
+        return createPartitionedTable(
+                partitionedTablePath, Collections.emptyMap(), Collections.emptyMap());
+    }
+
+    private Tuple2<Long, TableDescriptor> createPartitionedTable(
+            TablePath partitionedTablePath,
+            Map<String, String> properties,
+            Map<String, String> customProperties)
+            throws Exception {
         TableDescriptor partitionedTableDescriptor =
                 TableDescriptor.builder()
                         .schema(
@@ -229,6 +371,8 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
                                 AutoPartitionTimeUnit.YEAR)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
+                        .properties(properties)
+                        .customProperties(customProperties)
                         .build();
         return Tuple2.of(
                 createTable(partitionedTablePath, partitionedTableDescriptor),
