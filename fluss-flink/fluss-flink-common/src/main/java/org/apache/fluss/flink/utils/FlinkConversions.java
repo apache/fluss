@@ -186,16 +186,18 @@ public class FlinkConversions {
                                     "Metadata column " + col + " is not supported.");
                         });
 
-        Map<String, String> customProperties = flinkTableConf.toMap();
-        CatalogPropertiesUtils.serializeComputedColumns(
-                customProperties, resolvedSchema.getColumns());
+        Map<String, String> properties = flinkTableConf.toMap();
+        CatalogPropertiesUtils.serializeComputedColumns(properties, resolvedSchema.getColumns());
         CatalogPropertiesUtils.serializeWatermarkSpecs(
-                customProperties, catalogTable.getResolvedSchema().getWatermarkSpecs());
+                properties, catalogTable.getResolvedSchema().getWatermarkSpecs());
 
         String comment = catalogTable.getComment();
 
         // convert some flink options to fluss table configs.
-        Map<String, String> properties = convertFlinkOptionsToFlussTableProperties(flinkTableConf);
+        Map<String, String> flussTableProperties =
+                convertFlinkOptionsToFlussTableProperties(flinkTableConf);
+        Map<String, String> customProperties =
+                extractCustomProperties(properties, flussTableProperties);
 
         // then set distributed by information
         List<String> bucketKey;
@@ -224,7 +226,7 @@ public class FlinkConversions {
                 .partitionedBy(catalogTable.getPartitionKeys())
                 .distributedBy(bucketNum, bucketKey)
                 .comment(comment)
-                .properties(properties)
+                .properties(flussTableProperties)
                 .customProperties(customProperties)
                 .build();
     }
@@ -365,5 +367,12 @@ public class FlinkConversions {
     private static TableChange.ResetOption convertResetOption(
             org.apache.flink.table.catalog.TableChange.ResetOption flinkResetOption) {
         return TableChange.reset(flinkResetOption.getKey());
+    }
+
+    private static Map<String, String> extractCustomProperties(
+            Map<String, String> allProperties, Map<String, String> flussTableProperties) {
+        Map<String, String> customProperties = new HashMap<>(allProperties);
+        customProperties.keySet().removeAll(flussTableProperties.keySet());
+        return customProperties;
     }
 }
