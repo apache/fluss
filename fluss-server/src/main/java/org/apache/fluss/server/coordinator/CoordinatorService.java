@@ -21,12 +21,15 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
@@ -34,6 +37,7 @@ import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
@@ -90,6 +94,7 @@ import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
+import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
@@ -111,6 +116,7 @@ import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
 
+import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
@@ -120,8 +126,8 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitRemot
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePropertyChanges;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -297,12 +303,61 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             authorizer.authorize(currentSession(), OperationType.ALTER, Resource.table(tablePath));
         }
 
+        List<TableChange> tableChanges = toTableChanges(request.getConfigChangesList());
+
+        Runnable alterLakeTablePropertiesFunc =
+                () -> {
+                    try {
+                        checkNotNull(lakeCatalog).alterTable(tablePath, tableChanges);
+                    } catch (TableNotExistException e) {
+                        throw new FlussRuntimeException(
+                                "Lake table doesn't exists for lake-enabled table "
+                                        + tablePath
+                                        + ", which shouldn't be happened. Please check if the lake table was deleted manually.",
+                                e);
+                    }
+                };
+
         metadataManager.alterTableProperties(
                 tablePath,
-                toTablePropertyChanges(request.getConfigChangesList()),
+                toTablePropertyChanges(tableChanges),
+                alterLakeTablePropertiesFunc,
                 request.isIgnoreIfNotExists());
 
         return CompletableFuture.completedFuture(new AlterTablePropertiesResponse());
+    }
+
+    private TablePropertyChanges toTablePropertyChanges(List<TableChange> tableChanges) {
+        TablePropertyChanges.Builder builder = TablePropertyChanges.builder();
+        if (tableChanges.isEmpty()) {
+            return builder.build();
+        }
+
+        for (TableChange tableChange : tableChanges) {
+            if (tableChange instanceof TableChange.SetOption) {
+                TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
+                String optionKey = setOption.getKey();
+                if (isTableStorageConfig(optionKey)) {
+                    builder.setTableProperty(optionKey, setOption.getValue());
+                } else {
+                    // otherwise, it's considered as custom property
+                    builder.setCustomProperty(optionKey, setOption.getValue());
+                }
+            } else if (tableChange instanceof TableChange.ResetOption) {
+                TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
+                String optionKey = resetOption.getKey();
+                if (isTableStorageConfig(optionKey)) {
+                    builder.resetTableProperty(optionKey);
+                } else {
+                    // otherwise, it's considered as custom property
+                    builder.resetCustomProperty(optionKey);
+                }
+            } else {
+                throw new InvalidAlterTableException(
+                        "Unsupported alter table change: " + tableChange);
+            }
+        }
+        return builder.build();
     }
 
     private TableDescriptor applySystemDefaults(TableDescriptor tableDescriptor) {

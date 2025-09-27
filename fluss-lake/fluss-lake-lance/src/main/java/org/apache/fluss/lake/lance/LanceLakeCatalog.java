@@ -19,9 +19,11 @@ package org.apache.fluss.lake.lance;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lance.utils.LanceArrowUtils;
 import org.apache.fluss.lake.lance.utils.LanceDatasetAdapter;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 
@@ -66,6 +68,13 @@ public class LanceLakeCatalog implements LakeCatalog {
         } catch (RuntimeException e) {
             throw new RuntimeException("Table " + tablePath + " creation failed", e);
         }
+    }
+
+    @Override
+    public void alterTable(TablePath tablePath, List<TableChange> tableChanges)
+            throws TableNotExistException {
+        throw new UnsupportedOperationException(
+                "Alter table is not supported for Lance at the moment");
     }
 
     @Override

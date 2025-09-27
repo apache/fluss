@@ -20,8 +20,10 @@ package org.apache.fluss.lake.iceberg;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.IOUtils;
@@ -110,6 +112,13 @@ public class IcebergLakeCatalog implements LakeCatalog {
                                 tablePath, tablePath.getDatabaseName()));
             }
         }
+    }
+
+    @Override
+    public void alterTable(TablePath tablePath, List<TableChange> tableChanges)
+            throws TableNotExistException {
+        throw new UnsupportedOperationException(
+                "Alter table is not supported for Iceberg at the moment");
     }
 
     private TableIdentifier toIcebergTableIdentifier(TablePath tablePath) {
