@@ -45,6 +45,7 @@ import static org.apache.fluss.utils.PartitionUtils.generateAutoPartition;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionValues;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatNoException;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link PartitionUtils}. */
@@ -52,17 +53,26 @@ class PartitionUtilsTest {
 
     @Test
     void testValidatePartitionValues() {
-        assertThatThrownBy(() -> validatePartitionValues(Arrays.asList("$1", "2")))
+        assertThatThrownBy(() -> validatePartitionValues(Arrays.asList("$1", "2"), true))
                 .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining(
                         "The partition value $1 is invalid: '$1' contains one "
                                 + "or more characters other than ASCII alphanumerics, '_' and '-'");
 
-        assertThatThrownBy(() -> validatePartitionValues(Arrays.asList("?1", "2")))
+        assertThatThrownBy(() -> validatePartitionValues(Arrays.asList("?1", "2"), false))
                 .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining(
                         "The partition value ?1 is invalid: '?1' contains one or more "
                                 + "characters other than ASCII alphanumerics, '_' and '-'");
+
+        assertThatThrownBy(() -> validatePartitionValues(Arrays.asList("__p1", "2"), true))
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining(
+                        "The partition value __p1 is invalid: '__' is not allowed as prefix, "
+                                + "since it is reserved for internal databases/internal tables/internal partitions in Fluss server");
+
+        assertThatNoException()
+                .isThrownBy(() -> validatePartitionValues(Arrays.asList("__p1", "2"), false));
 
         TableDescriptor descriptor =
                 TableDescriptor.builder()
@@ -80,7 +90,8 @@ class PartitionUtilsTest {
                                 validatePartitionSpec(
                                         tableInfo.getTablePath(),
                                         tableInfo.getPartitionKeys(),
-                                        new PartitionSpec(Collections.emptyMap())))
+                                        new PartitionSpec(Collections.emptyMap()),
+                                        true))
                 .isInstanceOf(InvalidPartitionException.class)
                 .hasMessageContaining(
                         "PartitionSpec size is not equal to partition keys size for "
