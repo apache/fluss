@@ -53,13 +53,6 @@
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-fs-hadoop-shaded</artifactId>
             <version>${project.version}</version>
-            <exclusions>
-                <!-- exclude hadoop-common to avoid dependency conflict with fluss-fs-hadoop-shaded -->
-                <exclusion>
-                    <artifactId>hadoop-common</artifactId>
-                    <groupId>org.apache.hadoop</groupId>
-                </exclusion>
-            </exclusions>
         </dependency>
 
         <dependency>
@@ -95,10 +88,8 @@
                 </exclusion>
             </exclusions>
         </dependency>
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-test-utils</artifactId>
-        </dependency>
+
+        <!-- for the behavior test suite -->
         <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-common</artifactId>
@@ -107,9 +98,13 @@
             <type>test-jar</type>
         </dependency>
         <dependency>
+            <groupId>org.apache.fluss</groupId>
+            <artifactId>fluss-test-utils</artifactId>
+        </dependency>
+        <dependency>
             <groupId>org.apache.hadoop</groupId>
             <artifactId>hadoop-hdfs</artifactId>
-            <version>${fluss.hadoop.version}</version>
+            <version>${fs.hadoopshaded.version}</version>
             <scope>test</scope>
             <type>test-jar</type>
             <exclusions>
