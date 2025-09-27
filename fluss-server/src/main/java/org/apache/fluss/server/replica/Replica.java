@@ -849,6 +849,7 @@ public final class Replica {
                     new KvTabletSnapshotTarget(
                             tableBucket,
                             completedKvSnapshotCommitter,
+                            snapshotContext.getZooKeeperClient(),
                             rocksIncrementalSnapshot,
                             remoteKvTabletDir,
                             snapshotContext.getSnapshotFsWriteBufferSize(),
