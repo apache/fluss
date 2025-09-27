@@ -30,6 +30,7 @@ import org.apache.fluss.remote.RemoteLogSegment;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 
+import org.assertj.core.api.AbstractThrowableAssert;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -59,6 +60,7 @@ import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.utils.FlussPaths.remoteLogDir;
 import static org.apache.fluss.utils.FlussPaths.remoteLogTabletDir;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link RemoteLogDownloader}. */
 class RemoteLogDownloaderTest {
@@ -280,6 +282,52 @@ class RemoteLogDownloaderTest {
                         "(bucket=3, offset=0, ts=15)",
                         "(bucket=3, offset=0, ts=25)");
         assertThat(results).isEqualTo(expected);
+    }
+
+    @Test
+    void testFetchException() {
+        RemoteFileDownloader remoteFileDownloader = new RemoteFileDownloader(1);
+        RemoteLogDownloader remoteLogDownloader =
+                new RemoteLogDownloader(
+                        DATA1_TABLE_PATH, conf, remoteFileDownloader, scannerMetricGroup, 10L);
+        try {
+            // trigger auto download.
+            remoteLogDownloader.start();
+
+            TableBucket tb = new TableBucket(DATA1_TABLE_ID, 0);
+            FsPath fsPath = new FsPath("test:///empty");
+            RemoteLogSegment nonExistLogSegment =
+                    RemoteLogSegment.Builder.builder()
+                            .tableBucket(tb)
+                            .physicalTablePath(DATA1_PHYSICAL_TABLE_PATH)
+                            .remoteLogSegmentId(UUID.randomUUID())
+                            .remoteLogStartOffset(1)
+                            .remoteLogEndOffset(2)
+                            .maxTimestamp(2)
+                            .segmentSizeInBytes(Integer.MAX_VALUE)
+                            .build();
+
+            RemoteLogDownloadFuture remoteLogDownloadFuture =
+                    remoteLogDownloader.requestRemoteLog(fsPath, nonExistLogSegment);
+            retry(
+                    Duration.ofMinutes(1),
+                    () -> assertThat(remoteLogDownloadFuture.isDone()).isTrue());
+            AbstractThrowableAssert<?, ?> exactlyInstanceOf =
+                    assertThatThrownBy(() -> remoteLogDownloadFuture.getFileLogRecords(1))
+                            .cause()
+                            .isExactlyInstanceOf(IOException.class)
+                            .hasMessageContaining(
+                                    String.format(
+                                            "Failed to download remote log segment file %s, retry count 5",
+                                            RemoteLogDownloader.getFsPathAndFileName(
+                                                            fsPath, nonExistLogSegment)
+                                                    .getFileName()))
+                            .rootCause();
+
+        } finally {
+            IOUtils.closeQuietly(remoteLogDownloader);
+            IOUtils.closeQuietly(remoteFileDownloader);
+        }
     }
 
     private RemoteLogDownloadRequest createDownloadRequest(
