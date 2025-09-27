@@ -61,8 +61,8 @@ For most use cases, these work perfectly. However, you should configure your mac
 1. Your HDFS uses kerberos security
 2. You need to avoid version conflicts between Fluss's bundled hadoop libraries and your HDFS cluster
 
-Fluss automatically loads HDFS dependencies on the machine via the HADOOP_CLASSPATH environment variable.
-Make sure that the HADOOP_CLASSPATH environment variable is set up (it can be checked by running echo $HADOOP_CLASSPATH).
+Fluss automatically loads HDFS dependencies on the machine via the `HADOOP_CLASSPATH` environment variable.
+Make sure that the `HADOOP_CLASSPATH` environment variable is set up (it can be checked by running `echo $HADOOP_CLASSPATH`).
 If not, set it up using
 ```bash
 export HADOOP_CLASSPATH=`hadoop classpath`
