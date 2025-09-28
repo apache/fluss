@@ -75,8 +75,7 @@ public final class RowToPojoConverter<T> {
             for (int i = 0; i < rowReaders.length; i++) {
                 if (!row.isNullAt(i)) {
                     Object v = rowReaders[i].convert(row, i);
-                    PojoType.Property prop =
-                            pojoType.getProperty(projectionFieldNames.get(i));
+                    PojoType.Property prop = pojoType.getProperty(projectionFieldNames.get(i));
                     if (v != null) {
                         prop.write(pojo, v);
                     }
@@ -150,14 +149,16 @@ public final class RowToPojoConverter<T> {
                 return RowToPojoConverter::convertDateValue;
             case TIME_WITHOUT_TIME_ZONE:
                 return RowToPojoConverter::convertTimeValue;
-            case TIMESTAMP_WITHOUT_TIME_ZONE: {
-                final int precision = DataTypeChecks.getPrecision(fieldType);
-                return (row, pos) -> convertTimestampNtzValue(precision, row, pos);
-            }
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE: {
-                final int precision = DataTypeChecks.getPrecision(fieldType);
-                return (row, pos) -> convertTimestampLtzValue(precision, prop, row, pos);
-            }
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                {
+                    final int precision = DataTypeChecks.getPrecision(fieldType);
+                    return (row, pos) -> convertTimestampNtzValue(precision, row, pos);
+                }
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                {
+                    final int precision = DataTypeChecks.getPrecision(fieldType);
+                    return (row, pos) -> convertTimestampLtzValue(precision, prop, row, pos);
+                }
             default:
                 throw new UnsupportedOperationException(
                         String.format(
