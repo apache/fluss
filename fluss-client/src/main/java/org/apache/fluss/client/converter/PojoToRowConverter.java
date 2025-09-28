@@ -34,6 +34,7 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
+import java.util.List;
 
 /**
  * Converter for writer path: converts POJO instances to Fluss InternalRow according to a (possibly
@@ -44,12 +45,14 @@ public final class PojoToRowConverter<T> {
     private final PojoType<T> pojoType;
     private final RowType tableSchema;
     private final RowType projection;
+    private final List<String> projectionFieldNames;
     private final FieldToRow[] fieldConverters; // index corresponds to projection position
 
     private PojoToRowConverter(PojoType<T> pojoType, RowType tableSchema, RowType projection) {
         this.pojoType = pojoType;
         this.tableSchema = tableSchema;
         this.projection = projection;
+        this.projectionFieldNames = projection.getFieldNames();
         ConverterCommons.validatePojoMatchesTable(pojoType, tableSchema);
         ConverterCommons.validateProjectionSubset(projection, tableSchema);
         this.fieldConverters = createFieldConverters();
@@ -74,7 +77,7 @@ public final class PojoToRowConverter<T> {
             } catch (Exception e) {
                 throw new IllegalStateException(
                         "Failed to access field '"
-                                + projection.getFieldNames().get(i)
+                                + projectionFieldNames.get(i)
                                 + "' from POJO "
                                 + pojoType.getPojoClass().getName(),
                         e);
@@ -87,7 +90,7 @@ public final class PojoToRowConverter<T> {
     private FieldToRow[] createFieldConverters() {
         FieldToRow[] arr = new FieldToRow[projection.getFieldCount()];
         for (int i = 0; i < projection.getFieldCount(); i++) {
-            String fieldName = projection.getFieldNames().get(i);
+            String fieldName = projectionFieldNames.get(i);
             DataType fieldType = projection.getTypeAt(i);
             PojoType.Property prop = requireProperty(fieldName);
             ConverterCommons.validateCompatibility(fieldType, prop);

@@ -37,6 +37,7 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.util.List;
 
 /**
  * Converter for scanner path: converts InternalRow (possibly projected) to POJO, leaving
@@ -47,12 +48,14 @@ public final class RowToPojoConverter<T> {
     private final PojoType<T> pojoType;
     private final RowType tableSchema;
     private final RowType projection;
+    private final List<String> projectionFieldNames;
     private final RowToField[] rowReaders;
 
     private RowToPojoConverter(PojoType<T> pojoType, RowType tableSchema, RowType projection) {
         this.pojoType = pojoType;
         this.tableSchema = tableSchema;
         this.projection = projection;
+        this.projectionFieldNames = projection.getFieldNames();
         ConverterCommons.validatePojoMatchesTable(pojoType, tableSchema);
         ConverterCommons.validateProjectionSubset(projection, tableSchema);
         this.rowReaders = createRowReaders();
@@ -73,7 +76,7 @@ public final class RowToPojoConverter<T> {
                 if (!row.isNullAt(i)) {
                     Object v = rowReaders[i].convert(row, i);
                     PojoType.Property prop =
-                            pojoType.getProperty(projection.getFieldNames().get(i));
+                            pojoType.getProperty(projectionFieldNames.get(i));
                     if (v != null) {
                         prop.write(pojo, v);
                     }
@@ -97,7 +100,7 @@ public final class RowToPojoConverter<T> {
     private RowToField[] createRowReaders() {
         RowToField[] arr = new RowToField[projection.getFieldCount()];
         for (int i = 0; i < projection.getFieldCount(); i++) {
-            String name = projection.getFieldNames().get(i);
+            String name = projectionFieldNames.get(i);
             DataType type = projection.getTypeAt(i);
             PojoType.Property prop = requireProperty(name);
             ConverterCommons.validateCompatibility(type, prop);
@@ -147,10 +150,14 @@ public final class RowToPojoConverter<T> {
                 return RowToPojoConverter::convertDateValue;
             case TIME_WITHOUT_TIME_ZONE:
                 return RowToPojoConverter::convertTimeValue;
-            case TIMESTAMP_WITHOUT_TIME_ZONE:
-                return (row, pos) -> convertTimestampNtzValue(fieldType, row, pos);
-            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                return (row, pos) -> convertTimestampLtzValue(fieldType, prop, row, pos);
+            case TIMESTAMP_WITHOUT_TIME_ZONE: {
+                final int precision = DataTypeChecks.getPrecision(fieldType);
+                return (row, pos) -> convertTimestampNtzValue(precision, row, pos);
+            }
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE: {
+                final int precision = DataTypeChecks.getPrecision(fieldType);
+                return (row, pos) -> convertTimestampLtzValue(precision, prop, row, pos);
+            }
             default:
                 throw new UnsupportedOperationException(
                         String.format(
@@ -224,8 +231,7 @@ public final class RowToPojoConverter<T> {
     }
 
     /** Converts a TIMESTAMP_WITHOUT_TIME_ZONE value to a LocalDateTime honoring precision. */
-    private static Object convertTimestampNtzValue(DataType fieldType, InternalRow row, int pos) {
-        final int precision = DataTypeChecks.getPrecision(fieldType);
+    private static Object convertTimestampNtzValue(int precision, InternalRow row, int pos) {
         TimestampNtz t = row.getTimestampNtz(pos, precision);
         return t.toLocalDateTime();
     }
@@ -235,8 +241,7 @@ public final class RowToPojoConverter<T> {
      * depending on the target POJO property type.
      */
     private static Object convertTimestampLtzValue(
-            DataType fieldType, PojoType.Property prop, InternalRow row, int pos) {
-        final int precision = DataTypeChecks.getPrecision(fieldType);
+            int precision, PojoType.Property prop, InternalRow row, int pos) {
         TimestampLtz t = row.getTimestampLtz(pos, precision);
         if (prop.type == Instant.class) {
             return t.toInstant();
