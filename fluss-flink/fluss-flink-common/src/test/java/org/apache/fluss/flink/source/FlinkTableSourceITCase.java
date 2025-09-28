@@ -607,8 +607,15 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 writeRowsToPartition(conn, tablePath, partitionNameById.values());
         waitUntilAllBucketFinishSnapshot(admin, tablePath, partitionNameById.values());
 
+        // This test requires dynamically discovering newly created partitions, so
+        // 'scan.partition.discovery.interval' needs to be set to 2s (default is 1 minute),
+        // otherwise the test may hang for 1 minute.
         org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql(String.format("select * from %s", tableName)).collect();
+                tEnv.executeSql(
+                                String.format(
+                                        "select * from %s /*+ OPTIONS('scan.partition.discovery.interval' = '2s') */",
+                                        tableName))
+                        .collect();
         assertResultsIgnoreOrder(rowIter, expectedRowValues, false);
 
         // then create some new partitions, and write rows to the new partitions
@@ -1047,8 +1054,13 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                                 + "project=[a, b, d]]], fields=[a, b, d])");
 
         // test partition key prefix match
+        // This test requires dynamically discovering newly created partitions, so
+        // 'scan.partition.discovery.interval' needs to be set to 2s (default is 1 minute),
+        // otherwise the test may hang for 1 minute.
         org.apache.flink.util.CloseableIterator<Row> rowIter =
-                tEnv.executeSql("select * from multi_partitioned_table where c ='2025'").collect();
+                tEnv.executeSql(
+                                "select * from multi_partitioned_table /*+ OPTIONS('scan.partition.discovery.interval' = '2s') */ where c ='2025'")
+                        .collect();
 
         assertResultsIgnoreOrder(rowIter, expectedRowValues, false);
 
