@@ -162,11 +162,6 @@
             -Djdk.reflect.useDirectMethodHandle=false
             -Dio.netty.tryReflectionSetAccessible=true
         </extraJavaTestArgs>
-        <!-- Javadoc generation properties -->
-        <maven.javadoc.failOnError>false</maven.javadoc.failOnError>
-        <maven.javadoc.failOnWarnings>false</maven.javadoc.failOnWarnings>
-        <maven.javadoc.quiet>true</maven.javadoc.quiet>
-        <javadoc.version>3.6.3</javadoc.version>
     </properties>
 
     <dependencies>
@@ -532,57 +527,6 @@
                                 </goals>
                             </execution>
                         </executions>
-                    </plugin>
-                </plugins>
-            </build>
-        </profile>
-        <profile>
-            <id>javadoc-aggregate</id>
-            <activation>
-                <property>
-                    <name>javadoc.aggregate</name>
-                </property>
-            </activation>
-            <modules>
-                <!-- Only include Public-API-relevant modules -->
-                <module>fluss-client</module>
-                <module>fluss-flink</module>
-            </modules>
-            <build>
-                <plugins>
-                    <plugin>
-                        <groupId>org.apache.maven.plugins</groupId>
-                        <artifactId>maven-javadoc-plugin</artifactId>
-                        <version>${javadoc.version}</version>
-                        <configuration>
-                            <!-- Enhanced configuration for aggregate docs -->
-                            <source>11</source>
-                            <encoding>UTF-8</encoding>
-                            <windowTitle>Apache Fluss ${project.version} API</windowTitle>
-                            <doctitle>Apache Fluss ${project.version} API</doctitle>
-                            <show>protected</show>
-                            <use>true</use>
-                            <version>true</version>
-                            <author>true</author>
-                            <splitindex>true</splitindex>
-                            <nohelp>true</nohelp>
-                            <doclint>none</doclint>
-                            <failOnError>false</failOnError>
-                            <failOnWarnings>false</failOnWarnings>
-                            <quiet>true</quiet>
-                            <detectOfflineLinks>false</detectOfflineLinks>
-                            <additionalJOptions>
-                                <additionalJOption>-J-Xmx2g</additionalJOption>
-                                <additionalJOption>-J--illegal-access=permit</additionalJOption>
-                            </additionalJOptions>
-                            <excludePackageNames>*.internal.*:*.impl.*:*.test.*:*.tests.*:*.generated.*:*.benchmark.*:*.protogen.*</excludePackageNames>
-                            <groups>
-                            </groups>
-                            <links>
-                                <link>https://docs.oracle.com/en/java/javase/11/docs/api/</link>
-                                <link>https://nightlies.apache.org/flink/flink-docs-master/api/java/</link>
-                            </links>
-                        </configuration>
                     </plugin>
                 </plugins>
             </build>
