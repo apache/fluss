@@ -10,8 +10,9 @@ The Fluss Quickstart Flink Docker image provides a complete environment for runn
 
 Before building the Docker image, ensure you have:
 
-1. Docker installed and running
-2. Fluss built locally
+1. Check out the code version that you want to use for the Docker image. Go to the project root directory and build Fluss using `./mvnw clean package -DskipTests`.
+The local build will be used for the Docker image.
+2. Docker installed and running
 3. Internet access for retrieving dependencies
 
 ## Build Process
@@ -23,9 +24,6 @@ The build process consists of two main steps:
 First, you need to prepare the required JAR files and dependencies:
 
 ```bash
-# Navigate to the quickstart-flink directory
-cd docker/quickstart-flink
-
 # Make the script executable
 chmod +x prepare_build.sh
 
