@@ -559,6 +559,7 @@ public class FlinkSourceEnumerator
         return splits;
     }
 
+    /** Return the hybrid lake and fluss splits. Return null if no lake snapshot. */
     @Nullable
     private List<SourceSplitBase> generateHybridLakeFlussSplits() {
         // still have pending lake fluss splits,
@@ -580,9 +581,8 @@ public class FlinkSourceEnumerator
             pendingHybridLakeFlussSplits = lakeSplitGenerator.generateHybridLakeFlussSplits();
             return pendingHybridLakeFlussSplits;
         } catch (Exception e) {
-            LOG.error("Failed to get hybrid lake fluss splits, won't take splits in lake.", e);
+            throw new FlinkRuntimeException("Failed to generate hybrid lake fluss splits", e);
         }
-        return null;
     }
 
     private boolean ignoreTableBucket(TableBucket tableBucket) {

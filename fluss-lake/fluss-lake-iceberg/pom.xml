@@ -51,6 +51,13 @@
             <groupId>org.apache.iceberg</groupId>
             <artifactId>iceberg-data</artifactId>
             <version>${iceberg.version}</version>
+            <exclusions>
+                <!-- exclude dependency because of its GPLv2 license, see https://github.com/apache/flink/pull/15599#issuecomment-850241316 -->
+                <exclusion>
+                    <groupId>javax.annotation</groupId>
+                    <artifactId>javax.annotation-api</artifactId>
+                </exclusion>
+            </exclusions>
         </dependency>
         <dependency>
             <groupId>org.apache.iceberg</groupId>
@@ -291,13 +298,7 @@
                         <configuration>
                             <artifactSet>
                                 <includes>
-                                    <include>org.apache.iceberg:iceberg-api</include>
-                                    <include>org.apache.iceberg:iceberg-core</include>
-                                    <include>org.apache.iceberg:iceberg-data</include>
-                                    <include>org.apache.iceberg:iceberg-common</include>
-                                    <include>org.apache.iceberg:iceberg-parquet</include>
-                                    <include>org.apache.iceberg:iceberg-orc</include>
-                                    <include>org.apache.iceberg:iceberg-bundled-guava</include>
+                                    <include>*:*</include>
                                 </includes>
                             </artifactSet>
                             <filters>

@@ -49,7 +49,6 @@ import javax.annotation.Nullable;
 
 import java.io.IOException;
 import java.util.Arrays;
-import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.stream.Collectors;
@@ -314,8 +313,8 @@ public class IcebergLakeCommitter implements LakeCommitter<IcebergWriteResult, I
         List<Snapshot> snapshots = (List<Snapshot>) icebergTable.snapshots();
         // snapshots() returns snapshots in chronological order (oldest to newest), Reverse to find
         // most recent snapshot committed by Fluss
-        Collections.reverse(snapshots);
-        for (Snapshot snapshot : snapshots) {
+        for (int i = snapshots.size() - 1; i >= 0; i--) {
+            Snapshot snapshot = snapshots.get(i);
             Map<String, String> summary = snapshot.summary();
             if (summary != null && commitUser.equals(summary.get(COMMITTER_USER))) {
                 return snapshot;
