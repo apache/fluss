@@ -209,6 +209,23 @@ CREATE TABLE my_table LIKE datagen (EXCLUDING OPTIONS);
 
 For more details, refer to the [Flink CREATE TABLE](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/sql/create/#like) documentation.
 
+## Alter Table
+
+### Change/Add Table Properties
+
+The following SQL sets `client.connect-timeout` table property to `240s`.
+
+```sql title="Flink SQL"
+ALTER TABLE my_table SET ('client.connect-timeout' = '240s');
+```
+
+### Reset Table Properties
+
+The following SQL removes `client.connect-timeout` table property.
+
+```sql title="Flink SQL"
+ALTER TABLE my_table RESET ('client.connect-timeout');
+```
 
 ## Drop Table
 

@@ -144,6 +144,17 @@ TableInfo tableInfo = admin.getTableInfo(tablePath).get(); // blocking call
 System.out.println(tableInfo);
 ```
 
+## Altering Tables
+```java
+// set client.connect-timeout to 240s
+TableChange setOption = TableChange.set("client.connect-timeout", "240s");
+// remove client.writer.batch-size
+TableChange resetOption = TableChange.reset("client.writer.batch-size");
+List<TableChange> tableChanges = Arrays.asList(setOption, resetOption);
+// alter table
+admin.alterTable(tablePath, tableChanges, false).get();
+```
+
 ## Table API
 ### Writers
 In order to write data to Fluss tables, first you need to create a Table instance.
