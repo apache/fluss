@@ -406,7 +406,7 @@ All Iceberg tables created by Fluss include three system columns:
 
 ## Read Tables
 
-### 🔧 Reading with Other Engines
+### 🔍 Reading with Other Engines
 
 Since data tiered to Iceberg from Fluss is stored as standard Iceberg tables, you can use any Iceberg-compatible engine. Below is an example using [StarRocks](https://docs.starrocks.io/docs/data_source/catalog/iceberg/iceberg_catalog/):
 
@@ -466,7 +466,7 @@ When integrating with Iceberg, Fluss automatically converts between Fluss data t
 
 ## Maintenance and Optimization
 
-### 🔧 Auto Compaction
+### 📦 Auto Compaction
 
 The table option `table.datalake.auto-compaction` (disabled by default) provides per-table control over automatic compaction.
 When enabled for a specific table, compaction is automatically triggered during write operations to that table by the tiering service.
