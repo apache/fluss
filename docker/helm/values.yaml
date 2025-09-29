@@ -45,7 +45,7 @@ configurationOverrides:
 persistence:
   enabled: false
   size: 1Gi
-  storageClass: ""
+  storageClass:
 
 resources: {}
   # We usually recommend not to specify default resources and to leave this as a conscious
