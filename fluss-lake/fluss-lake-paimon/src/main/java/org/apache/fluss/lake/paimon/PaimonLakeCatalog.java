@@ -43,7 +43,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
-import static org.apache.fluss.lake.paimon.utils.FlussToPaimonTableChangeConverter.convert;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchemaChanges;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -113,7 +113,7 @@ public class PaimonLakeCatalog implements LakeCatalog {
         try {
             Identifier paimonPath = toPaimonIdentifier(tablePath);
             List<SchemaChange> paimonSchemaChanges =
-                    convert(tableChanges, this::getFlussPropertyKeyToPaimon);
+                    toPaimonSchemaChanges(tableChanges, this::getFlussPropertyKeyToPaimon);
             alterTable(paimonPath, paimonSchemaChanges);
         } catch (Catalog.ColumnAlreadyExistException | Catalog.ColumnNotExistException e) {
             // shouldn't happen before we support schema change

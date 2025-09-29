@@ -19,6 +19,7 @@ package org.apache.fluss.lake.paimon.utils;
 
 import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.GenericRow;
@@ -28,13 +29,16 @@ import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.data.BinaryRow;
 import org.apache.paimon.data.BinaryRowWriter;
 import org.apache.paimon.data.BinaryString;
+import org.apache.paimon.schema.SchemaChange;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
 
 import javax.annotation.Nullable;
 
+import java.util.ArrayList;
 import java.util.List;
+import java.util.function.Function;
 
 /** Utils for conversion between Paimon and Fluss. */
 public class PaimonConversions {
@@ -105,5 +109,30 @@ public class PaimonConversions {
         FlussRowAsPaimonRow flussRowAsPaimonRow = new FlussRowAsPaimonRow(flussRow, rowType);
         return org.apache.paimon.data.InternalRow.createFieldGetter(dataType, 0)
                 .getFieldOrNull(flussRowAsPaimonRow);
+    }
+
+    public static List<SchemaChange> toPaimonSchemaChanges(
+            List<TableChange> tableChanges, Function<String, String> optionKeyTransformer) {
+        List<SchemaChange> schemaChanges = new ArrayList<>(tableChanges.size());
+
+        for (TableChange tableChange : tableChanges) {
+            if (tableChange instanceof TableChange.SetOption) {
+                TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
+                schemaChanges.add(
+                        SchemaChange.setOption(
+                                optionKeyTransformer.apply(setOption.getKey()),
+                                setOption.getValue()));
+            } else if (tableChange instanceof TableChange.ResetOption) {
+                TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
+                schemaChanges.add(
+                        SchemaChange.removeOption(
+                                optionKeyTransformer.apply(resetOption.getKey())));
+            } else {
+                throw new UnsupportedOperationException(
+                        "Unsupported table change: " + tableChange.getClass());
+            }
+        }
+
+        return schemaChanges;
     }
 }
