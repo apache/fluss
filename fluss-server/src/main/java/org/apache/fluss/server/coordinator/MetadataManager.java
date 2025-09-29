@@ -40,6 +40,7 @@ import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.SchemaInfo;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
@@ -310,6 +311,7 @@ public class MetadataManager {
 
     public void alterTableProperties(
             TablePath tablePath,
+            List<TableChange> tableChanges,
             TablePropertyChanges tablePropertyChanges,
             boolean ignoreIfNotExists,
             @Nullable LakeCatalog lakeCatalog,
@@ -340,7 +342,12 @@ public class MetadataManager {
                 // pre alter table properties, e.g. create lake table in lake storage if it's to
                 // enable datalake for the table
                 preAlterTableProperties(
-                        tablePath, tableDescriptor, newDescriptor, lakeCatalog, dataLakeFormat);
+                        tablePath,
+                        tableDescriptor,
+                        newDescriptor,
+                        tableChanges,
+                        lakeCatalog,
+                        dataLakeFormat);
                 // update the table to zk
                 TableRegistration updatedTableRegistration =
                         tableReg.newProperties(
@@ -377,27 +384,29 @@ public class MetadataManager {
             TablePath tablePath,
             TableDescriptor tableDescriptor,
             TableDescriptor newDescriptor,
+            List<TableChange> tableChanges,
             LakeCatalog lakeCatalog,
             DataLakeFormat dataLakeFormat) {
-
-        boolean toEnableDataLake =
-                !isDataLakeEnabled(tableDescriptor) && isDataLakeEnabled(newDescriptor);
-
-        // enable lake table
-        if (toEnableDataLake) {
-            // TODO: should tolerate if the lake exist but matches our schema. This ensures
-            // eventually
-            //  consistent by idempotently creating the table multiple times. See #846
-            // before create table in fluss, we may create in lake
+        if (isDataLakeEnabled(newDescriptor)) {
             if (lakeCatalog == null) {
                 throw new InvalidAlterTableException(
                         "Cannot alter table "
                                 + tablePath
-                                + " to enable data lake, because the Fluss cluster doesn't enable datalake tables.");
-            } else {
+                                + " in data lake, because the Fluss cluster doesn't enable datalake tables.");
+            }
+
+            boolean isLakeTableNewlyCreated = false;
+            // to enable lake table
+            if (!isDataLakeEnabled(tableDescriptor)) {
+                // before create table in fluss, we may create in lake
                 try {
                     lakeCatalog.createTable(tablePath, newDescriptor);
+                    // no need to alter lake table if it is newly created
+                    isLakeTableNewlyCreated = true;
                 } catch (TableAlreadyExistException e) {
+                    // TODO: should tolerate if the lake exist but matches our schema. This ensures
+                    // eventually consistent by idempotently creating the table multiple times. See
+                    // #846
                     throw new LakeTableAlreadyExistException(
                             String.format(
                                     "The table %s already exists in %s catalog, please "
@@ -405,8 +414,22 @@ public class MetadataManager {
                                     tablePath, dataLakeFormat, dataLakeFormat));
                 }
             }
+
+            // only need to alter lake table if it is not newly created
+            if (!isLakeTableNewlyCreated) {
+                {
+                    try {
+                        lakeCatalog.alterTable(tablePath, tableChanges);
+                    } catch (TableNotExistException e) {
+                        throw new FlussRuntimeException(
+                                "Lake table doesn't exists for lake-enabled table "
+                                        + tablePath
+                                        + ", which shouldn't be happened. Please check if the lake table was deleted manually.",
+                                e);
+                    }
+                }
+            }
         }
-        // more pre-alter actions can be added here
     }
 
     private void postAlterTableProperties(

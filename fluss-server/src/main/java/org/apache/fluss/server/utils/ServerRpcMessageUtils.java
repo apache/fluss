@@ -21,7 +21,6 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.metadata.AlterConfigOpType;
@@ -148,7 +147,6 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrResultForBucket;
 import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
-import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
@@ -179,7 +177,6 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -261,43 +258,11 @@ public class ServerRpcMessageUtils {
         }
     }
 
-    public static TablePropertyChanges toTablePropertyChanges(List<PbAlterConfig> alterConfigs) {
-        TablePropertyChanges.Builder builder = TablePropertyChanges.builder();
-        if (alterConfigs.isEmpty()) {
-            return builder.build();
-        }
-
-        List<TableChange> tableChanges =
-                alterConfigs.stream()
-                        .filter(Objects::nonNull)
-                        .map(ServerRpcMessageUtils::toTableChange)
-                        .collect(Collectors.toList());
-
-        for (TableChange tableChange : tableChanges) {
-            if (tableChange instanceof TableChange.SetOption) {
-                TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
-                String optionKey = setOption.getKey();
-                if (isTableStorageConfig(optionKey)) {
-                    builder.setTableProperty(optionKey, setOption.getValue());
-                } else {
-                    // otherwise, it's considered as custom property
-                    builder.setCustomProperty(optionKey, setOption.getValue());
-                }
-            } else if (tableChange instanceof TableChange.ResetOption) {
-                TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
-                String optionKey = resetOption.getKey();
-                if (isTableStorageConfig(optionKey)) {
-                    builder.resetTableProperty(optionKey);
-                } else {
-                    // otherwise, it's considered as custom property
-                    builder.resetCustomProperty(optionKey);
-                }
-            } else {
-                throw new InvalidAlterTableException(
-                        "Unsupported alter table change: " + tableChange);
-            }
-        }
-        return builder.build();
+    public static List<TableChange> toTableChanges(List<PbAlterConfig> alterConfigs) {
+        return alterConfigs.stream()
+                .filter(Objects::nonNull)
+                .map(ServerRpcMessageUtils::toTableChange)
+                .collect(Collectors.toList());
     }
 
     public static MetadataResponse buildMetadataResponse(

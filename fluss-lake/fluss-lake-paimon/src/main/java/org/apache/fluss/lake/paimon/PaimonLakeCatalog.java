@@ -17,10 +17,13 @@
 
 package org.apache.fluss.lake.paimon;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.IOUtils;
@@ -32,6 +35,7 @@ import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
+import org.apache.paimon.schema.SchemaChange;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.DataTypes;
 
@@ -39,6 +43,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 
+import static org.apache.fluss.lake.paimon.utils.FlussToPaimonTableChangeConverter.convert;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -72,6 +77,11 @@ public class PaimonLakeCatalog implements LakeCatalog {
                         CatalogContext.create(Options.fromMap(configuration.toMap())));
     }
 
+    @VisibleForTesting
+    protected Catalog getPaimonCatalog() {
+        return paimonCatalog;
+    }
+
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws TableAlreadyExistException {
@@ -97,6 +107,20 @@ public class PaimonLakeCatalog implements LakeCatalog {
         }
     }
 
+    @Override
+    public void alterTable(TablePath tablePath, List<TableChange> tableChanges)
+            throws TableNotExistException {
+        try {
+            Identifier paimonPath = toPaimonIdentifier(tablePath);
+            List<SchemaChange> paimonSchemaChanges =
+                    convert(tableChanges, this::getFlussPropertyKeyToPaimon);
+            alterTable(paimonPath, paimonSchemaChanges);
+        } catch (Catalog.ColumnAlreadyExistException | Catalog.ColumnNotExistException e) {
+            // shouldn't happen before we support schema change
+            throw new RuntimeException(e);
+        }
+    }
+
     private void createTable(Identifier tablePath, Schema schema)
             throws Catalog.DatabaseNotExistException {
         try {
@@ -113,6 +137,15 @@ public class PaimonLakeCatalog implements LakeCatalog {
             paimonCatalog.createDatabase(databaseName, true);
         } catch (Catalog.DatabaseAlreadyExistException e) {
             // do nothing, shouldn't throw since ignoreIfExists
+        }
+    }
+
+    private void alterTable(Identifier tablePath, List<SchemaChange> tableChanges)
+            throws Catalog.ColumnAlreadyExistException, Catalog.ColumnNotExistException {
+        try {
+            paimonCatalog.alterTable(tablePath, tableChanges, false);
+        } catch (Catalog.TableNotExistException e) {
+            throw new TableNotExistException("Table " + tablePath + " not exists.");
         }
     }
 
@@ -187,6 +220,14 @@ public class PaimonLakeCatalog implements LakeCatalog {
             options.set(key.substring(PAIMON_CONF_PREFIX.length()), value);
         } else {
             options.set(FLUSS_CONF_PREFIX + key, value);
+        }
+    }
+
+    private String getFlussPropertyKeyToPaimon(String key) {
+        if (key.startsWith(PAIMON_CONF_PREFIX)) {
+            return key.substring(PAIMON_CONF_PREFIX.length());
+        } else {
+            return FLUSS_CONF_PREFIX + key;
         }
     }
 
