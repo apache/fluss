@@ -62,7 +62,7 @@ spec:
               echo "" >> $FLUSS_HOME/conf/server.yaml && \
               echo "tablet-server.id: ${FLUSS_SERVER_ID}" >> $FLUSS_HOME/conf/server.yaml && \
               echo "bind.listeners: INTERNAL://${POD_IP}:{{ .Values.appConfig.internalPort }}, CLIENT://0.0.0.0:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
-              echo "advertised.listeners: CLIENT://tablet-server-${FLUSS_SERVER_ID}.tablet-server-hs.default.svc.cluster.local:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
+              echo "advertised.listeners: CLIENT://tablet-server-${FLUSS_SERVER_ID}.tablet-server-hs.${POD_NAMESPACE}.svc.cluster.local:{{ .Values.appConfig.externalPort }}" >> $FLUSS_HOME/conf/server.yaml && \
               bin/tablet-server.sh start-foreground
           livenessProbe:
             failureThreshold: 100
