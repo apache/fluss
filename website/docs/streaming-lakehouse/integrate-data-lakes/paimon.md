@@ -175,3 +175,52 @@ The following table shows the mapping between [Fluss data types](table-design/da
 | TIMESTAMP WITH LOCAL TIMEZONE | TIMESTAMP WITH LOCAL TIMEZONE |
 | BINARY                        | BINARY                        |
 | BYTES                         | BYTES                         |
+
+## 📊 Snapshot Metadata
+
+Fluss adds specific metadata to Paimon snapshots for traceability:
+
+- **commit-user**: Set to `__fluss_lake_tiering` to identify Fluss-generated snapshots
+- **fluss-offsets**: JSON string containing the Fluss bucket offset mapping to track the tiering progress
+
+#### Non-Partitioned Tables
+
+For non-partitioned tables, the metadata structure of `fluss-offsets` is:
+
+```json
+[
+  {"bucket": 0, "offset": 1234},
+  {"bucket": 1, "offset": 5678},
+  {"bucket": 2, "offset": 9012}
+]
+```
+
+#### Partitioned Tables
+
+For partitioned tables, the metadata structure includes partition information:
+
+```json
+[
+  {
+    "partition_name": "date=2025",
+    "partition_id": 0,
+    "bucket": 0,
+    "offset": 3
+  },
+  {
+    "partition_name": "date=2025",
+    "partition_id": 1,
+    "bucket": 0,
+    "offset": 3
+  }
+]
+```
+
+#### Metadata Fields Explanation
+
+| Field            | Description                                  | Example                      |
+|------------------|----------------------------------------------|------------------------------|
+| `partition_id`   | Unique identifier in Fluss for the partition | `0`, `1`                     |
+| `bucket`         | Bucket identifier within the partition       | `0`, `1`, `2`                |
+| `partition_name` | Human-readable partition name                | `"date=2025"`, `"date=2026"` |
+| `offset`         | Offset within the partition's log            | `3`, `1000`                  |

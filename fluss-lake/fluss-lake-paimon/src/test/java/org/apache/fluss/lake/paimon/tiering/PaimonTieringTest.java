@@ -389,8 +389,8 @@ class PaimonTieringTest {
         String offsetProperty = getSnapshotLogOffsetProperty(tablePath, snapshot);
         assertThat(offsetProperty)
                 .isEqualTo(
-                        "[{\"partition_id\":1,\"bucket_id\":0,\"partition_name\":\"region=us-east/year=2024/month=01\",\"log_offset\":2},"
-                                + "{\"partition_id\":2,\"bucket_id\":0,\"partition_name\":\"region=eu-central/year=2023/month=12\",\"log_offset\":2}]");
+                        "[{\"partition_id\":1,\"bucket\":0,\"partition_name\":\"region=us-east/year=2024/month=01\",\"offset\":2},"
+                                + "{\"partition_id\":2,\"bucket\":0,\"partition_name\":\"region=eu-central/year=2023/month=12\",\"offset\":2}]");
 
         // Verify data for each partition
         for (String partition : partitionIdAndName.values()) {

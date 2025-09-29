@@ -102,7 +102,7 @@ class LanceTieringITCase extends FlinkLanceTieringTestBase {
                     {
                         put(
                                 FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
-                                "[{\"bucket_id\":0,\"log_offset\":30}]");
+                                "[{\"bucket\":0,\"offset\":30}]");
                         put("commit-user", FLUSS_LAKE_TIERING_COMMIT_USER);
                     }
                 };

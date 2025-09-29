@@ -37,8 +37,8 @@ public class BucketOffsetJsonSerdeTest extends JsonSerdeTestBase<BucketOffset> {
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"partition_id\":1,\"bucket_id\":1,\"partition_name\":\"country=eu-central/year=2023/month=12\",\"log_offset\":10}",
-            "{\"bucket_id\":2,\"log_offset\":20}"
+            "{\"partition_id\":1,\"bucket\":1,\"partition_name\":\"country=eu-central/year=2023/month=12\",\"offset\":10}",
+            "{\"bucket\":2,\"offset\":20}"
         };
     }
 }
