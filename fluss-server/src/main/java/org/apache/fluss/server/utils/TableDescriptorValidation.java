@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -48,6 +49,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
 import static org.apache.fluss.config.FlussConfigUtils.isAlterableTableOption;
+import static org.apache.fluss.config.FlussConfigUtils.isResettableTableOption;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
@@ -106,27 +108,41 @@ public class TableDescriptorValidation {
     }
 
     public static void validateAlterTableProperties(
-            TableInfo currentTable, Set<String> tableKeysToChange, Set<String> customKeysToChange) {
-        tableKeysToChange.forEach(
-                k -> {
-                    if (isTableStorageConfig(k) && !isAlterableTableOption(k)) {
-                        throw new InvalidAlterTableException(
-                                "The option '" + k + "' is not supported to alter yet.");
-                    }
-                });
+            TableInfo currentTable, TablePropertyChanges tablePropertyChanges) {
+        tablePropertyChanges
+                .tableKeysToChange()
+                .forEach(
+                        k -> {
+                            if (isTableStorageConfig(k)) {
+                                if (!isAlterableTableOption(k)) {
+                                    throw new InvalidAlterTableException(
+                                            "The option '"
+                                                    + k
+                                                    + "' is not supported to alter yet.");
+                                }
+
+                                if (tablePropertyChanges.tableKeyToReset(k)
+                                        && !isResettableTableOption(k)) {
+                                    throw new InvalidAlterTableException(
+                                            "The option '" + k + "' is not supported to reset.");
+                                }
+                            }
+                        });
 
         TableConfig currentConfig = currentTable.getTableConfig();
         if (currentConfig.isDataLakeEnabled() && currentConfig.getDataLakeFormat().isPresent()) {
             String format = currentConfig.getDataLakeFormat().get().toString();
-            customKeysToChange.forEach(
-                    k -> {
-                        if (k.startsWith(format + ".")) {
-                            throw new InvalidConfigException(
-                                    String.format(
-                                            "Property '%s' is not supported to alter which is for datalake table.",
-                                            k));
-                        }
-                    });
+            tablePropertyChanges
+                    .customKeysToChange()
+                    .forEach(
+                            k -> {
+                                if (k.startsWith(format + ".")) {
+                                    throw new InvalidConfigException(
+                                            String.format(
+                                                    "Property '%s' is not supported to alter which is for datalake table.",
+                                                    k));
+                                }
+                            });
         }
     }
 

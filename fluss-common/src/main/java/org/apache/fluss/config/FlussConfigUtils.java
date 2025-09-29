@@ -37,12 +37,14 @@ public class FlussConfigUtils {
     public static final String CLIENT_SECURITY_PREFIX = "client.security.";
 
     public static final List<String> ALTERABLE_TABLE_OPTIONS;
+    public static final List<String> RESETTABLE_TABLE_OPTIONS;
 
     static {
         TABLE_OPTIONS = extractConfigOptions("table.");
         CLIENT_OPTIONS = extractConfigOptions("client.");
         ALTERABLE_TABLE_OPTIONS =
                 Collections.singletonList(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
+        RESETTABLE_TABLE_OPTIONS = Collections.emptyList();
     }
 
     public static boolean isTableStorageConfig(String key) {
@@ -51,6 +53,10 @@ public class FlussConfigUtils {
 
     public static boolean isAlterableTableOption(String key) {
         return ALTERABLE_TABLE_OPTIONS.contains(key);
+    }
+
+    public static boolean isResettableTableOption(String key) {
+        return RESETTABLE_TABLE_OPTIONS.contains(key);
     }
 
     @VisibleForTesting

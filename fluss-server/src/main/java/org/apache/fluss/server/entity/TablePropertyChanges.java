@@ -42,6 +42,10 @@ public class TablePropertyChanges {
         this.customPropertiesToReset = customPropertiesToReset;
     }
 
+    public boolean tableKeyToReset(String key) {
+        return tablePropertiesToReset.contains(key);
+    }
+
     public Set<String> tableKeysToChange() {
         Set<String> keys = new HashSet<>(tablePropertiesToSet.keySet());
         keys.addAll(tablePropertiesToReset);
