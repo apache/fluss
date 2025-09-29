@@ -23,6 +23,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
@@ -429,6 +430,15 @@ class LakeEnabledTableCreateITCase {
                         }),
                 "log_c1,log_c2",
                 BUCKET_NUM);
+
+        // reset lake
+        TableChange.ResetOption resetLake =
+                TableChange.reset(ConfigOptions.TABLE_DATALAKE_ENABLED.key());
+        List<TableChange> resetChanges = Collections.singletonList(resetLake);
+        assertThatThrownBy(() -> admin.alterTable(logTablePath, resetChanges, false).get())
+                .cause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessage("The option 'table.datalake.enabled' is not supported to reset.");
     }
 
     @Test
