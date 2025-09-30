@@ -406,6 +406,40 @@ All Iceberg tables created by Fluss include three system columns:
 
 ## Read Tables
 
+###  Reading with Apache Flink
+
+For a table with the option 'table.datalake.enabled' = 'true', its data exists in two layers: one remains in Fluss, and the other has already been tiered to Iceberg.
+You can have a combined view of both Fluss and Iceberg data, which provides second-level latency but may result in slightly degraded query performance.
+Read data only from Iceberg not supported now.
+
+#### Union Read of Data in Fluss and Iceberg
+
+##### Prerequisites
+
+Prepare flink environment. See the [🚀 Start Tiering Service to Iceberg](#-start-datalake-tiering-service) for detailed instructions.
+
+##### Union Read
+
+To read the full dataset, which includes both Fluss (fresh) and Iceberg (historical) data, simply query the table without any suffix. The following example illustrates this:
+
+```sql
+-- Set execution mode to streaming or batch, here just take batch as an example
+SET 'execution.runtime-mode' = 'streaming';
+
+-- Query will union data from Fluss and Paimon
+select avg(total_price) from fluss_order;
+```
+
+It supports both batch and streaming modes, using Iceberg for historical data and Fluss for fresh data:
+
+- In batch mode (only log table)
+  
+- In streaming mode(pk table and log table)
+
+  Flink first reads the latest Iceberg snapshot (tiered via tiering service), then switches to Fluss starting from the log offset aligned with that snapshot, ensuring exactly-once semantics. This design enables Fluss to store only a small portion of the dataset in the Fluss cluster, reducing costs, while Iceberg serves as the source of complete historical data when needed.
+
+  More precisely, if Fluss log data is removed due to TTL expiration—controlled by the table.log.ttl configuration—it can still be read by Flink through its Union Read capability, as long as the data has already been tiered to Iceberg. For partitioned tables, if a partition is cleaned up—controlled by the table.auto-partition.num-retention configuration—the data in that partition remains accessible from Iceberg, provided it has been tiered there beforehand.
+
 ### 🔍 Reading with Other Engines
 
 Since data tiered to Iceberg from Fluss is stored as standard Iceberg tables, you can use any Iceberg-compatible engine. Below is an example using [StarRocks](https://docs.starrocks.io/docs/data_source/catalog/iceberg/iceberg_catalog/):
