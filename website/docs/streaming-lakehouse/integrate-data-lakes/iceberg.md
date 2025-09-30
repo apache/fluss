@@ -431,7 +431,7 @@ To read the full dataset, which includes both Fluss (fresh) and Iceberg (histori
 -- Set execution mode to streaming or batch, here just take batch as an example
 SET 'execution.runtime-mode' = 'streaming';
 
--- Query will union data from Fluss and Paimon
+-- Query will union data from Fluss and Iceberg
 select avg(total_price) from fluss_order;
 ```
 
@@ -439,7 +439,7 @@ It supports both batch and streaming modes, utilizing Iceberg for historical dat
 
 - In batch mode (only log table)
   
-- In streaming mode(primary key table and log table)
+- In streaming mode (primary key table and log table)
 
   Flink first reads the latest Iceberg snapshot (tiered via tiering service), then switches to Fluss starting from the log offset matching that snapshot. This design minimizes Fluss storage requirements (reducing costs) while using Iceberg as a complete historical archive.
 
