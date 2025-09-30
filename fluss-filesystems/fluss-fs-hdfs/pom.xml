@@ -53,6 +53,22 @@
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-fs-hadoop-shaded</artifactId>
             <version>${project.version}</version>
+            <exclusions>
+                <!-- exclude hadoop-common to avoid dependency conflict with fluss-fs-hadoop-shaded -->
+                <exclusion>
+                    <artifactId>hadoop-common</artifactId>
+                    <groupId>org.apache.hadoop</groupId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <!-- We must include protobuf-java, otherwise, will meet
+          Caused by: java.lang.ClassNotFoundException: com.google.protobuf.ServiceException
+         -->
+        <dependency>
+            <groupId>com.google.protobuf</groupId>
+            <artifactId>protobuf-java</artifactId>
+            <version>2.5.0</version>
         </dependency>
 
         <dependency>
