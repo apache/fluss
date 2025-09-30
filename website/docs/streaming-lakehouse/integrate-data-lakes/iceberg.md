@@ -413,15 +413,12 @@ When a table has the configuration `table.datalake.enabled = 'true'`, its data e
 - Fresh data is retained in Fluss
 - Historical data is tiered to Iceberg
 
-You can query a combined view of both layers with second-level latency, though query performance may be slightly reduced.
-
-Note: Reading data exclusively from Iceberg is not currently supported.
-
 #### Union Read of Data in Fluss and Iceberg
+You can query a combined view of both layers with second-level latency which is called union read.
 
 ##### Prerequisites
 
-Prepare your flink environment. See the [🚀 Start Tiering Service to Iceberg](#-start-datalake-tiering-service) for detailed instructions.
+Download the [fluss-lake-iceberg-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_VERSION$/fluss-lake-iceberg-$FLUSS_VERSION$.jar), and place it into `${FLINK_HOME}/lib`.
 
 ##### Union Read
 
@@ -429,23 +426,23 @@ To read the full dataset, which includes both Fluss (fresh) and Iceberg (histori
 
 ```sql
 -- Set execution mode to streaming or batch, here just take batch as an example
-SET 'execution.runtime-mode' = 'streaming';
+SET 'execution.runtime-mode' = 'batch';
 
 -- Query will union data from Fluss and Iceberg
-select avg(total_price) from fluss_order;
+select SUM(visit_count) from fluss_access_log;
 ```
 
 It supports both batch and streaming modes, utilizing Iceberg for historical data and Fluss for fresh data:
 
-- In batch mode (only log table)
-  
-- In streaming mode (primary key table and log table)
+- **Batch mode** (only log table)
+
+- **Streaming mode** (primary key table and log table)
 
   Flink first reads the latest Iceberg snapshot (tiered via tiering service), then switches to Fluss starting from the log offset matching that snapshot. This design minimizes Fluss storage requirements (reducing costs) while using Iceberg as a complete historical archive.
 
 Key behavior for data retention:
-- Expired Fluss log data (controlled by `table.log.ttl`) remains accessible via Iceberg if previously tiered
-- Cleaned-up partitions in partitioned tables (controlled by `table.auto-partition.num-retention`) remain accessible via Iceberg if previously tiered
+- **Expired Fluss log data** (controlled by `table.log.ttl`) remains accessible via Iceberg if previously tiered
+- **Cleaned-up partitions** in partitioned tables (controlled by `table.auto-partition.num-retention`) remain accessible via Iceberg if previously tiered
 
 ### 🔍 Reading with Other Engines
 
