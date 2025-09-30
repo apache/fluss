@@ -406,17 +406,22 @@ All Iceberg tables created by Fluss include three system columns:
 
 ## Read Tables
 
-###  Reading with Apache Flink
+### 🐿️ Reading with Apache Flink
 
-For a table with the option 'table.datalake.enabled' = 'true', its data exists in two layers: one remains in Fluss, and the other has already been tiered to Iceberg.
-You can have a combined view of both Fluss and Iceberg data, which provides second-level latency but may result in slightly degraded query performance.
-Read data only from Iceberg not supported now.
+When a table has the configuration `table.datalake.enabled = 'true'`, its data exists in two layers:
+
+- Fresh data is retained in Fluss
+- Historical data is tiered to Iceberg
+
+You can query a combined view of both layers with second-level latency, though query performance may be slightly reduced.
+
+Note: Reading data exclusively from Iceberg is not currently supported.
 
 #### Union Read of Data in Fluss and Iceberg
 
 ##### Prerequisites
 
-Prepare flink environment. See the [🚀 Start Tiering Service to Iceberg](#-start-datalake-tiering-service) for detailed instructions.
+Prepare your flink environment. See the [🚀 Start Tiering Service to Iceberg](#-start-datalake-tiering-service) for detailed instructions.
 
 ##### Union Read
 
@@ -430,15 +435,17 @@ SET 'execution.runtime-mode' = 'streaming';
 select avg(total_price) from fluss_order;
 ```
 
-It supports both batch and streaming modes, using Iceberg for historical data and Fluss for fresh data:
+It supports both batch and streaming modes, utilizing Iceberg for historical data and Fluss for fresh data:
 
 - In batch mode (only log table)
   
-- In streaming mode(pk table and log table)
+- In streaming mode(primary key table and log table)
 
-  Flink first reads the latest Iceberg snapshot (tiered via tiering service), then switches to Fluss starting from the log offset aligned with that snapshot, ensuring exactly-once semantics. This design enables Fluss to store only a small portion of the dataset in the Fluss cluster, reducing costs, while Iceberg serves as the source of complete historical data when needed.
+  Flink first reads the latest Iceberg snapshot (tiered via tiering service), then switches to Fluss starting from the log offset matching that snapshot. This design minimizes Fluss storage requirements (reducing costs) while using Iceberg as a complete historical archive.
 
-  More precisely, if Fluss log data is removed due to TTL expiration—controlled by the table.log.ttl configuration—it can still be read by Flink through its Union Read capability, as long as the data has already been tiered to Iceberg. For partitioned tables, if a partition is cleaned up—controlled by the table.auto-partition.num-retention configuration—the data in that partition remains accessible from Iceberg, provided it has been tiered there beforehand.
+Key behavior for data retention:
+- Expired Fluss log data (controlled by `table.log.ttl`) remains accessible via Iceberg if previously tiered
+- Cleaned-up partitions in partitioned tables (controlled by `table.auto-partition.num-retention`) remain accessible via Iceberg if previously tiered
 
 ### 🔍 Reading with Other Engines
 
