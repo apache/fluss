@@ -418,7 +418,7 @@ You can query a combined view of both layers with second-level latency which is 
 
 ##### Prerequisites
 
-Download the [fluss-lake-iceberg-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-iceberg/$FLUSS_VERSION$/fluss-lake-iceberg-$FLUSS_VERSION$.jar), and place it into `${FLINK_HOME}/lib`.
+You need to place the JARs required by Iceberg to read data into `${FLINK_HOME}/lib`. For detailed dependencies and JAR preparation instructions, refer to [🚀 Start Tiering Service to Iceberg](#-start-tiering-service-to-iceberg).
 
 ##### Union Read
 
