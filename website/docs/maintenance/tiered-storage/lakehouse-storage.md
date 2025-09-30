@@ -103,3 +103,10 @@ Another option `table.datalake.freshness`, allows per-table configuration of dat
 It defines the maximum amount of time that the datalake table's content should lag behind updates to the Fluss table. 
 Based on this target freshness, the Fluss tiering service automatically moves data from the Fluss table and updates to the datalake table, so that the data in the datalake table is kept up to date within this target.
 The default is `3min`, if the data does not need to be as fresh, you can specify a longer target freshness time to reduce costs.
+
+## Disable Lakehouse Storage
+
+### Disable Lakehouse Storage Per Table
+
+To disable lakehouse storage for a table, you can set the option 'table.datalake.enabled' = 'false'.
+Note: Currently, once lake storage is disabled for a table, it cannot be enabled again. In the future, repeated disabling and enabling will be supported.
