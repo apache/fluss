@@ -27,7 +27,7 @@ import org.apache.fluss.record.KvRecordBatch;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.bytesview.MemorySegmentBytesView;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
-import org.apache.fluss.rpc.messages.AlterTablePropertiesRequest;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
@@ -141,9 +141,9 @@ public class RpcMessageTestUtils {
         return createTableRequest;
     }
 
-    public static AlterTablePropertiesRequest newAlterTablePropertiesRequest(
+    public static AlterTableRequest newAlterTablePropertiesRequest(
             TablePath tablePath, List<PbAlterConfig> alterConfigs, boolean ignoreIfExists) {
-        AlterTablePropertiesRequest request = new AlterTablePropertiesRequest();
+        AlterTableRequest request = new AlterTableRequest();
         request.addAllConfigChanges(alterConfigs)
                 .setIgnoreIfNotExists(ignoreIfExists)
                 .setTablePath()

@@ -109,7 +109,7 @@ message CreateTableResponse {
 }
 
 // alter table request and response
-message AlterTablePropertiesRequest {
+message AlterTableRequest {
   required PbTablePath table_path = 1;
   required bool ignore_if_not_exists = 2;
   repeated PbAlterConfig config_changes = 3;
@@ -122,7 +122,7 @@ message PbAlterConfig {
   required int32 op_type = 3; // SET=0, DELETE=1, APPEND=2, SUBTRACT=3
 }
 
-message AlterTablePropertiesResponse {
+message AlterTableResponse {
 }
 
 

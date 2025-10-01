@@ -17,8 +17,8 @@
 
 package org.apache.fluss.rpc.gateway;
 
-import org.apache.fluss.rpc.messages.AlterTablePropertiesRequest;
-import org.apache.fluss.rpc.messages.AlterTablePropertiesResponse;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.AlterTableResponse;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateAclsResponse;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
@@ -69,11 +69,10 @@ public interface AdminGateway extends AdminReadOnlyGateway {
     /**
      * Alter a table.
      *
-     * @param request the request to alter the configs of a table.
+     * @param request the request to alter a table.
      */
     @RPC(api = ApiKeys.ALTER_TABLE_PROPERTIES)
-    CompletableFuture<AlterTablePropertiesResponse> alterTableProperties(
-            AlterTablePropertiesRequest request);
+    CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request);
 
     /**
      * Drop a table.

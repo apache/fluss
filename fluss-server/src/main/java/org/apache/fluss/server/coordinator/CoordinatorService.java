@@ -41,8 +41,8 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
-import org.apache.fluss.rpc.messages.AlterTablePropertiesRequest;
-import org.apache.fluss.rpc.messages.AlterTablePropertiesResponse;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.AlterTableResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
@@ -293,8 +293,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     @Override
-    public CompletableFuture<AlterTablePropertiesResponse> alterTableProperties(
-            AlterTablePropertiesRequest request) {
+    public CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request) {
         TablePath tablePath = toTablePath(request.getTablePath());
         tablePath.validate();
         if (authorizer != null) {
@@ -313,7 +312,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 dataLakeFormat,
                 lakeTableTieringManager);
 
-        return CompletableFuture.completedFuture(new AlterTablePropertiesResponse());
+        return CompletableFuture.completedFuture(new AlterTableResponse());
     }
 
     public static TablePropertyChanges toTablePropertyChanges(List<TableChange> tableChanges) {

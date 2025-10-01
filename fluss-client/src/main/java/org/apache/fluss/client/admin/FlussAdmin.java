@@ -42,7 +42,7 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
-import org.apache.fluss.rpc.messages.AlterTablePropertiesRequest;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
@@ -243,7 +243,7 @@ public class FlussAdmin implements Admin {
     public CompletableFuture<Void> alterTable(
             TablePath tablePath, List<TableChange> tableChanges, boolean ignoreIfNotExists) {
         tablePath.validate();
-        AlterTablePropertiesRequest request = new AlterTablePropertiesRequest();
+        AlterTableRequest request = new AlterTableRequest();
 
         List<PbAlterConfig> pbFlussTableChanges =
                 tableChanges.stream()
@@ -255,7 +255,7 @@ public class FlussAdmin implements Admin {
                 .setTablePath()
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
-        return gateway.alterTableProperties(request).thenApply(r -> null);
+        return gateway.alterTable(request).thenApply(r -> null);
     }
 
     @Override
