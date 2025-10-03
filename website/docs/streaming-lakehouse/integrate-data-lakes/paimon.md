@@ -125,7 +125,7 @@ Key behavior for data retention:
 
 ### Reading with other Engines
 
-Since the data tiered to Paimon from Fluss is stored as a standard Paimon table, you can use any engine that supports Paimon to read it. Below is an example using [StarRocks](https://paimon.apache.org/docs/master/engines/starrocks/):
+Since the data tiered to Paimon from Fluss is stored as a standard Paimon table, you can use any engine that supports Paimon to read it. Below is an example using [StarRocks](https://paimon.apache.org/docs/1.2/ecosystem/starrocks/):
 
 First, create a Paimon catalog in StarRocks:
 
