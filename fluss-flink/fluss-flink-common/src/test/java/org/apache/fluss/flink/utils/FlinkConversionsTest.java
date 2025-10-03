@@ -28,14 +28,18 @@ import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.table.api.Schema;
+import org.apache.flink.table.catalog.CatalogMaterializedTable;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.Column;
+import org.apache.flink.table.catalog.IntervalFreshness;
+import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
 import org.apache.flink.table.catalog.UniqueConstraint;
 import org.apache.flink.table.catalog.WatermarkSpec;
 import org.apache.flink.table.expressions.ResolvedExpression;
 import org.apache.flink.table.expressions.utils.ResolvedExpressionMock;
+import org.apache.flink.table.refresh.RefreshHandler;
 import org.junit.jupiter.api.Test;
 
 import java.util.ArrayList;
@@ -55,7 +59,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link FlinkConversions}. */
-class FlinkConversionsTest {
+public class FlinkConversionsTest {
 
     @Test
     void testTypeConversion() {
@@ -202,7 +206,7 @@ class FlinkConversionsTest {
                         currentMillis,
                         currentMillis);
         // get the converted flink table
-        CatalogTable convertedFlinkTable = FlinkConversions.toFlinkTable(tableInfo);
+        CatalogTable convertedFlinkTable = (CatalogTable) FlinkConversions.toFlinkTable(tableInfo);
 
         // resolve it and check
         TestSchemaResolver resolver = new TestSchemaResolver();
@@ -286,5 +290,110 @@ class FlinkConversionsTest {
                                 .withDescription(
                                         ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE
                                                 .description()));
+    }
+
+    @Test
+    void testFlinkMaterializedTableConversions() {
+        ResolvedSchema schema =
+                new ResolvedSchema(
+                        Arrays.asList(
+                                Column.physical(
+                                        "order_id",
+                                        org.apache.flink.table.api.DataTypes.STRING().notNull()),
+                                Column.physical(
+                                        "orig_ts",
+                                        org.apache.flink.table.api.DataTypes.TIMESTAMP())),
+                        Collections.emptyList(),
+                        UniqueConstraint.primaryKey(
+                                "PK_order_id", Collections.singletonList("order_id")));
+        Map<String, String> options = new HashMap<>();
+        options.put("k1", "v1");
+        options.put("k2", "v2");
+
+        TestRefreshHandler refreshHandler = new TestRefreshHandler("jobID: xxx, clusterId: yyy");
+        CatalogMaterializedTable flinkMaterializedTable =
+                CatalogMaterializedTable.newBuilder()
+                        .schema(Schema.newBuilder().fromResolvedSchema(schema).build())
+                        .comment("test comment")
+                        .options(options)
+                        .definitionQuery("select order_id, orig_ts from t")
+                        .freshness(IntervalFreshness.of("5", IntervalFreshness.TimeUnit.SECOND))
+                        .logicalRefreshMode(CatalogMaterializedTable.LogicalRefreshMode.CONTINUOUS)
+                        .refreshMode(CatalogMaterializedTable.RefreshMode.CONTINUOUS)
+                        .refreshStatus(CatalogMaterializedTable.RefreshStatus.INITIALIZING)
+                        .refreshHandlerDescription(refreshHandler.asSummaryString())
+                        .serializedRefreshHandler(refreshHandler.toBytes())
+                        .build();
+
+        // check the converted table
+        TableDescriptor flussTable =
+                FlinkConversions.toFlussTable(
+                        new ResolvedCatalogMaterializedTable(flinkMaterializedTable, schema));
+        String expectFlussTableString =
+                "TableDescriptor{schema=("
+                        + "order_id STRING NOT NULL,"
+                        + "orig_ts TIMESTAMP(6),"
+                        + "CONSTRAINT PK_order_id PRIMARY KEY (order_id)"
+                        + "), comment='test comment', partitionKeys=[], "
+                        + "tableDistribution={bucketKeys=[order_id] bucketCount=null}, "
+                        + "properties={}, "
+                        + "customProperties={materialized-table.definition-query=select order_id, orig_ts from t, "
+                        + "materialized-table.logical-refresh-mode=CONTINUOUS, "
+                        + "materialized-table.refresh-status=INITIALIZING, "
+                        + "k1=v1, k2=v2, "
+                        + "materialized-table.interval-freshness=5, "
+                        + "materialized-table.refresh-handler-description=test refresh handler, "
+                        + "materialized-table.refresh-handler-bytes=am9iSUQ6IHh4eCwgY2x1c3RlcklkOiB5eXk=, "
+                        + "materialized-table.interval-freshness.time-unit=SECOND, "
+                        + "materialized-table.refresh-mode=CONTINUOUS}}";
+        assertThat(flussTable.toString()).isEqualTo(expectFlussTableString);
+
+        // test convert fluss table to flink table
+        TablePath tablePath = TablePath.of("db", "table");
+        long currentMillis = System.currentTimeMillis();
+        TableInfo tableInfo =
+                TableInfo.of(
+                        tablePath,
+                        1L,
+                        1,
+                        flussTable.withBucketCount(1),
+                        currentMillis,
+                        currentMillis);
+        // get the converted flink table
+        CatalogMaterializedTable convertedFlinkMaterializedTable =
+                (CatalogMaterializedTable) FlinkConversions.toFlinkTable(tableInfo);
+
+        // resolve it and check
+        TestSchemaResolver resolver = new TestSchemaResolver();
+        // check the resolved schema
+        assertThat(resolver.resolve(convertedFlinkMaterializedTable.getUnresolvedSchema()))
+                .isEqualTo(schema);
+        // check the converted flink table is equal to the origin flink table
+        // need to put bucket key option
+        Map<String, String> bucketKeyOption = new HashMap<>();
+        bucketKeyOption.put(BUCKET_KEY.key(), "order_id");
+        bucketKeyOption.put(BUCKET_NUMBER.key(), "1");
+        CatalogMaterializedTable expectedTable =
+                addOptions(flinkMaterializedTable, bucketKeyOption);
+        checkEqualsIgnoreSchema(convertedFlinkMaterializedTable, expectedTable);
+    }
+
+    /** Test refresh handler for testing purpose. */
+    public static class TestRefreshHandler implements RefreshHandler {
+
+        private final String handlerString;
+
+        public TestRefreshHandler(String handlerString) {
+            this.handlerString = handlerString;
+        }
+
+        @Override
+        public String asSummaryString() {
+            return "test refresh handler";
+        }
+
+        public byte[] toBytes() {
+            return handlerString.getBytes();
+        }
     }
 }
