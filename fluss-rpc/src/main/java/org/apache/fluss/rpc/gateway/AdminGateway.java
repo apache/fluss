@@ -71,7 +71,7 @@ public interface AdminGateway extends AdminReadOnlyGateway {
      *
      * @param request the request to alter a table.
      */
-    @RPC(api = ApiKeys.ALTER_TABLE_PROPERTIES)
+    @RPC(api = ApiKeys.ALTER_TABLE)
     CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request);
 
     /**
