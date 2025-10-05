@@ -43,6 +43,8 @@ import org.apache.flink.table.catalog.ResolvedCatalogBaseTable;
 import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
+import org.apache.flink.table.catalog.TableChange.ModifyRefreshHandler;
+import org.apache.flink.table.catalog.TableChange.ModifyRefreshStatus;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.types.RowKind;
 
@@ -65,16 +67,16 @@ import static org.apache.flink.util.Preconditions.checkNotNull;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_DEFINITION_QUERY;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_INTERVAL_FRESHNESS;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_PREFIX;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_REFRESH_HANDLER_BYTES;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_REFRESH_HANDLER_DESCRIPTION;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_REFRESH_MODE;
+import static org.apache.fluss.flink.FlinkConnectorOptions.MATERIALIZED_TABLE_REFRESH_STATUS;
 import static org.apache.fluss.flink.adapter.CatalogTableAdapter.toCatalogTable;
-import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_DEFINITION_QUERY;
-import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_INTERVAL_FRESHNESS;
-import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT;
-import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE;
-import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_PREFIX;
-import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_REFRESH_HANDLER_BYTES;
-import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_REFRESH_HANDLER_DESCRIPTION;
-import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_REFRESH_MODE;
-import static org.apache.fluss.flink.catalog.FlinkCatalogOptions.MATERIALIZED_TABLE_REFRESH_STATUS;
 import static org.apache.fluss.utils.PropertiesUtils.excludeByPrefix;
 
 /** Utils for conversion between Flink and Fluss. */
@@ -421,18 +423,12 @@ public class FlinkConversions {
             org.apache.flink.table.catalog.TableChange materializedTableChange) {
         List<TableChange> flussTableChanges = new ArrayList<>();
         // Handle different types of MaterializedTableChange
-        if (materializedTableChange
-                instanceof org.apache.flink.table.catalog.TableChange.ModifyRefreshStatus) {
+        if (materializedTableChange instanceof ModifyRefreshStatus) {
             convertModifyRefreshStatus(
-                    (org.apache.flink.table.catalog.TableChange.ModifyRefreshStatus)
-                            materializedTableChange,
-                    flussTableChanges);
-        } else if (materializedTableChange
-                instanceof org.apache.flink.table.catalog.TableChange.ModifyRefreshHandler) {
+                    (ModifyRefreshStatus) materializedTableChange, flussTableChanges);
+        } else if (materializedTableChange instanceof ModifyRefreshHandler) {
             convertModifyRefreshHandler(
-                    (org.apache.flink.table.catalog.TableChange.ModifyRefreshHandler)
-                            materializedTableChange,
-                    flussTableChanges);
+                    (ModifyRefreshHandler) materializedTableChange, flussTableChanges);
         } else {
             throw new UnsupportedOperationException(
                     String.format(
@@ -445,8 +441,7 @@ public class FlinkConversions {
 
     /** Handles {@code ModifyRefreshStatus} change. */
     private static void convertModifyRefreshStatus(
-            org.apache.flink.table.catalog.TableChange.ModifyRefreshStatus modifyRefreshStatus,
-            List<TableChange> flussTableChanges) {
+            ModifyRefreshStatus modifyRefreshStatus, List<TableChange> flussTableChanges) {
         CatalogMaterializedTable.RefreshStatus newRefreshStatus =
                 modifyRefreshStatus.getRefreshStatus();
         flussTableChanges.add(
@@ -458,8 +453,7 @@ public class FlinkConversions {
      * description and one for bytes.
      */
     private static void convertModifyRefreshHandler(
-            org.apache.flink.table.catalog.TableChange.ModifyRefreshHandler modifyRefreshHandler,
-            List<TableChange> flussTableChanges) {
+            ModifyRefreshHandler modifyRefreshHandler, List<TableChange> flussTableChanges) {
         String newHandlerDesc = modifyRefreshHandler.getRefreshHandlerDesc();
         byte[] newHandlerBytes = modifyRefreshHandler.getRefreshHandlerBytes();
         flussTableChanges.add(

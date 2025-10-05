@@ -419,36 +419,8 @@
                                         </exclude>
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <!-- end exclude for flink tiering service -->
-                                        <exclude>org.apache.flink.table.catalog.CatalogBaseTable</exclude>
-                                        <exclude>org.apache.flink.table.catalog.CatalogBaseTable.TableKind</exclude>
-                                        <exclude>org.apache.flink.table.catalog.CatalogMaterializedTable</exclude>
-                                        <exclude>org.apache.flink.table.catalog.CatalogMaterializedTable.LogicalRefreshMode</exclude>
-                                        <exclude>org.apache.flink.table.catalog.CatalogMaterializedTable.RefreshMode</exclude>
-                                        <exclude>org.apache.flink.table.catalog.CatalogMaterializedTable.RefreshStatus</exclude>
-                                        <exclude>org.apache.flink.table.catalog.IntervalFreshness</exclude>
-                                        <exclude>org.apache.flink.table.catalog.IntervalFreshness.TimeUnit</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.AddColumn</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.AddUniqueConstraint</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.AddWatermark</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.ModifyColumn</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.ModifyColumnComment</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.ModifyColumnPosition</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.ModifyPhysicalColumnType</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.ModifyColumnName</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.ModifyUniqueConstraint</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.ModifyWatermark</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.ModifyWatermark</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.ModifyWatermark</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.DropColumn</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.DropWatermark</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.DropConstraint</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.SetOption</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.ResetOption</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.ColumnPosition</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.First</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.After</exclude>
-                                        <exclude>org.apache.flink.table.catalog.TableChange.MaterializedTableChange</exclude>
+                                        <!-- exclude flink compatibility class for catalogs -->
+                                        <exclude>org.apache.flink.table.catalog.*</exclude>
                                     </excludes>
                                 </rule>
                             </rules>
