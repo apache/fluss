@@ -21,49 +21,83 @@
  */
 
 .heroBanner {
-    padding: 5rem 0 11rem 0;
-    text-align: center;
-    position: relative;
-    overflow: hidden;
-    margin-left: -1px;
+  padding: 5rem 0 11rem 0;
+  text-align: center;
+  position: relative;
+  overflow: hidden;
+  margin-left: -1px;
 
-    @media screen and (min-width: 997px) {
-        background: url("@site/static/img/background.jpg");
-        background-size: cover;
-    }
+  @media screen and (min-width: 997px) {
+    background: url("@site/static/img/background.jpg");
+    background-size: cover;
+  }
 
-    @media screen and (max-width: 996px) {
-        background: var(--ifm-color-primary-darkest);
-    }
-
+  @media screen and (max-width: 996px) {
+    background: var(--ifm-color-primary-darkest);
+  }
 }
 
 @media screen and (max-width: 996px) {
-    .heroBanner {
-        padding: 2rem;
-    }
+  .heroBanner {
+    padding: 2rem;
+  }
+}
+
+/* ✨ Animated Hero Title (Apache Fluss text) ✨ */
+.hero__title {
+  font-size: 4rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  color: #ffffff;
+  letter-spacing: 2px;
+  text-shadow:
+    0 0 5px #00bfff,
+    0 0 10px #00bfff,
+    0 0 20px #0099cc,
+    0 0 40px #0077aa;
+  animation: glowFloat 3s ease-in-out infinite;
+  transition: transform 0.3s ease, text-shadow 0.3s ease;
+}
+
+@keyframes glowFloat {
+  0%, 100% {
+    transform: translateY(0);
+    text-shadow:
+      0 0 5px #00bfff,
+      0 0 10px #00bfff,
+      0 0 20px #0099cc,
+      0 0 40px #0077aa;
+  }
+  50% {
+    transform: translateY(-10px);
+    text-shadow:
+      0 0 10px #00eaff,
+      0 0 20px #00eaff,
+      0 0 40px #00bfff,
+      0 0 60px #0099cc;
+  }
 }
 
 .buttons {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-wrap: wrap;
-    gap: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-wrap: wrap;
+  gap: 20px;
 }
 
 .buttonWidth {
-    width: 200px;
+  width: 200px;
 }
 
 .buttonWithIcon {
-    display: flex;
-    align-items: center;
-    justify-content: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .buttonIcon {
-    margin-right: 8px;
-    width: 20px;
-    height: 20px;
+  margin-right: 8px;
+  width: 20px;
+  height: 20px;
 }

@@ -1,27 +1,13 @@
 /*
  * Licensed to the Apache Software Foundation (ASF) under one or more
- * contributor license agreements.  See the NOTICE file distributed with
+ * contributor license agreements. See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
  * The ASF licenses this file to You under the Apache License, Version 2.0
- * (the "License"); you may not use this file except in compliance with
- * the License.  You may obtain a copy of the License at
- *
- *    http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
  */
 
-/**
- * Any CSS included here will be global. The classic template
- * bundles Infima by default. Infima is a CSS framework designed to
- * work well for content-centric websites.
- */
-
-/* You can override the default Infima variables here. */
+/* ========================= */
+/* Global Variables */
+/* ========================= */
 :root {
   --ifm-color-primary: #0071e3;
   --ifm-color-primary-dark: #0066cc;
@@ -31,224 +17,207 @@
   --ifm-color-primary-lighter: #0682ff;
   --ifm-color-primary-lightest: #2893ff;
   --ifm-code-font-size: 90%;
-  --ifm-font-family-base: "Roboto",Segoe UI,Roboto,Ubuntu,Cantarell,Helvetica,sans-serif,Apple Color Emoji,Segoe UI Emoji,Android Emoji,EmojiSymbols,EmojiOne Mozilla,Twemoji Mozilla,Segoe UI Symbol,Noto Color Emoji;
+  --ifm-font-family-base: "Roboto",Segoe UI,Roboto,Ubuntu,Cantarell,Helvetica,sans-serif;
   --docusaurus-highlighted-code-line-bg: #E2E9F3;
-
   --ifm-menu-color-background-active: #edeefa99;
   --ifm-menu-color-background-hover: #edeefa99;
 }
 
-
-.source_code_button {
-  margin-left: 20px;
+/* ========================= */
+/* Basic Styling */
+/* ========================= */
+.navbar__brand, .hero__title, .hero__subtitle {
+  font-family: monaco, monospace;
 }
 
-
-.navbar__brand {
-  font-family: monaco;
-}
-
-.hero__title {
-  font-family: monaco;
-}
-
-.hero__subtitle {
-  padding-bottom: 2rem;
-}
-
-.header-github-link:hover {
-  opacity: 0.6;
-}
-
-.header-github-link::before {
-  content: '';
-  width: 24px;
-  height: 24px;
-  display: flex;
-  background: url("data:image/svg+xml,%3Csvg viewBox='0 0 24 24' xmlns='http://www.w3.org/2000/svg'%3E%3Cpath d='M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12'/%3E%3C/svg%3E")
-  no-repeat;
-}
-
-
-.menu__list-item {
-  font-size: 0.95rem;
-  font-weight: 500;
-}
-
+.source_code_button { margin-left: 20px; }
+.menu__list-item { font-size: 0.95rem; font-weight: 500; }
 .menu__link--sublist-caret:after {
   background: var(--ifm-menu-link-sublist-icon) 50% / 1.5rem 1.5rem;
 }
+.header-github-link:hover { opacity: 0.6; }
 
+/* ========================= */
+/* Hero Heading: White + Blue Glimmer + Neon + 3D Depth */
+/* ========================= */
+.hero__title-glimmer {
+  font-size: 4rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  display: inline-block;
+  color: #ffffff;
+  position: relative;
 
-.markdown {
-    padding-left: 1rem;
-    h1,
-    h2,
-    h3,
-    h4,
-    h5,
-    h6 {
-        color: #1d1d1d;
-        margin-bottom: 0.3125rem;
-        font-weight: 700;
-    }
+  /* 3D black shadow + neon glow */
+  text-shadow:
+    2px 2px 0 #000000,
+    0 0 5px #00bfff,
+    0 0 10px #00bfff,
+    0 0 20px #0099cc,
+    0 0 40px #0077aa;
 
-    b,
-    strong {
-        font-weight: 700;
-        color: #1d1d1d;
-    }
+  /* Initial pop animation */
+  transform: scale(0.5) rotateX(20deg);
+  opacity: 0;
+  animation: popGlow 0.8s forwards cubic-bezier(0.68,-0.55,0.265,1.55);
+  animation-delay: 0.3s;
 
-    h1,
-    h1:first-child {
-        font-size: 2.5rem;
-        margin-bottom: 1.5rem;
-        margin-top: 0;
-    }
+  /* Shimmer glimmer inside letters */
+  background: linear-gradient(90deg, #ffffff 20%, #00ffff 50%, #ffffff 80%);
+  background-size: 200% auto;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
 
-    h2 {
-        font-size: 2rem;
-        margin-bottom: 1.25rem;
-        margin-top: 2rem;
-        padding-top: 2rem;
-        border-top: 1px solid #e6e7e9;
-    }
-
-    h3 {
-        font-size: 1.5rem;
-        margin-bottom: 1.25rem;
-        margin-top: 1rem;
-    }
-    p {
-        line-height: 1.875;
-
-        code {
-          border-radius: 4px;
-          background-color: #edf2fa;
-          border: none;
-          padding: 3px 4px;
-          font-size: 14px;
-          color: #4c576c;
-      }
-    }
-
-    li {
-        code {
-            border-radius: 4px;
-            background-color: #edf2fa;
-            border: none;
-            padding: 3px 4px;
-            font-size: 14px;
-            color: #4c576c;
-        }
-    }
-
-/*    pre {
-        code {
-            padding: 0.725rem 1.25rem;
-            background-color: #262a37;
-            line-height: 1.875;
-        }
-    }*/
-
-    table thead tr {
-        background-color: #f7f9fe;
-    }
-
-    table thead th {
-        background-color: #f7f9fe;
-        color: #1d1d1d;
-        font-size: 1rem;
-        font-weight: 500;
-    }
-
-    table tr {
-        border-bottom: none;
-        background-color: var(--global-colors-white);
-        font-size: var(--global-font-size-small);
-
-        code {
-            border-radius: 4px;
-            background-color: #edf2fa;
-            border: none;
-            padding: 3px 4px;
-            font-size: 14px;
-            color: #4c576c;
-        }
-    }
-
-    table tr th {
-        padding: 0.53rem 0.8125rem;
-        border-color: #dfe5f0;
-    }
-
-    table tr td {
-        padding: 0.65rem 0.8125rem;
-        border-color: #dfe5f0;
-    }
-    a {
-        color: var(--ifm-color-primary);
-    }
-    ul {
-        margin: 16px 0;
-        padding-left: 20px;
-        li {
-            margin-top: 4px;
-            position: relative;
-            list-style: initial;
-        }
-        /*
-        code {
-            border-radius: 4px;
-            background-color: #edf2fa;
-            border: none;
-            padding: 3px 4px;
-            font-size: 14px;
-            color: #4c576c;
-        }*/
-    }
-    ol {
-        margin: 16px 0;
-        padding-left: 20px;
-        li {
-            list-style: decimal;
-        }
-        /*
-        code {
-            border-radius: 4px;
-            background-color: #edf2fa;
-            border: none;
-            padding: 3px 4px;
-            font-size: 14px;
-            color: #4c576c;
-        }
-        */
-    }
+  /* Continuous animations */
+  animation: popGlow 0.8s forwards cubic-bezier(0.68,-0.55,0.265,1.55) 0.3s,
+             shimmerWave 3s linear infinite 0.3s,
+             glow3D 4s ease-in-out infinite alternate 0.3s;
 }
 
-.theme-doc-markdown {
-    header {
-        margin-top: 1rem;
-
-        & + h1 {
-            display: none;
-        }
-    }
+/* Pop + scale keyframes */
+@keyframes popGlow {
+  0% { transform: scale(0.5) rotateX(20deg); opacity: 0; }
+  60% { transform: scale(1.2) rotateX(-10deg); opacity: 1; }
+  100% { transform: scale(1) rotateX(0deg); opacity: 1; }
 }
 
-.breadcrumbs__item--active .breadcrumbs__link {
-  background: var(--ifm-menu-color-background-active);
+/* Shimmer wave inside letters */
+@keyframes shimmerWave {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
 }
 
-.footer__copyright {
-    color: #dfe5f0;
-    font-size: .75rem;
-    line-height: 1.8;
-    opacity: .6;
-    text-align: center;
-    width: 98%;
+/* 3D neon glow pulse */
+@keyframes glow3D {
+  0%, 100% {
+    text-shadow:
+      2px 2px 0 #000000,
+      0 0 5px #00bfff,
+      0 0 10px #00bfff,
+      0 0 20px #0099cc,
+      0 0 40px #0077aa;
+  }
+  50% {
+    text-shadow:
+      2px 2px 0 #000000,
+      0 0 8px #00bfff,
+      0 0 16px #0099cc,
+      0 0 32px #0077aa,
+      0 0 50px #005577;
+  }
 }
 
-.hidden {
-    display: none !important;
+/* ========================= */
+/* Subtitle: Floating + Flowing + Shimmer */
+/* ========================= */
+.hero__subtitle-flow {
+  font-size: 1.5rem;
+  font-weight: 500;
+  display: inline-block;
+  letter-spacing: 1px;
+  opacity: 0;
+
+  /* White base color with shimmering gradient */
+  background: linear-gradient(90deg, #ffffff, #00ffff, #ffffff);
+  background-clip: text;
+  -webkit-background-clip: text;
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background-size: 200% auto;
+
+  /* Animations: pop, float, shimmer flow */
+  animation: subtitlePopFade 1s forwards ease-out 1s,
+             subtitleFloat 4s ease-in-out infinite alternate,
+             shimmerFlow 3s linear infinite;
+}
+
+@keyframes subtitlePopFade {
+  0% { opacity: 0; transform: translateY(10px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes subtitleFloat {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-5px); }
+}
+
+@keyframes shimmerFlow {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
+/* ========================= */
+/* Apache Fluss Continuous Animated Heading */
+/* ========================= */
+.hero__title-animated {
+  font-size: 4rem;
+  font-weight: 800;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  display: inline-block;
+  color: #ffffff;
+
+  /* Neon glow + 3D depth */
+  text-shadow:
+    0 0 5px #00bfff,
+    0 0 10px #00bfff,
+    0 0 20px #0099cc,
+    0 0 30px #0077aa,
+    2px 2px 5px rgba(0,0,0,0.5),
+    -2px -2px 5px rgba(0,0,0,0.5);
+
+  transform-style: preserve-3d;
+  animation: neonTilt 5s ease-in-out infinite, colorFlow 4s linear infinite;
+}
+
+@keyframes neonTilt {
+  0%, 100% { transform: rotateY(0deg) rotateX(0deg); }
+  25% { transform: rotateY(2deg) rotateX(1deg); }
+  50% { transform: rotateY(-2deg) rotateX(-1deg); }
+  75% { transform: rotateY(1deg) rotateX(2deg); }
+}
+
+@keyframes colorFlow {
+  0% {
+    text-shadow:
+      0 0 5px #00bfff,
+      0 0 10px #00bfff,
+      0 0 20px #0099cc,
+      0 0 30px #0077aa,
+      2px 2px 5px rgba(0,0,0,0.5),
+      -2px -2px 5px rgba(0,0,0,0.5);
+  }
+  50% {
+    text-shadow:
+      0 0 10px #00ffff,
+      0 0 20px #00ffff,
+      0 0 30px #00aacc,
+      0 0 40px #0088aa,
+      2px 2px 5px rgba(0,0,0,0.5),
+      -2px -2px 5px rgba(0,0,0,0.5);
+  }
+  100% {
+    text-shadow:
+      0 0 5px #00bfff,
+      0 0 10px #00bfff,
+      0 0 20px #0099cc,
+      0 0 30px #0077aa,
+      2px 2px 5px rgba(0,0,0,0.5),
+      -2px -2px 5px rgba(0,0,0,0.5);
+  }
+}
+
+/* ========================= */
+/* Buttons: Rise + Glow on Hover */
+/* ========================= */
+.hero_button,
+.button.button--secondary {
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+}
+
+.hero_button:hover,
+.button.button--secondary:hover {
+  transform: translateY(-4px);
+  box-shadow: 0 0 10px #00bfff, 0 0 20px #00cfff, 0 0 30px #00dfff;
 }
