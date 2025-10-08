@@ -26,6 +26,7 @@ import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TooManyBucketsException;
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
@@ -100,6 +101,7 @@ public class TableDescriptorValidation {
         checkLogFormat(tableConf, hasPrimaryKey);
         checkArrowCompression(tableConf);
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
+        checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema);
         checkSystemColumns(schema);
@@ -312,6 +314,30 @@ public class TableDescriptorValidation {
                                             + "partition is enabled, please set table property '%s'.",
                                     ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key()));
                 }
+            }
+        }
+    }
+
+    private static void checkDeleteBehavior(Configuration tableConf, boolean hasPrimaryKey) {
+        DeleteBehavior deleteBehavior = tableConf.get(ConfigOptions.TABLE_DELETE_BEHAVIOR);
+        if (deleteBehavior != DeleteBehavior.ALLOW) {
+            if (!hasPrimaryKey) {
+                throw new InvalidConfigException(
+                        "Delete behavior configuration is only supported for primary key tables.");
+            }
+        }
+
+        // For tables with merge engines, automatically set appropriate delete behavior
+        MergeEngineType mergeEngine = tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE);
+        if (mergeEngine != null) {
+            // For FIRST_ROW and VERSIONED merge engines, delete operations are not supported
+            // If user explicitly sets delete behavior to ALLOW, throw an exception
+            if (deleteBehavior == DeleteBehavior.ALLOW) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "Table with '%s' merge engine does not support delete operations. "
+                                        + "The delete behavior must be set to 'ignore' or 'disable', but got 'allow'.",
+                                mergeEngine));
             }
         }
     }

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.kv.rowmerger;
 
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.row.BinaryRow;
@@ -34,10 +35,16 @@ public class DefaultRowMerger implements RowMerger {
     private final PartialUpdaterCache partialUpdaterCache;
     private final KvFormat kvFormat;
     private final Schema schema;
+    private final DeleteBehavior deleteBehavior;
 
     public DefaultRowMerger(Schema schema, KvFormat kvFormat) {
+        this(schema, kvFormat, DeleteBehavior.ALLOW);
+    }
+
+    public DefaultRowMerger(Schema schema, KvFormat kvFormat, DeleteBehavior deleteBehavior) {
         this.schema = schema;
         this.kvFormat = kvFormat;
+        this.deleteBehavior = deleteBehavior;
         // TODO: share cache in server level when PartialUpdater is thread-safe
         this.partialUpdaterCache = new PartialUpdaterCache();
     }
@@ -52,13 +59,26 @@ public class DefaultRowMerger implements RowMerger {
     @Nullable
     @Override
     public BinaryRow delete(BinaryRow oldRow) {
-        // returns null to indicate the row is deleted
-        return null;
+        switch (deleteBehavior) {
+            case ALLOW:
+                // returns null to indicate the row is deleted
+                return null;
+            case IGNORE:
+                // returns the old row unchanged to ignore the delete operation
+                return oldRow;
+            case DISABLE:
+                throw new UnsupportedOperationException(
+                        "Delete operations are disabled for this table. "
+                                + "The table.delete.behavior is set to 'disable'.");
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported delete behavior: " + deleteBehavior);
+        }
     }
 
     @Override
     public boolean supportsDelete() {
-        return true;
+        return deleteBehavior != DeleteBehavior.DISABLE;
     }
 
     @Override
@@ -69,7 +89,7 @@ public class DefaultRowMerger implements RowMerger {
             // this also sanity checks the validity of the partial update
             PartialUpdater partialUpdater =
                     partialUpdaterCache.getOrCreatePartialUpdater(kvFormat, schema, targetColumns);
-            return new PartialUpdateRowMerger(partialUpdater);
+            return new PartialUpdateRowMerger(partialUpdater, deleteBehavior);
         }
     }
 
@@ -77,9 +97,12 @@ public class DefaultRowMerger implements RowMerger {
     private static class PartialUpdateRowMerger implements RowMerger {
 
         private final PartialUpdater partialUpdater;
+        private final DeleteBehavior deleteBehavior;
 
-        public PartialUpdateRowMerger(PartialUpdater partialUpdater) {
+        public PartialUpdateRowMerger(
+                PartialUpdater partialUpdater, DeleteBehavior deleteBehavior) {
             this.partialUpdater = partialUpdater;
+            this.deleteBehavior = deleteBehavior;
         }
 
         @Override
@@ -97,12 +120,25 @@ public class DefaultRowMerger implements RowMerger {
         @Nullable
         @Override
         public BinaryRow delete(BinaryRow oldRow) {
-            return partialUpdater.deleteRow(oldRow);
+            switch (deleteBehavior) {
+                case ALLOW:
+                    return partialUpdater.deleteRow(oldRow);
+                case IGNORE:
+                    // returns the old row unchanged to ignore the delete operation
+                    return oldRow;
+                case DISABLE:
+                    throw new UnsupportedOperationException(
+                            "Delete operations are disabled for this table. "
+                                    + "The table.delete.behavior is set to 'disable'.");
+                default:
+                    throw new IllegalArgumentException(
+                            "Unsupported delete behavior: " + deleteBehavior);
+            }
         }
 
         @Override
         public boolean supportsDelete() {
-            return true;
+            return deleteBehavior != DeleteBehavior.DISABLE;
         }
     }
 }

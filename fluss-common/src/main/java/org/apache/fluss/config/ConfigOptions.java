@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.compression.ArrowCompressionType;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
@@ -1360,6 +1361,18 @@ public class ConfigOptions {
                     .withDescription(
                             "The column name of the version column for the `versioned` merge engine. "
                                     + "If the merge engine is set to `versioned`, the version column must be set.");
+
+    public static final ConfigOption<DeleteBehavior> TABLE_DELETE_BEHAVIOR =
+            key("table.delete.behavior")
+                    .enumType(DeleteBehavior.class)
+                    .defaultValue(DeleteBehavior.ALLOW)
+                    .withDescription(
+                            "Defines the delete behavior for the primary key table. "
+                                    + "The supported delete behaviors are `allow`, `ignore`, and `disable`. "
+                                    + "The `allow` behavior allows normal delete operations (default). "
+                                    + "The `ignore` behavior silently skips delete requests without error. "
+                                    + "The `disable` behavior rejects delete requests with a clear error message. "
+                                    + "For tables with FIRST_ROW or VERSIONED merge engines, this option defaults to `ignore`.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv

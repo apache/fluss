@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.sink;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.sink.serializer.RowDataSerializationSchema;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
@@ -24,6 +25,7 @@ import org.apache.fluss.flink.utils.PushdownUtils;
 import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
 import org.apache.fluss.flink.utils.PushdownUtils.ValueConversion;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
@@ -359,6 +361,15 @@ public class FlinkTableSink
                     String.format(
                             "Table %s uses the '%s' merge engine which does not support DELETE or UPDATE statements.",
                             tablePath, mergeEngineType));
+        }
+
+        // Check table-level delete behavior configuration
+        DeleteBehavior deleteBehavior = flussConfig.get(ConfigOptions.TABLE_DELETE_BEHAVIOR);
+        if (deleteBehavior == DeleteBehavior.DISABLE) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "Table %s has delete behavior set to 'disable' which does not support DELETE statements.",
+                            tablePath));
         }
     }
 

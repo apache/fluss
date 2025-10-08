@@ -59,6 +59,7 @@ import java.util.Set;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
+import static org.apache.fluss.config.FlussConfigUtils.TABLE_PREFIX;
 import static org.apache.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
 import static org.apache.fluss.flink.utils.DataLakeUtils.getDatalakeFormat;
 import static org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils.getBucketKeyIndexes;
@@ -225,10 +226,10 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 ConfigOptions.BOOTSTRAP_SERVERS.key(),
                 tableOptions.get(FlinkConnectorOptions.BOOTSTRAP_SERVERS.key()));
 
-        // forward all client configs
+        // forward all client configs and table configs
         tableOptions.forEach(
                 (key, value) -> {
-                    if (key.startsWith(CLIENT_PREFIX)) {
+                    if (key.startsWith(CLIENT_PREFIX) || key.startsWith(TABLE_PREFIX)) {
                         flussConfig.setString(key, value);
                     }
                 });
