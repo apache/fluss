@@ -1095,4 +1095,107 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
             this.expectedRows = expectedRows;
         }
     }
+
+    @Test
+    void testDeleteBehaviorDisable() {
+        String tableName = "delete_behavior_disable_table";
+        tBatchEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + " a int not null,"
+                                + " b bigint null, "
+                                + " c string null, "
+                                + " primary key (a) not enforced"
+                                + ") with ('table.delete.behavior' = 'disable')",
+                        tableName));
+
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+        assertThatThrownBy(
+                        () ->
+                                tBatchEnv
+                                        .executeSql("DELETE FROM " + tableName + " WHERE a = 1")
+                                        .await())
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessage(
+                        String.format(
+                                "Table %s has delete behavior set to 'disable' which does not support DELETE statements.",
+                                tablePath));
+    }
+
+    @Test
+    void testDeleteBehaviorIgnore() throws Exception {
+        String tableName = "delete_behavior_ignore_table";
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + " a int not null primary key not enforced,"
+                                + " b string"
+                                + ") with ('table.delete.behavior' = 'ignore')",
+                        tableName));
+
+        // Insert some data
+        tEnv.executeSql(
+                        String.format(
+                                "INSERT INTO %s VALUES (1, 'test1'), (2, 'test2'), (3, 'test3')",
+                                tableName))
+                .await();
+
+        // Create a changelog stream with deletes that should be ignored
+        org.apache.flink.table.api.Table changelogData =
+                tEnv.fromChangelogStream(
+                        env.fromCollection(
+                                Arrays.asList(
+                                        Row.ofKind(RowKind.INSERT, 4, "test4"),
+                                        Row.ofKind(RowKind.DELETE, 1, "test1"), // Should be ignored
+                                        Row.ofKind(RowKind.UPDATE_AFTER, 2, "updated_test2"))));
+        tEnv.createTemporaryView("changelog_source", changelogData);
+
+        // Insert changelog data
+        tEnv.executeSql(String.format("INSERT INTO %s SELECT * FROM changelog_source", tableName));
+
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql(String.format("select * from %s", tableName)).collect();
+
+        // Row with a=1 should still exist (delete was ignored)
+        List<String> expectedRows =
+                Arrays.asList(
+                        "+I[1, test1]", // Delete was ignored
+                        "+I[2, test2]",
+                        "-U[2, test2]",
+                        "+U[2, updated_test2]",
+                        "+I[3, test3]",
+                        "+I[4, test4]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
+
+    @Test
+    void testDeleteBehaviorAllow() throws Exception {
+        String tableName = "delete_behavior_allow_table";
+        tBatchEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + " a int not null,"
+                                + " b bigint null, "
+                                + " c string null, "
+                                + " primary key (a) not enforced"
+                                + ") with ('table.delete.behavior' = 'allow')",
+                        tableName));
+
+        // Insert and delete should work normally
+        tBatchEnv
+                .executeSql(
+                        String.format(
+                                "INSERT INTO %s VALUES (1, 100, 'test1'), (2, 200, 'test2')",
+                                tableName))
+                .await();
+
+        tBatchEnv.executeSql("DELETE FROM " + tableName + " WHERE a = 1").await();
+
+        CloseableIterator<Row> rowIter =
+                tEnv.executeSql(String.format("select * from %s", tableName)).collect();
+
+        List<String> expectedRows =
+                Arrays.asList("+I[1, 100, test1]", "+I[2, 200, test2]", "-D[1, 100, test1]");
+        assertResultsIgnoreOrder(rowIter, expectedRows, true);
+    }
 }

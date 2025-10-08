@@ -35,6 +35,8 @@ import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.DeleteBehavior;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableChange;
@@ -402,6 +404,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                     String.format(
                             "'%s' is enabled for the table, but the Fluss cluster doesn't enable datalake tables.",
                             ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
+        }
+
+        // For tables with first_row or versioned merge engines, automatically set to IGNORE if
+        // delete behavior is ALLOW
+        Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
+        DeleteBehavior deleteBehavior = tableConf.get(ConfigOptions.TABLE_DELETE_BEHAVIOR);
+        MergeEngineType mergeEngine = tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE);
+        if (mergeEngine == MergeEngineType.FIRST_ROW || mergeEngine == MergeEngineType.VERSIONED) {
+            if (deleteBehavior == DeleteBehavior.ALLOW) {
+                Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());
+                newProperties.put(
+                        ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), DeleteBehavior.IGNORE.name());
+                newDescriptor = newDescriptor.withProperties(newProperties);
+            }
         }
 
         return newDescriptor;
