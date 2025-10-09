@@ -27,6 +27,8 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.server.DynamicServerConfig;
+import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -81,7 +83,10 @@ class MetadataUpdateITCase {
         zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         metadataManager =
                 new MetadataManager(
-                        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), new Configuration());
+                        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
+                        new Configuration(),
+                        new LakeCatalogDynamicLoader(
+                                new DynamicServerConfig(new Configuration()), null, true));
     }
 
     @Test

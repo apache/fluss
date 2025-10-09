@@ -19,6 +19,7 @@ package org.apache.fluss.server;
 
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.dynamic.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
@@ -43,6 +44,8 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
+import org.apache.fluss.rpc.messages.DescribeConfigsRequest;
+import org.apache.fluss.rpc.messages.DescribeConfigsResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -68,6 +71,7 @@ import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
+import org.apache.fluss.rpc.messages.PbDescribeConfigsResponseInfo;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
@@ -135,6 +139,7 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     protected final ZooKeeperClient zkClient;
     protected final MetadataManager metadataManager;
     protected final @Nullable Authorizer authorizer;
+    protected final DynamicConfigManager dynamicConfigManager;
 
     private long tokenLastUpdateTimeMs = 0;
     private ObtainedSecurityToken securityToken = null;
@@ -144,13 +149,15 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             ServerType provider,
             ZooKeeperClient zkClient,
             MetadataManager metadataManager,
-            @Nullable Authorizer authorizer) {
+            @Nullable Authorizer authorizer,
+            DynamicConfigManager dynamicConfigManager) {
         this.remoteFileSystem = remoteFileSystem;
         this.provider = provider;
         this.apiManager = new ApiManager(provider);
         this.zkClient = zkClient;
         this.metadataManager = metadataManager;
         this.authorizer = authorizer;
+        this.dynamicConfigManager = dynamicConfigManager;
     }
 
     @Override
@@ -460,6 +467,35 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
             throw new FlussRuntimeException(
                     String.format("Failed to list acls for resource: %s", aclBindingFilter), e);
         }
+    }
+
+    @Override
+    public CompletableFuture<DescribeConfigsResponse> describeConfigs(
+            DescribeConfigsRequest request) {
+        if (authorizer != null) {
+            authorizer.authorize(
+                    currentSession(), OperationType.DESCRIBE_CONFIGS, Resource.cluster());
+        }
+
+        List<ConfigEntry> configs = dynamicConfigManager.describeConfigs();
+        List<PbDescribeConfigsResponseInfo> pbConfigsInfos =
+                configs.stream()
+                        .map(
+                                configEntry -> {
+                                    PbDescribeConfigsResponseInfo pbDescribeConfigsResponseInfo =
+                                            new PbDescribeConfigsResponseInfo()
+                                                    .setConfigKey(configEntry.key())
+                                                    .setConfigSource(configEntry.source().name());
+                                    if (configEntry.value() != null) {
+                                        pbDescribeConfigsResponseInfo.setConfigValue(
+                                                configEntry.value());
+                                    }
+                                    return pbDescribeConfigsResponseInfo;
+                                })
+                        .collect(Collectors.toList());
+
+        return CompletableFuture.completedFuture(
+                new DescribeConfigsResponse().addAllInfos(pbConfigsInfos));
     }
 
     protected MetadataResponse processMetadataRequest(

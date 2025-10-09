@@ -27,6 +27,8 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.server.DynamicServerConfig;
+import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
@@ -412,7 +414,12 @@ public class ReplicaFetcherThreadTest {
                         null,
                         zkClient,
                         serverId,
-                        new TabletServerMetadataCache(new MetadataManager(null, conf)),
+                        new TabletServerMetadataCache(
+                                new MetadataManager(
+                                        null,
+                                        conf,
+                                        new LakeCatalogDynamicLoader(
+                                                new DynamicServerConfig(conf), null, true))),
                         RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
                         manualClock);

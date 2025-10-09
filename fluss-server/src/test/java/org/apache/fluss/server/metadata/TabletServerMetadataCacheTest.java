@@ -26,6 +26,8 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.server.DynamicServerConfig;
+import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 
 import org.junit.jupiter.api.BeforeEach;
@@ -526,7 +528,11 @@ public class TabletServerMetadataCacheTest {
         private final Map<TablePath, TableInfo> tableInfoMap = new HashMap<>();
 
         public TestingMetadataManager(List<TableInfo> tableInfos) {
-            super(null, new Configuration());
+            super(
+                    null,
+                    new Configuration(),
+                    new LakeCatalogDynamicLoader(
+                            new DynamicServerConfig(new Configuration()), null, true));
             tableInfos.forEach(tableInfo -> tableInfoMap.put(tableInfo.getTablePath(), tableInfo));
         }
 

@@ -152,7 +152,8 @@ public class CoordinatorEventProcessor implements EventProcessor {
             LakeTableTieringManager lakeTableTieringManager,
             CoordinatorMetricGroup coordinatorMetricGroup,
             Configuration conf,
-            ExecutorService ioExecutor) {
+            ExecutorService ioExecutor,
+            MetadataManager metadataManager) {
         this.zooKeeperClient = zooKeeperClient;
         this.serverMetadataCache = serverMetadataCache;
         this.coordinatorChannelManager = coordinatorChannelManager;
@@ -174,7 +175,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                 coordinatorEventManager,
                                 coordinatorContext),
                         zooKeeperClient);
-        this.metadataManager = new MetadataManager(zooKeeperClient, conf);
+        this.metadataManager = metadataManager;
 
         this.tableManager =
                 new TableManager(

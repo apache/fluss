@@ -23,6 +23,8 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.dynamic.AlterConfigOp;
+import org.apache.fluss.config.dynamic.ConfigEntry;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
@@ -475,4 +477,19 @@ public interface Admin extends AutoCloseable {
      * @return A CompletableFuture indicating completion of the operation.
      */
     DropAclsResult dropAcls(Collection<AclBindingFilter> filters);
+
+    /**
+     * Describe the configs of the cluster.
+     *
+     * @return A CompletableFuture containing the configs of the cluster.
+     */
+    CompletableFuture<Collection<ConfigEntry>> describeConfigs();
+
+    /**
+     * Alter the configs of the cluster.
+     *
+     * @param configs List of configs to alter.
+     * @return A CompletableFuture indicating completion of the operation.
+     */
+    CompletableFuture<Void> alterConfigs(Collection<AlterConfigOp> configs);
 }

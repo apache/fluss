@@ -54,6 +54,7 @@ import org.apache.fluss.server.zk.data.ZkData.BucketIdsZNode;
 import org.apache.fluss.server.zk.data.ZkData.BucketRemoteLogsZNode;
 import org.apache.fluss.server.zk.data.ZkData.BucketSnapshotIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.BucketSnapshotsZNode;
+import org.apache.fluss.server.zk.data.ZkData.ConfigEntityZNode;
 import org.apache.fluss.server.zk.data.ZkData.CoordinatorZNode;
 import org.apache.fluss.server.zk.data.ZkData.DatabaseZNode;
 import org.apache.fluss.server.zk.data.ZkData.DatabasesZNode;
@@ -1130,6 +1131,37 @@ public class ZooKeeperClient implements AutoCloseable {
                         AclChangeNotificationNode.pathPrefix(),
                         AclChangeNotificationNode.encode(resource));
         LOG.info("add acl change notification for resource {}  ", resource);
+    }
+
+    public Map<String, String> fetchEntityConfig() throws Exception {
+        String path = ConfigEntityZNode.path();
+        return getOrEmpty(path).map(ConfigEntityZNode::decode).orElse(new HashMap<>());
+    }
+
+    public void upsertServerEntityConfig(Map<String, String> configs) throws Exception {
+        upsertEntityConfigs(configs);
+    }
+
+    public void upsertEntityConfigs(Map<String, String> configs) throws Exception {
+        String path = ConfigEntityZNode.path();
+        if (zkClient.checkExists().forPath(path) != null) {
+            zkClient.setData().forPath(path, ConfigEntityZNode.encode(configs));
+        } else {
+            zkClient.create()
+                    .creatingParentsIfNeeded()
+                    .forPath(path, ConfigEntityZNode.encode(configs));
+        }
+
+        insertConfigChangeNotification();
+    }
+
+    public void insertConfigChangeNotification() throws Exception {
+        zkClient.create()
+                .creatingParentsIfNeeded()
+                .withMode(CreateMode.PERSISTENT_SEQUENTIAL)
+                .forPath(
+                        ZkData.ConfigEntityChangeNotificationSequenceZNode.pathPrefix(),
+                        ZkData.ConfigEntityChangeNotificationSequenceZNode.encode());
     }
 
     // --------------------------------------------------------------------------------------------

@@ -559,6 +559,23 @@ message ControlledShutdownRequest {
 message ControlledShutdownResponse {
   repeated PbTableBucket remaining_leader_buckets = 1;
 }
+message DescribeConfigsRequest{
+}
+
+message DescribeConfigsResponse{
+  repeated PbDescribeConfigsResponseInfo infos = 1;
+}
+
+
+message AlterConfigsRequest{
+ repeated PbAlterConfigsRequestInfo infos = 1;
+}
+
+
+message AlterConfigsResponse{
+}
+
+
 
 // --------------- Inner classes ----------------
 message PbApiVersion {
@@ -897,3 +914,16 @@ message PbHeartbeatRespForTable {
   required int64 table_id = 1;
   optional ErrorResponse error = 2;
 }
+
+message PbDescribeConfigsResponseInfo{
+  required string config_key = 1;
+  optional string config_value = 2;
+  required string config_source = 3;
+}
+
+message PbAlterConfigsRequestInfo{
+  required string config_key = 1;
+  optional string config_value = 2;
+  required int32 op_type = 3;
+}
+

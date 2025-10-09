@@ -41,7 +41,9 @@ public enum OperationType {
     CREATE((byte) 5),
     DROP((byte) 6),
     ALTER((byte) 7),
-    DESCRIBE((byte) 8);
+    DESCRIBE((byte) 8),
+    DESCRIBE_CONFIGS((byte) 9),
+    ALTER_CONFIGS((byte) 10);
 
     private final byte code;
 

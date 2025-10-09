@@ -41,10 +41,12 @@ import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.security.acl.AccessControlEntry;
 import org.apache.fluss.security.acl.AclBinding;
+import org.apache.fluss.server.DynamicServerConfig;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.DefaultAuthorizer;
 import org.apache.fluss.server.coordinator.CoordinatorServer;
+import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
@@ -201,7 +203,12 @@ public final class FlussClusterExtension
         zooKeeperServer = ZooKeeperTestUtils.createAndStartZookeeperTestingServer();
         zooKeeperClient =
                 createZooKeeperClient(zooKeeperServer.getConnectString(), NOPErrorHandler.INSTANCE);
-        metadataManager = new MetadataManager(zooKeeperClient, clusterConf);
+        metadataManager =
+                new MetadataManager(
+                        zooKeeperClient,
+                        clusterConf,
+                        new LakeCatalogDynamicLoader(
+                                new DynamicServerConfig(clusterConf), null, true));
         Configuration conf = new Configuration();
         rpcClient =
                 RpcClient.create(
