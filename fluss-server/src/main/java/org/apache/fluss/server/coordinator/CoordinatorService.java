@@ -18,11 +18,11 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.cluster.AlterConfig;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.dynamic.AlterConfigOp;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
@@ -32,6 +32,7 @@ import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.metadata.AlterConfigOpType;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
@@ -42,8 +43,8 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
-import org.apache.fluss.rpc.messages.AlterConfigsRequest;
-import org.apache.fluss.rpc.messages.AlterConfigsResponse;
+import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
@@ -74,7 +75,7 @@ import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
-import org.apache.fluss.rpc.messages.PbAlterConfigsRequestInfo;
+import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
 import org.apache.fluss.rpc.netty.server.Session;
@@ -254,11 +255,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             }
         }
 
+        LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer();
+
         // Check table creation permissions based on table type
         validateTableCreationPermission(tableDescriptor, tablePath);
 
         // apply system defaults if the config is not set
-        tableDescriptor = applySystemDefaults(tableDescriptor);
+        tableDescriptor =
+                applySystemDefaults(tableDescriptor, lakeCatalogContainer.getDataLakeFormat());
 
         // the distribution and bucket count must be set now
         //noinspection OptionalGetWithoutIsPresent
@@ -279,7 +284,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // before create table in fluss, we may create in lake
         if (isDataLakeEnabled(tableDescriptor)) {
             try {
-                checkNotNull(lakeCatalogDynamicLoader.getLakeCatalog())
+                checkNotNull(lakeCatalogContainer.getLakeCatalog())
                         .createTable(tablePath, tableDescriptor);
             } catch (TableAlreadyExistException e) {
                 throw new LakeTableAlreadyExistException(
@@ -287,8 +292,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 "The table %s already exists in %s catalog, please "
                                         + "first drop the table in %s catalog or use a new table name.",
                                 tablePath,
-                                lakeCatalogDynamicLoader.getDataLakeFormat(),
-                                lakeCatalogDynamicLoader.getDataLakeFormat()));
+                                lakeCatalogContainer.getDataLakeFormat(),
+                                lakeCatalogContainer.getDataLakeFormat()));
             }
         }
 
@@ -310,13 +315,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         List<TableChange> tableChanges = toTableChanges(request.getConfigChangesList());
         TablePropertyChanges tablePropertyChanges = toTablePropertyChanges(tableChanges);
 
+        LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer();
         metadataManager.alterTableProperties(
                 tablePath,
                 tableChanges,
                 tablePropertyChanges,
                 request.isIgnoreIfNotExists(),
-                lakeCatalog,
-                dataLakeFormat,
+                lakeCatalogContainer.getLakeCatalog(),
+                lakeCatalogContainer.getDataLakeFormat(),
                 lakeTableTieringManager);
 
         return CompletableFuture.completedFuture(new AlterTableResponse());
@@ -355,9 +362,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return builder.build();
     }
 
-    private TableDescriptor applySystemDefaults(TableDescriptor tableDescriptor) {
+    private TableDescriptor applySystemDefaults(
+            TableDescriptor tableDescriptor, DataLakeFormat dataLakeFormat) {
         TableDescriptor newDescriptor = tableDescriptor;
-        DataLakeFormat dataLakeFormat = lakeCatalogDynamicLoader.getDataLakeFormat();
 
         // not set bucket num
         if (!newDescriptor.getTableDistribution().isPresent()
@@ -654,35 +661,35 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     }
 
     @Override
-    public CompletableFuture<AlterConfigsResponse> alterConfigs(AlterConfigsRequest request) {
-        CompletableFuture<AlterConfigsResponse> future = new CompletableFuture<>();
-        List<PbAlterConfigsRequestInfo> infos = request.getInfosList();
+    public CompletableFuture<AlterClusterConfigsResponse> alterClusterConfigs(
+            AlterClusterConfigsRequest request) {
+        CompletableFuture<AlterClusterConfigsResponse> future = new CompletableFuture<>();
+        List<PbAlterConfig> infos = request.getAlterConfigsList();
         if (infos.isEmpty()) {
-            return CompletableFuture.completedFuture(new AlterConfigsResponse());
+            return CompletableFuture.completedFuture(new AlterClusterConfigsResponse());
         }
 
         if (authorizer != null) {
-            authorizer.authorize(currentSession(), OperationType.ALTER_CONFIGS, Resource.cluster());
+            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
         }
 
-        List<AlterConfigOp> serverConfigChanges =
+        List<AlterConfig> serverConfigChanges =
                 infos.stream()
                         .map(
                                 info ->
-                                        new AlterConfigOp(
+                                        new AlterConfig(
                                                 info.getConfigKey(),
                                                 info.hasConfigValue()
                                                         ? info.getConfigValue()
                                                         : null,
-                                                AlterConfigOp.OpType.forId(
-                                                        (byte) info.getOpType())))
+                                                AlterConfigOpType.from((byte) info.getOpType())))
                         .collect(Collectors.toList());
         AccessContextEvent<Void> accessContextEvent =
                 new AccessContextEvent<>(
                         (context) -> {
                             try {
                                 dynamicConfigManager.alterConfigs(serverConfigChanges);
-                                future.complete(new AlterConfigsResponse());
+                                future.complete(new AlterClusterConfigsResponse());
                             } catch (Exception e) {
                                 future.completeExceptionally(e);
                             }
@@ -694,7 +701,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @VisibleForTesting
     public DataLakeFormat getDataLakeFormat() {
-        return lakeCatalogDynamicLoader.getDataLakeFormat();
+        return lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat();
     }
 
     private void validateHeartbeatRequest(

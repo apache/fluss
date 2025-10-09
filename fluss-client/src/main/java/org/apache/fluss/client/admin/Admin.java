@@ -21,10 +21,10 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
+import org.apache.fluss.cluster.AlterConfig;
+import org.apache.fluss.cluster.ConfigEntry;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.config.dynamic.AlterConfigOp;
-import org.apache.fluss.config.dynamic.ConfigEntry;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
@@ -483,7 +483,7 @@ public interface Admin extends AutoCloseable {
      *
      * @return A CompletableFuture containing the configs of the cluster.
      */
-    CompletableFuture<Collection<ConfigEntry>> describeConfigs();
+    CompletableFuture<Collection<ConfigEntry>> describeClusterConfigs();
 
     /**
      * Alter the configs of the cluster.
@@ -491,5 +491,5 @@ public interface Admin extends AutoCloseable {
      * @param configs List of configs to alter.
      * @return A CompletableFuture indicating completion of the operation.
      */
-    CompletableFuture<Void> alterConfigs(Collection<AlterConfigOp> configs);
+    CompletableFuture<Void> alterClusterConfigs(Collection<AlterConfig> configs);
 }

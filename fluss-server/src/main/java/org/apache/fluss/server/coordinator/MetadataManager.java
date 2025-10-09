@@ -518,7 +518,9 @@ public class MetadataManager {
         TableRegistration tableReg = optionalTable.get();
         SchemaInfo schemaInfo = getLatestSchema(tablePath);
         return tableReg.toTableInfo(
-                tablePath, schemaInfo, lakeCatalogDynamicLoader.getDefaultLakeProperties());
+                tablePath,
+                schemaInfo,
+                lakeCatalogDynamicLoader.getLakeCatalogContainer().getDefaultTableLakeOptions());
     }
 
     public Map<TablePath, TableInfo> getTables(Collection<TablePath> tablePaths)
@@ -543,7 +545,12 @@ public class MetadataManager {
 
                 result.put(
                         tablePath,
-                        tableReg.toTableInfo(tablePath, schemaInfo, defaultTableLakeOptions));
+                        tableReg.toTableInfo(
+                                tablePath,
+                                schemaInfo,
+                                lakeCatalogDynamicLoader
+                                        .getLakeCatalogContainer()
+                                        .getDefaultTableLakeOptions()));
             }
         } catch (Exception e) {
             throw new FlussRuntimeException(

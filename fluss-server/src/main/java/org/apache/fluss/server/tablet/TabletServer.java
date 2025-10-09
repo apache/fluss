@@ -201,10 +201,14 @@ public class TabletServer extends ServerBase {
                             serverId);
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
+
             this.lakeCatalogDynamicLoader =
-                    new LakeCatalogDynamicLoader(dynamicServerConfig, pluginManager, true);
+                    new LakeCatalogDynamicLoader(conf, pluginManager, false);
             MetadataManager metadataManager =
                     new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
+            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, false);
+            dynamicConfigManager.startup();
+
             this.metadataCache = new TabletServerMetadataCache(metadataManager);
 
             this.scheduler = new FlussScheduler(conf.get(BACKGROUND_THREADS));
@@ -250,10 +254,6 @@ public class TabletServer extends ServerBase {
                             tabletServerMetricGroup,
                             clock);
             replicaManager.startup();
-
-            this.dynamicConfigManager =
-                    new DynamicConfigManager(zkClient, dynamicServerConfig, false);
-            dynamicConfigManager.startup();
 
             this.tabletService =
                     new TabletService(

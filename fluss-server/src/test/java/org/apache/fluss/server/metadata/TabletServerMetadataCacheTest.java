@@ -26,7 +26,6 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.server.DynamicServerConfig;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 
@@ -531,8 +530,7 @@ public class TabletServerMetadataCacheTest {
             super(
                     null,
                     new Configuration(),
-                    new LakeCatalogDynamicLoader(
-                            new DynamicServerConfig(new Configuration()), null, true));
+                    new LakeCatalogDynamicLoader(new Configuration(), null, true));
             tableInfos.forEach(tableInfo -> tableInfoMap.put(tableInfo.getTablePath(), tableInfo));
         }
 

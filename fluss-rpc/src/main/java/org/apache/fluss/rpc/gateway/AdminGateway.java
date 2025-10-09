@@ -17,8 +17,8 @@
 
 package org.apache.fluss.rpc.gateway;
 
-import org.apache.fluss.rpc.messages.AlterConfigsRequest;
-import org.apache.fluss.rpc.messages.AlterConfigsResponse;
+import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.AlterTableResponse;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
@@ -116,8 +116,9 @@ public interface AdminGateway extends AdminReadOnlyGateway {
     @RPC(api = ApiKeys.DROP_ACLS)
     CompletableFuture<DropAclsResponse> dropAcls(DropAclsRequest request);
 
-    @RPC(api = ApiKeys.ALTER_CONFIGS)
-    CompletableFuture<AlterConfigsResponse> alterConfigs(AlterConfigsRequest request);
+    @RPC(api = ApiKeys.ALTER_CLUSTER_CONFIGS)
+    CompletableFuture<AlterClusterConfigsResponse> alterClusterConfigs(
+            AlterClusterConfigsRequest request);
 
     // todo: rename table & alter table
 

@@ -36,7 +36,6 @@ import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
 import org.apache.fluss.rpc.messages.NotifyKvSnapshotOffsetRequest;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
-import org.apache.fluss.server.DynamicServerConfig;
 import org.apache.fluss.server.coordinator.event.AccessContextEvent;
 import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
@@ -153,8 +152,7 @@ class CoordinatorEventProcessorTest {
                 new MetadataManager(
                         zookeeperClient,
                         new Configuration(),
-                        new LakeCatalogDynamicLoader(
-                                new DynamicServerConfig(new Configuration()), null, true));
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
 
         // register coordinator server
         zookeeperClient.registerCoordinatorLeader(
@@ -341,8 +339,7 @@ class CoordinatorEventProcessorTest {
                 new MetadataManager(
                         zookeeperClient,
                         new Configuration(),
-                        new LakeCatalogDynamicLoader(
-                                new DynamicServerConfig(new Configuration()), null, true));
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
         TableAssignment table1Assignment =
                 TableAssignment.builder()
                         .add(0, BucketAssignment.of(0, 3, 2))
@@ -452,8 +449,7 @@ class CoordinatorEventProcessorTest {
                 new MetadataManager(
                         zookeeperClient,
                         new Configuration(),
-                        new LakeCatalogDynamicLoader(
-                                new DynamicServerConfig(new Configuration()), null, true));
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
         TableAssignment tableAssignment =
                 TableAssignment.builder()
                         .add(0, BucketAssignment.of(0, 1, 2))

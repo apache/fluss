@@ -44,8 +44,8 @@ public class ConfigJsonSerdeTest extends JsonSerdeTestBase<Map<String, String>> 
     @Override
     protected String[] expectedJsons() {
         return new String[] {
-            "{\"version\":1,\"config\":{\"datalake.format\":\"value1\",\"key2\":null,\"key3\":\"value3\"}}",
-            "{\"version\":1,\"config\":{}}"
+            "{\"version\":1,\"configs\":{\"datalake.format\":\"value1\",\"key2\":null,\"key3\":\"value3\"}}",
+            "{\"version\":1,\"configs\":{}}"
         };
     }
 }

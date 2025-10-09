@@ -18,8 +18,10 @@
 package org.apache.fluss.server;
 
 import org.apache.fluss.annotation.Internal;
+import org.apache.fluss.cluster.ServerReconfigurable;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.dynamic.ServerReconfigurable;
+import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.utils.MapUtils;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -29,7 +31,6 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
@@ -44,7 +45,7 @@ import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
  * them to these {@link ServerReconfigurable} instances.
  */
 @Internal
-public class DynamicServerConfig {
+class DynamicServerConfig {
 
     private static final Logger LOG = LoggerFactory.getLogger(DynamicServerConfig.class);
     private static final Set<String> ALLOWED_CONFIG_KEYS =
@@ -52,7 +53,8 @@ public class DynamicServerConfig {
     private static final Set<String> ALLOWED_CONFIG_PREFIXES = Collections.singleton("datalake.");
 
     private final ReadWriteLock lock = new ReentrantReadWriteLock();
-    private final Set<ServerReconfigurable> serverReconfigurableSet = ConcurrentHashMap.newKeySet();
+    private final Map<Class<? extends ServerReconfigurable>, ServerReconfigurable>
+            serverReconfigures = MapUtils.newConcurrentHashMap();
 
     /** The initial configuration items when the server starts from server.yaml. */
     private final Map<String, String> initialConfigMap;
@@ -69,38 +71,36 @@ public class DynamicServerConfig {
      * The current configuration, which is a combination of initial configuration and dynamic
      * configuration.
      */
-    private volatile Configuration currentConfig;
+    private Configuration currentConfig;
 
-    public DynamicServerConfig(Configuration flussConfig) {
+    DynamicServerConfig(Configuration flussConfig) {
         this.currentConfig = flussConfig;
         this.initialConfigMap = flussConfig.toMap();
         this.currentConfigMap = flussConfig.toMap();
     }
 
-    /** Register a ServerReconfigurable which listens to configuration changes. */
-    public void register(ServerReconfigurable serverReconfigurable) {
-        serverReconfigurableSet.add(serverReconfigurable);
+    void register(ServerReconfigurable serverReconfigurable) {
+        serverReconfigures.put(serverReconfigurable.getClass(), serverReconfigurable);
     }
 
-    /** Update the dynamic configuration and apply to registered ServerReconfigurables. */
-    public void updateDynamicConfig(Map<String, String> newDynamicConfigs, boolean skipErrorConfig)
+    /**
+     * Update the dynamic configuration and apply to registered ServerReconfigurable. If skipping
+     * error config, only the error one will be ignored.
+     */
+    void updateDynamicConfig(Map<String, String> newDynamicConfigs, boolean skipErrorConfig)
             throws Exception {
         inWriteLock(lock, () -> updateCurrentConfig(newDynamicConfigs, skipErrorConfig));
     }
 
-    public Configuration getCurrentConfig() {
-        return inReadLock(lock, () -> currentConfig);
-    }
-
-    public Map<String, String> getDynamicConfigs() {
+    Map<String, String> getDynamicConfigs() {
         return inReadLock(lock, () -> new HashMap<>(dynamicConfigs));
     }
 
-    public Map<String, String> getInitialServerConfigs() {
+    Map<String, String> getInitialServerConfigs() {
         return inReadLock(lock, () -> new HashMap<>(initialConfigMap));
     }
 
-    public boolean isAllowedConfig(String key) {
+    boolean isAllowedConfig(String key) {
         if (ALLOWED_CONFIG_KEYS.contains(key)) {
             return true;
         }
@@ -121,26 +121,28 @@ public class DynamicServerConfig {
         Configuration oldConfig = currentConfig;
         Set<ServerReconfigurable> appliedServerReconfigurableSet = new HashSet<>();
         if (!newProps.equals(currentConfigMap)) {
-            serverReconfigurableSet.forEach(
-                    serverReconfigurable -> {
-                        try {
-                            serverReconfigurable.validate(newConfig);
-                        } catch (Exception e) {
-                            LOG.error(
-                                    "Validate new dynamic config error and will roll back all the applied config.",
-                                    e);
-                            if (!skipErrorConfig) {
-                                throw e;
-                            }
-                        }
-                    });
+            serverReconfigures
+                    .values()
+                    .forEach(
+                            serverReconfigurable -> {
+                                try {
+                                    serverReconfigurable.validate(newConfig);
+                                } catch (ConfigException e) {
+                                    LOG.error(
+                                            "Validate new dynamic config error and will roll back all the applied config.",
+                                            e);
+                                    if (!skipErrorConfig) {
+                                        throw e;
+                                    }
+                                }
+                            });
 
             Exception throwable = null;
-            for (ServerReconfigurable serverReconfigurable : serverReconfigurableSet) {
+            for (ServerReconfigurable serverReconfigurable : serverReconfigures.values()) {
                 try {
                     serverReconfigurable.reconfigure(newConfig);
                     appliedServerReconfigurableSet.add(serverReconfigurable);
-                } catch (Exception e) {
+                } catch (ConfigException e) {
                     LOG.error(
                             "Apply new dynamic error and will roll back all the applied config.",
                             e);

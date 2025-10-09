@@ -1152,6 +1152,7 @@ public class ZooKeeperClient implements AutoCloseable {
                     .forPath(path, ConfigEntityZNode.encode(configs));
         }
 
+        LOG.info("upsert entity configs {}", configs);
         insertConfigChangeNotification();
     }
 

@@ -17,9 +17,9 @@
 
 package org.apache.fluss.server;
 
+import org.apache.fluss.cluster.ConfigEntry;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
-import org.apache.fluss.config.dynamic.ConfigEntry;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
@@ -44,8 +44,8 @@ import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
-import org.apache.fluss.rpc.messages.DescribeConfigsRequest;
-import org.apache.fluss.rpc.messages.DescribeConfigsResponse;
+import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoResponse;
 import org.apache.fluss.rpc.messages.GetFileSystemSecurityTokenRequest;
@@ -71,7 +71,6 @@ import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
 import org.apache.fluss.rpc.messages.PbApiVersion;
-import org.apache.fluss.rpc.messages.PbDescribeConfigsResponseInfo;
 import org.apache.fluss.rpc.messages.PbTablePath;
 import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
@@ -121,6 +120,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeKvSnapshot
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toGetFileSystemSecurityTokenResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toListPartitionInfosResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPbConfigEntries;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
@@ -470,32 +470,15 @@ public abstract class RpcServiceBase extends RpcGatewayService implements AdminR
     }
 
     @Override
-    public CompletableFuture<DescribeConfigsResponse> describeConfigs(
-            DescribeConfigsRequest request) {
+    public CompletableFuture<DescribeClusterConfigsResponse> describeClusterConfigs(
+            DescribeClusterConfigsRequest request) {
         if (authorizer != null) {
-            authorizer.authorize(
-                    currentSession(), OperationType.DESCRIBE_CONFIGS, Resource.cluster());
+            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
         }
 
         List<ConfigEntry> configs = dynamicConfigManager.describeConfigs();
-        List<PbDescribeConfigsResponseInfo> pbConfigsInfos =
-                configs.stream()
-                        .map(
-                                configEntry -> {
-                                    PbDescribeConfigsResponseInfo pbDescribeConfigsResponseInfo =
-                                            new PbDescribeConfigsResponseInfo()
-                                                    .setConfigKey(configEntry.key())
-                                                    .setConfigSource(configEntry.source().name());
-                                    if (configEntry.value() != null) {
-                                        pbDescribeConfigsResponseInfo.setConfigValue(
-                                                configEntry.value());
-                                    }
-                                    return pbDescribeConfigsResponseInfo;
-                                })
-                        .collect(Collectors.toList());
-
         return CompletableFuture.completedFuture(
-                new DescribeConfigsResponse().addAllInfos(pbConfigsInfos));
+                new DescribeClusterConfigsResponse().addAllConfigs(toPbConfigEntries(configs)));
     }
 
     protected MetadataResponse processMetadataRequest(

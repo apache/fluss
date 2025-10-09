@@ -17,10 +17,11 @@
 
 package org.apache.fluss.server;
 
+import org.apache.fluss.cluster.AlterConfig;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.dynamic.AlterConfigOp;
 import org.apache.fluss.exception.ConfigException;
+import org.apache.fluss.metadata.AlterConfigOpType;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -80,43 +81,51 @@ public class DynamicConfigChangeTest {
 
     @Test
     void testAlterLakehouseConfigs() throws Exception {
-        DynamicServerConfig dynamicServerConfig = new DynamicServerConfig(new Configuration());
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, dynamicServerConfig, true);
-        dynamicConfigManager.startup();
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
-                new LakeCatalogDynamicLoader(dynamicServerConfig, null, true)) {
+                new LakeCatalogDynamicLoader(new Configuration(), null, true)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, new Configuration(), true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
             assertThatThrownBy(
                             () ->
                                     dynamicConfigManager.alterConfigs(
                                             Collections.singletonList(
-                                                    new AlterConfigOp(
+                                                    new AlterConfig(
                                                             "un_support_key",
                                                             "value",
-                                                            AlterConfigOp.OpType.SET))))
+                                                            AlterConfigOpType.SET))))
                     .isExactlyInstanceOf(ConfigException.class)
                     .hasMessageContaining(
                             "The config key un_support_key is not allowed to be changed dynamically.");
 
             dynamicConfigManager.alterConfigs(
                     Arrays.asList(
-                            new AlterConfigOp(
-                                    DATALAKE_FORMAT.key(), "paimon", AlterConfigOp.OpType.SET),
-                            new AlterConfigOp(
+                            new AlterConfig(DATALAKE_FORMAT.key(), "paimon", AlterConfigOpType.SET),
+                            new AlterConfig(
                                     "datalake.paimon.metastore",
                                     "filesystem",
-                                    AlterConfigOp.OpType.SET)));
-            assertThat(lakeCatalogDynamicLoader.getDataLakeFormat()).isEqualTo(PAIMON);
-            assertThat(lakeCatalogDynamicLoader.getDefaultLakeProperties())
+                                    AlterConfigOpType.SET)));
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isEqualTo(PAIMON);
+            assertThat(
+                            lakeCatalogDynamicLoader
+                                    .getLakeCatalogContainer()
+                                    .getDefaultTableLakeOptions())
                     .isEqualTo(
                             Collections.singletonMap(
                                     "table.datalake.paimon.metastore", "filesystem"));
             dynamicConfigManager.alterConfigs(
                     Collections.singletonList(
-                            new AlterConfigOp(
-                                    DATALAKE_FORMAT.key(), null, AlterConfigOp.OpType.DELETE)));
-            assertThat(lakeCatalogDynamicLoader.getDataLakeFormat()).isEqualTo(null);
-            assertThat(lakeCatalogDynamicLoader.getDefaultLakeProperties()).isNull();
+                            new AlterConfig(
+                                    DATALAKE_FORMAT.key(), null, AlterConfigOpType.DELETE)));
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isEqualTo(null);
+            assertThat(
+                            lakeCatalogDynamicLoader
+                                    .getLakeCatalogContainer()
+                                    .getDefaultTableLakeOptions())
+                    .isNull();
         }
     }
 
@@ -124,87 +133,93 @@ public class DynamicConfigChangeTest {
     void testOverrideConfigs() throws Exception {
         Configuration configuration = new Configuration();
         configuration.setString(DATALAKE_FORMAT.key(), "paimon");
-        DynamicServerConfig dynamicServerConfig = new DynamicServerConfig(configuration);
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, dynamicServerConfig, true);
-        dynamicConfigManager.startup();
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
-                new LakeCatalogDynamicLoader(dynamicServerConfig, null, true)) {
-            assertThat(lakeCatalogDynamicLoader.getDataLakeFormat()).isEqualTo(PAIMON);
+                new LakeCatalogDynamicLoader(configuration, null, true)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isEqualTo(PAIMON);
             dynamicConfigManager.alterConfigs(
                     Collections.singletonList(
-                            new AlterConfigOp(
-                                    DATALAKE_FORMAT.key(), null, AlterConfigOp.OpType.SET)));
-            assertThat(lakeCatalogDynamicLoader.getDataLakeFormat()).isEqualTo(null);
+                            new AlterConfig(DATALAKE_FORMAT.key(), null, AlterConfigOpType.SET)));
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isEqualTo(null);
             dynamicConfigManager.alterConfigs(
                     Collections.singletonList(
-                            new AlterConfigOp(
-                                    DATALAKE_FORMAT.key(), null, AlterConfigOp.OpType.DELETE)));
-            assertThat(lakeCatalogDynamicLoader.getDataLakeFormat()).isEqualTo(PAIMON);
+                            new AlterConfig(
+                                    DATALAKE_FORMAT.key(), null, AlterConfigOpType.DELETE)));
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isEqualTo(PAIMON);
         }
     }
 
     @Test
     void testUnknownLakeHouse() throws Exception {
         Configuration configuration = new Configuration();
-        DynamicServerConfig dynamicServerConfig = new DynamicServerConfig(configuration);
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, dynamicServerConfig, true);
-        dynamicConfigManager.startup();
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
-                new LakeCatalogDynamicLoader(dynamicServerConfig, null, true)) {
+                new LakeCatalogDynamicLoader(configuration, null, true)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
             assertThatThrownBy(
                             () ->
                                     dynamicConfigManager.alterConfigs(
                                             Collections.singletonList(
-                                                    new AlterConfigOp(
+                                                    new AlterConfig(
                                                             DATALAKE_FORMAT.key(),
                                                             "unknown",
-                                                            AlterConfigOp.OpType.SET))))
+                                                            AlterConfigOpType.SET))))
                     .hasMessageContaining(
                             "Could not parse value 'unknown' for key 'datalake.format'");
 
-            assertThat(lakeCatalogDynamicLoader.getDataLakeFormat()).isNull();
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isNull();
         }
     }
 
     @Test
     void testWrongLakeFormatPrefix() throws Exception {
         Configuration configuration = new Configuration();
-        DynamicServerConfig dynamicServerConfig = new DynamicServerConfig(configuration);
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, dynamicServerConfig, true);
-        dynamicConfigManager.startup();
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
-                new LakeCatalogDynamicLoader(dynamicServerConfig, null, true)) {
+                new LakeCatalogDynamicLoader(configuration, null, true)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
             assertThatThrownBy(
                             () ->
                                     dynamicConfigManager.alterConfigs(
                                             Arrays.asList(
-                                                    new AlterConfigOp(
+                                                    new AlterConfig(
                                                             DATALAKE_FORMAT.key(),
                                                             "paimon",
-                                                            AlterConfigOp.OpType.SET),
-                                                    new AlterConfigOp(
+                                                            AlterConfigOpType.SET),
+                                                    new AlterConfig(
                                                             "datalake.iceberg.metastore",
                                                             "filesystem",
-                                                            AlterConfigOp.OpType.SET))))
+                                                            AlterConfigOpType.SET))))
                     .hasMessage(
-                            "Invalid configuration for datalake format paimon: datalake.iceberg.metastore");
+                            "Invalid configuration {datalake.format=paimon, datalake.iceberg.metastore=filesystem} for paimon datalake format");
 
-            assertThat(lakeCatalogDynamicLoader.getDataLakeFormat()).isNull();
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isNull();
         }
     }
 
     @Test
     void testListenUnMatchedDynamicConfigChanges() throws Exception {
-        DynamicServerConfig dynamicServerConfig = new DynamicServerConfig(new Configuration());
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, dynamicServerConfig, false);
-        dynamicConfigManager.startup();
+        Configuration configuration = new Configuration();
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
-                new LakeCatalogDynamicLoader(dynamicServerConfig, null, true)) {
-            assertThat(lakeCatalogDynamicLoader.getDataLakeFormat()).isEqualTo(null);
+                new LakeCatalogDynamicLoader(configuration, null, false)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, configuration, false);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isEqualTo(null);
             Map<String, String> config = new HashMap<>();
             config.put(DATALAKE_FORMAT.key(), "paimon");
             config.put("un_support_key", "value");
@@ -212,28 +227,33 @@ public class DynamicConfigChangeTest {
             retry(
                     Duration.ofMinutes(1),
                     () ->
-                            assertThat(lakeCatalogDynamicLoader.getDataLakeFormat())
+                            assertThat(
+                                            lakeCatalogDynamicLoader
+                                                    .getLakeCatalogContainer()
+                                                    .getDataLakeFormat())
                                     .isEqualTo(PAIMON));
         }
     }
 
     @Test
     void testReStartupContainsNoMatchedDynamicConfig() throws Exception {
-        DynamicServerConfig dynamicServerConfig = new DynamicServerConfig(new Configuration());
+        Configuration configuration = new Configuration();
         Map<String, String> config = new HashMap<>();
         config.put(DATALAKE_FORMAT.key(), "paimon");
         config.put("un_support_key", "value");
 
         // This often happens when upgrading with different allowed configs.
         zookeeperClient.upsertServerEntityConfig(config);
-        DynamicConfigManager dynamicConfigManager =
-                new DynamicConfigManager(zookeeperClient, dynamicServerConfig, true);
-        // Startup dynamic manager even is not matched now.
-        dynamicConfigManager.startup();
 
         try (LakeCatalogDynamicLoader lakeCatalogDynamicLoader =
-                new LakeCatalogDynamicLoader(dynamicServerConfig, null, true)) {
-            assertThat(lakeCatalogDynamicLoader.getDataLakeFormat()).isEqualTo(PAIMON);
+                new LakeCatalogDynamicLoader(configuration, null, true)) {
+            DynamicConfigManager dynamicConfigManager =
+                    new DynamicConfigManager(zookeeperClient, configuration, true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            // Startup dynamic manager even is not matched now.
+            dynamicConfigManager.startup();
+            assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
+                    .isEqualTo(PAIMON);
         }
     }
 }

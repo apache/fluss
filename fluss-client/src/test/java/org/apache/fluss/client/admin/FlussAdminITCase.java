@@ -23,12 +23,12 @@ import org.apache.fluss.client.metadata.KvSnapshotMetadata;
 import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.cluster.AlterConfig;
+import org.apache.fluss.cluster.ConfigEntry;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.config.dynamic.AlterConfigOp;
-import org.apache.fluss.config.dynamic.ConfigEntry;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
@@ -47,6 +47,7 @@ import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
+import org.apache.fluss.metadata.AlterConfigOpType;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.KvFormat;
@@ -67,10 +68,13 @@ import org.apache.fluss.types.DataTypes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import javax.annotation.Nullable;
+
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -951,10 +955,10 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 .getDataLakeFormat())
                 .isEqualTo(PAIMON);
 
-        admin.alterConfigs(
+        admin.alterClusterConfigs(
                         Collections.singletonList(
-                                new AlterConfigOp(
-                                        DATALAKE_FORMAT.key(), null, AlterConfigOp.OpType.SET)))
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(), null, AlterConfigOpType.SET)))
                 .get();
         assertThat(
                         FLUSS_CLUSTER_EXTENSION
@@ -962,18 +966,14 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 .getCoordinatorService()
                                 .getDataLakeFormat())
                 .isNull();
-        assertThat(admin.describeConfigs().get())
-                .contains(
-                        new ConfigEntry(
-                                DATALAKE_FORMAT.key(),
-                                null,
-                                ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG));
+        assertConfigEntry(
+                DATALAKE_FORMAT.key(), null, ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
 
         // Delete dynamic configs to use the initial value(from server.yaml)
-        admin.alterConfigs(
+        admin.alterClusterConfigs(
                         Collections.singletonList(
-                                new AlterConfigOp(
-                                        DATALAKE_FORMAT.key(), null, AlterConfigOp.OpType.DELETE)))
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(), null, AlterConfigOpType.DELETE)))
                 .get();
         assertThat(
                         FLUSS_CLUSTER_EXTENSION
@@ -981,12 +981,18 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                 .getCoordinatorService()
                                 .getDataLakeFormat())
                 .isEqualTo(PAIMON);
-        assertThat(admin.describeConfigs().get())
-                .contains(
-                        new ConfigEntry(
-                                DATALAKE_FORMAT.key(),
-                                "paimon",
-                                ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG));
+        assertConfigEntry(
+                DATALAKE_FORMAT.key(), "paimon", ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG);
+    }
+
+    private void assertConfigEntry(
+            String key, @Nullable String value, ConfigEntry.ConfigSource source)
+            throws ExecutionException, InterruptedException {
+        Collection<ConfigEntry> configEntries = admin.describeClusterConfigs().get();
+        List<String> configKeys =
+                configEntries.stream().map(ConfigEntry::key).collect(Collectors.toList());
+        assertThat(configKeys).doesNotHaveDuplicates();
+        assertThat(configEntries).contains(new ConfigEntry(key, value, source));
     }
 
     private void assertNoBucketSnapshot(KvSnapshots snapshots, int expectBucketNum) {

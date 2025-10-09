@@ -59,10 +59,8 @@ import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.security.acl.OperationType.ALTER;
-import static org.apache.fluss.security.acl.OperationType.ALTER_CONFIGS;
 import static org.apache.fluss.security.acl.OperationType.CREATE;
 import static org.apache.fluss.security.acl.OperationType.DESCRIBE;
-import static org.apache.fluss.security.acl.OperationType.DESCRIBE_CONFIGS;
 import static org.apache.fluss.security.acl.OperationType.DROP;
 import static org.apache.fluss.security.acl.OperationType.READ;
 import static org.apache.fluss.security.acl.OperationType.WRITE;
@@ -282,15 +280,7 @@ public class DefaultAuthorizerTest {
         testOperationTypeImplicationsOfAllow(
                 Resource.cluster(),
                 OperationType.ALL,
-                Arrays.asList(
-                        READ,
-                        WRITE,
-                        CREATE,
-                        DROP,
-                        ALTER,
-                        DESCRIBE,
-                        ALTER_CONFIGS,
-                        DESCRIBE_CONFIGS));
+                Arrays.asList(READ, WRITE, CREATE, DROP, ALTER, DESCRIBE));
         testOperationTypeImplicationsOfAllow(
                 Resource.cluster(), OperationType.CREATE, Collections.singleton(DESCRIBE));
         testOperationTypeImplicationsOfAllow(

@@ -21,8 +21,8 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
-import org.apache.fluss.rpc.messages.DescribeConfigsRequest;
-import org.apache.fluss.rpc.messages.DescribeConfigsResponse;
+import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.messages.FetchLogResponse;
 import org.apache.fluss.rpc.messages.GetDatabaseInfoRequest;
@@ -245,8 +245,8 @@ public class TestingTabletGatewayService extends TestingGatewayService
     }
 
     @Override
-    public CompletableFuture<DescribeConfigsResponse> describeConfigs(
-            DescribeConfigsRequest request) {
+    public CompletableFuture<DescribeClusterConfigsResponse> describeClusterConfigs(
+            DescribeClusterConfigsRequest request) {
         return null;
     }
 }

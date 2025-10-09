@@ -171,8 +171,9 @@ public class CoordinatorServer extends ServerBase {
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
-            this.dynamicConfigManager =
-                    new DynamicConfigManager(zkClient, dynamicServerConfig, true);
+            this.lakeCatalogDynamicLoader = new LakeCatalogDynamicLoader(conf, pluginManager, true);
+            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
             dynamicConfigManager.startup();
 
             this.coordinatorContext = new CoordinatorContext();
@@ -185,8 +186,6 @@ public class CoordinatorServer extends ServerBase {
 
             this.lakeTableTieringManager = new LakeTableTieringManager();
 
-            this.lakeCatalogDynamicLoader =
-                    new LakeCatalogDynamicLoader(dynamicServerConfig, pluginManager, true);
             MetadataManager metadataManager =
                     new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
             this.coordinatorService =

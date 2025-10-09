@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.config.dynamic;
+package org.apache.fluss.cluster;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConfigException;

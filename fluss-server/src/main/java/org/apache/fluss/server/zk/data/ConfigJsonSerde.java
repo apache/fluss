@@ -34,7 +34,7 @@ public class ConfigJsonSerde
     public static final ConfigJsonSerde INSTANCE = new ConfigJsonSerde();
 
     private static final String VERSION_KEY = "version";
-    private static final String CONFIG = "config";
+    private static final String CONFIGS = "configs";
     private static final int VERSION = 1;
 
     @Override
@@ -42,7 +42,7 @@ public class ConfigJsonSerde
             throws IOException {
         generator.writeStartObject();
         generator.writeNumberField(VERSION_KEY, VERSION);
-        generator.writeObjectFieldStart(CONFIG);
+        generator.writeObjectFieldStart(CONFIGS);
         for (Map.Entry<String, String> property : properties.entrySet()) {
             if (property.getValue() != null) {
                 generator.writeStringField(property.getKey(), property.getValue());
@@ -58,7 +58,7 @@ public class ConfigJsonSerde
     @Override
     public Map<String, String> deserialize(JsonNode node) {
         Map<String, String> properties = new HashMap<>();
-        JsonNode bucketsNode = node.get(CONFIG);
+        JsonNode bucketsNode = node.get(CONFIGS);
         Iterator<Map.Entry<String, JsonNode>> fields = bucketsNode.fields();
         while (fields.hasNext()) {
             Map.Entry<String, JsonNode> field = fields.next();

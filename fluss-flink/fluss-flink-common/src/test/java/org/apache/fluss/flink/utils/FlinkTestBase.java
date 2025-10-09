@@ -35,7 +35,6 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.server.DynamicServerConfig;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -226,8 +225,7 @@ public class FlinkTestBase extends AbstractTestBase {
                 new MetadataManager(
                         zkClient,
                         new Configuration(),
-                        new LakeCatalogDynamicLoader(
-                                new DynamicServerConfig(new Configuration()), null, false));
+                        new LakeCatalogDynamicLoader(new Configuration(), null, false));
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         Map<Long, String> newPartitionIds = new HashMap<>();
         for (String partition : partitionsToCreate) {

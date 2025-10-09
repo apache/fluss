@@ -18,8 +18,10 @@
 package org.apache.fluss.server;
 
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.config.dynamic.AlterConfigOp;
-import org.apache.fluss.config.dynamic.ConfigEntry;
+import org.apache.fluss.cluster.AlterConfig;
+import org.apache.fluss.cluster.ConfigEntry;
+import org.apache.fluss.cluster.ServerReconfigurable;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.server.authorizer.ZkNodeChangeNotificationWatcher;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -45,10 +47,8 @@ public class DynamicConfigManager {
     private final boolean isCoordinator;
 
     public DynamicConfigManager(
-            ZooKeeperClient zooKeeperClient,
-            DynamicServerConfig dynamicServerConfig,
-            boolean isCoordinator) {
-        this.dynamicServerConfig = dynamicServerConfig;
+            ZooKeeperClient zooKeeperClient, Configuration configuration, boolean isCoordinator) {
+        this.dynamicServerConfig = new DynamicServerConfig(configuration);
         this.zooKeeperClient = zooKeeperClient;
         this.isCoordinator = isCoordinator;
         this.configChangeListener =
@@ -71,6 +71,11 @@ public class DynamicConfigManager {
         }
     }
 
+    /** Register a ServerReconfigurable which listens to configuration changes. */
+    public void register(ServerReconfigurable serverReconfigurable) {
+        dynamicServerConfig.register(serverReconfigurable);
+    }
+
     public void close() {
         configChangeListener.stop();
     }
@@ -82,10 +87,12 @@ public class DynamicConfigManager {
         List<ConfigEntry> configEntries = new ArrayList<>();
         staticServerConfigs.forEach(
                 (key, value) -> {
-                    ConfigEntry configEntry =
-                            new ConfigEntry(
-                                    key, value, ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG);
-                    configEntries.add(configEntry);
+                    if (!dynamicDefaultConfigs.containsKey(key)) {
+                        ConfigEntry configEntry =
+                                new ConfigEntry(
+                                        key, value, ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG);
+                        configEntries.add(configEntry);
+                    }
                 });
         dynamicDefaultConfigs.forEach(
                 (key, value) -> {
@@ -98,15 +105,15 @@ public class DynamicConfigManager {
         return configEntries;
     }
 
-    public void alterConfigs(List<AlterConfigOp> serverConfigChanges) throws Exception {
+    public void alterConfigs(List<AlterConfig> clusterConfigChanges) throws Exception {
         Map<String, String> persistentProps = zooKeeperClient.fetchEntityConfig();
-        prepareIncrementalConfigs(serverConfigChanges, persistentProps);
+        prepareIncrementalConfigs(clusterConfigChanges, persistentProps);
         alterServerConfigs(persistentProps);
     }
 
     private void prepareIncrementalConfigs(
-            List<AlterConfigOp> alterConfigOps, Map<String, String> configsProps) {
-        alterConfigOps.forEach(
+            List<AlterConfig> alterConfigs, Map<String, String> configsProps) {
+        alterConfigs.forEach(
                 alterConfigOp -> {
                     String configPropName = alterConfigOp.key();
                     if (!dynamicServerConfig.isAllowedConfig(configPropName)) {

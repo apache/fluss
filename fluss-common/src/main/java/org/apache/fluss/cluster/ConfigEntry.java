@@ -15,13 +15,13 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.config.dynamic;
+package org.apache.fluss.cluster;
 
 import javax.annotation.Nullable;
 
 import java.util.Objects;
 
-/** Configuration entry. */
+/** Configuration entry for cluster. */
 public class ConfigEntry {
     private final String key;
     @Nullable private final String value;

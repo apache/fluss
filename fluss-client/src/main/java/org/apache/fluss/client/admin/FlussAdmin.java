@@ -22,10 +22,10 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
+import org.apache.fluss.cluster.AlterConfig;
 import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.cluster.ConfigEntry;
 import org.apache.fluss.cluster.ServerNode;
-import org.apache.fluss.config.dynamic.AlterConfigOp;
-import org.apache.fluss.config.dynamic.ConfigEntry;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -44,14 +44,14 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
-import org.apache.fluss.rpc.messages.AlterConfigsRequest;
+import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
-import org.apache.fluss.rpc.messages.DescribeConfigsRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropTableRequest;
@@ -69,8 +69,6 @@ import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
-import org.apache.fluss.rpc.messages.PbAlterConfigsRequestInfo;
-import org.apache.fluss.rpc.messages.PbDescribeConfigsResponseInfo;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
@@ -96,6 +94,7 @@ import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeCreatePart
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toConfigEntries;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
@@ -494,59 +493,43 @@ public class FlussAdmin implements Admin {
     }
 
     @Override
-    public CompletableFuture<Collection<ConfigEntry>> describeConfigs() {
+    public CompletableFuture<Collection<ConfigEntry>> describeClusterConfigs() {
         CompletableFuture<Collection<ConfigEntry>> future = new CompletableFuture<>();
-        DescribeConfigsRequest request = new DescribeConfigsRequest();
-        gateway.describeConfigs(request)
+        DescribeClusterConfigsRequest request = new DescribeClusterConfigsRequest();
+        gateway.describeClusterConfigs(request)
                 .whenComplete(
                         (r, t) -> {
                             if (t != null) {
                                 future.completeExceptionally(t);
+                            } else {
+                                future.complete(toConfigEntries(r.getConfigsList()));
                             }
-
-                            List<PbDescribeConfigsResponseInfo> responseInfos = r.getInfosList();
-                            List<ConfigEntry> configEntries =
-                                    responseInfos.stream()
-                                            .map(
-                                                    responseInfo ->
-                                                            new ConfigEntry(
-                                                                    responseInfo.getConfigKey(),
-                                                                    responseInfo.hasConfigValue()
-                                                                            ? responseInfo
-                                                                                    .getConfigValue()
-                                                                            : null,
-                                                                    ConfigEntry.ConfigSource
-                                                                            .valueOf(
-                                                                                    responseInfo
-                                                                                            .getConfigSource())))
-                                            .collect(Collectors.toList());
-                            future.complete(configEntries);
                         });
         return future;
     }
 
     @Override
-    public CompletableFuture<Void> alterConfigs(Collection<AlterConfigOp> configs) {
+    public CompletableFuture<Void> alterClusterConfigs(Collection<AlterConfig> configs) {
         CompletableFuture<Void> future = new CompletableFuture<>();
 
-        AlterConfigsRequest request = new AlterConfigsRequest();
-        for (AlterConfigOp alterConfigOp : configs) {
-            PbAlterConfigsRequestInfo requestInfo =
-                    request.addInfo()
-                            .setConfigKey(alterConfigOp.key())
-                            .setOpType(alterConfigOp.opType().id());
-            if (alterConfigOp.value() != null) {
-                requestInfo.setConfigValue(alterConfigOp.value());
+        AlterClusterConfigsRequest request = new AlterClusterConfigsRequest();
+        for (AlterConfig alterConfig : configs) {
+            PbAlterConfig pBAlterConfig =
+                    request.addAlterConfig()
+                            .setConfigKey(alterConfig.key())
+                            .setOpType(alterConfig.opType().value);
+            if (alterConfig.value() != null) {
+                pBAlterConfig.setConfigValue(alterConfig.value());
             }
         }
-        gateway.alterConfigs(request)
+        gateway.alterClusterConfigs(request)
                 .whenComplete(
                         (r, t) -> {
                             if (t != null) {
                                 future.completeExceptionally(t);
+                            } else {
+                                future.complete(null);
                             }
-
-                            future.complete(null);
                         });
 
         return future;

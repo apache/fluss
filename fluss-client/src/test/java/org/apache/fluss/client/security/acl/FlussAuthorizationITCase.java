@@ -25,12 +25,13 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
+import org.apache.fluss.cluster.AlterConfig;
+import org.apache.fluss.cluster.ConfigEntry;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
-import org.apache.fluss.config.dynamic.AlterConfigOp;
-import org.apache.fluss.config.dynamic.ConfigEntry;
 import org.apache.fluss.exception.AuthorizationException;
+import org.apache.fluss.metadata.AlterConfigOpType;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.TableBucket;
@@ -658,46 +659,11 @@ public class FlussAuthorizationITCase {
 
     @Test
     void testDynamicConfigs() throws ExecutionException, InterruptedException {
-        assertThatThrownBy(
-                        () ->
-                                guestAdmin
-                                        .alterConfigs(
-                                                Collections.singletonList(
-                                                        new AlterConfigOp(
-                                                                DATALAKE_FORMAT.key(),
-                                                                null,
-                                                                AlterConfigOp.OpType.SET)))
-                                        .get())
+        assertThatThrownBy(() -> guestAdmin.describeClusterConfigs().get())
                 .rootCause()
                 .hasMessageContaining(
                         String.format(
-                                "Principal %s have no authorization to operate ALTER_CONFIGS on resource Resource{type=CLUSTER, name='fluss-cluster'}",
-                                guestPrincipal));
-
-        rootAdmin
-                .createAcls(
-                        Collections.singletonList(
-                                new AclBinding(
-                                        Resource.cluster(),
-                                        new AccessControlEntry(
-                                                guestPrincipal,
-                                                "*",
-                                                OperationType.ALTER_CONFIGS,
-                                                PermissionType.ALLOW))))
-                .all()
-                .get();
-        guestAdmin
-                .alterConfigs(
-                        Collections.singletonList(
-                                new AlterConfigOp(
-                                        DATALAKE_FORMAT.key(), null, AlterConfigOp.OpType.SET)))
-                .get();
-
-        assertThatThrownBy(() -> guestAdmin.describeConfigs().get())
-                .rootCause()
-                .hasMessageContaining(
-                        String.format(
-                                "Principal %s have no authorization to operate DESCRIBE_CONFIGS on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                "Principal %s have no authorization to operate DESCRIBE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
                                 guestPrincipal));
         rootAdmin
                 .createAcls(
@@ -707,17 +673,52 @@ public class FlussAuthorizationITCase {
                                         new AccessControlEntry(
                                                 guestPrincipal,
                                                 "*",
-                                                OperationType.DESCRIBE_CONFIGS,
+                                                OperationType.DESCRIBE,
                                                 PermissionType.ALLOW))))
                 .all()
                 .get();
-        Collection<ConfigEntry> configToResourceConfigs = guestAdmin.describeConfigs().get();
+        Collection<ConfigEntry> configToResourceConfigs = guestAdmin.describeClusterConfigs().get();
         assertThat(configToResourceConfigs)
                 .contains(
                         new ConfigEntry(
                                 DATALAKE_FORMAT.key(),
-                                null,
-                                ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG));
+                                "paimon",
+                                ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG));
+
+        assertThatThrownBy(
+                        () ->
+                                guestAdmin
+                                        .alterClusterConfigs(
+                                                Collections.singletonList(
+                                                        new AlterConfig(
+                                                                DATALAKE_FORMAT.key(),
+                                                                null,
+                                                                AlterConfigOpType.SET)))
+                                        .get())
+                .rootCause()
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate ALTER on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                guestPrincipal));
+
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.cluster(),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.ALTER,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+        guestAdmin
+                .alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(), null, AlterConfigOpType.SET)))
+                .get();
     }
 
     private static Configuration initConfig() {

@@ -701,7 +701,7 @@ public final class ZkData {
      * a sequential child node under the {@link ConfigEntityChangeNotificationZNode} with a prefix.
      * The znode path follows this structure:
      *
-     * <p>/config/changes/acl_changes_[sequenceNumber]
+     * <p>/config/changes/config_changes_[sequenceNumber]
      */
     public static final class ConfigEntityChangeNotificationSequenceZNode {
         private static final String SEQUENT_NUMBER_PREFIX = "config_change_";
