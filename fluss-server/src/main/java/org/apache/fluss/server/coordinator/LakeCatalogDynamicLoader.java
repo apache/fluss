@@ -72,7 +72,7 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
                             && !key.startsWith(datalakePrefix)) {
                         throw new ConfigException(
                                 String.format(
-                                        "Invalid configuration %s for %s datalake format",
+                                        "Invalid configuration '%s' for '%s' datalake format",
                                         key, newDatalakeFormat));
                     }
                 });

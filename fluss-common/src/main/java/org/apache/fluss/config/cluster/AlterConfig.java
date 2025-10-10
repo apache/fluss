@@ -17,8 +17,6 @@
 
 package org.apache.fluss.config.cluster;
 
-import org.apache.fluss.metadata.AlterConfigOpType;
-
 import javax.annotation.Nullable;
 
 import java.util.Objects;
