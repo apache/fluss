@@ -18,8 +18,8 @@
 package org.apache.fluss.server;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.cluster.ServerReconfigurable;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.utils.MapUtils;
 

@@ -18,10 +18,10 @@
 package org.apache.fluss.server;
 
 import org.apache.fluss.annotation.VisibleForTesting;
-import org.apache.fluss.cluster.AlterConfig;
-import org.apache.fluss.cluster.ConfigEntry;
-import org.apache.fluss.cluster.ServerReconfigurable;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.AlterConfig;
+import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.server.authorizer.ZkNodeChangeNotificationWatcher;
 import org.apache.fluss.server.zk.ZooKeeperClient;

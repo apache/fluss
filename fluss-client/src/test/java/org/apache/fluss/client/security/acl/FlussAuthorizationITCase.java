@@ -25,11 +25,11 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
-import org.apache.fluss.cluster.AlterConfig;
-import org.apache.fluss.cluster.ConfigEntry;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.config.cluster.AlterConfig;
+import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.metadata.AlterConfigOpType;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -719,6 +719,17 @@ public class FlussAuthorizationITCase {
                                 new AlterConfig(
                                         DATALAKE_FORMAT.key(), null, AlterConfigOpType.SET)))
                 .get();
+        assertThat(guestAdmin.describeClusterConfigs().get())
+                .contains(
+                        new ConfigEntry(
+                                DATALAKE_FORMAT.key(),
+                                null,
+                                ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG))
+                .doesNotContain(
+                        new ConfigEntry(
+                                DATALAKE_FORMAT.key(),
+                                "paimon",
+                                ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG));
     }
 
     private static Configuration initConfig() {

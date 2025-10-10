@@ -17,9 +17,9 @@
 
 package org.apache.fluss.server.coordinator;
 
-import org.apache.fluss.cluster.ServerReconfigurable;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.ServerReconfigurable;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.lake.lakestorage.LakeStorage;
@@ -65,7 +65,6 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
                         : currentConfiguration.get(DATALAKE_FORMAT);
         Map<String, String> configMap = newConfig.toMap();
         String datalakePrefix = "datalake." + newDatalakeFormat + ".";
-        final DataLakeFormat finalDatalakeFormat = newDatalakeFormat;
         configMap.forEach(
                 (key, value) -> {
                     if (!key.equals(DATALAKE_FORMAT.key())
@@ -74,7 +73,7 @@ public class LakeCatalogDynamicLoader implements ServerReconfigurable, AutoClose
                         throw new ConfigException(
                                 String.format(
                                         "Invalid configuration %s for %s datalake format",
-                                        newConfig, finalDatalakeFormat));
+                                        key, newDatalakeFormat));
                     }
                 });
     }

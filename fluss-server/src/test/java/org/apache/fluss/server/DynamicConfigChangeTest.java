@@ -17,9 +17,9 @@
 
 package org.apache.fluss.server;
 
-import org.apache.fluss.cluster.AlterConfig;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.exception.ConfigException;
 import org.apache.fluss.metadata.AlterConfigOpType;
 import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
@@ -202,7 +202,7 @@ public class DynamicConfigChangeTest {
                                                             "filesystem",
                                                             AlterConfigOpType.SET))))
                     .hasMessage(
-                            "Invalid configuration {datalake.format=paimon, datalake.iceberg.metastore=filesystem} for paimon datalake format");
+                            "Invalid configuration datalake.iceberg.metastore for paimon datalake format");
 
             assertThat(lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat())
                     .isNull();

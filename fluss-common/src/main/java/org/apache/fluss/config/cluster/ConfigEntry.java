@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.cluster;
+package org.apache.fluss.config.cluster;
 
 import javax.annotation.Nullable;
 
