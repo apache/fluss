@@ -27,6 +27,8 @@ import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.factories.CatalogFactory;
 import org.apache.flink.table.factories.Factory;
 import org.apache.flink.table.factories.TableFactory;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import java.util.HashMap;
 import java.util.Map;
@@ -37,6 +39,7 @@ import static org.apache.fluss.metadata.DataLakeFormat.ICEBERG;
 
 /** A lake catalog to delegate the operations on lake table. */
 public class LakeCatalogWrapper {
+    private static final Logger LOG = LoggerFactory.getLogger(LakeCatalogWrapper.class);
 
     private static final Map<String, CatalogFactory> CATALOG_FACTORY_MAP = new HashMap<>();
     private static final Map<String, Catalog> LAKECATALOG_MAP = new HashMap<>();
@@ -59,11 +62,18 @@ public class LakeCatalogWrapper {
                 .map(factory -> (CatalogFactory) factory)
                 .forEach(
                         factory -> {
-                            if (factory.factoryIdentifier() == null) {
-                                CATALOG_FACTORY_MAP.put(
-                                        factory.requiredContext().get("type"), factory);
-                            } else {
-                                CATALOG_FACTORY_MAP.put(factory.factoryIdentifier(), factory);
+                            try {
+                                if (factory.factoryIdentifier() == null) {
+                                    CATALOG_FACTORY_MAP.put(
+                                            factory.requiredContext().get("type"), factory);
+                                } else {
+                                    CATALOG_FACTORY_MAP.put(factory.factoryIdentifier(), factory);
+                                }
+                            } catch (Exception e) {
+                                LOG.warn(
+                                        "Failed to load {} catalog factory.",
+                                        factory.getClass().getName(),
+                                        e);
                             }
                         });
     }
