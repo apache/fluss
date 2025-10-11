@@ -30,13 +30,6 @@ The Coordinator Server implements a multi-stage shutdown process:
    7. Dynamic Config Manager → Lake Catalog Dynamic Loader
    8. RPC Client → Client Metric Group
 
-   **Tablet Server Shutdown Order:**
-   1. Tablet Server Metric Group → Metric Registry (async)
-   2. RPC Server (async) → Tablet Service
-   3. ZooKeeper Client → RPC Client → Client Metric Group
-   4. Scheduler → KV Manager → Remote Log Manager
-   5. Log Manager → Replica Manager
-   6. Authorizer → Dynamic Config Manager → Lake Catalog Dynamic Loader
 3. **Resource Cleanup**: Executors, connections, and other resources are properly closed
 
 ```bash
@@ -49,7 +42,15 @@ kill -TERM <coordinator-pid>
 
 ### Tablet Server Shutdown
 
-The Tablet Server supports **controlled shutdown** to minimize data unavailability:
+The Tablet Server supports **controlled shutdown** to minimize data unavailability. The shutdown process ensures that all services are stopped in a specific order to maintain consistency:
+
+   **Tablet Server Shutdown Order:**
+   1. Tablet Server Metric Group → Metric Registry (async)
+   2. RPC Server (async) → Tablet Service
+   3. ZooKeeper Client → RPC Client → Client Metric Group
+   4. Scheduler → KV Manager → Remote Log Manager
+   5. Log Manager → Replica Manager
+   6. Authorizer → Dynamic Config Manager → Lake Catalog Dynamic Loader
 
 #### Controlled Shutdown Process
 
@@ -66,118 +67,6 @@ kill -TERM <tablet-server-pid>
 
 - **Controlled Shutdown Retries**: Number of attempts to transfer leadership
 - **Retry Interval**: Time between retry attempts (default: configurable via `CONTROLLED_SHUTDOWN_RETRY_INTERVAL_MS`)
-
-## Component-Specific Shutdown
-
-### Executor Services
-
-Fluss uses the `ExecutorUtils` class for graceful executor shutdown:
-
-```java
-// Graceful shutdown with timeout
-ExecutorUtils.gracefulShutdown(timeout, TimeUnit.SECONDS, executorService);
-
-// Non-blocking shutdown
-CompletableFuture<Void> shutdownFuture = 
-    ExecutorUtils.nonBlockingShutdown(timeout, TimeUnit.SECONDS, executorService);
-```
-
-**Shutdown Process**:
-1. Call `shutdown()` to stop accepting new tasks
-2. Wait for existing tasks to complete within timeout
-3. Force termination with `shutdownNow()` if timeout exceeded
-
-### Network Components
-
-#### RPC Server Shutdown
-
-The Netty-based RPC server implements asynchronous shutdown:
-
-```java
-CompletableFuture<Void> shutdownFuture = rpcServer.closeAsync();
-```
-
-**Shutdown Steps**:
-1. Stop accepting new connections
-2. Close existing channels gracefully
-3. Shutdown event loop groups
-4. Release worker pools
-
-#### Event Loop Groups
-
-Network event loops are shut down using Netty's graceful shutdown:
-
-```java
-group.shutdownGracefully()
-    .addListener(finished -> {
-        // Handle completion
-    });
-```
-
-### Remote Log Manager
-
-For components with thread pools, Fluss follows the standard Java pattern:
-
-1. **Disable New Tasks**: Call `shutdown()` to prevent new task submission
-2. **Wait for Completion**: Use `awaitTermination()` with timeout
-3. **Force Cancellation**: Call `shutdownNow()` if tasks don't complete
-4. **Handle Interruption**: Properly handle `InterruptedException`
-
-## Best Practices
-
-### 1. Use Shutdown Hooks
-
-Register shutdown hooks for critical services to ensure cleanup on JVM termination:
-
-```java
-Thread shutdownHook = ShutdownHookUtil.addShutdownHook(
-    service, 
-    "ServiceName", 
-    logger
-);
-```
-
-### 2. Implement Timeout Handling
-
-Always specify timeouts for shutdown operations to prevent indefinite blocking:
-
-```java
-// Good: With timeout
-ExecutorUtils.gracefulShutdown(30, TimeUnit.SECONDS, executor);
-
-// Avoid: Without timeout (may block indefinitely)
-executor.shutdown();
-executor.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
-```
-
-### 3. Order of Shutdown
-
-Shut down components in reverse order of their dependencies:
-
-1. Stop accepting new requests
-2. Complete ongoing operations
-3. Close client connections
-4. Shutdown background services
-5. Release system resources
-
-### 4. Handle Exceptions
-
-Properly handle exceptions during shutdown to ensure all cleanup steps execute:
-
-```java
-Throwable exception = null;
-try {
-    // Shutdown component 1
-} catch (Throwable t) {
-    exception = ExceptionUtils.firstOrSuppressed(t, exception);
-}
-try {
-    // Shutdown component 2
-} catch (Throwable t) {
-    exception = ExceptionUtils.firstOrSuppressed(t, exception);
-}
-// Continue for all components...
-```
 
 ## Monitoring Shutdown
 
