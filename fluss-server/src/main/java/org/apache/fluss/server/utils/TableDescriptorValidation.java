@@ -31,6 +31,7 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -106,27 +107,42 @@ public class TableDescriptorValidation {
     }
 
     public static void validateAlterTableProperties(
-            TableInfo currentTable, Set<String> tableKeysToChange, Set<String> customKeysToChange) {
-        tableKeysToChange.forEach(
-                k -> {
-                    if (isTableStorageConfig(k) && !isAlterableTableOption(k)) {
-                        throw new InvalidAlterTableException(
-                                "The option '" + k + "' is not supported to alter yet.");
-                    }
-                });
+            TableInfo currentTable, TablePropertyChanges tablePropertyChanges) {
+        // valid table bucket
+        if (tablePropertyChanges.getBucketNum() != null) {
+            if (currentTable.getNumBuckets() > tablePropertyChanges.getBucketNum()) {
+                throw new InvalidAlterTableException(
+                        "Bucket number cannot be reduced, current bucket number is "
+                                + currentTable.getNumBuckets()
+                                + ", new bucket number is "
+                                + tablePropertyChanges.getBucketNum());
+            }
+        }
+
+        tablePropertyChanges
+                .tableKeysToChange()
+                .forEach(
+                        k -> {
+                            if (isTableStorageConfig(k) && !isAlterableTableOption(k)) {
+                                throw new InvalidAlterTableException(
+                                        "The option '" + k + "' is not supported to alter yet.");
+                            }
+                        });
 
         TableConfig currentConfig = currentTable.getTableConfig();
         if (currentConfig.isDataLakeEnabled() && currentConfig.getDataLakeFormat().isPresent()) {
             String format = currentConfig.getDataLakeFormat().get().toString();
-            customKeysToChange.forEach(
-                    k -> {
-                        if (k.startsWith(format + ".")) {
-                            throw new InvalidConfigException(
-                                    String.format(
-                                            "Property '%s' is not supported to alter which is for datalake table.",
-                                            k));
-                        }
-                    });
+            tablePropertyChanges
+                    .customKeysToChange()
+                    .forEach(
+                            k -> {
+                                if (k.startsWith(format + ".")) {
+                                    throw new InvalidConfigException(
+                                            String.format(
+                                                    "Property '%s' is not supported to alter which is for datalake table.",
+                                                    k));
+                                }
+                            });
         }
     }
 

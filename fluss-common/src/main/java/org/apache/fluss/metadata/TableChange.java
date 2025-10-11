@@ -22,12 +22,56 @@ import java.util.Objects;
 /** {@link TableChange} represents the modification of the Fluss Table. */
 public interface TableChange {
 
+    static BucketNumOption bucketNum(int bucketNum) {
+        return new BucketNumOption(bucketNum);
+    }
+
     static SetOption set(String key, String value) {
         return new SetOption(key, value);
     }
 
     static ResetOption reset(String key) {
         return new ResetOption(key);
+    }
+
+    /**
+     * A table change to change the bucket num.
+     *
+     * <p>It is equal to the following statement:
+     *
+     * <pre>
+     *    ALTER TABLE &lt;table_name&gt; SET 'bucket.num' = '&lt;bucketNum&gt;';
+     * </pre>
+     */
+    class BucketNumOption implements TableChange {
+        private final int bucketNum;
+
+        public BucketNumOption(int bucketNum) {
+            this.bucketNum = bucketNum;
+        }
+
+        public int getBucketNum() {
+            return bucketNum;
+        }
+
+        @Override
+        public boolean equals(Object o) {
+            if (o == null || getClass() != o.getClass()) {
+                return false;
+            }
+            BucketNumOption that = (BucketNumOption) o;
+            return bucketNum == that.bucketNum;
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hashCode(bucketNum);
+        }
+
+        @Override
+        public String toString() {
+            return "BucketNumOption{" + "bucketNum=" + bucketNum + '}';
+        }
     }
 
     /**
