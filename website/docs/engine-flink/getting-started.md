@@ -28,6 +28,9 @@ For Flink's Table API, Fluss supports the following features:
 | [SQL create table](ddl.md#create-table)           | ✔️    |                                        |
 | [SQL create table like](ddl.md#create-table-like) | ✔️    |                                        |
 | [SQL drop table](ddl.md#drop-table)               | ✔️    |                                        |
+| [SQL create materialized table](ddl.md#materialized-table) | ✔️    | Continuous refresh mode only |
+| [SQL alter materialized table](ddl.md#alter-materialized-table) | ✔️    | Suspend/Resume support |
+| [SQL drop materialized table](ddl.md#drop-materialized-table) | ✔️    |                                        |
 | [SQL show partitions](ddl.md#show-partitions)     | ✔️    |                                        |
 | [SQL add partition](ddl.md#add-partition)         | ✔️    |                                        |
 | [SQL drop partition](ddl.md#drop-partition)       | ✔️    |                                        |
