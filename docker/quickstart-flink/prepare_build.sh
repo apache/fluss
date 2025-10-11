@@ -89,7 +89,7 @@ download_jar() {
 
     # Verify checksum if provided
     if [ -n "$expected_hash" ]; then
-        local actual_hash=$(sha1sum "$dest_file" | awk '{print $1}')
+        local actual_hash=$(shasum "$dest_file" | awk '{print $1}')
         if [ "$expected_hash" != "$actual_hash" ]; then
             log_error "Checksum mismatch for $description"
             log_error "Expected: $expected_hash"
@@ -169,7 +169,58 @@ main() {
     log_info "Preparing lake tiering JAR..."
     copy_jar "$PROJECT_ROOT/fluss-flink/fluss-flink-tiering/target/fluss-flink-tiering-*.jar" "./opt" "fluss-flink-tiering"
 
-    # Summary
+    # Final verification
+    verify_jars
+    
+    # Show summary
+    show_summary
+}
+
+# Verify that all required JAR files are present
+verify_jars() {
+    log_info "Verifying all required JAR files are present..."
+    
+    local missing_jars=()
+    local lib_jars=(
+        "fluss-flink-1.20-*.jar"
+        "fluss-lake-paimon-*.jar"
+        "flink-faker-0.5.3.jar"
+        "flink-shaded-hadoop-2-uber-2.8.3-10.0.jar"
+        "paimon-flink-1.20-1.2.0.jar"
+    )
+    
+    local opt_jars=(
+        "fluss-flink-tiering-*.jar"
+    )
+    
+    # Check lib directory
+    for jar_pattern in "${lib_jars[@]}"; do
+        if ! ls ./lib/$jar_pattern >/dev/null 2>&1; then
+            missing_jars+=("lib/$jar_pattern")
+        fi
+    done
+    
+    # Check opt directory
+    for jar_pattern in "${opt_jars[@]}"; do
+        if ! ls ./opt/$jar_pattern >/dev/null 2>&1; then
+            missing_jars+=("opt/$jar_pattern")
+        fi
+    done
+    
+    # Report results
+    if [ ${#missing_jars[@]} -eq 0 ]; then
+        log_success "All required JAR files are present!"
+    else
+        log_error "Missing required JAR files:"
+        for jar in "${missing_jars[@]}"; do
+            log_error "  - $jar"
+        done
+        exit 1
+    fi
+}
+
+# Summary function
+show_summary() {
     log_success "JAR files preparation completed!"
     echo ""
     log_info "📦 Generated JAR files:"
