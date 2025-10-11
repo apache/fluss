@@ -58,6 +58,7 @@ public class LakeCatalogWrapper {
         Stream.concat(
                         ServiceLoader.load(Factory.class).stream(),
                         ServiceLoader.load(TableFactory.class).stream())
+                .map(ServiceLoader.Provider::get)
                 .filter(factory -> factory instanceof CatalogFactory)
                 .map(factory -> (CatalogFactory) factory)
                 .forEach(
