@@ -118,6 +118,13 @@ const config: Config = {
       },
     ],
   ],
+  scripts: [
+    {
+      src: 'https://analytics.apache.org/matomo.js',  // Matomo analytics tracking script - replaces placeholder URL
+      async: true,
+      defer: true,
+    },
+  ],
   themeConfig: {
     image: 'img/logo/png/colored_logo.png',
     colorMode: {
