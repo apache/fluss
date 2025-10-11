@@ -31,6 +31,7 @@ import org.apache.flink.table.factories.TableFactory;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.ServiceLoader;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.metadata.DataLakeFormat.ICEBERG;
 
@@ -47,27 +48,24 @@ public class LakeCatalogWrapper {
         this.catalogName = catalogName;
         this.classLoader = classLoader;
 
-        for (Factory factory : ServiceLoader.load(Factory.class)) {
-            if (factory instanceof CatalogFactory) {
-                CatalogFactory catalogFactory = (CatalogFactory) factory;
-                CATALOG_FACTORY_MAP.put(catalogFactory.factoryIdentifier(), catalogFactory);
-            }
-        }
         // Iceberg catalog factory is not supported by Factory spi, we need to discover it by
         // TableFactory.
         // Also, Iceberg factory not implement factoryIdentifier(), we need to use
         // requiredContext().get("type") instead.
-        for (TableFactory factory : ServiceLoader.load(TableFactory.class)) {
-            if (factory instanceof CatalogFactory) {
-                CatalogFactory catalogFactory = (CatalogFactory) factory;
-                if (catalogFactory.factoryIdentifier() == null) {
-                    CATALOG_FACTORY_MAP.put(
-                            catalogFactory.requiredContext().get("type"), catalogFactory);
-                } else {
-                    CATALOG_FACTORY_MAP.put(catalogFactory.factoryIdentifier(), catalogFactory);
-                }
-            }
-        }
+        Stream.concat(
+                        ServiceLoader.load(Factory.class).stream(),
+                        ServiceLoader.load(TableFactory.class).stream())
+                .filter(factory -> factory instanceof CatalogFactory)
+                .map(factory -> (CatalogFactory) factory)
+                .forEach(
+                        factory -> {
+                            if (factory.factoryIdentifier() == null) {
+                                CATALOG_FACTORY_MAP.put(
+                                        factory.requiredContext().get("type"), factory);
+                            } else {
+                                CATALOG_FACTORY_MAP.put(factory.factoryIdentifier(), factory);
+                            }
+                        });
     }
 
     public Catalog getOrCreateLakeCatalog(Configuration tableOptions) {
