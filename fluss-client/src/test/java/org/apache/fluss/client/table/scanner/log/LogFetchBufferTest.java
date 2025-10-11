@@ -17,6 +17,7 @@
 
 package org.apache.fluss.client.table.scanner.log;
 
+import org.apache.fluss.exception.FetchException;
 import org.apache.fluss.exception.WakeupException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.LogRecordReadContext;
@@ -25,6 +26,8 @@ import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+
+import javax.annotation.Nullable;
 
 import java.time.Duration;
 import java.util.Arrays;
@@ -44,6 +47,7 @@ import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
 import static org.apache.fluss.record.TestData.DEFAULT_SCHEMA_ID;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link LogFetchBuffer}. */
 public class LogFetchBufferTest {
@@ -251,6 +255,31 @@ public class LogFetchBufferTest {
         }
     }
 
+    @Test
+    void testFetchException() throws Exception {
+        try (LogFetchBuffer logFetchBuffer = new LogFetchBuffer()) {
+            AtomicBoolean completed = new AtomicBoolean(false);
+            PendingFetch pendingFetch =
+                    makePendingFetch(
+                            tableBucket1, completed, new FetchException("Test fetch exception"));
+
+            logFetchBuffer.tryComplete(pendingFetch.tableBucket());
+            assertThat(logFetchBuffer.isEmpty()).isTrue();
+            logFetchBuffer.pend(pendingFetch);
+            assertThat(logFetchBuffer.isEmpty()).isTrue();
+
+            completed.set(true);
+            logFetchBuffer.tryComplete(pendingFetch.tableBucket());
+            assertThat(logFetchBuffer.isEmpty()).isFalse();
+            assertThatThrownBy(logFetchBuffer::poll)
+                    .isExactlyInstanceOf(FetchException.class)
+                    .hasMessageContaining("Test fetch exception");
+            assertThatThrownBy(logFetchBuffer::peek)
+                    .isExactlyInstanceOf(FetchException.class)
+                    .hasMessageContaining("Test fetch exception");
+        }
+    }
+
     private boolean await(LogFetchBuffer buffer, Duration waitTime) throws InterruptedException {
         return buffer.awaitNotEmpty(System.nanoTime() + waitTime.toNanos());
     }
@@ -271,6 +300,12 @@ public class LogFetchBufferTest {
 
     private PendingFetch makePendingFetch(TableBucket tableBucket, AtomicBoolean completed)
             throws Exception {
+        return makePendingFetch(tableBucket, completed, null);
+    }
+
+    private PendingFetch makePendingFetch(
+            TableBucket tableBucket, AtomicBoolean completed, @Nullable RuntimeException exception)
+            throws Exception {
         DefaultCompletedFetch completedFetch = makeCompletedFetch(tableBucket);
         return new PendingFetch() {
             @Override
@@ -285,6 +320,9 @@ public class LogFetchBufferTest {
 
             @Override
             public CompletedFetch toCompletedFetch() {
+                if (exception != null) {
+                    throw exception;
+                }
                 return completedFetch;
             }
         };
