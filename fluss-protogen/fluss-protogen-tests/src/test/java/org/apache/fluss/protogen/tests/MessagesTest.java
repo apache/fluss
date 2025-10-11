@@ -225,4 +225,18 @@ public class MessagesTest {
         assertThat(parsed.getX().getA()).isEqualTo("a");
         assertThat(parsed.getX().getB()).isEqualTo("b");
     }
+
+    @Test
+    public void testToString() {
+        M lpm = new M();
+
+        lpm.setX().setA("a").setB("b");
+
+        lpm.addItem().setK("k1").setV("v1");
+        lpm.addItem().setK("k2").setV("v2").setXx().setN(5);
+
+        assertThat(lpm.toString())
+                .isEqualTo(
+                        "M{x=X{a=a, b=b}, items=[KV{k=k1, v=v1, xx=null}, KV{k=k2, v=v2, xx=XX{n=5}}]}");
+    }
 }
