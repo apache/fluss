@@ -33,7 +33,7 @@ public class IllegalConfigurationException extends RuntimeException {
     private static final long serialVersionUID = 695506964810499989L;
 
     /**
-     * Constructs an new IllegalConfigurationException with the given error message.
+     * Constructs a new IllegalConfigurationException with the given error message.
      *
      * @param message The error message for the exception.
      */
@@ -42,7 +42,7 @@ public class IllegalConfigurationException extends RuntimeException {
     }
 
     /**
-     * Constructs an new IllegalConfigurationException with the given error message format and
+     * Constructs a new IllegalConfigurationException with the given error message format and
      * arguments.
      *
      * @param format The error message format for the exception.
@@ -53,7 +53,7 @@ public class IllegalConfigurationException extends RuntimeException {
     }
 
     /**
-     * Constructs an new IllegalConfigurationException with the given error message and a given
+     * Constructs a new IllegalConfigurationException with the given error message and a given
      * cause.
      *
      * @param message The error message for the exception.
