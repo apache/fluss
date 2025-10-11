@@ -752,19 +752,29 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     private void mayInitLakeCatalogCatalog(Configuration tableOptions) {
-        // TODO: Currently, a Fluss cluster only supports a single DataLake storage. However, in the
-        //  future, it may support multiple DataLakes. The following code assumes that a single
-        //  lakeCatalog is shared across multiple tables, which will no longer be valid in such
-        //  cases and should be updated accordingly.
         if (lakeCatalog == null) {
             synchronized (this) {
                 if (lakeCatalog == null) {
                     try {
                         Map<String, String> catalogProperties =
                                 DataLakeUtils.extractLakeCatalogProperties(tableOptions);
-                        lakeCatalog = new LakeCatalog(catalogName, catalogProperties, classLoader);
+
+                        // Detect the lake format from table options
+                        org.apache.fluss.metadata.DataLakeFormat lakeFormat =
+                                tableOptions.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
+                        if (lakeFormat == null) {
+                            throw new IllegalArgumentException(
+                                    String.format(
+                                            "The datalake format is not set, please set it by %s",
+                                            ConfigOptions.TABLE_DATALAKE_FORMAT.key()));
+                        }
+
+                        lakeCatalog =
+                                new LakeCatalog(
+                                        catalogName, catalogProperties, classLoader, lakeFormat);
                     } catch (Exception e) {
-                        throw new FlussRuntimeException("Failed to init paimon catalog.", e);
+                        throw new FlussRuntimeException(
+                                "Failed to init lake catalog: " + e.getMessage(), e);
                     }
                 }
             }
