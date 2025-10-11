@@ -23,7 +23,7 @@ import java.util.Map;
 
 /**
  * Placeholder class to resolve compatibility issues. This placeholder class can be removed once we
- * drop the support of Flink v1.x which requires the legacy InitContext interface.
+ * drop the support of Flink v1.x.
  */
 public interface TableFactory {
 

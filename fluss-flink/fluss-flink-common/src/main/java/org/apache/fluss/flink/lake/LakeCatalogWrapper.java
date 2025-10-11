@@ -55,7 +55,7 @@ public class LakeCatalogWrapper {
         }
         // Iceberg catalog factory is not supported by Factory spi, we need to discover it by
         // TableFactory.
-        // Another Iceberg factory not implement factoryIdentifier(), we need to use
+        // Also, Iceberg factory not implement factoryIdentifier(), we need to use
         // requiredContext().get("type") instead.
         for (TableFactory factory : ServiceLoader.load(TableFactory.class)) {
             if (factory instanceof CatalogFactory) {
