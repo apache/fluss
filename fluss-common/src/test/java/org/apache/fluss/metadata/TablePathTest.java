@@ -37,6 +37,13 @@ class TablePathTest {
         assertThat(path.isValid()).isTrue();
         assertThat(path.toString()).isEqualTo("db_2-abc3.table-1_abc_2");
 
+        // assert invalid name prefix
+        TablePath invalidPath = TablePath.of("db_2", "__table-1");
+        assertThatThrownBy(invalidPath::validate)
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(
+                        "Table name __table-1 is invalid: '__' is not allowed as prefix");
+
         // check max length
         String longName = StringUtils.repeat("a", 200);
         assertThat(TablePath.of(longName, longName).isValid()).isTrue();
