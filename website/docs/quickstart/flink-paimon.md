@@ -1,9 +1,9 @@
 ---
-title: Real-Time Analytics with Flink
+title: Real-Time Analytics with Flink (Paimon)
 sidebar_position: 1
 ---
 
-# Real-Time Analytics With Flink
+# Real-Time Analytics With Flink (Paimon)
 
 This guide will get you up and running with Apache Flink to do real-time analytics, covering some powerful features of Fluss,
 including integrating with Paimon.
