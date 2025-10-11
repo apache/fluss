@@ -22,7 +22,8 @@ public enum AlterConfigOpType {
     SET(0),
     DELETE(1),
     APPEND(2),
-    SUBTRACT(3);
+    SUBTRACT(3),
+    BUCKET_NUM(4);
 
     public final int value;
 
@@ -40,6 +41,8 @@ public enum AlterConfigOpType {
                 return APPEND;
             case 3:
                 return SUBTRACT;
+            case 4:
+                return BUCKET_NUM;
             default:
                 throw new IllegalArgumentException("Unsupported AlterConfigOpType: " + opType);
         }
