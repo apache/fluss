@@ -82,6 +82,16 @@
             <!-- make it provided, should be added manually-->
             <scope>provided</scope>
         </dependency>
+
+        <!-- Iceberg - use non-shaded version to avoid version conflicts -->
+        <dependency>
+            <groupId>org.apache.iceberg</groupId>
+            <artifactId>iceberg-flink-${flink.major.version}</artifactId>
+            <version>${iceberg.version}</version>
+            <!-- make it provided, should be added manually-->
+            <scope>provided</scope>
+        </dependency>
+
         <dependency>
             <groupId>org.apache.flink</groupId>
             <artifactId>flink-connector-files</artifactId>

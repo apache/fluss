@@ -17,40 +17,86 @@
 
 package org.apache.fluss.flink.lake;
 
+import org.apache.fluss.metadata.DataLakeFormat;
+
 import org.apache.flink.table.catalog.ObjectIdentifier;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.factories.DynamicTableFactory;
 import org.apache.flink.table.factories.FactoryUtil;
-import org.apache.paimon.flink.FlinkTableFactory;
 
 /** A factory to create {@link DynamicTableSource} for lake table. */
 public class LakeTableFactory {
 
-    // now, always assume is paimon, todo need to describe lake storage from
-    // to know which lake storage used
-    private final org.apache.paimon.flink.FlinkTableFactory paimonFlinkTableFactory;
+    private final Object delegateFactory;
+    private final DataLakeFormat lakeFormat;
 
-    public LakeTableFactory() {
-        paimonFlinkTableFactory = new FlinkTableFactory();
+    public LakeTableFactory(DataLakeFormat lakeFormat, ClassLoader classLoader) {
+        this.lakeFormat = lakeFormat;
+
+        if (lakeFormat == DataLakeFormat.PAIMON) {
+            this.delegateFactory = createPaimonFlinkTableFactory(classLoader);
+        } else if (lakeFormat == DataLakeFormat.ICEBERG) {
+            this.delegateFactory = createIcebergFlinkTableFactory(classLoader);
+        } else {
+            throw new UnsupportedOperationException(
+                    "Unsupported lake format: "
+                            + lakeFormat
+                            + ". Only PAIMON and ICEBERG are supported.");
+        }
+    }
+
+    private Object createPaimonFlinkTableFactory(ClassLoader classLoader) {
+        try {
+            Class<?> paimonFactoryClass =
+                    classLoader.loadClass("org.apache.paimon.flink.FlinkTableFactory");
+            return paimonFactoryClass.getDeclaredConstructor().newInstance();
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Failed to create Paimon FlinkTableFactory. Make sure paimon-flink is on the classpath.",
+                    e);
+        }
+    }
+
+    private Object createIcebergFlinkTableFactory(ClassLoader classLoader) {
+        try {
+            Class<?> icebergFactoryClass =
+                    classLoader.loadClass("org.apache.iceberg.flink.FlinkDynamicTableFactory");
+            return icebergFactoryClass.getDeclaredConstructor().newInstance();
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Failed to create Iceberg FlinkDynamicTableFactory. Make sure iceberg-flink is on the classpath.",
+                    e);
+        }
     }
 
     public DynamicTableSource createDynamicTableSource(
             DynamicTableFactory.Context context, String tableName) {
         ObjectIdentifier originIdentifier = context.getObjectIdentifier();
-        ObjectIdentifier paimonIdentifier =
+        ObjectIdentifier lakeIdentifier =
                 ObjectIdentifier.of(
                         originIdentifier.getCatalogName(),
                         originIdentifier.getDatabaseName(),
                         tableName);
         DynamicTableFactory.Context newContext =
                 new FactoryUtil.DefaultDynamicTableContext(
-                        paimonIdentifier,
+                        lakeIdentifier,
                         context.getCatalogTable(),
                         context.getEnrichmentOptions(),
                         context.getConfiguration(),
                         context.getClassLoader(),
                         context.isTemporary());
 
-        return paimonFlinkTableFactory.createDynamicTableSource(newContext);
+        try {
+            // Use reflection to call createDynamicTableSource on the delegate factory
+            java.lang.reflect.Method createMethod =
+                    delegateFactory
+                            .getClass()
+                            .getMethod(
+                                    "createDynamicTableSource", DynamicTableFactory.Context.class);
+            return (DynamicTableSource) createMethod.invoke(delegateFactory, newContext);
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Failed to create DynamicTableSource for lake format: " + lakeFormat, e);
+        }
     }
 }

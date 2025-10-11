@@ -77,7 +77,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         String tableName = tableIdentifier.getObjectName();
         if (tableName.contains(LAKE_TABLE_SPLITTER)) {
             tableName = tableName.substring(0, tableName.indexOf(LAKE_TABLE_SPLITTER));
-            lakeTableFactory = mayInitLakeTableFactory();
+            lakeTableFactory = mayInitLakeTableFactory(context);
             return lakeTableFactory.createDynamicTableSource(context, tableName);
         }
 
@@ -244,11 +244,28 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         return TablePath.of(tablePath.getDatabaseName(), tablePath.getObjectName());
     }
 
-    private LakeTableFactory mayInitLakeTableFactory() {
+    private LakeTableFactory mayInitLakeTableFactory(Context context) {
         if (lakeTableFactory == null) {
             synchronized (this) {
                 if (lakeTableFactory == null) {
-                    lakeTableFactory = new LakeTableFactory();
+                    // Get lake format from connector property in table options
+                    // The connector property is set by the lake catalog (e.g., "iceberg", "paimon")
+                    Map<String, String> tableOptions = context.getCatalogTable().getOptions();
+                    String connector = tableOptions.get("connector");
+
+                    DataLakeFormat lakeFormat;
+                    if ("iceberg".equalsIgnoreCase(connector)) {
+                        lakeFormat = DataLakeFormat.ICEBERG;
+                    } else if ("paimon".equalsIgnoreCase(connector)) {
+                        lakeFormat = DataLakeFormat.PAIMON;
+                    } else {
+                        throw new IllegalArgumentException(
+                                "Unsupported lake connector: "
+                                        + connector
+                                        + ". Only 'iceberg' and 'paimon' are supported.");
+                    }
+
+                    lakeTableFactory = new LakeTableFactory(lakeFormat, context.getClassLoader());
                 }
             }
         }

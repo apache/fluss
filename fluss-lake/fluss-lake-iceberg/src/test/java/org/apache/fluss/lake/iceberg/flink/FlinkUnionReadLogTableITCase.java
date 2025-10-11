@@ -250,6 +250,49 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         jobClient.cancel().get();
     }
 
+    // This test verifies that the $lake suffix works and data can be retrieved directly from
+    // Iceberg
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testReadIcebergLakeTableDirectly(boolean isPartitioned) throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName =
+                "lake_direct_logTable_" + (isPartitioned ? "partitioned" : "non_partitioned");
+
+        TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
+        List<Row> writtenRows = new ArrayList<>();
+        long tableId = prepareLogTable(t1, DEFAULT_BUCKET_NUM, isPartitioned, writtenRows);
+        // wait until records has been synced to Iceberg
+        waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
+
+        // Read Iceberg snapshot directly using $lake suffix
+        TableResult lakeTableResult =
+                batchTEnv.executeSql(String.format("select * from %s$lake", tableName));
+        List<Row> icebergRows = CollectionUtil.iteratorToList(lakeTableResult.collect());
+
+        // Verify that we can read data from Iceberg via $lake suffix
+        assertThat(icebergRows).isNotEmpty();
+        assertThat(icebergRows).hasSize(writtenRows.size());
+
+        // Note: Iceberg adds metadata columns (_spec_id, _partition, _file) at the end.
+        // This test verifies that the $lake suffix works and data can be retrieved,
+
+        // verify (user columns + Iceberg metadata columns)
+        int userColumnCount = writtenRows.get(0).getArity();
+        Row firstRow = icebergRows.get(0);
+        assertThat(firstRow.getArity())
+                .as("Iceberg row should have user columns plus metadata columns")
+                .isGreaterThanOrEqualTo(userColumnCount);
+
+        // TODO: Iceberg system tables (e.g., snapshots, files, manifests) are accessible via
+        // native Iceberg catalog but require additional handling in FlinkCatalog to translate
+        // This can be added in a future enhancement.
+
+        jobClient.cancel().get();
+    }
+
     private long prepareLogTable(
             TablePath tablePath, int bucketNum, boolean isPartitioned, List<Row> flinkRows)
             throws Exception {
