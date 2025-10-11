@@ -71,7 +71,7 @@ public class LakeCatalogWrapper {
                                 }
                             } catch (Exception e) {
                                 LOG.warn(
-                                        "Failed to load {} catalog factory.",
+                                        "Failed to load catalog factory: {}",
                                         factory.getClass().getName(),
                                         e);
                             }
