@@ -276,10 +276,10 @@ For more details, refer to the [Flink ALTER TABLE(DROP)](https://nightlies.apach
 
 ## Materialized Table
 ### Overview
-Flink Materialized Table is a new table type introduced in Flink SQL, aimed at simplifying both batch and stream data pipelines, providing a consistent development experience. By specifying data freshness and query when creating Materialized Table, the engine automatically derives the schema for the materialized table and creates corresponding data refresh pipeline to achieve the specified freshness.
-For more details, refer to the [Flink Materialized Table](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/materialized-table/overview) documentation.
+Flink Materialized Table is a new table type introduced in Flink SQL that simplifies the development of both batch and streaming data pipelines.
+By defining the data freshness and query during creation, Flink automatically derives the table schema and generates a refresh pipeline to maintain the desired freshness level. This provides a unified and consistent development experience for both real-time and batch workloads. For more information, see the [Flink Materialized Table](https://nightlies.apache.org/flink/flink-docs-release-1.20/docs/dev/table/materialized-table/overview) documentation.
 
-Starting from Fluss version 0.8, Flink Materialized Table is now supported, which can significantly reduce the cost of building real-time data pipelines with Flink + Fluss. Materialized tables in Fluss are implemented as regular Fluss tables with special metadata to identify them as materialized tables.
+Starting from Fluss version 0.8, Flink Materialized Table is now supported, which can significantly reduce the cost of building real-time data pipelines with Apache Flink and Fluss. Materialized tables in Fluss are implemented as regular Fluss tables with special metadata to identify them as materialized tables.
 
 ### Create Materialized Table
 
@@ -297,9 +297,9 @@ FROM orders
 GROUP BY DATE_FORMAT(order_time, 'yyyy-MM-dd'), shop_id;
 ```
 
-#### Supported Refresh Mode
+#### Supported Refresh Modes
 
-Fluss currently supports **CONTINUOUS** refresh mode for materialized table, which means the materialized table is continuously refreshed. The **FULL** refresh mode will be supported in future releases.
+Apache Fluss currently supports **CONTINUOUS** refresh mode for materialized table, which means the materialized table is continuously refreshed. The **FULL** refresh mode will be supported in future releases.
 
 #### Schema Definition
 
