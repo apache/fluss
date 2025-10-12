@@ -1,6 +1,8 @@
 # Graceful Shutdown
 
-Fluss provides comprehensive graceful shutdown mechanisms to ensure data integrity and proper resource cleanup when stopping servers or services. This document covers the various shutdown procedures and best practices for different Fluss components.
+Apache Fluss provides a **comprehensive graceful shutdown mechanism** to ensure data integrity and proper resource cleanup when stopping servers or services.
+
+This guide describes the shutdown procedures, configuration options, and best practices for each Fluss component.
 
 ## Overview
 
@@ -11,12 +13,14 @@ Graceful shutdown in Fluss ensures that:
 - Network connections are cleanly closed
 - Background tasks are terminated properly
 
+These guarantees prevent data corruption and ensure smooth restarts of the system.
+
 ## Server Shutdown
 
 ### Coordinator Server Shutdown
 
-The Coordinator Server implements a multi-stage shutdown process:
-
+The **Coordinator Server** uses a multi-stage shutdown process to safely terminate all services in the correct order.
+#### Shutdown Process
 1. **Shutdown Hook Registration**: The server registers a JVM shutdown hook that triggers graceful shutdown on process termination
 2. **Service Termination**: All services are stopped in a specific order to maintain consistency:
 
@@ -42,15 +46,15 @@ kill -TERM <coordinator-pid>
 
 ### Tablet Server Shutdown
 
-The Tablet Server supports **controlled shutdown** to minimize data unavailability. The shutdown process ensures that all services are stopped in a specific order to maintain consistency:
+The **Tablet Server** supports a **controlled shutdown process** designed to minimize data unavailability and ensure leadership handover before termination.
 
-   **Tablet Server Shutdown Order:**
-   1. Tablet Server Metric Group → Metric Registry (async)
-   2. RPC Server (async) → Tablet Service
-   3. ZooKeeper Client → RPC Client → Client Metric Group
-   4. Scheduler → KV Manager → Remote Log Manager
-   5. Log Manager → Replica Manager
-   6. Authorizer → Dynamic Config Manager → Lake Catalog Dynamic Loader
+**Shutdown Order:**
+1. Tablet Server Metric Group → Metric Registry (async)
+2. RPC Server (async) → Tablet Service 
+3. ZooKeeper Client → RPC Client → Client Metric Group 
+4. Scheduler → KV Manager → Remote Log Manager 
+5. Log Manager → Replica Manager 
+6. Authorizer → Dynamic Config Manager → Lake Catalog Dynamic Loader
 
 #### Controlled Shutdown Process
 
@@ -65,8 +69,8 @@ kill -TERM <tablet-server-pid>
 
 #### Configuration Options
 
-- **Controlled Shutdown Retries**: Number of attempts to transfer leadership
-- **Retry Interval**: Time between retry attempts (default: configurable via `CONTROLLED_SHUTDOWN_RETRY_INTERVAL_MS`)
+- **Controlled Shutdown Retries**: Number of attempts to transfer leadership (`default:` 3 retries)
+- **Retry Interval**: Time between retry attempts (`default`: 1000L)
 
 ## Monitoring Shutdown
 
@@ -89,21 +93,11 @@ Monitor shutdown-related metrics:
 ## Troubleshooting
 
 ### Common Issues
-
-1. **Hanging Shutdown**: 
-   - Check for blocking operations without timeouts
-   - Verify thread pool configurations
-   - Look for deadlocks in application code
-
-2. **Resource Leaks**:
-   - Ensure all `AutoCloseable` resources are properly closed
-   - Check for unclosed network connections
-   - Verify file handle cleanup
-
-3. **Data Loss**:
-   - Use controlled shutdown for Tablet Servers
-   - Ensure proper leadership transfer
-   - Verify replication factor settings
+| Issue                | Possible Causes                                                 | Recommended Actions                                                             |
+| -------------------- | --------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| **Hanging shutdown** | Blocking operations, thread pool misconfiguration, or deadlocks | Check for blocking calls without timeouts, inspect thread dumps                 |
+| **Resource leaks**   | Unclosed resources or connections                               | Verify all `AutoCloseable` resources and file handles are closed                |
+| **Data loss**        | Unclean shutdown or failed leadership transfer                  | Always use controlled shutdown for Tablet Servers and verify replication factor |
 
 ### Debug Steps
 
