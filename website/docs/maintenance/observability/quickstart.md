@@ -6,7 +6,7 @@ sidebar_position: 1
 
 # Observability Quickstart Guides
 
-On this page, you can find the following guides to set up an observability stack **based on the instructions in the [Flink quickstart guide](/docs/quickstart/flink-paimon)**:
+On this page, you can find the following guides to set up an observability stack **based on the instructions in the [Flink quickstart guide](../../quickstart/flink-paimon.md)**:
 
 - [Observability with Prometheus, Loki and Grafana](#observability-with-prometheus-loki-and-grafana)
 
