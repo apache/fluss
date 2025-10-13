@@ -32,7 +32,29 @@ mkdir fluss-quickstart-flink-iceberg
 cd fluss-quickstart-flink-iceberg
 ```
 
-2. Create a `docker-compose.yml` file with the following content:
+2. Create a `lib` directory and download the required Hadoop jar file:
+
+```shell
+mkdir lib
+cd lib
+wget https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar
+cd ..
+```
+
+This jar file provides Hadoop 3.3.5 dependencies required for Iceberg's Hadoop catalog integration.
+
+:::info
+The `lib` directory serves as a staging area for additional jars needed by the Fluss coordinator server. The docker-compose configuration (see step 3) mounts this directory and copies all jars to `/opt/fluss/plugins/iceberg/` inside the coordinator container at startup.
+
+You can add more jars to this `lib` directory based on your requirements:
+- **Cloud storage support**: For AWS S3 integration with Iceberg, add the corresponding Iceberg bundle jars (e.g., `iceberg-aws-bundle`)
+- **Custom Hadoop configurations**: Add jars for specific HDFS distributions or custom authentication mechanisms
+- **Other catalog backends**: Add jars needed for alternative Iceberg catalog implementations (e.g., Rest, Hive, Glue)
+
+Any jar placed in the `lib` directory will be automatically loaded by the Fluss coordinator server, making it available for Iceberg integration.
+:::
+
+3. Create a `docker-compose.yml` file with the following content:
 
 
 ```yaml
