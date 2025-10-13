@@ -57,9 +57,7 @@ public class LakeCatalog {
         } else if (lakeFormat == ICEBERG && !LAKE_CATALOG_CACHE.containsKey(ICEBERG)) {
             catalogProperties.put("catalog-type", catalogProperties.get("type"));
             LAKE_CATALOG_CACHE.put(
-                    ICEBERG,
-                    new org.apache.iceberg.flink.FlinkCatalogFactory()
-                            .createCatalog(catalogName, catalogProperties));
+                    ICEBERG, IcebergCatalogFactory.create(catalogName, catalogProperties));
         } else {
             throw new UnsupportedOperationException("Unsupported datalake format: " + lakeFormat);
         }
@@ -70,7 +68,7 @@ public class LakeCatalog {
      * Factory for creating Paimon Catalog instances.
      *
      * <p>Purpose: Encapsulates Paimon-related dependencies (e.g. FlinkFileIOLoader) to avoid direct
-     * dependency in the main LakeCatalogWrapper class.
+     * dependency in the main LakeCatalog class.
      */
     public static class PaimonCatalogFactory {
 
@@ -83,6 +81,23 @@ public class LakeCatalog {
                     CatalogContext.create(
                             Options.fromMap(properties), null, new FlinkFileIOLoader()),
                     classLoader);
+        }
+    }
+
+    /**
+     * Factory for creating Iceberg Catalog instances.
+     *
+     * <p>Purpose: Encapsulates Iceberg-related dependencies (e.g. FlinkCatalogFactory) to avoid
+     * direct dependency in the main LakeCatalog class, for java 8 compatibility.
+     */
+    public static class IcebergCatalogFactory {
+
+        private IcebergCatalogFactory() {}
+
+        public static Catalog create(String catalogName, Map<String, String> properties) {
+            properties.put("catalog-type", properties.get("type"));
+            return new org.apache.iceberg.flink.FlinkCatalogFactory()
+                    .createCatalog(catalogName, properties);
         }
     }
 }
