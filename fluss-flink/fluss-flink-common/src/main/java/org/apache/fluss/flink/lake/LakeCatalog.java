@@ -29,15 +29,16 @@ import org.apache.paimon.flink.FlinkFileIOLoader;
 import org.apache.paimon.options.Options;
 
 import java.lang.reflect.Method;
-import java.util.HashMap;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.fluss.metadata.DataLakeFormat.ICEBERG;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 
 /** A lake catalog to delegate the operations on lake table. */
 public class LakeCatalog {
-    private static final Map<DataLakeFormat, Catalog> LAKE_CATALOG_CACHE = new HashMap<>();
+    private static final Map<DataLakeFormat, Catalog> LAKE_CATALOG_CACHE =
+            new ConcurrentHashMap<>();
 
     private final String catalogName;
     private final ClassLoader classLoader;
@@ -51,13 +52,14 @@ public class LakeCatalog {
         DataLakeFormat lakeFormat = tableOptions.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
         Map<String, String> catalogProperties =
                 DataLakeUtils.extractLakeCatalogProperties(tableOptions);
-        if (lakeFormat == PAIMON && !LAKE_CATALOG_CACHE.containsKey(PAIMON)) {
-            LAKE_CATALOG_CACHE.put(
+        if (lakeFormat == PAIMON) {
+            LAKE_CATALOG_CACHE.computeIfAbsent(
                     PAIMON,
-                    PaimonCatalogFactory.create(catalogName, catalogProperties, classLoader));
-        } else if (lakeFormat == ICEBERG && !LAKE_CATALOG_CACHE.containsKey(ICEBERG)) {
-            LAKE_CATALOG_CACHE.put(
-                    ICEBERG, IcebergCatalogFactory.create(catalogName, catalogProperties));
+                    k -> PaimonCatalogFactory.create(catalogName, catalogProperties, classLoader));
+
+        } else if (lakeFormat == ICEBERG) {
+            LAKE_CATALOG_CACHE.computeIfAbsent(
+                    ICEBERG, k -> IcebergCatalogFactory.create(catalogName, catalogProperties));
         } else {
             throw new UnsupportedOperationException("Unsupported datalake format: " + lakeFormat);
         }
