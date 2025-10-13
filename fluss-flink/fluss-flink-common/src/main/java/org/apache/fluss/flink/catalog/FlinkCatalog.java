@@ -336,11 +336,11 @@ public class FlinkCatalog extends AbstractCatalog {
             // should be pattern like table_name$lake
             tableName = tableComponents[0];
         } else {
-            // be some thing like table_name$lake$snapshot
+            // be something like table_name$lake$snapshot
             tableName = String.join("", tableComponents);
         }
         return lakeCatalog
-                .getOrCreateLakeCatalog(properties)
+                .getLakeCatalog(properties)
                 .getTable(new ObjectPath(databaseName, tableName));
     }
 

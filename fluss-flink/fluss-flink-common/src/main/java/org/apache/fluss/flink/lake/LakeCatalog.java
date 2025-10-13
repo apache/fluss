@@ -28,6 +28,7 @@ import org.apache.paimon.flink.FlinkCatalogFactory;
 import org.apache.paimon.flink.FlinkFileIOLoader;
 import org.apache.paimon.options.Options;
 
+import java.lang.reflect.Method;
 import java.util.HashMap;
 import java.util.Map;
 
@@ -36,10 +37,6 @@ import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 
 /** A lake catalog to delegate the operations on lake table. */
 public class LakeCatalog {
-    // disabled iceberg on java8 for compatibility reason
-    private static final boolean SKIP_ICEBERG =
-            Boolean.parseBoolean(System.getProperties().getProperty("skip.on.java8", "false"));
-
     private static final Map<DataLakeFormat, Catalog> LAKE_CATALOG_CACHE = new HashMap<>();
 
     private final String catalogName;
@@ -50,7 +47,7 @@ public class LakeCatalog {
         this.classLoader = classLoader;
     }
 
-    public Catalog getOrCreateLakeCatalog(Configuration tableOptions) {
+    public Catalog getLakeCatalog(Configuration tableOptions) {
         DataLakeFormat lakeFormat = tableOptions.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
         Map<String, String> catalogProperties =
                 DataLakeUtils.extractLakeCatalogProperties(tableOptions);
@@ -58,10 +55,7 @@ public class LakeCatalog {
             LAKE_CATALOG_CACHE.put(
                     PAIMON,
                     PaimonCatalogFactory.create(catalogName, catalogProperties, classLoader));
-        } else if (!SKIP_ICEBERG
-                && lakeFormat == ICEBERG
-                && !LAKE_CATALOG_CACHE.containsKey(ICEBERG)) {
-            catalogProperties.put("catalog-type", catalogProperties.get("type"));
+        } else if (lakeFormat == ICEBERG && !LAKE_CATALOG_CACHE.containsKey(ICEBERG)) {
             LAKE_CATALOG_CACHE.put(
                     ICEBERG, IcebergCatalogFactory.create(catalogName, catalogProperties));
         } else {
@@ -90,20 +84,27 @@ public class LakeCatalog {
         }
     }
 
-    /**
-     * Factory for creating Iceberg Catalog instances.
-     *
-     * <p>Purpose: Encapsulates Iceberg-related dependencies (e.g. FlinkCatalogFactory) to avoid
-     * direct dependency in the main LakeCatalog class, for java 8 compatibility.
-     */
+    /** Factory use reflection to create Iceberg Catalog instances. */
     public static class IcebergCatalogFactory {
 
         private IcebergCatalogFactory() {}
 
         public static Catalog create(String catalogName, Map<String, String> properties) {
             properties.put("catalog-type", properties.get("type"));
-            return new org.apache.iceberg.flink.FlinkCatalogFactory()
-                    .createCatalog(catalogName, properties);
+            try {
+                Class<?> flinkCatalogFactoryClass =
+                        Class.forName("org.apache.iceberg.flink.FlinkCatalogFactory");
+                Object factoryInstance =
+                        flinkCatalogFactoryClass.getDeclaredConstructor().newInstance();
+
+                Method createCatalogMethod =
+                        flinkCatalogFactoryClass.getMethod(
+                                "createCatalog", String.class, Map.class);
+                return (Catalog)
+                        createCatalogMethod.invoke(factoryInstance, catalogName, properties);
+            } catch (Exception e) {
+                throw new RuntimeException("Failed to create Iceberg catalog using reflection", e);
+            }
         }
     }
 }
