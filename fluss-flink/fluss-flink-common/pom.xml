@@ -227,7 +227,7 @@
                 <artifactId>maven-compiler-plugin</artifactId>
                 <configuration>
                     <compilerArgs>
-                        <arg>-Dskip.on.java8=${skip.on.java8}</arg>
+                        <arg>-Askip.on.java8=${skip.on.java8}</arg>
                     </compilerArgs>
                 </configuration>
             </plugin>
