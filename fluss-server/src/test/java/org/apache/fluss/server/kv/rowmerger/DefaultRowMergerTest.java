@@ -30,7 +30,6 @@ import org.junit.jupiter.params.provider.EnumSource;
 
 import static org.apache.fluss.testutils.DataTestUtils.compactedRow;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Tests for {@link DefaultRowMerger} delete behavior functionality. */
 class DefaultRowMergerTest {
@@ -48,10 +47,10 @@ class DefaultRowMergerTest {
         return compactedRow(ROW_TYPE, new Object[] {id, name});
     }
 
-    @Test
-    void testDefaultRowMergerWithAllowDeleteBehavior() {
-        DefaultRowMerger merger =
-                new DefaultRowMerger(SCHEMA, KvFormat.COMPACTED, DeleteBehavior.ALLOW);
+    @ParameterizedTest
+    @EnumSource(DeleteBehavior.class)
+    void testDefaultRowMerger(DeleteBehavior deleteBehavior) {
+        DefaultRowMerger merger = new DefaultRowMerger(SCHEMA, KvFormat.COMPACTED, deleteBehavior);
 
         BinaryRow oldRow = createBinaryRow(1, "old");
         BinaryRow newRow = createBinaryRow(1, "new");
@@ -65,48 +64,7 @@ class DefaultRowMergerTest {
         assertThat(deletedRow).isNull();
 
         // Test supportsDelete - should return true
-        assertThat(merger.supportsDelete()).isTrue();
-    }
-
-    @Test
-    void testDefaultRowMergerWithIgnoreDeleteBehavior() {
-        DefaultRowMerger merger =
-                new DefaultRowMerger(SCHEMA, KvFormat.COMPACTED, DeleteBehavior.IGNORE);
-
-        BinaryRow oldRow = createBinaryRow(1, "old");
-        BinaryRow newRow = createBinaryRow(1, "new");
-
-        // Test merge operation - should return new row
-        BinaryRow mergedRow = merger.merge(oldRow, newRow);
-        assertThat(mergedRow).isSameAs(newRow);
-
-        // Test delete operation - should return old row (ignored)
-        BinaryRow deletedRow = merger.delete(oldRow);
-        assertThat(deletedRow).isSameAs(oldRow);
-
-        // Test supportsDelete - should return true
-        assertThat(merger.supportsDelete()).isTrue();
-    }
-
-    @Test
-    void testDefaultRowMergerWithDisableDeleteBehavior() {
-        DefaultRowMerger merger =
-                new DefaultRowMerger(SCHEMA, KvFormat.COMPACTED, DeleteBehavior.DISABLE);
-
-        BinaryRow oldRow = createBinaryRow(1, "old");
-        BinaryRow newRow = createBinaryRow(1, "new");
-
-        // Test merge operation - should return new row
-        BinaryRow mergedRow = merger.merge(oldRow, newRow);
-        assertThat(mergedRow).isSameAs(newRow);
-
-        // Test delete operation - should throw exception
-        assertThatThrownBy(() -> merger.delete(oldRow))
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessageContaining("Delete operations are disabled for this table");
-
-        // Test supportsDelete - should return false
-        assertThat(merger.supportsDelete()).isFalse();
+        assertThat(merger.deleteBehavior()).isEqualTo(deleteBehavior);
     }
 
     @ParameterizedTest
@@ -119,29 +77,9 @@ class DefaultRowMergerTest {
 
         BinaryRow oldRow = createBinaryRow(1, "old");
 
-        switch (deleteBehavior) {
-            case ALLOW:
-                // Test delete operation for partial merger - should delegate to partial updater
-                // Note: We can't easily test the exact behavior without setting up PartialUpdater
-                // but we can test that it doesn't throw an exception
-                assertThat(partialMerger.supportsDelete()).isTrue();
-                break;
-
-            case IGNORE:
-                // Test delete operation for partial merger - should return old row
-                BinaryRow ignoredRow = partialMerger.delete(oldRow);
-                assertThat(ignoredRow).isSameAs(oldRow);
-                assertThat(partialMerger.supportsDelete()).isTrue();
-                break;
-
-            case DISABLE:
-                // Test delete operation for partial merger - should throw exception
-                assertThatThrownBy(() -> partialMerger.delete(oldRow))
-                        .isInstanceOf(UnsupportedOperationException.class)
-                        .hasMessageContaining("Delete operations are disabled for this table");
-                assertThat(partialMerger.supportsDelete()).isFalse();
-                break;
-        }
+        BinaryRow ignoredRow = partialMerger.delete(oldRow);
+        assertThat(ignoredRow).isNull();
+        assertThat(partialMerger.deleteBehavior()).isEqualTo(deleteBehavior);
     }
 
     @Test
@@ -154,6 +92,6 @@ class DefaultRowMergerTest {
         // Should behave like ALLOW
         BinaryRow deletedRow = merger.delete(oldRow);
         assertThat(deletedRow).isNull();
-        assertThat(merger.supportsDelete()).isTrue();
+        assertThat(merger.deleteBehavior()).isEqualTo(DeleteBehavior.ALLOW);
     }
 }

@@ -45,7 +45,8 @@ public interface RowMerger {
     /**
      * Merge the old row with a delete row.
      *
-     * <p>This method will be invoked only when {@link #supportsDelete()} returns true.
+     * <p>This method will be invoked only when {@link #deleteBehavior()} returns {@link
+     * DeleteBehavior#ALLOW}.
      *
      * @param oldRow the old row.
      * @return the merged row, or null if the row is deleted.
@@ -54,11 +55,11 @@ public interface RowMerger {
     BinaryRow delete(BinaryRow oldRow);
 
     /**
-     * Whether the merger supports to merge delete rows.
+     * The behavior of delete operations on primary key tables.
      *
-     * @return true if the merger supports delete operation.
+     * @return {@link DeleteBehavior}
      */
-    boolean supportsDelete();
+    DeleteBehavior deleteBehavior();
 
     /** Dynamically configure the target columns to merge and return the effective merger. */
     RowMerger configureTargetColumns(@Nullable int[] targetColumns);
@@ -71,7 +72,7 @@ public interface RowMerger {
         if (mergeEngineType.isPresent()) {
             switch (mergeEngineType.get()) {
                 case FIRST_ROW:
-                    return new FirstRowRowMerger();
+                    return new FirstRowRowMerger(deleteBehavior);
                 case VERSIONED:
                     Optional<String> versionColumn = tableConf.getMergeEngineVersionColumn();
                     if (!versionColumn.isPresent()) {
@@ -80,7 +81,8 @@ public interface RowMerger {
                                         "'%s' must be set for versioned merge engine.",
                                         ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key()));
                     }
-                    return new VersionedRowMerger(schema.getRowType(), versionColumn.get());
+                    return new VersionedRowMerger(
+                            schema.getRowType(), versionColumn.get(), deleteBehavior);
                 default:
                     throw new IllegalArgumentException(
                             "Unsupported merge engine type: " + mergeEngineType.get());

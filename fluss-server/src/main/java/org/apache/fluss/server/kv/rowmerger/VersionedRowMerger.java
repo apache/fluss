@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.kv.rowmerger;
 
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.TimestampLtz;
@@ -46,8 +47,12 @@ public class VersionedRowMerger implements RowMerger {
 
     private final Comparator<BinaryRow> versionComparator;
 
-    public VersionedRowMerger(RowType schema, String versionColumnName) {
+    private final DeleteBehavior deleteBehavior;
+
+    public VersionedRowMerger(
+            RowType schema, String versionColumnName, DeleteBehavior deleteBehavior) {
         this.versionComparator = createVersionComparator(schema, versionColumnName);
+        this.deleteBehavior = deleteBehavior;
     }
 
     @Nullable
@@ -65,8 +70,8 @@ public class VersionedRowMerger implements RowMerger {
     }
 
     @Override
-    public boolean supportsDelete() {
-        return false;
+    public DeleteBehavior deleteBehavior() {
+        return deleteBehavior;
     }
 
     @Override

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.kv.rowmerger;
 
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.TimestampLtz;
@@ -128,7 +129,7 @@ class VersionedRowMergerTest {
                         .column("b", DataTypes.STRING())
                         .build()
                         .getRowType();
-        VersionedRowMerger merger = new VersionedRowMerger(schema, "a");
+        VersionedRowMerger merger = new VersionedRowMerger(schema, "a", DeleteBehavior.DISABLE);
 
         for (TestSpec testSpec : testSpecs) {
             BinaryRow oldRow = compactedRow(schema, new Object[] {testSpec.oldValue, "dummy"});
@@ -152,9 +153,9 @@ class VersionedRowMergerTest {
                         .column("b", DataTypes.STRING())
                         .build()
                         .getRowType();
-        VersionedRowMerger merger = new VersionedRowMerger(schema, "a");
+        VersionedRowMerger merger = new VersionedRowMerger(schema, "a", DeleteBehavior.DISABLE);
 
-        assertThat(merger.supportsDelete()).isFalse();
+        assertThat(merger.deleteBehavior()).isEqualTo(DeleteBehavior.DISABLE);
         assertThat(merger.configureTargetColumns(null)).isSameAs(merger);
     }
 

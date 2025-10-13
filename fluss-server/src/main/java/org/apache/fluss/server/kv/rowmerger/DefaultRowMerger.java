@@ -59,26 +59,13 @@ public class DefaultRowMerger implements RowMerger {
     @Nullable
     @Override
     public BinaryRow delete(BinaryRow oldRow) {
-        switch (deleteBehavior) {
-            case ALLOW:
-                // returns null to indicate the row is deleted
-                return null;
-            case IGNORE:
-                // returns the old row unchanged to ignore the delete operation
-                return oldRow;
-            case DISABLE:
-                throw new UnsupportedOperationException(
-                        "Delete operations are disabled for this table. "
-                                + "The table.delete.behavior is set to 'disable'.");
-            default:
-                throw new IllegalArgumentException(
-                        "Unsupported delete behavior: " + deleteBehavior);
-        }
+        // returns null to indicate the row is deleted
+        return null;
     }
 
     @Override
-    public boolean supportsDelete() {
-        return deleteBehavior != DeleteBehavior.DISABLE;
+    public DeleteBehavior deleteBehavior() {
+        return deleteBehavior;
     }
 
     @Override
@@ -120,25 +107,12 @@ public class DefaultRowMerger implements RowMerger {
         @Nullable
         @Override
         public BinaryRow delete(BinaryRow oldRow) {
-            switch (deleteBehavior) {
-                case ALLOW:
-                    return partialUpdater.deleteRow(oldRow);
-                case IGNORE:
-                    // returns the old row unchanged to ignore the delete operation
-                    return oldRow;
-                case DISABLE:
-                    throw new UnsupportedOperationException(
-                            "Delete operations are disabled for this table. "
-                                    + "The table.delete.behavior is set to 'disable'.");
-                default:
-                    throw new IllegalArgumentException(
-                            "Unsupported delete behavior: " + deleteBehavior);
-            }
+            return partialUpdater.deleteRow(oldRow);
         }
 
         @Override
-        public boolean supportsDelete() {
-            return deleteBehavior != DeleteBehavior.DISABLE;
+        public DeleteBehavior deleteBehavior() {
+            return deleteBehavior;
         }
     }
 }
