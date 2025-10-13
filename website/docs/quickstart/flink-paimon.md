@@ -1,7 +1,6 @@
 ---
 title: Real-Time Analytics with Flink (Paimon)
 sidebar_position: 1
-slug: /quickstart/flink-paimon
 ---
 
 # Real-Time Analytics With Flink (Paimon)
