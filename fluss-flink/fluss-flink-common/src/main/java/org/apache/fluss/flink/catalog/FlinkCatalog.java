@@ -23,7 +23,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
-import org.apache.fluss.flink.lake.LakeCatalogWrapper;
+import org.apache.fluss.flink.lake.LakeCatalog;
 import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
@@ -116,7 +116,7 @@ public class FlinkCatalog extends AbstractCatalog {
     protected final Map<String, String> securityConfigs;
     protected Connection connection;
     protected Admin admin;
-    private volatile LakeCatalogWrapper lakeCatalog;
+    private volatile LakeCatalog lakeCatalog;
 
     public FlinkCatalog(
             String name,
@@ -130,7 +130,7 @@ public class FlinkCatalog extends AbstractCatalog {
         this.bootstrapServers = bootstrapServers;
         this.classLoader = classLoader;
         this.securityConfigs = securityConfigs;
-        this.lakeCatalog = new LakeCatalogWrapper(catalogName, classLoader);
+        this.lakeCatalog = new LakeCatalog(catalogName, classLoader);
     }
 
     @Override
