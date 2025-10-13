@@ -38,7 +38,7 @@ import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 public class LakeCatalog {
     // disabled iceberg on java8 for compatibility reason
     private static final boolean SKIP_ICEBERG =
-            Boolean.getBoolean(System.getProperty("skip.on.java8", "false"));
+            Boolean.parseBoolean(System.getProperties().getProperty("skip.on.java8", "false"));
 
     private static final Map<DataLakeFormat, Catalog> LAKE_CATALOG_CACHE = new HashMap<>();
 
