@@ -57,6 +57,8 @@ services:
         datalake.iceberg.warehouse: /tmp/iceberg
     volumes:
       - shared-tmpfs:/tmp/iceberg
+      - ./lib:/tmp/lib
+    entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/fluss/plugins/iceberg/ && exec /docker-entrypoint.sh coordinatorServer"]
 
   tablet-server:
     image: fluss/fluss:$FLUSS_DOCKER_VERSION$
@@ -136,7 +138,7 @@ You can also visit http://localhost:8083/ to see if Flink is running normally.
 
 :::note
 - If you want to additionally use an observability stack, follow one of the provided quickstart guides [here](maintenance/observability/quickstart.md) and then continue with this guide.
-- If you want to run with your own Flink environment, remember to download the [fluss-flink connector jar](/downloads), [flink-connector-faker](https://github.com/knaufk/flink-faker/releases), [iceberg-flink connector jar](https://iceberg.apache.org/docs/latest/flink/), [avro-1.12.0.jar](https://mvnrepository.com/artifact/org.apache.avro/avro/1.12.0), and [iceberg-aws-bundle-1.9.1.jar](https://mvnrepository.com/artifact/org.apache.iceberg/iceberg-aws-bundle/1.9.1) and then put them to `FLINK_HOME/lib/`.
+- If you want to run with your own Flink environment, remember to download the [fluss-flink connector jar](/downloads), [flink-connector-faker](https://github.com/knaufk/flink-faker/releases) and [iceberg-flink connector jar](https://iceberg.apache.org/docs/latest/flink/) and then put them to `FLINK_HOME/lib/`.
 - All the following commands involving `docker compose` should be executed in the created working directory that contains the `docker-compose.yml` file.
 :::
 
@@ -424,7 +426,7 @@ When querying the `datalake_enriched_orders` table, Fluss uses a union operation
 Support for querying Iceberg data directly via the `$lake` suffix and metadata tables (like `$lake$snapshots`) is currently in development. See [issue #1559](https://github.com/alibaba/fluss/issues/1559) for more details.
 :::
 
-Wait for the checkpoints (~30s) to complete to ensure data is tiered to Iceberg. Then run the following SQL to do real-time analytics:
+Wait for the configured `datalake.freshness` (~30s) to complete to ensure data is tiered to Iceberg. Then run the following SQL to do real-time analytics:
 ```sql  title="Flink SQL"
 -- switch to batch mode
 SET 'execution.runtime-mode' = 'batch';

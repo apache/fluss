@@ -37,7 +37,7 @@ function HomepageHeader() {
                 <div className={styles.buttons}>
                     <Link
                         className={clsx("hero_button button button--primary button--lg", styles.buttonWidth)}
-                        to="/docs/quickstart/flink">
+                        to="/docs/quickstart/flink-paimon">
                         Quick Start
                     </Link>
 

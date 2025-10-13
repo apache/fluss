@@ -39,18 +39,6 @@
                 <include>org.apache.flink:flink-shaded-hadoop-2-uber</include>
             </includes>
         </dependencySet>
-        <dependencySet>
-            <outputDirectory>plugins/iceberg</outputDirectory>
-            <unpack>false</unpack>
-            <useProjectArtifact>false</useProjectArtifact>
-            <useProjectAttachments>false</useProjectAttachments>
-            <useTransitiveDependencies>true</useTransitiveDependencies>
-            <useTransitiveFiltering>true</useTransitiveFiltering>
-            <includes>
-                <include>org.apache.flink:flink-shaded-hadoop-2-uber</include>
-            </includes>
-        </dependencySet>
-
     </dependencySets>
 
     <files>
