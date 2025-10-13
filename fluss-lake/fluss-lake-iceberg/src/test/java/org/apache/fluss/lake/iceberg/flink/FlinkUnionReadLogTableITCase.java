@@ -277,7 +277,7 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         assertThat(icebergRows).hasSize(writtenRows.size());
 
         // Note: Iceberg adds metadata columns (_spec_id, _partition, _file) at the end.
-        // This test verifies that the $lake suffix works and data can be retrieved,
+        // This test verifies that the $lake suffix works and data can be retrieved.
 
         // verify (user columns + Iceberg metadata columns)
         int userColumnCount = writtenRows.get(0).getArity();
