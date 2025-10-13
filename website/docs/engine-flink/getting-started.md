@@ -6,7 +6,7 @@ sidebar_position: 1
 
 # Getting Started with Flink Engine
 ## Quick Start
-For a quick introduction to running Flink, refer to the [Quick Start](quickstart/flink-paimon.md) guide.
+For a quick introduction to running Flink, refer to the [Quick Start](quickstart/flink-paimon) guide.
 
 
 ## Support Flink Versions
