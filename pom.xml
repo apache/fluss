@@ -461,7 +461,7 @@
                             <useIncrementalCompilation>false</useIncrementalCompilation>
                             <compilerArgs >
                                 <!-- Prevents recompilation due to missing package-info.class, see MCOMPILER-205 -->
-                                <arg>-Xpkginfo:always -Diceberg.enable=false</arg>
+                                <arg>-Xpkginfo:always</arg>
                             </compilerArgs>
                         </configuration>
                     </plugin>
