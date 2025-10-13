@@ -111,6 +111,9 @@ public class LakeCatalog {
 
         private IcebergCatalogFactory() {}
 
+        // Iceberg 1.4.3 is the last Java 8 compatible version, while Flink Iceberg 1.18+ requires
+        // 1.5.0+.
+        // Using reflection to maintain Java 8 compatibility.
         public static Catalog create(String catalogName, Configuration tableOptions) {
             Map<String, String> catalogProperties =
                     DataLakeUtils.extractLakeCatalogProperties(tableOptions);
@@ -132,7 +135,9 @@ public class LakeCatalog {
                 return (Catalog)
                         createCatalogMethod.invoke(factoryInstance, catalogName, catalogProperties);
             } catch (Exception e) {
-                throw new RuntimeException("Failed to create Iceberg catalog using reflection", e);
+                throw new RuntimeException(
+                        "Failed to create Iceberg catalog using reflection. Please make sure iceberg-flink-runtime is on the classpath.",
+                        e);
             }
         }
     }
