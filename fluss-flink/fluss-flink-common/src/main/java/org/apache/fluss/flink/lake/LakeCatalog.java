@@ -36,6 +36,10 @@ import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 
 /** A lake catalog to delegate the operations on lake table. */
 public class LakeCatalog {
+    // disabled iceberg on java8 for compatibility reason
+    private static final boolean ENABLE_ICEBERG =
+            Boolean.parseBoolean(System.getProperty("iceberg.enable", "true"));
+
     private static final Map<DataLakeFormat, Catalog> LAKE_CATALOG_CACHE = new HashMap<>();
 
     private final String catalogName;
@@ -54,7 +58,9 @@ public class LakeCatalog {
             LAKE_CATALOG_CACHE.put(
                     PAIMON,
                     PaimonCatalogFactory.create(catalogName, catalogProperties, classLoader));
-        } else if (lakeFormat == ICEBERG && !LAKE_CATALOG_CACHE.containsKey(ICEBERG)) {
+        } else if (ENABLE_ICEBERG
+                && lakeFormat == ICEBERG
+                && !LAKE_CATALOG_CACHE.containsKey(ICEBERG)) {
             catalogProperties.put("catalog-type", catalogProperties.get("type"));
             LAKE_CATALOG_CACHE.put(
                     ICEBERG, IcebergCatalogFactory.create(catalogName, catalogProperties));
