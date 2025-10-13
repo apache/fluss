@@ -153,10 +153,10 @@ main() {
 
     # Download flink-shaded-hadoop-2-uber for Hadoop integration
     download_jar \
-        "https://repo.maven.apache.org/maven2/org/apache/flink/flink-shaded-hadoop-2-uber/2.8.3-10.0/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar" \
-        "./lib/flink-shaded-hadoop-2-uber-2.8.3-10.0.jar" \
-        "5dd57b5d38965c0f70e3f63d2581755df6c296bb" \
-        "flink-shaded-hadoop-2-uber-2.8.3-10.0"
+        "https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar" \
+        "./lib/hadoop-apache-3.3.5-2.jar" \
+        "508255883b984483a45ca48d5af6365d4f013bb8" \
+        "hadoop-apache-3.3.5-2.jar"
 
     # Download paimon-flink connector
     download_jar \
@@ -185,7 +185,7 @@ verify_jars() {
         "fluss-flink-1.20-*.jar"
         "fluss-lake-paimon-*.jar"
         "flink-faker-0.5.3.jar"
-        "flink-shaded-hadoop-2-uber-2.8.3-10.0.jar"
+        "hadoop-apache-3.3.5-2.jar"
         "paimon-flink-1.20-1.2.0.jar"
     )
     
