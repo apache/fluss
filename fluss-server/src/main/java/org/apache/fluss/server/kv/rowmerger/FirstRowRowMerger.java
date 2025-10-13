@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.kv.rowmerger;
 
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.row.BinaryRow;
 
@@ -28,6 +29,12 @@ import javax.annotation.Nullable;
  * @see MergeEngineType#FIRST_ROW
  */
 public class FirstRowRowMerger implements RowMerger {
+
+    private final DeleteBehavior deleteBehavior;
+
+    public FirstRowRowMerger(DeleteBehavior deleteBehavior) {
+        this.deleteBehavior = deleteBehavior;
+    }
 
     @Nullable
     @Override
@@ -44,8 +51,8 @@ public class FirstRowRowMerger implements RowMerger {
     }
 
     @Override
-    public boolean supportsDelete() {
-        return false;
+    public DeleteBehavior deleteBehavior() {
+        return deleteBehavior;
     }
 
     @Override

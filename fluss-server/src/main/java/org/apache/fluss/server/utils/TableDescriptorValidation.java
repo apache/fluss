@@ -319,20 +319,20 @@ public class TableDescriptorValidation {
     }
 
     private static void checkDeleteBehavior(Configuration tableConf, boolean hasPrimaryKey) {
-        DeleteBehavior deleteBehavior = tableConf.get(ConfigOptions.TABLE_DELETE_BEHAVIOR);
-        if (deleteBehavior != DeleteBehavior.ALLOW) {
-            if (!hasPrimaryKey) {
-                throw new InvalidConfigException(
-                        "Delete behavior configuration is only supported for primary key tables.");
-            }
+        Optional<DeleteBehavior> deleteBehaviorOptional =
+                tableConf.getOptional(ConfigOptions.TABLE_DELETE_BEHAVIOR);
+        if (!hasPrimaryKey && deleteBehaviorOptional.isPresent()) {
+            throw new InvalidConfigException(
+                    "Delete behavior configuration is only supported for primary key tables.");
         }
 
         // For tables with merge engines, automatically set appropriate delete behavior
         MergeEngineType mergeEngine = tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE);
-        if (mergeEngine != null) {
+        if (mergeEngine == MergeEngineType.FIRST_ROW || mergeEngine == MergeEngineType.VERSIONED) {
             // For FIRST_ROW and VERSIONED merge engines, delete operations are not supported
             // If user explicitly sets delete behavior to ALLOW, throw an exception
-            if (deleteBehavior == DeleteBehavior.ALLOW) {
+            if (deleteBehaviorOptional.isPresent()
+                    && deleteBehaviorOptional.get() == DeleteBehavior.ALLOW) {
                 throw new InvalidConfigException(
                         String.format(
                                 "Table with '%s' merge engine does not support delete operations. "

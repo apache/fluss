@@ -206,28 +206,23 @@ public class FlinkTableSource
         } else {
             if (hasPrimaryKey()) {
                 // pk table
-                if (mergeEngineType == MergeEngineType.FIRST_ROW
-                        || mergeEngineType == MergeEngineType.VERSIONED) {
+                if (mergeEngineType == MergeEngineType.FIRST_ROW) {
                     return ChangelogMode.insertOnly();
                 } else {
                     // Check delete behavior configuration
                     Configuration tableConf = Configuration.fromMap(tableOptions);
                     DeleteBehavior deleteBehavior =
                             tableConf.get(ConfigOptions.TABLE_DELETE_BEHAVIOR);
-                    if (deleteBehavior == DeleteBehavior.IGNORE) {
-                        // If delete operations are ignored, only insert and update are relevant
+                    if (deleteBehavior == DeleteBehavior.ALLOW) {
+                        return ChangelogMode.all();
+                    } else {
+                        // If delete operations are ignored or disabled, only insert and update are
+                        // relevant
                         return ChangelogMode.newBuilder()
                                 .addContainedKind(RowKind.INSERT)
                                 .addContainedKind(RowKind.UPDATE_BEFORE)
                                 .addContainedKind(RowKind.UPDATE_AFTER)
                                 .build();
-                    } else if (deleteBehavior == DeleteBehavior.DISABLE) {
-                        throw new UnsupportedOperationException(
-                                String.format(
-                                        "Table %s has delete behavior set to 'disable' which does not support DELETE statements.",
-                                        tablePath));
-                    } else {
-                        return ChangelogMode.all();
                     }
                 }
             } else {

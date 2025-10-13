@@ -1096,42 +1096,17 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         }
     }
 
-    @Test
-    void testDeleteBehaviorDisable() {
-        String tableName = "delete_behavior_disable_table";
-        tBatchEnv.executeSql(
-                String.format(
-                        "create table %s ("
-                                + " a int not null,"
-                                + " b bigint null, "
-                                + " c string null, "
-                                + " primary key (a) not enforced"
-                                + ") with ('table.delete.behavior' = 'disable')",
-                        tableName));
-
-        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
-        assertThatThrownBy(
-                        () ->
-                                tBatchEnv
-                                        .executeSql("DELETE FROM " + tableName + " WHERE a = 1")
-                                        .await())
-                .isInstanceOf(UnsupportedOperationException.class)
-                .hasMessage(
-                        String.format(
-                                "Table %s has delete behavior set to 'disable' which does not support DELETE statements.",
-                                tablePath));
-    }
-
-    @Test
-    void testDeleteBehaviorIgnore() throws Exception {
+    @ParameterizedTest
+    @ValueSource(strings = {"ignore", "disable"})
+    void testDeleteBehaviorIgnoreOrDisable(String deleteBehavior) throws Exception {
         String tableName = "delete_behavior_ignore_table";
         tEnv.executeSql(
                 String.format(
                         "create table %s ("
                                 + " a int not null primary key not enforced,"
                                 + " b string"
-                                + ") with ('table.delete.behavior' = 'ignore')",
-                        tableName));
+                                + ") with ('table.delete.behavior' = '%s')",
+                        tableName, deleteBehavior));
 
         // Insert some data
         tEnv.executeSql(
@@ -1151,7 +1126,8 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         tEnv.createTemporaryView("changelog_source", changelogData);
 
         // Insert changelog data
-        tEnv.executeSql(String.format("INSERT INTO %s SELECT * FROM changelog_source", tableName));
+        tEnv.executeSql(String.format("INSERT INTO %s SELECT * FROM changelog_source", tableName))
+                .await();
 
         CloseableIterator<Row> rowIter =
                 tEnv.executeSql(String.format("select * from %s", tableName)).collect();
