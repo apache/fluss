@@ -34,7 +34,6 @@ import org.apache.flink.table.catalog.UniqueConstraint;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -42,13 +41,11 @@ import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
-import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.lake.iceberg.IcebergLakeCatalog.SYSTEM_COLUMNS;
-import static org.apache.fluss.metadata.DataLakeFormat.ICEBERG;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test class for {@link FlinkCatalog}. */
-public class FlinkCatalogLakeTest extends FlinkIcebergTieringTestBase {
+class FlinkCatalogLakeTest extends FlinkIcebergTieringTestBase {
 
     protected static final String DEFAULT_DB = "fluss";
 
@@ -63,18 +60,10 @@ public class FlinkCatalogLakeTest extends FlinkIcebergTieringTestBase {
     }
 
     @Test
-    // TODO: duplicate code in paimon and iceberg, refactor it after #1709
+    // TODO: remove this test in #1803
     void testGetLakeTable() throws Exception {
         Map<String, String> options = new HashMap<>();
         options.put(TABLE_DATALAKE_ENABLED.key(), "true");
-        options.put(TABLE_DATALAKE_FORMAT.key(), ICEBERG.toString());
-        options.put("datalake.iceberg.type", "hadoop");
-        String warehousePath =
-                Files.createTempDirectory("fluss-testing-datalake-tiered")
-                        .resolve("warehouse")
-                        .toString();
-        options.put("datalake.iceberg.warehouse", warehousePath);
-
         ObjectPath lakeTablePath = new ObjectPath(DEFAULT_DB, "lake_table");
         CatalogTable table = this.newCatalogTable(options);
         catalog.createTable(lakeTablePath, table, false);

@@ -31,14 +31,18 @@ import org.apache.paimon.options.Options;
 
 import java.lang.reflect.Method;
 import java.util.Map;
+import java.util.concurrent.locks.ReentrantLock;
 
 import static org.apache.fluss.metadata.DataLakeFormat.ICEBERG;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
+import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /** A lake catalog to delegate the operations on lake table. */
 public class LakeCatalog {
     private static final Map<DataLakeFormat, Catalog> LAKE_CATALOG_CACHE =
             MapUtils.newConcurrentHashMap();
+
+    private static final ReentrantLock LOCK = new ReentrantLock();
 
     private final String catalogName;
     private final ClassLoader classLoader;
@@ -49,21 +53,35 @@ public class LakeCatalog {
     }
 
     public Catalog getLakeCatalog(Configuration tableOptions) {
-        DataLakeFormat lakeFormat = tableOptions.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
-        Map<String, String> catalogProperties =
-                DataLakeUtils.extractLakeCatalogProperties(tableOptions);
-        if (lakeFormat == PAIMON) {
-            LAKE_CATALOG_CACHE.computeIfAbsent(
-                    PAIMON,
-                    k -> PaimonCatalogFactory.create(catalogName, catalogProperties, classLoader));
+        return inLock(
+                LOCK,
+                () -> {
+                    DataLakeFormat lakeFormat =
+                            tableOptions.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
+                    if (lakeFormat == PAIMON) {
+                        // TODO: Currently, a Fluss cluster only supports a single DataLake storage.
+                        // However, in the
+                        //  future, it may support multiple DataLakes. The following code assumes
+                        // that a single
+                        //  lakeCatalog is shared across multiple tables, which will no longer be
+                        // valid in such
+                        //  cases and should be updated accordingly.
+                        LAKE_CATALOG_CACHE.computeIfAbsent(
+                                PAIMON,
+                                k ->
+                                        PaimonCatalogFactory.create(
+                                                catalogName, tableOptions, classLoader));
 
-        } else if (lakeFormat == ICEBERG) {
-            LAKE_CATALOG_CACHE.computeIfAbsent(
-                    ICEBERG, k -> IcebergCatalogFactory.create(catalogName, catalogProperties));
-        } else {
-            throw new UnsupportedOperationException("Unsupported datalake format: " + lakeFormat);
-        }
-        return LAKE_CATALOG_CACHE.get(lakeFormat);
+                    } else if (lakeFormat == ICEBERG) {
+                        LAKE_CATALOG_CACHE.computeIfAbsent(
+                                ICEBERG,
+                                k -> IcebergCatalogFactory.create(catalogName, tableOptions));
+                    } else {
+                        throw new UnsupportedOperationException(
+                                "Unsupported datalake format: " + lakeFormat);
+                    }
+                    return LAKE_CATALOG_CACHE.get(lakeFormat);
+                });
     }
 
     /**
@@ -77,11 +95,13 @@ public class LakeCatalog {
         private PaimonCatalogFactory() {}
 
         public static Catalog create(
-                String catalogName, Map<String, String> properties, ClassLoader classLoader) {
+                String catalogName, Configuration tableOptions, ClassLoader classLoader) {
+            Map<String, String> catalogProperties =
+                    DataLakeUtils.extractLakeCatalogProperties(tableOptions);
             return FlinkCatalogFactory.createCatalog(
                     catalogName,
                     CatalogContext.create(
-                            Options.fromMap(properties), null, new FlinkFileIOLoader()),
+                            Options.fromMap(catalogProperties), null, new FlinkFileIOLoader()),
                     classLoader);
         }
     }
@@ -91,8 +111,15 @@ public class LakeCatalog {
 
         private IcebergCatalogFactory() {}
 
-        public static Catalog create(String catalogName, Map<String, String> properties) {
-            properties.put("catalog-type", properties.get("type"));
+        public static Catalog create(String catalogName, Configuration tableOptions) {
+            Map<String, String> catalogProperties =
+                    DataLakeUtils.extractLakeCatalogProperties(tableOptions);
+            // Map "type" to "catalog-type" (equivalent)
+            // Required: either "catalog-type" (standard type) or "catalog-impl"
+            // (fully-qualified custom class, mandatory if "catalog-type" is missing)
+            if (catalogProperties.containsKey("type")) {
+                catalogProperties.put("catalog-type", catalogProperties.get("type"));
+            }
             try {
                 Class<?> flinkCatalogFactoryClass =
                         Class.forName("org.apache.iceberg.flink.FlinkCatalogFactory");
@@ -103,7 +130,7 @@ public class LakeCatalog {
                         flinkCatalogFactoryClass.getMethod(
                                 "createCatalog", String.class, Map.class);
                 return (Catalog)
-                        createCatalogMethod.invoke(factoryInstance, catalogName, properties);
+                        createCatalogMethod.invoke(factoryInstance, catalogName, catalogProperties);
             } catch (Exception e) {
                 throw new RuntimeException("Failed to create Iceberg catalog using reflection", e);
             }
