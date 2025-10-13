@@ -117,7 +117,12 @@ public class WriterClient {
                             this::maybeAbortBatches);
         } catch (Throwable t) {
             close(Duration.ofMillis(0));
-            throw new FlussRuntimeException("Failed to construct writer", t);
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Failed to construct writer. Max request size: %d bytes, Idempotence enabled: %b",
+                            maxRequestSize,
+                            idempotenceManager != null ? idempotenceManager.idempotenceEnabled() : false),
+                    t);
         }
     }
 
@@ -148,7 +153,11 @@ public class WriterClient {
         try {
             accumulator.awaitFlushCompletion();
         } catch (InterruptedException e) {
-            throw new FlussRuntimeException("Flush interrupted." + e);
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Flush interrupted after %d ms. Writer may be in inconsistent state",
+                            System.currentTimeMillis() - start),
+                    e);
         }
         LOG.trace(
                 "Flushed accumulated records in writer in {} ms.",
@@ -196,7 +205,12 @@ public class WriterClient {
                 // TODO add the wakeup logic refer to Kafka.
             }
         } catch (Exception e) {
-            throw new FlussRuntimeException(e);
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Failed to send record to table %s. Writer state: %s",
+                            record.getPhysicalTablePath(),
+                            sender != null && sender.isRunning() ? "running" : "closed"),
+                    e);
         }
     }
 
@@ -212,7 +226,10 @@ public class WriterClient {
     private void throwIfWriterClosed() {
         if (sender == null || !sender.isRunning()) {
             throw new IllegalStateException(
-                    "Cannot perform operation after writer has been closed");
+                    String.format(
+                            "Cannot perform write operation after writer has been closed. Sender running: %b, Thread pool shutdown: %b",
+                            sender != null && sender.isRunning(),
+                            ioThreadPool == null || ioThreadPool.isShutdown()));
         }
     }
 
@@ -225,11 +242,11 @@ public class WriterClient {
                 && maxInflightRequestPerBucket
                         > MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE) {
             throw new IllegalConfigurationException(
-                    "The value of "
-                            + ConfigOptions.CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET.key()
-                            + " should be less than or equal to "
-                            + MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE
-                            + " when idempotence writer enabled to ensure message ordering.");
+                    String.format(
+                            "Invalid configuration for idempotent writer. The value of %s (%d) should be less than or equal to %d when idempotence is enabled to ensure message ordering",
+                            ConfigOptions.CLIENT_WRITER_MAX_INFLIGHT_REQUESTS_PER_BUCKET.key(),
+                            maxInflightRequestPerBucket,
+                            MAX_IN_FLIGHT_REQUESTS_PER_BUCKET_FOR_IDEMPOTENCE));
         }
 
         TabletServerGateway tabletServerGateway = metadataUpdater.newRandomTabletServerClient();
@@ -249,10 +266,10 @@ public class WriterClient {
 
         if (idempotenceEnabled && ack != -1) {
             throw new IllegalConfigurationException(
-                    "Must set "
-                            + ConfigOptions.CLIENT_WRITER_ACKS.key()
-                            + " to 'all' in order to use the idempotent writer. Otherwise "
-                            + "we cannot guarantee idempotence.");
+                    String.format(
+                            "Invalid acks configuration for idempotent writer. Must set %s to 'all' (current value: '%s') in order to use the idempotent writer. Otherwise we cannot guarantee idempotence",
+                            ConfigOptions.CLIENT_WRITER_ACKS.key(),
+                            acks));
         }
 
         return ack;
@@ -262,10 +279,10 @@ public class WriterClient {
         int retries = conf.getInt(ConfigOptions.CLIENT_WRITER_RETRIES);
         if (idempotenceEnabled && retries == 0) {
             throw new IllegalConfigurationException(
-                    "Must set "
-                            + ConfigOptions.CLIENT_WRITER_RETRIES.key()
-                            + " to non-zero when using the idempotent writer. Otherwise "
-                            + "we cannot guarantee idempotence.");
+                    String.format(
+                            "Invalid retries configuration for idempotent writer. Must set %s to non-zero (current value: %d) when using the idempotent writer. Otherwise we cannot guarantee idempotence",
+                            ConfigOptions.CLIENT_WRITER_RETRIES.key(),
+                            retries));
         }
         return retries;
     }
