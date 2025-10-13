@@ -33,9 +33,6 @@
     <packaging>jar</packaging>
 
     <!-- Override Jackson version for Iceberg compatibility in tests -->
-    <properties>
-        <jackson.version.test>2.18.3</jackson.version.test>
-    </properties>
 
     <!-- Override dependency management for Jackson to use 2.18.3 for Iceberg compatibility -->
     <dependencyManagement>
