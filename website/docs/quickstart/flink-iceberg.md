@@ -1,6 +1,7 @@
 ---
 title: Real-Time Analytics with Flink (Iceberg)
 sidebar_position: 2
+slug: /quickstart/flink-iceberg
 ---
 
 # Real-Time Analytics With Flink (Iceberg)
