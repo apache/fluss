@@ -21,6 +21,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.utils.DataLakeUtils;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.utils.MapUtils;
 
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
@@ -30,7 +31,6 @@ import org.apache.paimon.options.Options;
 
 import java.lang.reflect.Method;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 import static org.apache.fluss.metadata.DataLakeFormat.ICEBERG;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
@@ -38,7 +38,7 @@ import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 /** A lake catalog to delegate the operations on lake table. */
 public class LakeCatalog {
     private static final Map<DataLakeFormat, Catalog> LAKE_CATALOG_CACHE =
-            new ConcurrentHashMap<>();
+            MapUtils.newConcurrentHashMap();
 
     private final String catalogName;
     private final ClassLoader classLoader;
