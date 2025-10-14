@@ -88,6 +88,7 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
             // do nothing
         }
 
+        @Override
         public TableDescriptor getTable(TablePath tablePath) {
             return tableByPath.get(tablePath);
         }

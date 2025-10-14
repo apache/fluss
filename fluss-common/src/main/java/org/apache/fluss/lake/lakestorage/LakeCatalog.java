@@ -35,6 +35,14 @@ import java.util.List;
 public interface LakeCatalog extends AutoCloseable {
 
     /**
+     * Get a table in lake.
+     *
+     * @param tablePath path of the table to be created
+     * @throws TableNotExistException if the table not exists
+     */
+    TableDescriptor getTable(TablePath tablePath) throws TableNotExistException;
+
+    /**
      * Create a new table in lake.
      *
      * @param tablePath path of the table to be created
