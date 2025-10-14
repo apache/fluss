@@ -34,7 +34,7 @@ The following is a list of (but not limited to) use-cases that Fluss shines ✨:
 
 ## Where to go Next?
 
-- [QuickStart](quickstart/flink-paimon.md): Get started with Fluss in minutes.
+- [QuickStart](quickstart/flink.md): Get started with Fluss in minutes.
 - [Architecture](concepts/architecture.md): Learn about Fluss's architecture.
 - [Table Design](table-design/overview.md): Explore Fluss's table types, partitions and buckets.
 - [Lakehouse](streaming-lakehouse/overview.md): Integrate Fluss with your Lakehouse to bring low-latency data to your Lakehouse analytics.
