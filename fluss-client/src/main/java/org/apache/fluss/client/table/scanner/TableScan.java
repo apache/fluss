@@ -96,8 +96,7 @@ public class TableScan implements Scan {
             throw new UnsupportedOperationException(
                     String.format(
                             "LogScanner doesn't support limit pushdown. Table: %s, requested limit: %d",
-                            tableInfo.getTablePath(),
-                            limit));
+                            tableInfo.getTablePath(), limit));
         }
         return new LogScannerImpl(
                 conn.getConfiguration(),
@@ -114,8 +113,7 @@ public class TableScan implements Scan {
             throw new UnsupportedOperationException(
                     String.format(
                             "Currently, BatchScanner is only available when limit is set. Table: %s, bucket: %s",
-                            tableInfo.getTablePath(),
-                            tableBucket));
+                            tableInfo.getTablePath(), tableBucket));
         }
         return new LimitBatchScanner(
                 tableInfo, tableBucket, conn.getMetadataUpdater(), projectedColumns, limit);
@@ -127,10 +125,7 @@ public class TableScan implements Scan {
             throw new UnsupportedOperationException(
                     String.format(
                             "Currently, SnapshotBatchScanner doesn't support limit pushdown. Table: %s, bucket: %s, snapshot ID: %d, requested limit: %d",
-                            tableInfo.getTablePath(),
-                            tableBucket,
-                            snapshotId,
-                            limit));
+                            tableInfo.getTablePath(), tableBucket, snapshotId, limit));
         }
         String scannerTmpDir =
                 conn.getConfiguration().getString(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR);
@@ -142,9 +137,7 @@ public class TableScan implements Scan {
             throw new FlussRuntimeException(
                     String.format(
                             "Failed to get snapshot metadata for table bucket %s, snapshot ID: %d, Table: %s",
-                            tableBucket,
-                            snapshotId,
-                            tableInfo.getTablePath()),
+                            tableBucket, snapshotId, tableInfo.getTablePath()),
                     e);
         }
 

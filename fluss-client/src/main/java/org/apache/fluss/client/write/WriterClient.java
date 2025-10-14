@@ -92,12 +92,16 @@ public class WriterClient {
             MetadataUpdater metadataUpdater,
             ClientMetricGroup clientMetricGroup,
             Admin admin) {
+        int maxRequestSizeLocal = -1;
+        IdempotenceManager idempotenceManagerLocal = null;
         try {
             this.conf = conf;
             this.metadataUpdater = metadataUpdater;
-            this.maxRequestSize =
+            maxRequestSizeLocal =
                     (int) conf.get(ConfigOptions.CLIENT_WRITER_REQUEST_MAX_SIZE).getBytes();
-            this.idempotenceManager = buildIdempotenceManager();
+            this.maxRequestSize = maxRequestSizeLocal;
+            idempotenceManagerLocal = buildIdempotenceManager();
+            this.idempotenceManager = idempotenceManagerLocal;
             this.writerMetricGroup = new WriterMetricGroup(clientMetricGroup);
 
             short acks = configureAcks(idempotenceManager.idempotenceEnabled());
@@ -120,8 +124,10 @@ public class WriterClient {
             throw new FlussRuntimeException(
                     String.format(
                             "Failed to construct writer. Max request size: %d bytes, Idempotence enabled: %b",
-                            maxRequestSize,
-                            idempotenceManager != null ? idempotenceManager.idempotenceEnabled() : false),
+                            maxRequestSizeLocal,
+                            idempotenceManagerLocal != null
+                                    ? idempotenceManagerLocal.idempotenceEnabled()
+                                    : false),
                     t);
         }
     }
@@ -268,8 +274,7 @@ public class WriterClient {
             throw new IllegalConfigurationException(
                     String.format(
                             "Invalid acks configuration for idempotent writer. Must set %s to 'all' (current value: '%s') in order to use the idempotent writer. Otherwise we cannot guarantee idempotence",
-                            ConfigOptions.CLIENT_WRITER_ACKS.key(),
-                            acks));
+                            ConfigOptions.CLIENT_WRITER_ACKS.key(), acks));
         }
 
         return ack;
@@ -281,8 +286,7 @@ public class WriterClient {
             throw new IllegalConfigurationException(
                     String.format(
                             "Invalid retries configuration for idempotent writer. Must set %s to non-zero (current value: %d) when using the idempotent writer. Otherwise we cannot guarantee idempotence",
-                            ConfigOptions.CLIENT_WRITER_RETRIES.key(),
-                            retries));
+                            ConfigOptions.CLIENT_WRITER_RETRIES.key(), retries));
         }
         return retries;
     }
