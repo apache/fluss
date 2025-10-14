@@ -25,5 +25,5 @@ metadata:
 data:
   server.yaml: |
     {{- range $key, $val := .Values.configurationOverrides }}
-    {{ $key }}: {{ $val }}
+    {{ $key }}: {{ tpl (printf "%v" $val) $ }}
     {{- end }}

@@ -37,7 +37,7 @@ configurationOverrides:
   default.bucket.number: 3
   default.replication.factor: 3
   zookeeper.path.root: /fluss
-  zookeeper.address: zk-zookeeper.default.svc.cluster.local:2181
+  zookeeper.address: zk-zookeeper.{{ .Release.Namespace }}.svc.cluster.local:2181
   remote.data.dir: /tmp/fluss/remote-data
   data.dir: /tmp/fluss/data
   internal.listener.name: INTERNAL
