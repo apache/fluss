@@ -31,18 +31,14 @@ import org.apache.paimon.options.Options;
 
 import java.lang.reflect.Method;
 import java.util.Map;
-import java.util.concurrent.locks.ReentrantLock;
 
 import static org.apache.fluss.metadata.DataLakeFormat.ICEBERG;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
-import static org.apache.fluss.utils.concurrent.LockUtils.inLock;
 
 /** A lake catalog to delegate the operations on lake table. */
 public class LakeCatalog {
     private static final Map<DataLakeFormat, Catalog> LAKE_CATALOG_CACHE =
             MapUtils.newConcurrentHashMap();
-
-    private static final ReentrantLock LOCK = new ReentrantLock();
 
     private final String catalogName;
     private final ClassLoader classLoader;
@@ -53,34 +49,25 @@ public class LakeCatalog {
     }
 
     public Catalog getLakeCatalog(Configuration tableOptions) {
-        return inLock(
-                LOCK,
-                () -> {
-                    DataLakeFormat lakeFormat =
-                            tableOptions.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
-                    if (lakeFormat == PAIMON) {
-                        // TODO: Currently, a Fluss cluster only supports a single DataLake storage.
-                        // However, in the
-                        //  future, it may support multiple DataLakes. The following code assumes
-                        // that a single
-                        //  lakeCatalog is shared across multiple tables, which will no longer be
-                        // valid in such
-                        //  cases and should be updated accordingly.
-                        LAKE_CATALOG_CACHE.computeIfAbsent(
-                                PAIMON,
-                                k ->
-                                        PaimonCatalogFactory.create(
-                                                catalogName, tableOptions, classLoader));
-
-                    } else if (lakeFormat == ICEBERG) {
-                        LAKE_CATALOG_CACHE.computeIfAbsent(
-                                ICEBERG,
-                                k -> IcebergCatalogFactory.create(catalogName, tableOptions));
+        DataLakeFormat lakeFormat = tableOptions.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
+        // TODO: Currently, a Fluss cluster only supports a single DataLake storage.
+        // However, in the
+        //  future, it may support multiple DataLakes. The following code assumes
+        // that a single
+        //  lakeCatalog is shared across multiple tables, which will no longer be
+        // valid in such
+        //  cases and should be updated accordingly.
+        return LAKE_CATALOG_CACHE.computeIfAbsent(
+                lakeFormat,
+                (dataLakeFormat) -> {
+                    if (dataLakeFormat == PAIMON) {
+                        return PaimonCatalogFactory.create(catalogName, tableOptions, classLoader);
+                    } else if (dataLakeFormat == ICEBERG) {
+                        return IcebergCatalogFactory.create(catalogName, tableOptions);
                     } else {
                         throw new UnsupportedOperationException(
-                                "Unsupported datalake format: " + lakeFormat);
+                                "Unsupported datalake format: " + dataLakeFormat);
                     }
-                    return LAKE_CATALOG_CACHE.get(lakeFormat);
                 });
     }
 
@@ -111,9 +98,10 @@ public class LakeCatalog {
 
         private IcebergCatalogFactory() {}
 
-        // Iceberg 1.4.3 is the last Java 8 compatible version, while Flink Iceberg 1.18+ requires
-        // 1.5.0+.
+        // Iceberg 1.4.3 is the last Java 8 compatible version, while the Flink 1.18+ connector
+        // requires Iceberg 1.5.0+.
         // Using reflection to maintain Java 8 compatibility.
+        // Once Fluss drops Java 8, we can remove the reflection code
         public static Catalog create(String catalogName, Configuration tableOptions) {
             Map<String, String> catalogProperties =
                     DataLakeUtils.extractLakeCatalogProperties(tableOptions);
