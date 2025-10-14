@@ -683,6 +683,12 @@ class FlinkCatalogTest {
                 .hasMessage(
                         "Failed to list partitions of table fluss.partitioned_t1 in test-catalog, by partitionSpec CatalogPartitionSpec{{second=}}");
 
+        ObjectPath illegalPartitionTablePath =
+                new ObjectPath(DEFAULT_DB, "partitioned_t1$lake$snapshots");
+        assertThatThrownBy(() -> catalog.listPartitions(illegalPartitionTablePath))
+                .isInstanceOf(CatalogException.class)
+                .hasMessage("listPartitions only supports table_name$lake pattern");
+
         // NEW: Test dropPartition functionality
         CatalogPartitionSpec firstPartSpec = catalogPartitionSpecs.get(0);
         catalog.dropPartition(path2, firstPartSpec, false);

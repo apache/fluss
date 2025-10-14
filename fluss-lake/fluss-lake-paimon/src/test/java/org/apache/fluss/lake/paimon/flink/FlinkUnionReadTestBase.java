@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.paimon.flink;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.flink.catalog.FlinkCatalog;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
@@ -29,6 +30,8 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import javax.annotation.Nullable;
+
+import java.util.Collections;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 
@@ -45,6 +48,7 @@ public class FlinkUnionReadTestBase extends FlinkPaimonTieringTestBase {
     protected static final int DEFAULT_BUCKET_NUM = 1;
     StreamTableEnvironment batchTEnv;
     StreamTableEnvironment streamTEnv;
+    FlinkCatalog flinkCatalog;
 
     @BeforeAll
     protected static void beforeAll() {
@@ -56,6 +60,7 @@ public class FlinkUnionReadTestBase extends FlinkPaimonTieringTestBase {
         super.beforeEach();
         buildBatchTEnv();
         buildStreamTEnv();
+        buildFlinkCatalog();
     }
 
     @Override
@@ -97,5 +102,17 @@ public class FlinkUnionReadTestBase extends FlinkPaimonTieringTestBase {
                         CATALOG_NAME, BOOTSTRAP_SERVERS.key(), bootstrapServers));
         batchTEnv.executeSql("use catalog " + CATALOG_NAME);
         batchTEnv.executeSql("use " + DEFAULT_DB);
+    }
+
+    protected void buildFlinkCatalog() {
+        String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
+        flinkCatalog =
+                new FlinkCatalog(
+                        CATALOG_NAME,
+                        DEFAULT_DB,
+                        bootstrapServers,
+                        Thread.currentThread().getContextClassLoader(),
+                        Collections.emptyMap());
+        flinkCatalog.open();
     }
 }
