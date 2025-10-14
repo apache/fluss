@@ -687,6 +687,8 @@ class FlinkCatalogTest {
                 new ObjectPath(DEFAULT_DB, "partitioned_t1$lake$snapshots");
         assertThatThrownBy(() -> catalog.listPartitions(illegalPartitionTablePath))
                 .isInstanceOf(CatalogException.class)
+                .rootCause()
+                .isInstanceOf(IllegalArgumentException.class)
                 .hasMessage("listPartitions only supports table_name$lake pattern");
 
         // NEW: Test dropPartition functionality
