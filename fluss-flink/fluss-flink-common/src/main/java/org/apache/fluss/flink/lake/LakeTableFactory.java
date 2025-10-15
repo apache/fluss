@@ -88,16 +88,7 @@ public class LakeTableFactory {
     }
 
     private DynamicTableSourceFactory getPaimonFactory() {
-        try {
-            Class<?> paimonFactoryClass =
-                    Class.forName("org.apache.paimon.flink.FlinkTableFactory");
-            return (DynamicTableSourceFactory)
-                    paimonFactoryClass.getDeclaredConstructor().newInstance();
-        } catch (Exception e) {
-            throw new RuntimeException(
-                    "Failed to create Paimon table factory. Please ensure paimon-flink is on the classpath.",
-                    e);
-        }
+        return new org.apache.paimon.flink.FlinkTableFactory();
     }
 
     private DynamicTableSourceFactory getIcebergFactory(Map<String, String> tableOptions) {

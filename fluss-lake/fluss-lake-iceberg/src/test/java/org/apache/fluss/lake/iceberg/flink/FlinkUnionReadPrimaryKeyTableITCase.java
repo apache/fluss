@@ -308,8 +308,8 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
         int expectedUserRowCount = isPartitioned ? 2 * waitUntilPartitions(t1).size() : 2;
         assertThat(icebergRows).hasSize(expectedUserRowCount);
 
-        // verify rows have expected number of columns (user columns + potential Iceberg metadata)
-        int userColumnCount = 16; // The table has 16 columns
+        // verify rows have expected number of columns
+        int userColumnCount = lakeTableResult.getResolvedSchema().getColumnCount();
         Row firstRow = icebergRows.get(0);
         assertThat(firstRow.getArity())
                 .as("Iceberg row should have at least user columns")

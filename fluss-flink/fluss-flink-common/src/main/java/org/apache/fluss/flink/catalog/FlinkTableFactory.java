@@ -84,11 +84,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         if (tableName.contains(LAKE_TABLE_SPLITTER)) {
             // Extract the lake table name: for "table$lake" -> "table"
             // for "table$lake$snapshots" -> "table$snapshots"
-            String baseTableName = tableName.substring(0, tableName.indexOf(LAKE_TABLE_SPLITTER));
-            String suffix =
-                    tableName.substring(
-                            tableName.indexOf(LAKE_TABLE_SPLITTER) + LAKE_TABLE_SPLITTER.length());
-            String lakeTableName = suffix.isEmpty() ? baseTableName : baseTableName + suffix;
+            String lakeTableName = tableName.replaceFirst("\\$lake", "");
 
             lakeTableFactory = mayInitLakeTableFactory();
             return lakeTableFactory.createDynamicTableSource(context, lakeTableName);
