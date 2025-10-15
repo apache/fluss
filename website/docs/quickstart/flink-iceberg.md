@@ -442,15 +442,46 @@ The data for the `datalake_enriched_orders` table is stored in Fluss (for real-t
 
 When querying the `datalake_enriched_orders` table, Fluss uses a union operation that combines data from both Fluss and Iceberg to provide a complete result set -- combines **real-time** and **historical** data.
 
-:::note
-Support for querying Iceberg data directly via the `$lake` suffix and metadata tables (like `$lake$snapshots`) is currently in development. See [issue #1559](https://github.com/alibaba/fluss/issues/1559) for more details.
-:::
+If you wish to query only the data stored in Iceberg—offering high-performance access without the overhead of unioning data—you can use the `datalake_enriched_orders$lake` table by appending the `$lake` suffix.
+This approach also enables all the optimizations and features of a Flink Iceberg table source, including [system table](https://iceberg.apache.org/docs/latest/flink-queries/#inspecting-tables) such as `datalake_enriched_orders$lake$snapshots`.
 
-Wait for the configured `datalake.freshness` (~30s) to complete to ensure data is tiered to Iceberg. Then run the following SQL to do real-time analytics:
+
 ```sql  title="Flink SQL"
 -- switch to batch mode
 SET 'execution.runtime-mode' = 'batch';
 ```
+
+
+```sql  title="Flink SQL"
+-- query snapshots in iceberg
+SELECT snapshot_id, operation FROM datalake_enriched_orders$lake$snapshots;
+```
+
+**Sample Output:**
+```shell
++-------------+--------------------+
+| snapshot_id |          operation |
++-------------+--------------------+
+|           1 |             append |
++-------------+--------------------+
+```
+**Note:** Make sure to wait for the checkpoints (~30s) to complete before querying the snapshots, otherwise the result will be empty.
+
+Run the following SQL to do analytics on Iceberg data:
+```sql  title="Flink SQL"
+-- to sum prices of all orders in iceberg
+SELECT sum(total_price) as sum_price FROM datalake_enriched_orders$lake;
+```
+**Sample Output:**
+```shell
++------------+
+|  sum_price |
++------------+
+| 1669519.92 |
++------------+
+```
+
+To achieve results with sub-second data freshness, you can query the table directly, which seamlessly unifies data from both Fluss and Iceberg:
 
 ```sql  title="Flink SQL"
 -- to sum prices of all orders (combining fluss and iceberg data)
@@ -465,6 +496,7 @@ SELECT sum(total_price) as sum_price FROM datalake_enriched_orders;
 | 1777908.36 |
 +------------+
 ```
+
 You can execute the real-time analytics query multiple times, and the results will vary with each run as new data is continuously written to Fluss in real-time.
 
 Finally, you can use the following command to view the files stored in Iceberg:
