@@ -21,7 +21,6 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.utils.DataLakeUtils;
 import org.apache.fluss.metadata.DataLakeFormat;
-import org.apache.fluss.utils.MapUtils;
 
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
@@ -34,59 +33,64 @@ import java.util.Map;
 
 import static org.apache.fluss.metadata.DataLakeFormat.ICEBERG;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
-/** A lake catalog to delegate the operations on lake table. */
-public class LakeCatalog {
-    private static final Map<DataLakeFormat, Catalog> LAKE_CATALOG_CACHE =
-            MapUtils.newConcurrentHashMap();
+/** A lake flink catalog to delegate the operations on lake table. */
+public class LakeFlinkCatalog {
 
     private final String catalogName;
     private final ClassLoader classLoader;
 
-    public LakeCatalog(String catalogName, ClassLoader classLoader) {
+    private volatile Catalog catalog;
+    private volatile DataLakeFormat lakeFormat;
+
+    public LakeFlinkCatalog(String catalogName, ClassLoader classLoader) {
         this.catalogName = catalogName;
         this.classLoader = classLoader;
     }
 
     public Catalog getLakeCatalog(Configuration tableOptions) {
-        DataLakeFormat lakeFormat = tableOptions.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
-        if (lakeFormat == null) {
-            throw new IllegalArgumentException(
-                    "DataLake format is not specified in table options. "
-                            + "Please ensure '"
-                            + ConfigOptions.TABLE_DATALAKE_FORMAT.key()
-                            + "' is set.");
-        }
-        return LAKE_CATALOG_CACHE.computeIfAbsent(
-                lakeFormat,
-                (dataLakeFormat) -> {
-                    if (dataLakeFormat == PAIMON) {
-                        return PaimonCatalogFactory.create(catalogName, tableOptions, classLoader);
-                    } else if (dataLakeFormat == ICEBERG) {
-                        return IcebergCatalogFactory.create(catalogName, tableOptions);
+        // TODO: Currently, a Fluss cluster only supports a single DataLake storage.
+        // However, in the
+        //  future, it may support multiple DataLakes. The following code assumes
+        // that a single
+        //  lakeCatalog is shared across multiple tables, which will no longer be
+        // valid in such
+        //  cases and should be updated accordingly.
+        if (catalog == null) {
+            synchronized (this) {
+                if (catalog == null) {
+                    DataLakeFormat lakeFormat =
+                            tableOptions.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
+                    if (lakeFormat == null) {
+                        throw new IllegalArgumentException(
+                                "DataLake format is not specified in table options. "
+                                        + "Please ensure '"
+                                        + ConfigOptions.TABLE_DATALAKE_FORMAT.key()
+                                        + "' is set.");
+                    }
+                    if (lakeFormat == PAIMON) {
+                        catalog =
+                                PaimonCatalogFactory.create(catalogName, tableOptions, classLoader);
+                        this.lakeFormat = PAIMON;
+                    } else if (lakeFormat == ICEBERG) {
+                        catalog = IcebergCatalogFactory.create(catalogName, tableOptions);
+                        this.lakeFormat = ICEBERG;
                     } else {
                         throw new UnsupportedOperationException(
-                                "Unsupported datalake format: " + dataLakeFormat);
+                                "Unsupported datalake format: " + lakeFormat);
                     }
-                });
+                }
+            }
+        }
+        return catalog;
     }
 
-    public Catalog getLakeCatalog(Configuration tableOptions, DataLakeFormat lakeFormat) {
-        if (lakeFormat == null) {
-            throw new IllegalArgumentException("DataLake format cannot be null");
-        }
-        return LAKE_CATALOG_CACHE.computeIfAbsent(
+    public DataLakeFormat getLakeFormat() {
+        checkNotNull(
                 lakeFormat,
-                (dataLakeFormat) -> {
-                    if (dataLakeFormat == PAIMON) {
-                        return PaimonCatalogFactory.create(catalogName, tableOptions, classLoader);
-                    } else if (dataLakeFormat == ICEBERG) {
-                        return IcebergCatalogFactory.create(catalogName, tableOptions);
-                    } else {
-                        throw new UnsupportedOperationException(
-                                "Unsupported datalake format: " + dataLakeFormat);
-                    }
-                });
+                "DataLake format is null, must call getLakeCatalog firstly to initialize lake format.");
+        return lakeFormat;
     }
 
     /**

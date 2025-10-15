@@ -23,7 +23,7 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.InvalidTableException;
-import org.apache.fluss.flink.lake.LakeCatalog;
+import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
@@ -114,7 +114,7 @@ public class FlinkCatalog extends AbstractCatalog {
     protected final String defaultDatabase;
     protected final String bootstrapServers;
     protected final Map<String, String> securityConfigs;
-    private final LakeCatalog lakeCatalog;
+    private final LakeFlinkCatalog lakeFlinkCatalog;
     protected Connection connection;
     protected Admin admin;
 
@@ -130,12 +130,12 @@ public class FlinkCatalog extends AbstractCatalog {
         this.bootstrapServers = bootstrapServers;
         this.classLoader = classLoader;
         this.securityConfigs = securityConfigs;
-        this.lakeCatalog = new LakeCatalog(catalogName, classLoader);
+        this.lakeFlinkCatalog = new LakeFlinkCatalog(catalogName, classLoader);
     }
 
     @Override
     public Optional<Factory> getFactory() {
-        return Optional.of(new FlinkTableFactory(lakeCatalog));
+        return Optional.of(new FlinkTableFactory(lakeFlinkCatalog));
     }
 
     @Override
@@ -340,7 +340,7 @@ public class FlinkCatalog extends AbstractCatalog {
             // Need to reconstruct: table_name + $snapshots
             tableName = String.join("", tableComponents);
         }
-        return lakeCatalog
+        return lakeFlinkCatalog
                 .getLakeCatalog(properties)
                 .getTable(new ObjectPath(databaseName, tableName));
     }

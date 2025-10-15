@@ -20,7 +20,7 @@ package org.apache.fluss.flink.catalog;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
-import org.apache.fluss.flink.lake.LakeCatalog;
+import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.lake.LakeTableFactory;
 import org.apache.fluss.flink.sink.FlinkTableSink;
 import org.apache.fluss.flink.source.FlinkTableSource;
@@ -69,11 +69,11 @@ import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
 /** Factory to create table source and table sink for Fluss. */
 public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
 
-    private final LakeCatalog lakeCatalog;
+    private final LakeFlinkCatalog lakeFlinkCatalog;
     private volatile LakeTableFactory lakeTableFactory;
 
-    public FlinkTableFactory(LakeCatalog lakeCatalog) {
-        this.lakeCatalog = lakeCatalog;
+    public FlinkTableFactory(LakeFlinkCatalog lakeFlinkCatalog) {
+        this.lakeFlinkCatalog = lakeFlinkCatalog;
     }
 
     @Override
@@ -257,7 +257,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         if (lakeTableFactory == null) {
             synchronized (this) {
                 if (lakeTableFactory == null) {
-                    lakeTableFactory = new LakeTableFactory(lakeCatalog);
+                    lakeTableFactory = new LakeTableFactory(lakeFlinkCatalog);
                 }
             }
         }

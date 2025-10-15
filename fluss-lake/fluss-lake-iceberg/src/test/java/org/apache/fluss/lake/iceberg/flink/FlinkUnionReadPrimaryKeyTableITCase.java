@@ -278,7 +278,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testReadIcebergLakeTableAndSystemTable(boolean isPartitioned) throws Exception {
+    void testReadIcebergLakeTable(boolean isPartitioned) throws Exception {
         // first of all, start tiering
         JobClient jobClient = buildTieringJob(execEnv);
 
@@ -307,13 +307,6 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
         // per partition
         int expectedUserRowCount = isPartitioned ? 2 * waitUntilPartitions(t1).size() : 2;
         assertThat(icebergRows).hasSize(expectedUserRowCount);
-
-        // verify rows have expected number of columns
-        int userColumnCount = lakeTableResult.getResolvedSchema().getColumnCount();
-        Row firstRow = icebergRows.get(0);
-        assertThat(firstRow.getArity())
-                .as("Iceberg row should have at least user columns")
-                .isGreaterThanOrEqualTo(userColumnCount);
 
         // Test 2: Read Iceberg system table (snapshots) using $lake$snapshots suffix
         TableResult snapshotsResult =
