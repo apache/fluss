@@ -109,6 +109,7 @@ check_prerequisites() {
     local required_dirs=(
         "$PROJECT_ROOT/fluss-flink/fluss-flink-1.20/target"
         "$PROJECT_ROOT/fluss-lake/fluss-lake-paimon/target"
+        "$PROJECT_ROOT/fluss-lake/fluss-lake-iceberg/target"
         "$PROJECT_ROOT/fluss-flink/fluss-flink-tiering/target"
     )
 
@@ -140,6 +141,7 @@ main() {
     log_info "Copying Fluss connector JARs..."
     copy_jar "$PROJECT_ROOT/fluss-flink/fluss-flink-1.20/target/fluss-flink-1.20-*.jar" "./lib" "fluss-flink-1.20 connector"
     copy_jar "$PROJECT_ROOT/fluss-lake/fluss-lake-paimon/target/fluss-lake-paimon-*.jar" "./lib" "fluss-lake-paimon connector"
+    copy_jar "$PROJECT_ROOT/fluss-lake/fluss-lake-iceberg/target/fluss-lake-iceberg-*.jar" "./lib" "fluss-lake-iceberg connector"
 
     # Download external dependencies
     log_info "Downloading external dependencies..."
@@ -151,12 +153,12 @@ main() {
         "" \
         "flink-faker-0.5.3"
 
-    # Download flink-shaded-hadoop-2-uber for Hadoop integration
+    # Download Hadoop for HDFS/local filesystem support
     download_jar \
         "https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar" \
         "./lib/hadoop-apache-3.3.5-2.jar" \
         "508255883b984483a45ca48d5af6365d4f013bb8" \
-        "hadoop-apache-3.3.5-2.jar"
+        "hadoop-apache-3.3.5-2"
 
     # Download paimon-flink connector
     download_jar \
@@ -165,13 +167,24 @@ main() {
         "b9f8762c6e575f6786f1d156a18d51682ffc975c" \
         "paimon-flink-1.20-1.2.0"
 
+    # Iceberg Support
+    log_info "Downloading Iceberg connector JARs..."
+
+    # Download iceberg-flink-runtime for Flink 1.20 (version 1.9.1)
+    download_jar \
+        "https://repo1.maven.org/maven2/org/apache/iceberg/iceberg-flink-runtime-1.20/1.9.1/iceberg-flink-runtime-1.20-1.9.1.jar" \
+        "./lib/iceberg-flink-runtime-1.20-1.9.1.jar" \
+        "" \
+        "iceberg-flink-runtime-1.20-1.9.1"
+
+
     # Prepare lake tiering JAR
     log_info "Preparing lake tiering JAR..."
     copy_jar "$PROJECT_ROOT/fluss-flink/fluss-flink-tiering/target/fluss-flink-tiering-*.jar" "./opt" "fluss-flink-tiering"
 
     # Final verification
     verify_jars
-    
+
     # Show summary
     show_summary
 }
@@ -179,34 +192,36 @@ main() {
 # Verify that all required JAR files are present
 verify_jars() {
     log_info "Verifying all required JAR files are present..."
-    
+
     local missing_jars=()
     local lib_jars=(
         "fluss-flink-1.20-*.jar"
         "fluss-lake-paimon-*.jar"
+        "fluss-lake-iceberg-*.jar"
         "flink-faker-0.5.3.jar"
         "hadoop-apache-3.3.5-2.jar"
         "paimon-flink-1.20-1.2.0.jar"
+        "iceberg-flink-runtime-1.20-1.9.1.jar"
     )
-    
+
     local opt_jars=(
         "fluss-flink-tiering-*.jar"
     )
-    
+
     # Check lib directory
     for jar_pattern in "${lib_jars[@]}"; do
         if ! ls ./lib/$jar_pattern >/dev/null 2>&1; then
             missing_jars+=("lib/$jar_pattern")
         fi
     done
-    
+
     # Check opt directory
     for jar_pattern in "${opt_jars[@]}"; do
         if ! ls ./opt/$jar_pattern >/dev/null 2>&1; then
             missing_jars+=("opt/$jar_pattern")
         fi
     done
-    
+
     # Report results
     if [ ${#missing_jars[@]} -eq 0 ]; then
         log_success "All required JAR files are present!"
@@ -224,10 +239,22 @@ show_summary() {
     log_success "JAR files preparation completed!"
     echo ""
     log_info "📦 Generated JAR files:"
-    echo "Lib directory:"
-    ls -la ./lib/ 2>/dev/null || echo "  (empty)"
-    echo "Opt directory:"
-    ls -la ./opt/ 2>/dev/null || echo "  (empty)"
+    echo ""
+    echo "Lib directory (Flink connectors):"
+    ls -lh ./lib/ | tail -n +2 | awk '{printf "  %-50s %8s\n", $9, $5}'
+    echo ""
+    echo "Opt directory (Tiering service):"
+    ls -lh ./opt/ | tail -n +2 | awk '{printf "  %-50s %8s\n", $9, $5}'
+    echo ""
+    log_info "📋 Included Components:"
+    echo "  ✓ Fluss Flink 1.20 connector"
+    echo "  ✓ Fluss Lake Paimon connector"
+    echo "  ✓ Fluss Lake Iceberg connector"
+    echo "  ✓ Iceberg Flink runtime 1.20 (v1.9.1)"
+    echo "  ✓ Paimon Flink 1.20 (v1.2.0)"
+    echo "  ✓ Hadoop Apache (v3.3.5-2)"
+    echo "  ✓ Flink Faker (v0.5.3)"
+    echo "  ✓ Fluss Tiering service"
 }
 
 # Run main function
