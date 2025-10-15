@@ -37,7 +37,6 @@ import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
-import org.junit.Ignore;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -279,12 +278,11 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
 
     @ParameterizedTest
     @ValueSource(booleans = {false, true})
-    void testReadIcebergLakeTableDirectly(boolean isPartitioned) throws Exception {
+    void testReadIcebergLakeTableAndSystemTable(boolean isPartitioned) throws Exception {
         // first of all, start tiering
         JobClient jobClient = buildTieringJob(execEnv);
 
-        String tableName =
-                "lake_direct_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
+        String tableName = "lake_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
 
         TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
         Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
@@ -295,7 +293,7 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
         // wait until records have been synced to Iceberg
         waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
 
-        // Read Iceberg snapshot directly using $lake suffix
+        // Test 1: Read Iceberg lake table directly using $lake suffix
         TableResult lakeTableResult =
                 batchTEnv.executeSql(String.format("select * from %s$lake", tableName));
         List<Row> icebergRows = CollectionUtil.iteratorToList(lakeTableResult.collect());
@@ -310,9 +308,6 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
         int expectedUserRowCount = isPartitioned ? 2 * waitUntilPartitions(t1).size() : 2;
         assertThat(icebergRows).hasSize(expectedUserRowCount);
 
-        // Note: Iceberg may add metadata columns at the end
-        // This test verifies that the $lake suffix works and data can be retrieved
-
         // verify rows have expected number of columns (user columns + potential Iceberg metadata)
         int userColumnCount = 16; // The table has 16 columns
         Row firstRow = icebergRows.get(0);
@@ -320,44 +315,33 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
                 .as("Iceberg row should have at least user columns")
                 .isGreaterThanOrEqualTo(userColumnCount);
 
-        jobClient.cancel().get();
-    }
-
-    @Ignore
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testReadIcebergSystemTable(boolean isPartitioned) throws Exception {
-        // first of all, start tiering
-        JobClient jobClient = buildTieringJob(execEnv);
-
-        String tableName =
-                "lake_system_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
-
-        TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
-        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
-        // create table & write initial data
-        long tableId =
-                preparePKTableFullType(t1, DEFAULT_BUCKET_NUM, isPartitioned, bucketLogEndOffset);
-
-        // wait until records have been synced to Iceberg
-        waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
-
-        // Read Iceberg system table (snapshots) using $lake$snapshots suffix
+        // Test 2: Read Iceberg system table (snapshots) using $lake$snapshots suffix
         TableResult snapshotsResult =
                 batchTEnv.executeSql(String.format("select * from %s$lake$snapshots", tableName));
         List<Row> snapshotRows = CollectionUtil.iteratorToList(snapshotsResult.collect());
-        System.out.println(snapshotRows);
 
         // Verify that we can read snapshots from Iceberg via $lake$snapshots suffix
         assertThat(snapshotRows).as("Should have at least one snapshot").isNotEmpty();
 
-        // Verify that snapshot rows have expected columns
-        // Iceberg snapshots table typically has columns like: committed_at, snapshot_id, parent_id,
-        // operation, etc.
+        // Verify snapshot structure based on Iceberg snapshots table schema
+        // Expected columns: committed_at, snapshot_id, parent_id, operation, manifest_list, summary
         Row firstSnapshot = snapshotRows.get(0);
-        assertThat(firstSnapshot.getArity())
-                .as("Snapshot row should have multiple columns")
-                .isGreaterThan(0);
+        assertThat(firstSnapshot.getArity()).as("Snapshot row should have 6 columns").isEqualTo(6);
+
+        // Verify committed_at field (index 0) is not null
+        assertThat(firstSnapshot.getField(0)).as("committed_at should not be null").isNotNull();
+
+        // Verify snapshot_id field (index 1) is not null
+        assertThat(firstSnapshot.getField(1)).as("snapshot_id should not be null").isNotNull();
+
+        // Verify manifest_list field (index 4) is not null and is a string path
+        assertThat(firstSnapshot.getField(4))
+                .as("manifest_list should be a non-null path")
+                .isNotNull()
+                .isInstanceOf(String.class);
+
+        // Verify summary field (index 5) contains expected metadata
+        assertThat(firstSnapshot.getField(5)).as("summary should not be null").isNotNull();
 
         jobClient.cancel().get();
     }

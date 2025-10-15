@@ -50,13 +50,31 @@ public class LakeCatalog {
 
     public Catalog getLakeCatalog(Configuration tableOptions) {
         DataLakeFormat lakeFormat = tableOptions.get(ConfigOptions.TABLE_DATALAKE_FORMAT);
-        // TODO: Currently, a Fluss cluster only supports a single DataLake storage.
-        // However, in the
-        //  future, it may support multiple DataLakes. The following code assumes
-        // that a single
-        //  lakeCatalog is shared across multiple tables, which will no longer be
-        // valid in such
-        //  cases and should be updated accordingly.
+        if (lakeFormat == null) {
+            throw new IllegalArgumentException(
+                    "DataLake format is not specified in table options. "
+                            + "Please ensure '"
+                            + ConfigOptions.TABLE_DATALAKE_FORMAT.key()
+                            + "' is set.");
+        }
+        return LAKE_CATALOG_CACHE.computeIfAbsent(
+                lakeFormat,
+                (dataLakeFormat) -> {
+                    if (dataLakeFormat == PAIMON) {
+                        return PaimonCatalogFactory.create(catalogName, tableOptions, classLoader);
+                    } else if (dataLakeFormat == ICEBERG) {
+                        return IcebergCatalogFactory.create(catalogName, tableOptions);
+                    } else {
+                        throw new UnsupportedOperationException(
+                                "Unsupported datalake format: " + dataLakeFormat);
+                    }
+                });
+    }
+
+    public Catalog getLakeCatalog(Configuration tableOptions, DataLakeFormat lakeFormat) {
+        if (lakeFormat == null) {
+            throw new IllegalArgumentException("DataLake format cannot be null");
+        }
         return LAKE_CATALOG_CACHE.computeIfAbsent(
                 lakeFormat,
                 (dataLakeFormat) -> {

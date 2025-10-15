@@ -135,7 +135,7 @@ public class FlinkCatalog extends AbstractCatalog {
 
     @Override
     public Optional<Factory> getFactory() {
-        return Optional.of(new FlinkTableFactory());
+        return Optional.of(new FlinkTableFactory(lakeCatalog));
     }
 
     @Override
@@ -336,7 +336,8 @@ public class FlinkCatalog extends AbstractCatalog {
             // should be pattern like table_name$lake
             tableName = tableComponents[0];
         } else {
-            // be something like table_name$lake$snapshot
+            // pattern is table_name$lake$snapshots
+            // Need to reconstruct: table_name + $snapshots
             tableName = String.join("", tableComponents);
         }
         return lakeCatalog

@@ -20,6 +20,7 @@ package org.apache.fluss.flink.catalog;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
+import org.apache.fluss.flink.lake.LakeCatalog;
 import org.apache.fluss.flink.lake.LakeTableFactory;
 import org.apache.fluss.flink.sink.FlinkTableSink;
 import org.apache.fluss.flink.source.FlinkTableSource;
@@ -68,7 +69,12 @@ import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
 /** Factory to create table source and table sink for Fluss. */
 public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
 
+    private final LakeCatalog lakeCatalog;
     private volatile LakeTableFactory lakeTableFactory;
+
+    public FlinkTableFactory(LakeCatalog lakeCatalog) {
+        this.lakeCatalog = lakeCatalog;
+    }
 
     @Override
     public DynamicTableSource createDynamicTableSource(Context context) {
@@ -76,9 +82,16 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         ObjectIdentifier tableIdentifier = context.getObjectIdentifier();
         String tableName = tableIdentifier.getObjectName();
         if (tableName.contains(LAKE_TABLE_SPLITTER)) {
-            tableName = tableName.substring(0, tableName.indexOf(LAKE_TABLE_SPLITTER));
+            // Extract the lake table name: for "table$lake" -> "table"
+            // for "table$lake$snapshots" -> "table$snapshots"
+            String baseTableName = tableName.substring(0, tableName.indexOf(LAKE_TABLE_SPLITTER));
+            String suffix =
+                    tableName.substring(
+                            tableName.indexOf(LAKE_TABLE_SPLITTER) + LAKE_TABLE_SPLITTER.length());
+            String lakeTableName = suffix.isEmpty() ? baseTableName : baseTableName + suffix;
+
             lakeTableFactory = mayInitLakeTableFactory();
-            return lakeTableFactory.createDynamicTableSource(context, tableName);
+            return lakeTableFactory.createDynamicTableSource(context, lakeTableName);
         }
 
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
@@ -248,7 +261,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         if (lakeTableFactory == null) {
             synchronized (this) {
                 if (lakeTableFactory == null) {
-                    lakeTableFactory = new LakeTableFactory();
+                    lakeTableFactory = new LakeTableFactory(lakeCatalog);
                 }
             }
         }
