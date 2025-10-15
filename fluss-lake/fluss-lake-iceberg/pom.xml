@@ -242,6 +242,12 @@
             <version>${iceberg.version}</version>
             <scope>test</scope>
         </dependency>
+
+        <dependency>
+            <groupId>org.apache.flink</groupId>
+            <artifactId>flink-connector-files</artifactId>
+            <scope>test</scope>
+        </dependency>
     </dependencies>
 
     <build>

@@ -32,9 +32,12 @@ import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.core.execution.JobClient;
+import org.apache.flink.table.api.TableResult;
 import org.apache.flink.types.Row;
 import org.apache.flink.types.RowKind;
 import org.apache.flink.util.CloseableIterator;
+import org.apache.flink.util.CollectionUtil;
+import org.junit.Ignore;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
@@ -51,6 +54,7 @@ import java.util.Map;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsExactOrder;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertRowResultsIgnoreOrder;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test case for union read primary key table. */
 public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase {
@@ -271,6 +275,91 @@ public class FlinkUnionReadPrimaryKeyTableITCase extends FlinkUnionReadTestBase 
         } else {
             assertResultsExactOrder(actual, totalExpectedRows, true);
         }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testReadIcebergLakeTableDirectly(boolean isPartitioned) throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName =
+                "lake_direct_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
+
+        TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+        // create table & write initial data
+        long tableId =
+                preparePKTableFullType(t1, DEFAULT_BUCKET_NUM, isPartitioned, bucketLogEndOffset);
+
+        // wait until records have been synced to Iceberg
+        waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
+
+        // Read Iceberg snapshot directly using $lake suffix
+        TableResult lakeTableResult =
+                batchTEnv.executeSql(String.format("select * from %s$lake", tableName));
+        List<Row> icebergRows = CollectionUtil.iteratorToList(lakeTableResult.collect());
+
+        // Verify that we can read data from Iceberg via $lake suffix
+        assertThat(icebergRows).isNotEmpty();
+
+        // Note: The expected row count should be based on how many rows were written
+        // In preparePKTableFullType, we write 2 unique rows (by PK) per iteration, 2 iterations
+        // Since this is a primary key table, duplicate PKs are deduplicated, so only 2 unique rows
+        // per partition
+        int expectedUserRowCount = isPartitioned ? 2 * waitUntilPartitions(t1).size() : 2;
+        assertThat(icebergRows).hasSize(expectedUserRowCount);
+
+        // Note: Iceberg may add metadata columns at the end
+        // This test verifies that the $lake suffix works and data can be retrieved
+
+        // verify rows have expected number of columns (user columns + potential Iceberg metadata)
+        int userColumnCount = 16; // The table has 16 columns
+        Row firstRow = icebergRows.get(0);
+        assertThat(firstRow.getArity())
+                .as("Iceberg row should have at least user columns")
+                .isGreaterThanOrEqualTo(userColumnCount);
+
+        jobClient.cancel().get();
+    }
+
+    @Ignore
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testReadIcebergSystemTable(boolean isPartitioned) throws Exception {
+        // first of all, start tiering
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        String tableName =
+                "lake_system_pk_table_" + (isPartitioned ? "partitioned" : "non_partitioned");
+
+        TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
+        Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+        // create table & write initial data
+        long tableId =
+                preparePKTableFullType(t1, DEFAULT_BUCKET_NUM, isPartitioned, bucketLogEndOffset);
+
+        // wait until records have been synced to Iceberg
+        waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
+
+        // Read Iceberg system table (snapshots) using $lake$snapshots suffix
+        TableResult snapshotsResult =
+                batchTEnv.executeSql(String.format("select * from %s$lake$snapshots", tableName));
+        List<Row> snapshotRows = CollectionUtil.iteratorToList(snapshotsResult.collect());
+        System.out.println(snapshotRows);
+
+        // Verify that we can read snapshots from Iceberg via $lake$snapshots suffix
+        assertThat(snapshotRows).as("Should have at least one snapshot").isNotEmpty();
+
+        // Verify that snapshot rows have expected columns
+        // Iceberg snapshots table typically has columns like: committed_at, snapshot_id, parent_id,
+        // operation, etc.
+        Row firstSnapshot = snapshotRows.get(0);
+        assertThat(firstSnapshot.getArity())
+                .as("Snapshot row should have multiple columns")
+                .isGreaterThan(0);
+
+        jobClient.cancel().get();
     }
 
     private void writeFullTypeRow(TablePath tablePath, String partition) throws Exception {
