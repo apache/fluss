@@ -442,7 +442,7 @@ SELECT snapshot_id, total_record_count FROM datalake_enriched_orders$lake$snapsh
 |           1 |                650 |
 +-------------+--------------------+
 ```
-**Note:** Make sure to wait for the checkpoints (~30s) to complete before querying the snapshots, otherwise the result will be empty.
+**Note:** Make sure to wait for the configured `datalake.freshness` (~30s) to complete before querying the snapshots, otherwise the result will be empty.
 
 Run the following SQL to do analytics on Paimon data:
 ```sql  title="Flink SQL"

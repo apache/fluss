@@ -36,8 +36,7 @@ cd fluss-quickstart-flink-iceberg
 
 ```shell
 mkdir lib
-wget -O lib/https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar
-```
+wget -O lib/hadoop-apache-3.3.5-2.jar https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar```
 
 This jar file provides Hadoop 3.3.5 dependencies required for Iceberg's Hadoop catalog integration.
 
@@ -465,7 +464,7 @@ SELECT snapshot_id, operation FROM datalake_enriched_orders$lake$snapshots;
 |           1 |             append |
 +-------------+--------------------+
 ```
-**Note:** Make sure to wait for the checkpoints (~30s) to complete before querying the snapshots, otherwise the result will be empty.
+**Note:** Make sure to wait for the configured `datalake.freshness` (~30s) to complete before querying the snapshots, otherwise the result will be empty.
 
 Run the following SQL to do analytics on Iceberg data:
 ```sql  title="Flink SQL"
