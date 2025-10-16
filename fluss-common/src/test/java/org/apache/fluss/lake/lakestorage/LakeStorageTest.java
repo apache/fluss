@@ -146,6 +146,11 @@ class LakeStorageTest {
     private static class TestPaimonLakeCatalog implements LakeCatalog {
 
         @Override
+        public TableDescriptor getTable(TablePath tablePath) throws TableNotExistException {
+            return null;
+        }
+
+        @Override
         public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
                 throws TableAlreadyExistException {}
 
