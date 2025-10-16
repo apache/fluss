@@ -25,7 +25,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
-import org.apache.fluss.flink.tiering.event.TieringRestoreEvent;
+import org.apache.fluss.flink.tiering.event.TieringFailOverEvent;
 import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
 import org.apache.fluss.flink.tiering.source.TieringSource;
 import org.apache.fluss.lake.committer.BucketOffset;
@@ -129,10 +129,10 @@ public class TieringCommitOperator<WriteResult, Committable>
         super.setup(containingTask, config, output);
         int attemptNumber = getRuntimeContext().getAttemptNumber();
         if (attemptNumber > 0) {
-            LOG.info("Send TieringRestoreEvent");
+            LOG.info("Send TieringFailoverEvent, current attempt number: {}", attemptNumber);
             // attempt number is greater than zero, the job must failover
             operatorEventGateway.sendEventToCoordinator(
-                    new SourceEventWrapper(new TieringRestoreEvent()));
+                    new SourceEventWrapper(new TieringFailOverEvent()));
         }
     }
 
@@ -175,6 +175,9 @@ public class TieringCommitOperator<WriteResult, Committable>
                         new SourceEventWrapper(
                                 new FailedTieringEvent(
                                         tableId, ExceptionUtils.stringifyException(e))));
+                LOG.warn(
+                        "Fail to commit tiering write result, will try to tier again in next round.",
+                        e);
             } finally {
                 collectedTableBucketWriteResults.remove(tableId);
             }

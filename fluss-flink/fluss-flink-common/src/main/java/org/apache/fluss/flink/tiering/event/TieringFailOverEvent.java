@@ -20,7 +20,7 @@ package org.apache.fluss.flink.tiering.event;
 
 import org.apache.flink.api.connector.source.SourceEvent;
 
-/** SourceEvent used to represent tiering is restoring. */
-public class TieringRestoreEvent implements SourceEvent {
+/** SourceEvent used to represent tiering is failover. */
+public class TieringFailOverEvent implements SourceEvent {
     private static final long serialVersionUID = 1L;
 }
