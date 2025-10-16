@@ -78,7 +78,7 @@ public class LakeFlinkCatalog {
                         this.lakeFormat = ICEBERG;
                     } else {
                         throw new UnsupportedOperationException(
-                                "Unsupported datalake format: " + lakeFormat);
+                                "Unsupported data lake format: " + lakeFormat);
                     }
                 }
             }
@@ -89,7 +89,7 @@ public class LakeFlinkCatalog {
     public DataLakeFormat getLakeFormat() {
         checkNotNull(
                 lakeFormat,
-                "DataLake format is null, must call getLakeCatalog firstly to initialize lake format.");
+                "DataLake format is null, must call getLakeCatalog first to initialize lake format.");
         return lakeFormat;
     }
 
