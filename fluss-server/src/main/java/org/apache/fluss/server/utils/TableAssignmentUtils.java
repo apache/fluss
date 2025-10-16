@@ -46,7 +46,8 @@ public class TableAssignmentUtils {
             int replicationFactor,
             TabletServerInfo[] servers,
             int startIndex,
-            int nextReplicaShift) {
+            int nextReplicaShift,
+            int startBucketId) {
         if (nBuckets <= 0) {
             throw new InvalidBucketsException("Number of buckets must be larger than 0.");
         }
@@ -68,14 +69,20 @@ public class TableAssignmentUtils {
                     replicationFactor,
                     Arrays.stream(servers).mapToInt(TabletServerInfo::getId).toArray(),
                     startIndex,
-                    nextReplicaShift);
+                    nextReplicaShift,
+                    startBucketId);
         } else {
             if (Arrays.stream(servers).anyMatch(tsInfo -> tsInfo.getRack() == null)) {
                 throw new InvalidServerRackInfoException(
                         "Not all tabletServers have rack information for replica rack aware assignment.");
             } else {
                 return generateRackAwareAssigment(
-                        nBuckets, replicationFactor, servers, startIndex, nextReplicaShift);
+                        nBuckets,
+                        replicationFactor,
+                        servers,
+                        startIndex,
+                        nextReplicaShift,
+                        startBucketId);
             }
         }
     }
@@ -162,6 +169,22 @@ public class TableAssignmentUtils {
      * replica distribution is even across tabletServers and racks.
      */
     public static TableAssignment generateAssignment(
+            int nBuckets,
+            int replicationFactor,
+            TabletServerInfo[] servers,
+            int fixStartIndex,
+            int startBucketId)
+            throws InvalidReplicationFactorException {
+        return generateAssignment(
+                nBuckets,
+                replicationFactor,
+                servers,
+                fixStartIndex,
+                fixStartIndex >= 0 ? fixStartIndex : randomInt(servers.length),
+                startBucketId);
+    }
+
+    public static TableAssignment generateAssignment(
             int nBuckets, int replicationFactor, TabletServerInfo[] servers)
             throws InvalidReplicationFactorException {
         return generateAssignment(
@@ -169,7 +192,8 @@ public class TableAssignmentUtils {
                 replicationFactor,
                 servers,
                 randomInt(servers.length),
-                randomInt(servers.length));
+                randomInt(servers.length),
+                0);
     }
 
     private static TableAssignment generateRackUnawareAssigment(
@@ -177,9 +201,10 @@ public class TableAssignmentUtils {
             int replicationFactor,
             int[] serverIds,
             int startIndex,
-            int nextReplicaShift) {
+            int nextReplicaShift,
+            int startBucketId) {
         Map<Integer, BucketAssignment> assignments = new HashMap<>();
-        int currentBucketId = 0;
+        int currentBucketId = Math.max(0, startBucketId);
         for (int i = 0; i < nBuckets; i++) {
             if (currentBucketId > 0 && (currentBucketId % serverIds.length == 0)) {
                 nextReplicaShift += 1;
@@ -203,7 +228,8 @@ public class TableAssignmentUtils {
             int replicationFactor,
             TabletServerInfo[] servers,
             int startIndex,
-            int nextReplicaShift) {
+            int nextReplicaShift,
+            int startBucketId) {
         Map<Integer, String> serverRackMap = new HashMap<>();
         for (TabletServerInfo server : servers) {
             serverRackMap.put(server.getId(), server.getRack());
@@ -212,7 +238,7 @@ public class TableAssignmentUtils {
         List<Integer> arrangedServerList = getRackAlternatedTabletServerList(serverRackMap);
         int numServers = arrangedServerList.size();
         Map<Integer, BucketAssignment> assignments = new HashMap<>();
-        int currentBucketId = 0;
+        int currentBucketId = Math.max(0, startBucketId);
         for (int i = 0; i < nBuckets; i++) {
             if (currentBucketId > 0 && (currentBucketId % arrangedServerList.size() == 0)) {
                 nextReplicaShift += 1;

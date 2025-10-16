@@ -40,8 +40,13 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.function.Function;
 
+import static org.apache.fluss.config.cluster.AlterConfigOpType.BUCKET_NUM;
+
 /** Utils for conversion between Paimon and Fluss. */
 public class PaimonConversions {
+
+    // property key for bucket number
+    private static final String BUCKET_NUM = "bucket.num";
 
     public static RowKind toRowKind(ChangeType changeType) {
         switch (changeType) {
@@ -116,7 +121,14 @@ public class PaimonConversions {
         List<SchemaChange> schemaChanges = new ArrayList<>(tableChanges.size());
 
         for (TableChange tableChange : tableChanges) {
-            if (tableChange instanceof TableChange.SetOption) {
+            if (tableChange instanceof TableChange.BucketNumOption) {
+                TableChange.BucketNumOption bucketNumOption =
+                        (TableChange.BucketNumOption) tableChange;
+                schemaChanges.add(
+                        SchemaChange.setOption(
+                                optionKeyTransformer.apply(BUCKET_NUM),
+                                String.valueOf(bucketNumOption.getBucketNum())));
+            } else if (tableChange instanceof TableChange.SetOption) {
                 TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
                 schemaChanges.add(
                         SchemaChange.setOption(
