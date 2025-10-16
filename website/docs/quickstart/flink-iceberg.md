@@ -36,7 +36,8 @@ cd fluss-quickstart-flink-iceberg
 
 ```shell
 mkdir lib
-wget -O lib/hadoop-apache-3.3.5-2.jar https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar```
+wget -O lib/hadoop-apache-3.3.5-2.jar https://repo1.maven.org/maven2/io/trino/hadoop/hadoop-apache/3.3.5-2/hadoop-apache-3.3.5-2.jar
+```
 
 This jar file provides Hadoop 3.3.5 dependencies required for Iceberg's Hadoop catalog integration.
 
