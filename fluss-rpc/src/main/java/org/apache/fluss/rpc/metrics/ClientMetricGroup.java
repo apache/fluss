@@ -21,6 +21,8 @@ import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 
+import javax.annotation.Nullable;
+
 import java.util.Map;
 
 /** The metric group for clients. */
@@ -29,10 +31,16 @@ public class ClientMetricGroup extends AbstractMetricGroup {
     private static final String NAME = "client";
 
     private final String clientId;
+    private final @Nullable String clusterId;
 
     public ClientMetricGroup(MetricRegistry registry, String clientId) {
+        this(registry, null, clientId);
+    }
+
+    public ClientMetricGroup(MetricRegistry registry, @Nullable String clusterId, String clientId) {
         super(registry, new String[] {NAME}, null);
         this.clientId = clientId;
+        this.clusterId = clusterId;
     }
 
     @Override
@@ -43,6 +51,11 @@ public class ClientMetricGroup extends AbstractMetricGroup {
     @Override
     protected final void putVariables(Map<String, String> variables) {
         variables.put("client_id", clientId);
+        if (clusterId != null) {
+            variables.put("cluster_id", clusterId);
+        } else {
+            variables.put("cluster_id", "");
+        }
     }
 
     public MetricRegistry getMetricRegistry() {
