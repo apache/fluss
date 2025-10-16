@@ -57,6 +57,12 @@ public class AppendOnlyWriter extends RecordWriter<InternalRow> {
     @Override
     public void write(LogRecord record) throws Exception {
         flussRecordAsPaimonRow.setFlussRecord(record);
+
+        // get partition once
+        if (partition == null) {
+            partition = tableWrite.getPartition(flussRecordAsPaimonRow);
+        }
+
         // hacky, call internal method tableWrite.getWrite() to support
         // to write to given partition, otherwise, it'll always extract a partition from Paimon row
         // which may be costly

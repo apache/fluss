@@ -157,6 +157,9 @@ public class PaimonLakeCatalog implements LakeCatalog {
         Schema.Builder schemaBuilder = Schema.newBuilder();
         Options options = new Options();
 
+        // set default properties
+        setPaimonDefaultProperties(options);
+
         // When bucket key is undefined, it should use dynamic bucket (bucket = -1) mode.
         List<String> bucketKeys = tableDescriptor.getBucketKeys();
         if (!bucketKeys.isEmpty()) {
@@ -213,6 +216,12 @@ public class PaimonLakeCatalog implements LakeCatalog {
                 .forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
         schemaBuilder.options(options.toMap());
         return schemaBuilder.build();
+    }
+
+    private void setPaimonDefaultProperties(Options options) {
+        // set partition.legacy-name to false, otherwise paimon will use toString for all types,
+        // which will cause inconsistent partition value for a same binary value
+        options.set(CoreOptions.PARTITION_GENERATE_LEGCY_NAME, false);
     }
 
     private void setFlussPropertyToPaimon(String key, String value, Options options) {

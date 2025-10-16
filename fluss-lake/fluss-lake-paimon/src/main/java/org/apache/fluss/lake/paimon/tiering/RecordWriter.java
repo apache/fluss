@@ -29,7 +29,6 @@ import javax.annotation.Nullable;
 
 import java.util.List;
 
-import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonPartitionBinaryRow;
 import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** A base interface to write {@link LogRecord} to Paimon. */
@@ -38,7 +37,8 @@ public abstract class RecordWriter<T> implements AutoCloseable {
     protected final TableWriteImpl<T> tableWrite;
     protected final RowType tableRowType;
     protected final int bucket;
-    @Nullable protected final BinaryRow partition;
+    protected final List<String> partitionKeys;
+    @Nullable protected BinaryRow partition;
     protected final FlussRecordAsPaimonRow flussRecordAsPaimonRow;
 
     public RecordWriter(
@@ -50,7 +50,11 @@ public abstract class RecordWriter<T> implements AutoCloseable {
         this.tableWrite = tableWrite;
         this.tableRowType = tableRowType;
         this.bucket = tableBucket.getBucket();
-        this.partition = toPaimonPartitionBinaryRow(partitionKeys, partition);
+        this.partitionKeys = partitionKeys;
+        // set partition to EMPTY_ROW in advance for non-partitioned table
+        if (partition == null || partitionKeys.isEmpty()) {
+            this.partition = BinaryRow.EMPTY_ROW;
+        }
         this.flussRecordAsPaimonRow =
                 new FlussRecordAsPaimonRow(tableBucket.getBucket(), tableRowType);
     }

@@ -17,15 +17,22 @@
 
 package org.apache.fluss.lake.paimon.tiering;
 
+import org.apache.fluss.client.table.getter.PartitionGetter;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.lake.paimon.testutils.FlinkPaimonTieringTestBase;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.utils.types.Tuple2;
@@ -40,8 +47,17 @@ import org.apache.paimon.utils.CloseableIterator;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.MethodSource;
 
+import java.math.BigDecimal;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -49,6 +65,7 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -180,6 +197,150 @@ class PaimonTieringITCase extends FlinkPaimonTieringTestBase {
                         }
                     };
             checkSnapshotPropertyInPaimon(partitionedTablePath, properties);
+        } finally {
+            jobClient.cancel().get();
+        }
+    }
+
+    private static Stream<Arguments> tieringAllTypesWriteArgs() {
+        return Stream.of(Arguments.of(true), Arguments.of(false));
+    }
+
+    @ParameterizedTest
+    @MethodSource("tieringAllTypesWriteArgs")
+    void testTieringForAllTypes(boolean isPrimaryKeyTable) throws Exception {
+        // create a table, write some records and wait until snapshot finished
+        TablePath t1 =
+                TablePath.of(
+                        DEFAULT_DB,
+                        isPrimaryKeyTable ? "pkTableForAllTypes" : "logTableForAllTypes");
+        Schema.Builder builder =
+                Schema.newBuilder()
+                        .column("c0", DataTypes.STRING())
+                        .column("c1", DataTypes.BOOLEAN())
+                        .column("c2", DataTypes.TINYINT())
+                        .column("c3", DataTypes.SMALLINT())
+                        .column("c4", DataTypes.INT())
+                        .column("c5", DataTypes.BIGINT())
+                        .column("c6", DataTypes.FLOAT())
+                        .column("c7", DataTypes.DOUBLE())
+                        // decimal not support for partition key
+                        .column("c8", DataTypes.DECIMAL(10, 2))
+                        .column("c9", DataTypes.CHAR(10))
+                        .column("c10", DataTypes.STRING())
+                        .column("c11", DataTypes.BYTES())
+                        .column("c12", DataTypes.BINARY(5))
+                        .column("c13", DataTypes.DATE())
+                        .column("c14", DataTypes.TIME(6))
+                        .column("c15", DataTypes.TIMESTAMP(6))
+                        .column("c16", DataTypes.TIMESTAMP_LTZ(6));
+        if (isPrimaryKeyTable) {
+            builder.primaryKey(
+                    "c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c9", "c10", "c11", "c12",
+                    "c13", "c14", "c15", "c16");
+        }
+        List<String> partitionKeys =
+                Arrays.asList(
+                        "c1", "c2", "c3", "c4", "c5", "c6", "c7", "c9", "c10", "c11", "c12", "c13",
+                        "c14", "c15", "c16");
+        TableDescriptor.Builder tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(builder.build())
+                        .distributedBy(1, "c0")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        tableDescriptor.partitionedBy(partitionKeys);
+        tableDescriptor.customProperties(Collections.emptyMap());
+        tableDescriptor.properties(Collections.emptyMap());
+        long t1Id = createTable(t1, tableDescriptor.build());
+
+        // write records
+        List<InternalRow> rows =
+                Collections.singletonList(
+                        row(
+                                BinaryString.fromString("v0"),
+                                true,
+                                (byte) 1,
+                                (short) 2,
+                                3,
+                                4L,
+                                5.0f,
+                                6.0,
+                                Decimal.fromBigDecimal(new BigDecimal("0.09"), 10, 2),
+                                BinaryString.fromString("v1"),
+                                BinaryString.fromString("v2"),
+                                "v3".getBytes(StandardCharsets.UTF_8),
+                                new byte[] {1, 2, 3, 4, 5},
+                                (int) LocalDate.of(2025, 10, 16).toEpochDay(),
+                                (int)
+                                        (LocalTime.of(10, 10, 10, 123000000).toNanoOfDay()
+                                                / 1_000_000),
+                                TimestampNtz.fromLocalDateTime(
+                                        LocalDateTime.of(2025, 10, 16, 10, 10, 10, 123000000)),
+                                TimestampLtz.fromInstant(
+                                        Instant.parse("2025-10-16T10:10:10.123Z"))));
+        writeRows(t1, rows, !isPrimaryKeyTable);
+
+        TableInfo tableInfo = admin.getTableInfo(t1).get();
+        List<PartitionInfo> partitionInfos = admin.listPartitionInfos(t1).get();
+        assertThat(partitionInfos.size()).isEqualTo(1);
+        PartitionGetter partitionGetter =
+                new PartitionGetter(tableInfo.getRowType(), partitionKeys);
+        String partition = partitionGetter.getPartition(rows.get(0));
+        assertThat(partitionInfos.get(0).getPartitionName()).isEqualTo(partition);
+
+        long partitionId = partitionInfos.get(0).getPartitionId();
+        TableBucket t1Bucket = new TableBucket(t1Id, partitionId, 0);
+
+        // then start tiering job
+        JobClient jobClient = buildTieringJob(execEnv);
+
+        try {
+            // check the status of replica after synced
+            assertReplicaStatus(t1Bucket, 1);
+
+            // check data in paimon
+            Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
+                    getPaimonRowCloseableIterator(t1);
+            for (InternalRow expectedRow : rows) {
+                org.apache.paimon.data.InternalRow row = paimonRowIterator.next();
+                assertThat(row.getString(0).toString())
+                        .isEqualTo(expectedRow.getString(0).toString());
+                assertThat(row.getBoolean(1)).isEqualTo(expectedRow.getBoolean(1));
+                assertThat(row.getByte(2)).isEqualTo(expectedRow.getByte(2));
+                assertThat(row.getShort(3)).isEqualTo(expectedRow.getShort(3));
+                assertThat(row.getInt(4)).isEqualTo(expectedRow.getInt(4));
+                assertThat(row.getLong(5)).isEqualTo(expectedRow.getLong(5));
+                assertThat(row.getFloat(6)).isEqualTo(expectedRow.getFloat(6));
+                assertThat(row.getDouble(7)).isEqualTo(expectedRow.getDouble(7));
+                assertThat(row.getDecimal(8, 10, 2).toBigDecimal())
+                        .isEqualTo(expectedRow.getDecimal(8, 10, 2).toBigDecimal());
+                assertThat(row.getString(9).toString())
+                        .isEqualTo(expectedRow.getString(9).toString());
+                assertThat(row.getString(10).toString())
+                        .isEqualTo(expectedRow.getString(10).toString());
+                assertThat(row.getBinary(11)).isEqualTo(expectedRow.getBytes(11));
+                assertThat(row.getBinary(12)).isEqualTo(expectedRow.getBinary(12, 5));
+                assertThat(row.getInt(13)).isEqualTo(expectedRow.getInt(13));
+                assertThat(row.getInt(14)).isEqualTo(expectedRow.getInt(14));
+                assertThat(row.getTimestamp(15, 6).getMillisecond())
+                        .isEqualTo(expectedRow.getTimestampNtz(15, 6).getMillisecond());
+                assertThat(row.getTimestamp(16, 6).getMillisecond())
+                        .isEqualTo(expectedRow.getTimestampLtz(16, 6).getEpochMillisecond());
+
+                // check snapshot in paimon
+                Map<String, String> properties =
+                        new HashMap<String, String>() {
+                            {
+                                put(
+                                        FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY,
+                                        String.format(
+                                                "[{\"partition_id\":%d,\"bucket\":0,\"partition_name\":\"c1=true/c2=1/c3=2/c4=3/c5=4/c6=5_0/c7=6_0/c9=v1/c10=v2/c11=7633/c12=0102030405/c13=2025-10-16/c14=10-10-10_123/c15=2025-10-16-10-10-10_123/c16=2025-10-16-10-10-10_123\",\"offset\":1}]",
+                                                partitionId));
+                            }
+                        };
+                checkSnapshotPropertyInPaimon(t1, properties);
+            }
         } finally {
             jobClient.cancel().get();
         }

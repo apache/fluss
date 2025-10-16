@@ -18,7 +18,6 @@
 package org.apache.fluss.lake.paimon.utils;
 
 import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
-import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.ChangeType;
@@ -26,15 +25,10 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 
 import org.apache.paimon.catalog.Identifier;
-import org.apache.paimon.data.BinaryRow;
-import org.apache.paimon.data.BinaryRowWriter;
-import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.schema.SchemaChange;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
-
-import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -76,31 +70,6 @@ public class PaimonConversions {
 
     public static Identifier toPaimon(TablePath tablePath) {
         return Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
-    }
-
-    public static BinaryRow toPaimonPartitionBinaryRow(
-            List<String> partitionKeys, @Nullable String partitionName) {
-        if (partitionName == null || partitionKeys.isEmpty()) {
-            return BinaryRow.EMPTY_ROW;
-        }
-
-        //  Fluss's existing utility
-        ResolvedPartitionSpec resolvedPartitionSpec =
-                ResolvedPartitionSpec.fromPartitionName(partitionKeys, partitionName);
-
-        BinaryRow partitionBinaryRow = new BinaryRow(partitionKeys.size());
-        BinaryRowWriter writer = new BinaryRowWriter(partitionBinaryRow);
-
-        List<String> partitionValues = resolvedPartitionSpec.getPartitionValues();
-        for (int i = 0; i < partitionKeys.size(); i++) {
-            // Todo Currently, partition column must be String datatype, so we can always use
-            // `BinaryString.fromString` to convert to Paimon's data structure. Revisit here when
-            // #489 is finished.
-            writer.writeString(i, BinaryString.fromString(partitionValues.get(i)));
-        }
-
-        writer.complete();
-        return partitionBinaryRow;
     }
 
     public static Object toPaimonLiteral(DataType dataType, Object flussLiteral) {
