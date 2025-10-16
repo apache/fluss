@@ -21,9 +21,9 @@
 # Declare variables to be passed into your templates.
 
 image:
-  registry: docker.io
-  repository: fluss/fluss
-  tag: "0.7.0"
+  registry: ""
+  repository: fluss
+  tag: "0.8-SNAPSHOT"
   pullPolicy: IfNotPresent
   pullSecrets: []
 

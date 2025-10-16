@@ -5,7 +5,7 @@ This chart deploys an Apache Fluss cluster on Kubernetes, following Helm best pr
 It requires a Zookeeper ensemble to be running in the same Kubernetes cluster. In future releases, we may add support for an embedded Zookeeper cluster.
 
 
-## Requirements 
+## Development environment 
 
 | component                                                                      | version |
 | ------------------------------------------------------------------------------ | ------- |
@@ -13,9 +13,21 @@ It requires a Zookeeper ensemble to be running in the same Kubernetes cluster. I
 | [Minikube](https://minikube.sigs.k8s.io/docs/)                                 | v1.36.0 |
 | [Kubernetes](https://kubernetes.io)                                            | v1.25.3 |
 | [Helm](https://helm.sh)                                                        | v3.18.6 |
-| [Apache Fluss](https://fluss.apache.org/docs/)                                 | v0.7.0  |
+| [Apache Fluss](https://fluss.apache.org/docs/)                                 | v0.8-SNAPSHOT  |
 
-A container image for Fluss is available on DockerHub as `fluss/fluss:0.7.0`. You can use it directly or build your own from this repo.
+
+## Image requirements 
+
+A container image for Fluss is available on DockerHub as `fluss/fluss`. You can use it directly or build your own from this repo. To use your own image you need to build the project with [Maven](https://fluss.apache.org/community/dev/building/) and build it with Docker.
+
+The Maven build will create all required artifacts in the `build-target` directory. You need to copy it into the `docker` directory. The Dockerfile in this directory will copy these artifacts into the image.
+
+In minikube, you can use the local Docker daemon to build the image without pushing it to a registry:
+
+```bash
+eval $(minikube -p minikube docker-env)
+docker build -t fluss/fluss:0.8-SNAPSHOT .
+```
 
 ## Overview
 
@@ -27,15 +39,9 @@ It creates:
 
 ## Quick start
 
-1) Default (Zookeeper available in-cluster):
+1) ZooKeeper deployment:
 
-```bash
-helm install fluss ./fluss-helm
-```
-
-2) ZooKeeper deployment:
-
-To start Zookeeper use Bitnami’s chart or your own deployment. Example with Bitnami’s chart:
+To start Zookeeper use Bitnami’s chart or your own deployment. If you have an existing Zookeeper cluster, you can skip this step. Example with Bitnami’s chart:
 
 ```bash
 helm repo add bitnami https://charts.bitnami.com/bitnami
@@ -44,6 +50,20 @@ helm install zk bitnami/zookeeper \
   --set replicaCount=3 \
   --set auth.enabled=false \
   --set persistence.size=5Gi
+```
+
+2) Default (Zookeeper available in-cluster):
+
+```bash
+helm install fluss ./fluss-helm
+```
+With an optional namespace flag `--namespace <your-namespace>` if you want to install it in a specific namespace.
+
+This assumes, that Zookeeper is reachable at `zk-zookeeper.<your-namespace>.svc.cluster.local:2181`. If your Zookeeper address is different, you can override it with:
+
+```bash
+helm install fluss ./fluss-helm \
+  --set zookeeper.address=<your-zk-address>
 ```
 
 ## Configuration reference
