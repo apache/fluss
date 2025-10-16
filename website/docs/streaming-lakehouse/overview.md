@@ -9,17 +9,16 @@ sidebar_position: 1
 
 Lakehouse represents a new, open architecture that combines the best elements of data lakes and data warehouses. 
 It combines data lake scalability and cost-effectiveness with data warehouse reliability and performance. 
-The well-known data lake format such like [Apache Iceberg](https://iceberg.apache.org/), [Apache Paimon](https://paimon.apache.org/), [Apache Hudi](https://hudi.apache.org/) and [Delta Lake](https://delta.io/) play key roles in the Lakehouse architecture,
+The well-known data lake formats such as [Apache Iceberg](https://iceberg.apache.org/), [Apache Paimon](https://paimon.apache.org/), [Apache Hudi](https://hudi.apache.org/) and [Delta Lake](https://delta.io/) play key roles in the Lakehouse architecture,
 facilitating a harmonious balance between data storage, reliability, and analytical capabilities within a single, unified platform.
 
 Lakehouse, as a modern architecture, is effective in addressing the complex needs of data management and analytics.
-But they can hardly meet the scenario of real-time analytics requiring sub-second-level data freshness limited by their implementation.
+However, they struggle to meet real-time analytics scenarios that require sub-second-level data freshness due to limitations in their implementation.
 With these data lake formats, you will get into a contradictory situation:
 
-1. If you require low latency, then you write and commit frequently, which means many small Parquet files. This becomes inefficient for
+1. If you require low latency, then you must write and commit frequently, resulting in many small Parquet files. This becomes inefficient for
 reads which must now deal with masses of small files.
-2. If you require reading efficiency, then you accumulate data until you can write to large Parquet files, but this introduces
-much higher latency.
+2. If you require reading efficiency, then you accumulate data until you can write to large Parquet files, but this results in much higher latency.
 
 Overall, these data lake formats typically achieve data freshness at best within minute-level granularity, even under optimal usage conditions.
 
@@ -31,17 +30,17 @@ This not only brings low latency to data Lakehouse, but also adds powerful analy
 
 To build a Streaming Lakehouse, Fluss maintains a tiering service that compacts real-time data from the Fluss cluster into the data lake format stored in the Lakehouse Storage.
 The data in the Fluss cluster, stored in streaming Arrow format, is optimized for low-latency read and write operations, making it ideal for short-term data storage. In contrast, the compacted data in the Lakehouse, stored in Parquet format with higher compression, is optimized for efficient analytics and long-term storage.
-So the data in Fluss cluster serves real-time data layer which retains days with sub-second-level freshness, and the data in Lakehouse serves historical data layer which retains months with minute-level freshness.
+The data in the Fluss cluster serves as a real-time data layer, retaining days of data with sub-second-level freshness. In contrast, the data in the Lakehouse serves as a historical data layer, retaining months of data with minute-level freshness.
 
 ![streamhouse](../assets/streamhouse.png)
 
 The core idea of Streaming Lakehouse is shared data and shared metadata between stream and Lakehouse, avoiding data duplication and metadata inconsistency.
-Some powerful features it provided are:
+Some powerful features it provides are:
 
-- **Unified Metadata**: Fluss provides a unified table metadata for both data in Stream and Lakehouse. So users only need to handle one table, but can access either the real-time streaming data, or the historical data, or the union of them.
-- **Union Reads**: Compute engines perform queries on the table will read the union of the real-time streaming data and Lakehouse data. Currently, only Flink supports union reads, but more engines are on the roadmap.
+- **Unified Metadata**: Fluss provides unified table metadata for both data in Stream and Lakehouse. Users only need to manage one table and can access real-time streaming data, historical data, or both combined.
+- **Union Reads**: Compute engines that perform queries on the table will read the union of the real-time streaming data and Lakehouse data. Currently, only Flink supports union reads, but more engines are on the roadmap.
 - **Real-Time Lakehouse**: The union reads help Lakehouse evolving from near-real-time analytics to truly real-time analytics. This empowers businesses to gain more valuable insights from real-time data.
 - **Analytical Streams**: The union reads help data streams to have the powerful analytics capabilities. This reduces complexity when developing streaming applications, simplifies debugging, and allows for immediate access to live data insights.
-- **Connect to Lakehouse Ecosystem**: Fluss keeps the table metadata in sync with data lake catalogs while compacting data into Lakehouse. This allows external engines like Spark, StarRocks, Flink, Trino to read the data directly by connecting to the data lake catalog.
+- **Connect to Lakehouse Ecosystem**: Fluss keeps the table metadata in sync with data lake catalogs while compacting data into Lakehouse. As a result, external engines like Spark, StarRocks, Flink, and Trino can read the data directly. They simply connect to the data lake catalog.
 
 Currently, Fluss supports [Paimon](integrate-data-lakes/paimon.md), [Iceberg](integrate-data-lakes/iceberg.md), and [Lance](integrate-data-lakes/lance.md) as Lakehouse Storage, more kinds of data lake formats are on the roadmap.
