@@ -85,10 +85,6 @@ public class TabletServer extends ServerBase {
 
     private static final Logger LOG = LoggerFactory.getLogger(TabletServer.class);
 
-    // TODO, maybe need to make it configurable
-    private static final int CONTROLLED_SHUTDOWN_MAX_RETRIES = 3;
-    private static final long CONTROLLED_SHUTDOWN_RETRY_INTERVAL_MS = 1000L;
-
     private final int serverId;
 
     /**
@@ -452,7 +448,11 @@ public class TabletServer extends ServerBase {
         // a period of time and try again for a number of retries. If all the attempt fails, we
         // simply force the shutdown.
         boolean shutdownSucceeded = false;
-        int remainingRetries = CONTROLLED_SHUTDOWN_MAX_RETRIES;
+        int remainingRetries =
+                conf.getInt(ConfigOptions.TABLET_SERVER_CONTROLLED_SHUTDOWN_MAX_RETRIES);
+        long retryIntervalMs =
+                conf.get(ConfigOptions.TABLET_SERVER_CONTROLLED_SHUTDOWN_RETRY_INTERVAL).toMillis();
+
         while (!shutdownSucceeded && remainingRetries > 0) {
             remainingRetries--;
 
@@ -484,7 +484,7 @@ public class TabletServer extends ServerBase {
 
             if (!shutdownSucceeded && remainingRetries > 0) {
                 try {
-                    Thread.sleep(CONTROLLED_SHUTDOWN_RETRY_INTERVAL_MS);
+                    Thread.sleep(retryIntervalMs);
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
                     break;

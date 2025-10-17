@@ -69,8 +69,20 @@ kill -TERM <tablet-server-pid>
 
 #### Configuration Options
 
-- **Controlled Shutdown Retries**: Number of attempts to transfer leadership (`default:` 3 retries)
-- **Retry Interval**: Time between retry attempts (`default`: 1000L)
+The controlled shutdown process can be configured using the following options:
+
+- **`tablet-server.controlled-shutdown.max-retries`**: Maximum number of attempts to transfer leadership before proceeding with unclean shutdown (default: 3)
+- **`tablet-server.controlled-shutdown.retry-interval`**: Time interval between retry attempts (default: 1000ms)
+
+**Example Configuration:**
+
+```yaml
+# server.yaml
+tablet-server:
+  controlled-shutdown:
+    max-retries: 5
+    retry-interval: 2000ms
+```
 
 ## Monitoring Shutdown
 
@@ -110,8 +122,8 @@ Monitor shutdown-related metrics:
 
 | Configuration | Description | Default |
 |---------------|-------------|---------|
-| `controlled.shutdown.max.retries` | Maximum retries for controlled shutdown | 3 |
-| `controlled.shutdown.retry.interval.ms` | Interval between retry attempts | 5000 |
+| `tablet-server.controlled-shutdown.max-retries` | Maximum retries for controlled shutdown | 3 |
+| `tablet-server.controlled-shutdown.retry-interval` | Interval between retry attempts | 1000ms |
 | `shutdown.timeout.ms` | General shutdown timeout | 30000 |
 
 ## See Also

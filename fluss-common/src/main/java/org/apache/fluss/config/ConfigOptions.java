@@ -418,6 +418,26 @@ public class ConfigOptions {
                                     + WRITER_ID_EXPIRATION_TIME.key()
                                     + " passing. The default value is 10 minutes.");
 
+    public static final ConfigOption<Integer> TABLET_SERVER_CONTROLLED_SHUTDOWN_MAX_RETRIES =
+            key("tablet-server.controlled-shutdown.max-retries")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The maximum number of retries for controlled shutdown of the tablet server. "
+                                    + "During controlled shutdown, the tablet server attempts to transfer leadership "
+                                    + "of its buckets to other servers. If the transfer fails, it will retry up to "
+                                    + "this number of times before proceeding with shutdown. The default value is 3.");
+
+    public static final ConfigOption<Duration> TABLET_SERVER_CONTROLLED_SHUTDOWN_RETRY_INTERVAL =
+            key("tablet-server.controlled-shutdown.retry-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(1000))
+                    .withDescription(
+                            "The interval between retries during controlled shutdown of the tablet server. "
+                                    + "When controlled shutdown fails to transfer bucket leadership, the tablet server "
+                                    + "will wait for this duration before attempting the next retry. "
+                                    + "The default value is 1000 milliseconds (1 second).");
+
     public static final ConfigOption<Integer> BACKGROUND_THREADS =
             key("server.background.threads")
                     .intType()
