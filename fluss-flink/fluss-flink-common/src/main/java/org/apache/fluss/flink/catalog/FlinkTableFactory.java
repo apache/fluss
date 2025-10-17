@@ -69,7 +69,7 @@ import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
 /** Factory to create table source and table sink for Fluss. */
 public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
 
-    private final LakeFlinkCatalog lakeFlinkCatalog;
+    protected final LakeFlinkCatalog lakeFlinkCatalog;
     private volatile LakeTableFactory lakeTableFactory;
 
     public FlinkTableFactory(LakeFlinkCatalog lakeFlinkCatalog) {
