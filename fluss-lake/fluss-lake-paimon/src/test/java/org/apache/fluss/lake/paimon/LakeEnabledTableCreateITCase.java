@@ -53,13 +53,10 @@ import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 import java.util.stream.Stream;
 
-import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PAIMON_DEFAULT_OPTIONS;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PAIMON_UNSETTABLE_OPTIONS;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
@@ -378,10 +375,7 @@ class LakeEnabledTableCreateITCase {
     void testCreateLakeEnableTableWithUnsettablePaimonOptions() {
         Map<String, String> customProperties = new HashMap<>();
 
-        Set<String> keys = new HashSet<>();
-        keys.addAll(PAIMON_UNSETTABLE_OPTIONS);
-        keys.addAll(PAIMON_DEFAULT_OPTIONS.keySet());
-        for (String key : keys) {
+        for (String key : PAIMON_UNSETTABLE_OPTIONS) {
             customProperties.clear();
             customProperties.put(key, "v");
 
@@ -402,7 +396,7 @@ class LakeEnabledTableCreateITCase {
                     .isInstanceOf(InvalidConfigException.class)
                     .hasMessage(
                             String.format(
-                                    "The Paimon option %s will be set automatically by Fluss and should not set manually.",
+                                    "The Paimon option %s will be set automatically by Fluss and should not be set manually.",
                                     key));
         }
     }

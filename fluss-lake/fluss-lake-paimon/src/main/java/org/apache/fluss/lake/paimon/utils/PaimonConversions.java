@@ -57,16 +57,10 @@ public class PaimonConversions {
     /** Paimon config options set by Fluss should not be set by users. */
     @VisibleForTesting public static final Set<String> PAIMON_UNSETTABLE_OPTIONS = new HashSet<>();
 
-    @VisibleForTesting public static final Options PAIMON_DEFAULT_OPTIONS = new Options();
-
     static {
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET.key());
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET_KEY.key());
-        PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.CHANGELOG_PRODUCER.key());
-
-        // set partition.legacy-name to false, otherwise paimon will use toString for all types,
-        // which will cause inconsistent partition value for a same binary value
-        PAIMON_DEFAULT_OPTIONS.set(CoreOptions.PARTITION_GENERATE_LEGCY_NAME, false);
+        PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.PARTITION_GENERATE_LEGCY_NAME.key());
     }
 
     public static RowKind toRowKind(ChangeType changeType) {
@@ -120,13 +114,13 @@ public class PaimonConversions {
                 TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
                 schemaChanges.add(
                         SchemaChange.setOption(
-                                getFlussPropertyKeyToPaimon(setOption.getKey()),
+                                convertFlussPropertyKeyToPaimon(setOption.getKey()),
                                 setOption.getValue()));
             } else if (tableChange instanceof TableChange.ResetOption) {
                 TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
                 schemaChanges.add(
                         SchemaChange.removeOption(
-                                getFlussPropertyKeyToPaimon(resetOption.getKey())));
+                                convertFlussPropertyKeyToPaimon(resetOption.getKey())));
             } else {
                 throw new UnsupportedOperationException(
                         "Unsupported table change: " + tableChange.getClass());
@@ -212,19 +206,20 @@ public class PaimonConversions {
                     if (k.startsWith(PAIMON_CONF_PREFIX)) {
                         paimonKey = k.substring(PAIMON_CONF_PREFIX.length());
                     }
-                    if (PAIMON_UNSETTABLE_OPTIONS.contains(paimonKey)
-                            || PAIMON_DEFAULT_OPTIONS.toMap().containsKey(paimonKey)) {
+                    if (PAIMON_UNSETTABLE_OPTIONS.contains(paimonKey)) {
                         throw new InvalidConfigException(
                                 String.format(
                                         "The Paimon option %s will be set automatically by Fluss "
-                                                + "and should not set manually.",
+                                                + "and should not be set manually.",
                                         k));
                     }
                 });
     }
 
     private static void setPaimonDefaultProperties(Options options) {
-        PAIMON_DEFAULT_OPTIONS.toMap().forEach(options::set);
+        // set partition.legacy-name to false, otherwise paimon will use toString for all types,
+        // which will cause inconsistent partition value for the same binary value
+        options.set(CoreOptions.PARTITION_GENERATE_LEGCY_NAME, false);
     }
 
     private static void setFlussPropertyToPaimon(String key, String value, Options options) {
@@ -235,7 +230,7 @@ public class PaimonConversions {
         }
     }
 
-    private static String getFlussPropertyKeyToPaimon(String key) {
+    private static String convertFlussPropertyKeyToPaimon(String key) {
         if (key.startsWith(PAIMON_CONF_PREFIX)) {
             return key.substring(PAIMON_CONF_PREFIX.length());
         } else {
