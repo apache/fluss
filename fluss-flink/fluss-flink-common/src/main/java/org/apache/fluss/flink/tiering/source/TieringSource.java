@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.tiering.source;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.source.enumerator.TieringSourceEnumerator;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
@@ -104,8 +106,9 @@ public class TieringSource<WriteResult>
 
     @Override
     public SourceReader<TableBucketWriteResult<WriteResult>, TieringSplit> createReader(
-            SourceReaderContext sourceReaderContext) throws Exception {
-        return new TieringSourceReader<>(sourceReaderContext, flussConf, lakeTieringFactory);
+            SourceReaderContext sourceReaderContext) {
+        Connection connection = ConnectionFactory.createConnection(flussConf);
+        return new TieringSourceReader<>(sourceReaderContext, connection, lakeTieringFactory);
     }
 
     /** This follows the operator uid hash generation logic of flink {@link StreamGraphHasherV2}. */

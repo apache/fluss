@@ -18,12 +18,10 @@
 package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.client.Connection;
-import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.client.table.scanner.log.ScanRecords;
-import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.source.reader.BoundedSplitReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
@@ -97,9 +95,10 @@ public class TieringSplitReader<WriteResult>
     private final Set<TieringLogSplit> currentTableEmptyLogSplits;
 
     public TieringSplitReader(
-            Configuration flussConf, LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
+            Connection connection, LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
         this.lakeTieringFactory = lakeTieringFactory;
-        this.connection = ConnectionFactory.createConnection(flussConf);
+        // owned by TieringSourceReader
+        this.connection = connection;
         this.pendingTieringTables = new ArrayDeque<>();
         this.pendingTieringSplits = new HashMap<>();
         this.currentTableStoppingOffsets = new HashMap<>();
@@ -457,9 +456,8 @@ public class TieringSplitReader<WriteResult>
         if (currentTable != null) {
             currentTable.close();
         }
-        if (connection != null) {
-            connection.close();
-        }
+
+        // don't need to close connection, will be closed by TieringSourceReader
     }
 
     private void subscribeLog(TieringLogSplit logSplit) {

@@ -17,6 +17,8 @@
 
 package org.apache.fluss.flink.tiering.source;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.TableWriter;
@@ -61,7 +63,11 @@ class TieringSplitReaderTest extends FlinkTestBase {
     void testTieringTable() throws Exception {
         TablePath tablePath = TablePath.of("fluss", "fluss_test_tiering_one_table");
         long tableId = createTable(tablePath, DEFAULT_PK_TABLE_DESCRIPTOR);
-        try (TieringSplitReader<TestingWriteResult> tieringSplitReader = createTieringReader()) {
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                TieringSplitReader<TestingWriteResult> tieringSplitReader =
+                        createTieringReader(connection)) {
             // test empty splits
             SplitsAddition<TieringSplit> splitsAddition =
                     new SplitsAddition<>(
@@ -155,7 +161,11 @@ class TieringSplitReaderTest extends FlinkTestBase {
         TablePath tablePath1 = TablePath.of("fluss", "tiering_table1");
         long tableId1 = createTable(tablePath1, DEFAULT_PK_TABLE_DESCRIPTOR);
 
-        try (TieringSplitReader<TestingWriteResult> tieringSplitReader = createTieringReader()) {
+        try (Connection connection =
+                        ConnectionFactory.createConnection(
+                                FLUSS_CLUSTER_EXTENSION.getClientConfig());
+                TieringSplitReader<TestingWriteResult> tieringSplitReader =
+                        createTieringReader(connection)) {
             Map<TableBucket, List<InternalRow>> table0Rows = putRows(tableId0, tablePath0, 10);
             Map<TableBucket, List<InternalRow>> table1Rows = putRows(tableId1, tablePath1, 10);
             waitUntilSnapshot(tableId0, 0);
@@ -266,9 +276,8 @@ class TieringSplitReaderTest extends FlinkTestBase {
         }
     }
 
-    private TieringSplitReader<TestingWriteResult> createTieringReader() {
-        return new TieringSplitReader<>(
-                FLUSS_CLUSTER_EXTENSION.getClientConfig(), new TestingLakeTieringFactory());
+    private TieringSplitReader<TestingWriteResult> createTieringReader(Connection connection) {
+        return new TieringSplitReader<>(connection, new TestingLakeTieringFactory());
     }
 
     private void verifyTieringRows(
