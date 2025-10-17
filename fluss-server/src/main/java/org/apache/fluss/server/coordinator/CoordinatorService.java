@@ -448,7 +448,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // first, validate the partition spec, and get resolved partition spec.
         PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
-        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec);
+        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, true);
         ResolvedPartitionSpec partitionToCreate =
                 ResolvedPartitionSpec.fromPartitionSpec(table.partitionKeys, partitionSpec);
 
@@ -489,7 +489,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // first, validate the partition spec.
         PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
-        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec);
+        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, false);
         ResolvedPartitionSpec partitionToDrop =
                 ResolvedPartitionSpec.fromPartitionSpec(table.partitionKeys, partitionSpec);
 
