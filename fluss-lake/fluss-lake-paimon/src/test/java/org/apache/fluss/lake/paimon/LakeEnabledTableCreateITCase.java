@@ -53,10 +53,14 @@ import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PAIMON_DEFAULT_OPTIONS;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PAIMON_UNSETTABLE_OPTIONS;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -368,6 +372,39 @@ class LakeEnabledTableCreateITCase {
                         }),
                 null,
                 BUCKET_NUM);
+    }
+
+    @Test
+    void testCreateLakeEnableTableWithUnsettablePaimonOptions() {
+        Map<String, String> customProperties = new HashMap<>();
+
+        Set<String> keys = new HashSet<>();
+        keys.addAll(PAIMON_UNSETTABLE_OPTIONS);
+        keys.addAll(PAIMON_DEFAULT_OPTIONS.keySet());
+        for (String key : keys) {
+            customProperties.clear();
+            customProperties.put(key, "v");
+
+            TableDescriptor table =
+                    TableDescriptor.builder()
+                            .schema(
+                                    Schema.newBuilder()
+                                            .column("c1", DataTypes.INT())
+                                            .column("c2", DataTypes.STRING())
+                                            .build())
+                            .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                            .customProperties(customProperties)
+                            .distributedBy(BUCKET_NUM, "c1", "c2")
+                            .build();
+            TablePath tablePath = TablePath.of(DATABASE, "table_unsettable_paimon_option");
+            assertThatThrownBy(() -> admin.createTable(tablePath, table, false).get())
+                    .cause()
+                    .isInstanceOf(InvalidConfigException.class)
+                    .hasMessage(
+                            String.format(
+                                    "The Paimon option %s will be set automatically by Fluss and should not set manually.",
+                                    key));
+        }
     }
 
     @Test
