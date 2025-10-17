@@ -57,6 +57,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PAIMON_UNSETTABLE_OPTIONS;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -368,6 +369,36 @@ class LakeEnabledTableCreateITCase {
                         }),
                 null,
                 BUCKET_NUM);
+    }
+
+    @Test
+    void testCreateLakeEnableTableWithUnsettablePaimonOptions() {
+        Map<String, String> customProperties = new HashMap<>();
+
+        for (String key : PAIMON_UNSETTABLE_OPTIONS) {
+            customProperties.clear();
+            customProperties.put(key, "v");
+
+            TableDescriptor table =
+                    TableDescriptor.builder()
+                            .schema(
+                                    Schema.newBuilder()
+                                            .column("c1", DataTypes.INT())
+                                            .column("c2", DataTypes.STRING())
+                                            .build())
+                            .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                            .customProperties(customProperties)
+                            .distributedBy(BUCKET_NUM, "c1", "c2")
+                            .build();
+            TablePath tablePath = TablePath.of(DATABASE, "table_unsettable_paimon_option");
+            assertThatThrownBy(() -> admin.createTable(tablePath, table, false).get())
+                    .cause()
+                    .isInstanceOf(InvalidConfigException.class)
+                    .hasMessage(
+                            String.format(
+                                    "The Paimon option %s will be set automatically by Fluss and should not be set manually.",
+                                    key));
+        }
     }
 
     @Test
