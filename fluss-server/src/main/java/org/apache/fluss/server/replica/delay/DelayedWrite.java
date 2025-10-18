@@ -211,8 +211,10 @@ public class DelayedWrite<T extends WriteResultForBucket> extends DelayedOperati
     public static class DelayedBucketStatus<T extends WriteResultForBucket> {
         private final long requiredOffset;
         private final T writeResultForBucket;
+
         /** Whether this bucket is waiting acks. */
         private volatile boolean acksPending;
+
         /** The error code of the delayed operation. */
         private volatile Errors delayedError;
 

@@ -22,6 +22,7 @@ public class HybridSnapshotLogSplitState extends SourceSplitState {
 
     /** The records to skip while reading a snapshot. */
     private long recordsToSkip;
+
     /** Whether the snapshot reading is finished. */
     private boolean snapshotFinished;
 
