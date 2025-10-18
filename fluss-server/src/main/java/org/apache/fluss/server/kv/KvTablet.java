@@ -21,8 +21,10 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.memory.MemorySegmentPool;
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -277,9 +279,14 @@ public final class KvTablet {
                             byte[] keyBytes = BytesUtils.toArray(kvRecord.getKey());
                             KvPreWriteBuffer.Key key = KvPreWriteBuffer.Key.of(keyBytes);
                             if (kvRecord.getRow() == null) {
-                                if (!rowMerger.supportsDelete()) {
+                                DeleteBehavior deleteBehavior = rowMerger.deleteBehavior();
+                                if (deleteBehavior == DeleteBehavior.IGNORE) {
                                     // skip delete rows if the merger doesn't support yet
                                     continue;
+                                } else if (deleteBehavior == DeleteBehavior.DISABLE) {
+                                    throw new DeletionDisabledException(
+                                            "Delete operations are disabled for this table. "
+                                                    + "The table.delete.behavior is set to 'disable'.");
                                 }
                                 // it's for deletion
                                 byte[] oldValue = getFromBufferOrKv(key);

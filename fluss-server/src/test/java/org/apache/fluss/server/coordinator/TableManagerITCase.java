@@ -27,6 +27,7 @@ import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -939,6 +940,170 @@ class TableManagerITCase {
         } finally {
             logCluster.close();
         }
+    }
+
+    @Test
+    void testDeleteBehavior() throws Exception {
+        AdminGateway adminGateway = getAdminGateway();
+
+        // Create database
+        String db = "test_delete_behavior_db";
+        adminGateway.createDatabase(newCreateDatabaseRequest(db, false)).get();
+
+        // Test 1: FIRST_ROW merge engine with ALLOW delete behavior - should be changed to IGNORE
+        TablePath tablePath1 = TablePath.of(db, "test_first_row_table");
+        Map<String, String> properties1 = new HashMap<>();
+        properties1.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "first_row");
+        properties1.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "allow");
+
+        TableDescriptor tableDescriptor1 =
+                TableDescriptor.builder()
+                        .schema(newPkSchema())
+                        .comment("first row merge engine table")
+                        .distributedBy(3, "a")
+                        .properties(properties1)
+                        .build();
+
+        adminGateway.createTable(newCreateTableRequest(tablePath1, tableDescriptor1, false)).get();
+
+        // Get the table and verify delete behavior is changed to IGNORE
+        GetTableInfoResponse response1 =
+                adminGateway.getTableInfo(newGetTableInfoRequest(tablePath1)).get();
+        TableDescriptor createdTable1 = TableDescriptor.fromJsonBytes(response1.getTableJson());
+
+        assertThat(createdTable1.getProperties())
+                .containsEntry(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "IGNORE");
+
+        // Test 2: VERSIONED merge engine with ALLOW delete behavior - should be changed to IGNORE
+        TablePath tablePath2 = TablePath.of(db, "test_versioned_table");
+        Map<String, String> properties2 = new HashMap<>();
+        properties2.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "versioned");
+        properties2.put(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "b");
+        properties2.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "allow");
+
+        TableDescriptor tableDescriptor2 =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .withComment("a comment")
+                                        .column("b", DataTypes.INT())
+                                        .primaryKey("a")
+                                        .build())
+                        .comment("versioned merge engine table")
+                        .distributedBy(3, "a")
+                        .properties(properties2)
+                        .build();
+
+        adminGateway.createTable(newCreateTableRequest(tablePath2, tableDescriptor2, false)).get();
+
+        // Get the table and verify delete behavior is changed to IGNORE
+        GetTableInfoResponse response2 =
+                adminGateway.getTableInfo(newGetTableInfoRequest(tablePath2)).get();
+        TableDescriptor createdTable2 = TableDescriptor.fromJsonBytes(response2.getTableJson());
+
+        assertThat(createdTable2.getProperties())
+                .containsEntry(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "IGNORE");
+
+        // Test 3: FIRST_ROW merge engine with IGNORE delete behavior should succeed
+        TablePath tablePath3 = TablePath.of(db, "first_row_ignore_table");
+        Map<String, String> properties3 = new HashMap<>();
+        properties3.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "first_row");
+        properties3.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "ignore");
+
+        TableDescriptor tableDescriptor3 =
+                TableDescriptor.builder()
+                        .schema(newPkSchema())
+                        .comment("first row merge engine table with ignore delete")
+                        .distributedBy(3, "a")
+                        .properties(properties3)
+                        .build();
+
+        adminGateway.createTable(newCreateTableRequest(tablePath3, tableDescriptor3, false)).get();
+
+        // Verify the table was created successfully
+        GetTableInfoResponse response3 =
+                adminGateway.getTableInfo(newGetTableInfoRequest(tablePath3)).get();
+        TableDescriptor createdTable3 = TableDescriptor.fromJsonBytes(response3.getTableJson());
+        assertThat(createdTable3.getProperties())
+                .containsEntry(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "ignore");
+
+        // Test 4: VERSIONED merge engine with DISABLE delete behavior should succeed
+        TablePath tablePath4 = TablePath.of(db, "versioned_disable_table");
+        Map<String, String> properties4 = new HashMap<>();
+        properties4.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "versioned");
+        properties4.put(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "b");
+        properties4.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "disable");
+
+        TableDescriptor tableDescriptor4 =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("a", DataTypes.INT())
+                                        .withComment("a comment")
+                                        .column("b", DataTypes.INT())
+                                        .primaryKey("a")
+                                        .build())
+                        .comment("versioned merge engine table with disable delete")
+                        .distributedBy(3, "a")
+                        .properties(properties4)
+                        .build();
+
+        adminGateway.createTable(newCreateTableRequest(tablePath4, tableDescriptor4, false)).get();
+
+        // Verify the table was created successfully
+        GetTableInfoResponse response4 =
+                adminGateway.getTableInfo(newGetTableInfoRequest(tablePath4)).get();
+        TableDescriptor createdTable4 = TableDescriptor.fromJsonBytes(response4.getTableJson());
+        assertThat(createdTable4.getProperties())
+                .containsEntry(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "disable");
+
+        // Test 5: Last row engine table with ALLOW delete behavior should succeed
+        TablePath tablePath5 = TablePath.of(db, "normal_pk_table");
+        Map<String, String> properties5 = new HashMap<>();
+        properties5.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "allow");
+
+        TableDescriptor tableDescriptor5 =
+                TableDescriptor.builder()
+                        .schema(newPkSchema())
+                        .comment("normal pk table with allow delete")
+                        .distributedBy(3, "a")
+                        .properties(properties5)
+                        .build();
+
+        adminGateway.createTable(newCreateTableRequest(tablePath5, tableDescriptor5, false)).get();
+
+        // Verify the table was created successfully
+        GetTableInfoResponse response5 =
+                adminGateway.getTableInfo(newGetTableInfoRequest(tablePath5)).get();
+        TableDescriptor createdTable5 = TableDescriptor.fromJsonBytes(response5.getTableJson());
+        assertThat(createdTable5.getProperties())
+                .containsEntry(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "allow");
+
+        // Test 6: Log table with delete behavior should fail
+        TablePath tablePath6 = TablePath.of(db, "log_table_with_delete_behavior");
+        Map<String, String> properties6 = new HashMap<>();
+        properties6.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "allow");
+
+        TableDescriptor tableDescriptor6 =
+                TableDescriptor.builder()
+                        .schema(newLogSchema())
+                        .comment("log table with delete behavior")
+                        .distributedBy(3, "a")
+                        .properties(properties6)
+                        .build();
+
+        assertThatThrownBy(
+                        () ->
+                                adminGateway
+                                        .createTable(
+                                                newCreateTableRequest(
+                                                        tablePath6, tableDescriptor6, false))
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(
+                        "Delete behavior configuration is only supported for primary key tables.");
     }
 
     private static Configuration initLogRestrictedConf() {

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.kv.rowmerger;
 
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.row.BinaryRow;
@@ -34,10 +35,16 @@ public class DefaultRowMerger implements RowMerger {
     private final PartialUpdaterCache partialUpdaterCache;
     private final KvFormat kvFormat;
     private final Schema schema;
+    private final DeleteBehavior deleteBehavior;
 
     public DefaultRowMerger(Schema schema, KvFormat kvFormat) {
+        this(schema, kvFormat, DeleteBehavior.ALLOW);
+    }
+
+    public DefaultRowMerger(Schema schema, KvFormat kvFormat, DeleteBehavior deleteBehavior) {
         this.schema = schema;
         this.kvFormat = kvFormat;
+        this.deleteBehavior = deleteBehavior;
         // TODO: share cache in server level when PartialUpdater is thread-safe
         this.partialUpdaterCache = new PartialUpdaterCache();
     }
@@ -57,8 +64,8 @@ public class DefaultRowMerger implements RowMerger {
     }
 
     @Override
-    public boolean supportsDelete() {
-        return true;
+    public DeleteBehavior deleteBehavior() {
+        return deleteBehavior;
     }
 
     @Override
@@ -69,7 +76,7 @@ public class DefaultRowMerger implements RowMerger {
             // this also sanity checks the validity of the partial update
             PartialUpdater partialUpdater =
                     partialUpdaterCache.getOrCreatePartialUpdater(kvFormat, schema, targetColumns);
-            return new PartialUpdateRowMerger(partialUpdater);
+            return new PartialUpdateRowMerger(partialUpdater, deleteBehavior);
         }
     }
 
@@ -77,9 +84,12 @@ public class DefaultRowMerger implements RowMerger {
     private static class PartialUpdateRowMerger implements RowMerger {
 
         private final PartialUpdater partialUpdater;
+        private final DeleteBehavior deleteBehavior;
 
-        public PartialUpdateRowMerger(PartialUpdater partialUpdater) {
+        public PartialUpdateRowMerger(
+                PartialUpdater partialUpdater, DeleteBehavior deleteBehavior) {
             this.partialUpdater = partialUpdater;
+            this.deleteBehavior = deleteBehavior;
         }
 
         @Override
@@ -101,8 +111,8 @@ public class DefaultRowMerger implements RowMerger {
         }
 
         @Override
-        public boolean supportsDelete() {
-            return true;
+        public DeleteBehavior deleteBehavior() {
+            return deleteBehavior;
         }
     }
 }

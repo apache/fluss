@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.source;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
@@ -30,6 +31,7 @@ import org.apache.fluss.flink.utils.PushdownUtils;
 import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.GreaterOrEqual;
@@ -74,6 +76,7 @@ import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.functions.LookupFunction;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.types.RowKind;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -206,7 +209,21 @@ public class FlinkTableSource
                 if (mergeEngineType == MergeEngineType.FIRST_ROW) {
                     return ChangelogMode.insertOnly();
                 } else {
-                    return ChangelogMode.all();
+                    // Check delete behavior configuration
+                    Configuration tableConf = Configuration.fromMap(tableOptions);
+                    DeleteBehavior deleteBehavior =
+                            tableConf.get(ConfigOptions.TABLE_DELETE_BEHAVIOR);
+                    if (deleteBehavior == DeleteBehavior.ALLOW) {
+                        return ChangelogMode.all();
+                    } else {
+                        // If delete operations are ignored or disabled, only insert and update are
+                        // relevant
+                        return ChangelogMode.newBuilder()
+                                .addContainedKind(RowKind.INSERT)
+                                .addContainedKind(RowKind.UPDATE_BEFORE)
+                                .addContainedKind(RowKind.UPDATE_AFTER)
+                                .build();
+                    }
                 }
             } else {
                 // append only
