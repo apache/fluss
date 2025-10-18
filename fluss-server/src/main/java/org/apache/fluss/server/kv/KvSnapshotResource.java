@@ -43,6 +43,7 @@ public class KvSnapshotResource {
 
     /** A scheduler to schedule kv snapshot. */
     private final ScheduledExecutorService kvSnapshotScheduler;
+
     /** Thread pool for async snapshot workers. */
     private final ExecutorService asyncOperationsThreadPool;
 

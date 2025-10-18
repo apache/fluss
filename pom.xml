@@ -106,7 +106,7 @@
         <roaster.version>2.22.2.Final</roaster.version>
         <jmh.version>1.27</jmh.version>
 
-        <spotless.version>2.27.1</spotless.version>
+        <spotless.version>2.46.1</spotless.version>
         <spotless.scalafmt.version>3.4.3</spotless.scalafmt.version>
         <spotless.delimiter>package</spotless.delimiter>
         <spotless.license.header>
@@ -994,7 +994,7 @@
                         <skip>${skip.on.java8}</skip>
                         <java>
                             <googleJavaFormat>
-                                <version>1.15.0</version>
+                                <version>1.24.0</version>
                                 <style>AOSP</style>
                             </googleJavaFormat>
 
