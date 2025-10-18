@@ -55,3 +55,15 @@ jobs:
     uses: ./.github/workflows/ci-template.yaml
     with:
         java-version: "11"
+
+  build-on-jdk17:
+    name: "Java 17"
+    uses: ./.github/workflows/ci-template.yaml
+    with:
+      java-version: "17"
+
+  build-on-jdk21:
+    name: "Java 21"
+    uses: ./.github/workflows/ci-template.yaml
+    with:
+      java-version: "21"
