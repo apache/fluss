@@ -19,7 +19,6 @@ package org.apache.fluss.lake.iceberg.tiering;
 
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
-import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.lake.iceberg.testutils.FlinkIcebergTieringTestBase;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -40,9 +39,6 @@ import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.iceberg.data.Record;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.params.ParameterizedTest;
-import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.ValueSource;
 
 import java.nio.ByteBuffer;
 import java.time.Duration;
@@ -57,13 +53,10 @@ import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutionException;
-import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** The ITCase for tiering into iceberg. */
 class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
@@ -93,7 +86,7 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
                     .column("f_time", DataTypes.TIME())
                     .column("f_char", DataTypes.CHAR(3))
                     .column("f_bytes", DataTypes.BYTES())
-                    .primaryKey("f_date", "f_int")
+                    .primaryKey("f_int")
                     .build();
 
     private static final Schema logSchema =
@@ -283,44 +276,6 @@ class IcebergTieringITCase extends FlinkIcebergTieringTestBase {
         } finally {
             jobClient.cancel().get();
         }
-    }
-
-    private static Stream<Arguments> tieringAllTypesWriteArgs() {
-        return Stream.of(Arguments.of(true), Arguments.of(false));
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = {false, true})
-    void testTieringForAllTypes(boolean isPrimaryKeyTable) throws Exception {
-        // create a table, write some records and wait until snapshot finished
-        TablePath t1 =
-                TablePath.of(
-                        DEFAULT_DB,
-                        isPrimaryKeyTable ? "pkTableForAllTypes" : "logTableForAllTypes");
-        Schema.Builder builder =
-                Schema.newBuilder()
-                        .column("c0", DataTypes.STRING())
-                        .column("c1", DataTypes.BOOLEAN());
-        if (isPrimaryKeyTable) {
-            builder.primaryKey("c0", "c1");
-        }
-        List<String> partitionKeys = List.of("c1");
-        TableDescriptor.Builder tableDescriptor =
-                TableDescriptor.builder()
-                        .schema(builder.build())
-                        .distributedBy(1, "c0")
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
-        tableDescriptor.partitionedBy(partitionKeys);
-        tableDescriptor.customProperties(Collections.emptyMap());
-        tableDescriptor.properties(Collections.emptyMap());
-
-        assertThatThrownBy(() -> createTable(t1, tableDescriptor.build()))
-                .isInstanceOf(ExecutionException.class)
-                .rootCause()
-                .isInstanceOf(InvalidTableException.class)
-                .hasMessage(
-                        "Iceberg partition key only support string type, c1 is not string type.");
     }
 
     private void checkDataInIcebergPrimaryKeyTable(

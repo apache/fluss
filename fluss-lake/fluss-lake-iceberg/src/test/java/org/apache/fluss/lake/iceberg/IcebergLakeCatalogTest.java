@@ -17,7 +17,9 @@
 
 package org.apache.fluss.lake.iceberg;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
@@ -29,14 +31,19 @@ import org.apache.iceberg.SortField;
 import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.types.Types;
+import org.assertj.core.api.Assertions;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import java.io.File;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
@@ -395,5 +402,37 @@ class IcebergLakeCatalogTest {
         assertThatThrownBy(() -> flussIcebergCatalog.createTable(tablePath, tableDescriptor))
                 .isInstanceOf(UnsupportedOperationException.class)
                 .hasMessageContaining("Only one bucket key is supported for Iceberg");
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = {false, true})
+    void testIllegalPartitionKeyType(boolean isPrimaryKeyTable) throws Exception {
+        TablePath t1 =
+                TablePath.of(
+                        "test_db",
+                        isPrimaryKeyTable
+                                ? "pkIllegalPartitionKeyType"
+                                : "logIllegalPartitionKeyType");
+        Schema.Builder builder =
+                Schema.newBuilder()
+                        .column("c0", DataTypes.STRING())
+                        .column("c1", DataTypes.BOOLEAN());
+        if (isPrimaryKeyTable) {
+            builder.primaryKey("c0", "c1");
+        }
+        List<String> partitionKeys = List.of("c1");
+        TableDescriptor.Builder tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(builder.build())
+                        .distributedBy(1, "c0")
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        tableDescriptor.partitionedBy(partitionKeys);
+
+        Assertions.assertThatThrownBy(
+                        () -> flussIcebergCatalog.createTable(t1, tableDescriptor.build()))
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessage(
+                        "Iceberg partition key only support string type, c1 is not string type.");
     }
 }
