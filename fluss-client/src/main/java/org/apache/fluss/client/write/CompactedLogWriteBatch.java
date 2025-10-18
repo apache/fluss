@@ -21,9 +21,10 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.memory.AbstractPagedOutputView;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.record.ChangeType;
-import org.apache.fluss.record.MemoryLogRecordsIndexedBuilder;
+import org.apache.fluss.record.MemoryLogRecordsCompactedBuilder;
 import org.apache.fluss.record.bytesview.BytesView;
-import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.compacted.CompactedRow;
 import org.apache.fluss.rpc.messages.ProduceLogRequest;
 
 import javax.annotation.concurrent.NotThreadSafe;
@@ -33,16 +34,16 @@ import java.io.IOException;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
- * A batch of log records managed in INDEXED format that is or will be sent to server by {@link
+ * A batch of log records managed in COMPACTED format that is or will be sent to server by {@link
  * ProduceLogRequest}.
  *
  * <p>This class is not thread safe and external synchronization must be used when modifying it.
  */
 @NotThreadSafe
 @Internal
-public final class IndexedLogWriteBatch extends AbstractRowLogWriteBatch<IndexedRow> {
+public final class CompactedLogWriteBatch extends AbstractRowLogWriteBatch<CompactedRow> {
 
-    public IndexedLogWriteBatch(
+    public CompactedLogWriteBatch(
             int bucketId,
             PhysicalTablePath physicalTablePath,
             int schemaId,
@@ -54,18 +55,18 @@ public final class IndexedLogWriteBatch extends AbstractRowLogWriteBatch<Indexed
                 physicalTablePath,
                 createdMs,
                 outputView,
-                new RecordsBuilderAdapter<IndexedRow>() {
-                    private final MemoryLogRecordsIndexedBuilder delegate =
-                            MemoryLogRecordsIndexedBuilder.builder(
+                new RecordsBuilderAdapter<CompactedRow>() {
+                    private final MemoryLogRecordsCompactedBuilder delegate =
+                            MemoryLogRecordsCompactedBuilder.builder(
                                     schemaId, writeLimit, outputView, true);
 
                     @Override
-                    public boolean hasRoomFor(IndexedRow row) {
+                    public boolean hasRoomFor(CompactedRow row) {
                         return delegate.hasRoomFor(row);
                     }
 
                     @Override
-                    public void append(ChangeType changeType, IndexedRow row) throws Exception {
+                    public void append(ChangeType changeType, CompactedRow row) throws Exception {
                         delegate.append(changeType, row);
                     }
 
@@ -114,12 +115,13 @@ public final class IndexedLogWriteBatch extends AbstractRowLogWriteBatch<Indexed
                         return delegate.getSizeInBytes();
                     }
                 },
-                "Failed to build indexed log record batch.");
+                "Failed to build compacted log record batch.");
     }
 
     @Override
-    protected IndexedRow requireAndCastRow(org.apache.fluss.row.InternalRow row) {
-        checkArgument(row instanceof IndexedRow, "row must be IndexRow for indexed log table");
-        return (IndexedRow) row;
+    protected CompactedRow requireAndCastRow(InternalRow row) {
+        checkArgument(
+                row instanceof CompactedRow, "row must be CompactedRow for compacted log table");
+        return (CompactedRow) row;
     }
 }
