@@ -24,11 +24,13 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.sink.serializer.FlussSerializationSchema;
+import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.sink.writer.FlinkSinkWriter;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 
+import org.apache.flink.api.common.typeinfo.TypeInformation;
 import org.apache.flink.table.types.logical.RowType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -72,7 +74,8 @@ public class FlussSinkBuilder<InputT> {
     private String tableName;
     private final Map<String, String> configOptions = new HashMap<>();
     private FlussSerializationSchema<InputT> serializationSchema;
-    private boolean shuffleByBucketId = true;
+    private DistributionMode shuffleMode = DistributionMode.BUCKET_SHUFFLE;
+    private TypeInformation<InputT> rowTypeInformation;
 
     /** Set the bootstrap server for the sink. */
     public FlussSinkBuilder<InputT> setBootstrapServers(String bootstrapServers) {
@@ -92,9 +95,19 @@ public class FlussSinkBuilder<InputT> {
         return this;
     }
 
-    /** Set shuffle by bucket id. */
+    /**
+     * Set shuffle by bucket id. Deprecated use {@link
+     * FlussSinkBuilder#setShuffleMode(DistributionMode) } instead.
+     */
+    @Deprecated
     public FlussSinkBuilder<InputT> setShuffleByBucketId(boolean shuffleByBucketId) {
-        this.shuffleByBucketId = shuffleByBucketId;
+        this.shuffleMode =
+                shuffleByBucketId ? DistributionMode.BUCKET_SHUFFLE : DistributionMode.NONE;
+        return this;
+    }
+
+    public FlussSinkBuilder<InputT> setShuffleMode(DistributionMode shuffleByBucketId) {
+        this.shuffleMode = shuffleByBucketId;
         return this;
     }
 
@@ -117,6 +130,12 @@ public class FlussSinkBuilder<InputT> {
         return this;
     }
 
+    /** Set a {@link TypeInformation} to deserialize and serialize InputT for shuffle. */
+    public FlussSinkBuilder<InputT> setRowTypeInformation(TypeInformation<InputT> typeInformation) {
+        this.rowTypeInformation = typeInformation;
+        return this;
+    }
+
     /** Build the FlussSink. */
     public FlussSink<InputT> build() {
         validateConfiguration();
@@ -126,7 +145,9 @@ public class FlussSinkBuilder<InputT> {
         FlinkSink.SinkWriterBuilder<? extends FlinkSinkWriter<InputT>, InputT> writerBuilder;
 
         TablePath tablePath = new TablePath(database, tableName);
-        flussConfig.setString(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
+        if (bootstrapServers != null) {
+            flussConfig.setString(ConfigOptions.BOOTSTRAP_SERVERS.key(), bootstrapServers);
+        }
 
         TableInfo tableInfo;
         try (Connection connection = ConnectionFactory.createConnection(flussConfig);
@@ -163,7 +184,7 @@ public class FlussSinkBuilder<InputT> {
                             bucketKeys,
                             partitionKeys,
                             lakeFormat,
-                            shuffleByBucketId,
+                            shuffleMode,
                             serializationSchema);
         } else {
             LOG.info("Initializing Fluss append sink writer ...");
@@ -176,8 +197,9 @@ public class FlussSinkBuilder<InputT> {
                             bucketKeys,
                             partitionKeys,
                             lakeFormat,
-                            shuffleByBucketId,
-                            serializationSchema);
+                            shuffleMode,
+                            serializationSchema,
+                            rowTypeInformation);
         }
 
         return new FlussSink<>(writerBuilder);

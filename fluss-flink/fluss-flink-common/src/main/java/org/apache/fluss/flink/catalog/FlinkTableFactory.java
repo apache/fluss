@@ -23,6 +23,7 @@ import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.lake.LakeTableFactory;
 import org.apache.fluss.flink.sink.FlinkTableSink;
+import org.apache.fluss.flink.sink.shuffle.DistributionMode;
 import org.apache.fluss.flink.source.FlinkTableSource;
 import org.apache.fluss.flink.utils.FlinkConnectorOptionsUtils;
 import org.apache.fluss.metadata.DataLakeFormat;
@@ -175,6 +176,15 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         List<String> partitionKeys = resolvedCatalogTable.getPartitionKeys();
 
         RowType rowType = (RowType) context.getPhysicalRowDataType().getLogicalType();
+        DistributionMode distributionMode;
+        if (tableOptions.getOptional(FlinkConnectorOptions.SINK_DISTRIBUTION_MODE).isPresent()) {
+            distributionMode = tableOptions.get(FlinkConnectorOptions.SINK_DISTRIBUTION_MODE);
+        } else {
+            distributionMode =
+                    tableOptions.get(FlinkConnectorOptions.SINK_BUCKET_SHUFFLE)
+                            ? DistributionMode.BUCKET_SHUFFLE
+                            : DistributionMode.NONE;
+        }
 
         return new FlinkTableSink(
                 toFlussTablePath(context.getObjectIdentifier()),
@@ -189,7 +199,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE),
                 tableOptions.get(FlinkConnectorOptions.BUCKET_NUMBER),
                 getBucketKeys(tableOptions),
-                tableOptions.get(FlinkConnectorOptions.SINK_BUCKET_SHUFFLE));
+                distributionMode);
     }
 
     @Override
@@ -215,6 +225,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                                 FlinkConnectorOptions.LOOKUP_ASYNC,
                                 FlinkConnectorOptions.SINK_IGNORE_DELETE,
                                 FlinkConnectorOptions.SINK_BUCKET_SHUFFLE,
+                                FlinkConnectorOptions.SINK_DISTRIBUTION_MODE,
                                 LookupOptions.MAX_RETRIES,
                                 LookupOptions.CACHE_TYPE,
                                 LookupOptions.PARTIAL_CACHE_EXPIRE_AFTER_ACCESS,
