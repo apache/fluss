@@ -58,6 +58,7 @@ import org.junit.jupiter.api.extension.Extension;
 import org.junit.jupiter.api.extension.ExtensionContext;
 
 import java.io.File;
+import java.net.URLClassLoader;
 import java.nio.file.Files;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -103,17 +104,21 @@ public final class FlussClusterExtension
     private final Map<Integer, TabletServer> tabletServers;
     private final List<ServerNode> tabletServerNodes;
     private final Configuration clusterConf;
+    
+    // Custom class loader for testing class loading scenarios
+    private final URLClassLoader customClassLoader;
 
     /** Creates a new {@link Builder} for {@link FlussClusterExtension}. */
     public static Builder builder() {
         return new Builder();
     }
 
-    private FlussClusterExtension(int numOfTabletServers, Configuration clusterConf) {
+    private FlussClusterExtension(int numOfTabletServers, Configuration clusterConf, URLClassLoader customClassLoader) {
         this.initialNumOfTabletServers = numOfTabletServers;
         this.tabletServers = new HashMap<>(numOfTabletServers);
         this.tabletServerNodes = new ArrayList<>();
         this.clusterConf = clusterConf;
+        this.customClassLoader = customClassLoader;
     }
 
     @Override
@@ -195,6 +200,10 @@ public final class FlussClusterExtension
         if (zooKeeperServer != null) {
             zooKeeperServer.close();
             zooKeeperServer = null;
+        }
+        // Close custom class loader if it was provided
+        if (customClassLoader != null) {
+            customClassLoader.close();
         }
     }
 
@@ -571,6 +580,7 @@ public final class FlussClusterExtension
     public static class Builder {
         private int numOfTabletServers = 1;
         private final Configuration clusterConf = new Configuration();
+        private URLClassLoader customClassLoader = null;
 
         public Builder() {
             // reduce testing resources
@@ -589,9 +599,20 @@ public final class FlussClusterExtension
             clusterConf.toMap().forEach(this.clusterConf::setString);
             return this;
         }
+        
+        /** 
+         * Sets a custom class loader for testing class loading scenarios.
+         * 
+         * @param classLoader The custom class loader to use
+         * @return This builder
+         */
+        public Builder setCustomClassLoader(URLClassLoader classLoader) {
+            this.customClassLoader = classLoader;
+            return this;
+        }
 
         public FlussClusterExtension build() {
-            return new FlussClusterExtension(numOfTabletServers, clusterConf);
+            return new FlussClusterExtension(numOfTabletServers, clusterConf, customClassLoader);
         }
     }
 }
