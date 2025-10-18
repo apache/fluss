@@ -46,8 +46,10 @@ public class TestingLeaderEndpoint implements LeaderEndpoint {
 
     private final ReplicaManager replicaManager;
     private final ServerNode localNode;
+
     /** The max size for the fetch response. */
     private final int maxFetchSize;
+
     /** The max fetch size for a bucket in bytes. */
     private final int maxFetchSizeForBucket;
 

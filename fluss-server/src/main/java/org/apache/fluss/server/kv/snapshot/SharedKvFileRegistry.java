@@ -213,6 +213,7 @@ public class SharedKvFileRegistry implements AutoCloseable {
 
         private final long createdBySnapshotID;
         private long lastUsedSnapshotID;
+
         /** The shared kv file handle. */
         KvFileHandle kvFileHandle;
 
