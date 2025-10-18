@@ -18,6 +18,7 @@
 package org.apache.fluss.server.tablet;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.RetriableException;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -110,6 +111,35 @@ public class TabletServerShutdownITCase {
 
         // restart the shutdown server
         FLUSS_CLUSTER_EXTENSION.startTabletServer(leader, true);
+    }
+
+    @Test
+    void testControlledShutdownConfiguration() throws Exception {
+        // Test that the controlled shutdown configuration options are properly loaded
+        Configuration conf = new Configuration();
+
+        // Verify default values are loaded correctly
+        assertThat(conf.getInt(ConfigOptions.TABLET_SERVER_CONTROLLED_SHUTDOWN_MAX_RETRIES))
+                .isEqualTo(3);
+        assertThat(
+                        conf.get(ConfigOptions.TABLET_SERVER_CONTROLLED_SHUTDOWN_RETRY_INTERVAL)
+                                .toMillis())
+                .isEqualTo(1000L);
+
+        // Test custom configuration values
+        Configuration customConf = new Configuration();
+        customConf.set(ConfigOptions.TABLET_SERVER_CONTROLLED_SHUTDOWN_MAX_RETRIES, 5);
+        customConf.set(
+                ConfigOptions.TABLET_SERVER_CONTROLLED_SHUTDOWN_RETRY_INTERVAL,
+                Duration.ofMillis(2000));
+
+        assertThat(customConf.getInt(ConfigOptions.TABLET_SERVER_CONTROLLED_SHUTDOWN_MAX_RETRIES))
+                .isEqualTo(5);
+        assertThat(
+                        customConf
+                                .get(ConfigOptions.TABLET_SERVER_CONTROLLED_SHUTDOWN_RETRY_INTERVAL)
+                                .toMillis())
+                .isEqualTo(2000L);
     }
 
     @Test
