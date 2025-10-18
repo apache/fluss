@@ -47,6 +47,7 @@ import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.ProjectedRow;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.DataTypes;
@@ -57,17 +58,21 @@ import org.apache.commons.lang3.StringUtils;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
 import java.time.Duration;
+import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Stream;
 
 import static org.apache.fluss.client.table.scanner.batch.BatchScanUtils.collectRows;
 import static org.apache.fluss.record.TestData.DATA1_ROW_TYPE;
@@ -110,6 +115,58 @@ class FlussTableITCase extends ClientToServerITCaseBase {
         try (Table table = conn.getTable(DATA1_TABLE_PATH)) {
             AppendWriter appendWriter = table.newAppend().createWriter();
             appendWriter.append(row(1, "a")).get();
+        }
+    }
+
+    private static Stream<Arguments> upsertTimeValueForAllPrecisionsArgs() {
+        return Stream.of(Arguments.of(KvFormat.INDEXED), Arguments.of(KvFormat.COMPACTED));
+    }
+
+    @ParameterizedTest
+    @MethodSource("upsertTimeValueForAllPrecisionsArgs")
+    void testUpsertTimeValueForAllPrecisions(KvFormat kvFormat) throws Exception {
+        LocalTime time = LocalTime.of(10, 10, 10, 123000000);
+        long mill = time.toNanoOfDay() / 1_000_000;
+
+        // check for all precisions
+        for (int i = 0; i <= 9; i++) {
+            Schema schema =
+                    Schema.newBuilder()
+                            .column("a", DataTypes.TIME(i))
+                            .column("b", DataTypes.INT())
+                            .primaryKey("a", "b")
+                            .build();
+            TablePath tablePath = TablePath.of("test_db_" + i, "test_pk_table_" + i);
+            TableDescriptor tableDescriptor =
+                    TableDescriptor.builder()
+                            .schema(schema)
+                            .property(ConfigOptions.TABLE_KV_FORMAT, kvFormat)
+                            .distributedBy(1)
+                            .build();
+            createTable(tablePath, tableDescriptor, false);
+            try (Table table = conn.getTable(tablePath)) {
+                UpsertWriter upsertWriter = table.newUpsert().createWriter();
+                upsertWriter.upsert(row((int) mill, 1)).get();
+                upsertWriter.flush();
+
+                LogScanner logScanner = createLogScanner(table);
+                subscribeFromBeginning(logScanner, table);
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                Integer scanResult = null;
+                for (ScanRecord scanRecord : scanRecords) {
+                    InternalRow row = scanRecord.getRow();
+                    scanResult = row.getInt(0);
+                }
+
+                Lookuper lookuper = table.newLookup().createLookuper();
+                ProjectedRow keyRow = ProjectedRow.from(schema.getPrimaryKeyIndexes());
+                keyRow.replaceRow(row((int) mill, 1));
+                InternalRow singletonRow = lookuper.lookup(keyRow).get().getSingletonRow();
+                assertThat(singletonRow).isNotNull();
+                Integer lookupResult = singletonRow.getInt(0);
+
+                assertThat(scanResult).isEqualTo(lookupResult);
+            }
         }
     }
 

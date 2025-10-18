@@ -332,8 +332,19 @@ public class CompactedRowWriter {
                 break;
             case INTEGER:
             case DATE:
-            case TIME_WITHOUT_TIME_ZONE:
                 fieldWriter = (writer, pos, value) -> writer.writeInt((int) value);
+                break;
+            case TIME_WITHOUT_TIME_ZONE:
+                final int timePrecision = getPrecision(fieldType);
+                fieldWriter =
+                        (writer, pos, value) -> {
+                            if (timePrecision == 0) {
+                                // truncate to seconds to keep consistence with ArrowTimeWriter
+                                writer.writeInt((int) value / 1000 * 1000);
+                            } else {
+                                writer.writeInt((int) value);
+                            }
+                        };
                 break;
             case BIGINT:
                 fieldWriter = (writer, pos, value) -> writer.writeLong((long) value);
