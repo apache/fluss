@@ -804,6 +804,7 @@ public class ZooKeeperClient implements AutoCloseable {
         ops.add(metadataPartitionNode);
         zkClient.transaction().forOperations(ops);
     }
+
     // --------------------------------------------------------------------------------------------
     // Schema
     // --------------------------------------------------------------------------------------------
