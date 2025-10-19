@@ -119,13 +119,16 @@ It is recommended to automatically format your code by applying the following se
 4. Go to "Settings" → "Tools" → "Actions on Save".
 5. Under "Formatting Actions", select "Optimize imports" and "Reformat code".
 6. From the "All file types list" next to "Reformat code", select Java and Scala.
+7. Go to "Settings" → "Editor" → "Code Style" → "Java".
+8. Under "Imports" tab on the right side find "Class count to use import with '*'" and put there 9999.
+9. Do same with "Names count to use static import with '*'" and click "Apply".
 
 For earlier IntelliJ IDEA versions:
 
-4. Go to "Settings" → "Other Settings" → "Save Actions".
-5. Under "General", enable your preferred settings for when to format the code, e.g. "Activate save actions on save".
-6. Under "Formatting Actions", select "Optimize imports" and "Reformat file".
-7. Under "File Path Inclusions", add an entry for `.*\.java` to avoid formatting other file types.
+1. Go to "Settings" → "Other Settings" → "Save Actions".
+2. Under "General", enable your preferred settings for when to format the code, e.g. "Activate save actions on save".
+3. Under "Formatting Actions", select "Optimize imports" and "Reformat file".
+4. Under "File Path Inclusions", add an entry for `.*\.java` to avoid formatting other file types.
 
 You can also format the whole project via Maven by using `mvn spotless:apply`.
 
