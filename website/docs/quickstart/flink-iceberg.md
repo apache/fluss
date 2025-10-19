@@ -484,17 +484,20 @@ SELECT sum(total_price) as sum_price FROM datalake_enriched_orders$lake;
 To achieve results with sub-second data freshness, you can query the table directly, which seamlessly unifies data from both Fluss and Iceberg:
 
 ```sql  title="Flink SQL"
--- to sum prices of all orders (combining fluss and iceberg data)
-SELECT sum(total_price) as sum_price FROM datalake_enriched_orders;
+-- all orders (combining fluss and iceberg data)
+> SELECT * FROM datalake_enriched_orders limit 2;
 ```
 
 **Sample Output:**
 ```shell
-+------------+
-|  sum_price |
-+------------+
-| 1777908.36 |
-+------------+
+
++-----------+----------+-------------+------------+----------------+--------+--------------+----------------+--------------+-----------------+-------------+
+| order_key | cust_key | total_price | order_date | order_priority |  clerk |    cust_name |     cust_phone | cust_acctbal | cust_mktsegment | nation_name |
++-----------+----------+-------------+------------+----------------+--------+--------------+----------------+--------------+-----------------+-------------+
+|  77733888 |       12 |      412.61 | 2025-07-11 |           high | Clerk3 | Frank Furter | 1-203-732-5680 |       623.86 |       HOUSEHOLD |       CHINA |
+|    340736 |        1 |      111.26 | 2025-09-05 |            low | Clerk1 |       <NULL> |         <NULL> |       <NULL> |          <NULL> |      <NULL> |
++-----------+----------+-------------+------------+----------------+--------+--------------+----------------+--------------+-----------------+-------------+
+
 ```
 
 You can execute the real-time analytics query multiple times, and the results will vary with each run as new data is continuously written to Fluss in real-time.

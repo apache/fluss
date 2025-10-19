@@ -318,12 +318,26 @@
                                     <include>*:*</include>
                                 </includes>
                             </artifactSet>
+                            <relocations>
+                                <!-- Shade Jackson to match Iceberg's shaded package -->
+                                <relocation>
+                                    <pattern>com.fasterxml.jackson</pattern>
+                                    <shadedPattern>org.apache.iceberg.shaded.com.fasterxml.jackson</shadedPattern>
+                                </relocation>
+                                <!-- Shade Parquet to match Iceberg's shaded package -->
+                                <relocation>
+                                    <pattern>org.apache.parquet</pattern>
+                                    <shadedPattern>org.apache.iceberg.shaded.org.apache.parquet</shadedPattern>
+                                </relocation>
+                            </relocations>
                             <filters>
                                 <filter>
                                     <artifact>*</artifact>
                                     <excludes>
                                         <exclude>LICENSE</exclude>
                                         <exclude>NOTICE</exclude>
+                                        <!-- Exclude multi-release JAR versions that cause shading issues -->
+                                        <exclude>META-INF/versions/**</exclude>
                                     </excludes>
                                 </filter>
                             </filters>
