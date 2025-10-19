@@ -61,6 +61,7 @@ import java.nio.ByteBuffer;
 import java.time.LocalDateTime;
 import java.time.OffsetDateTime;
 import java.time.ZoneOffset;
+import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -217,8 +218,14 @@ class IcebergRecordReaderTest extends IcebergSourceTestBase {
             record.setField("small_int", i % 32768);
             record.setField("float_val", 100.5f + i);
             record.setField("decimal_val", new BigDecimal(i + 100.25));
-            record.setField("timestamp_ntz", LocalDateTime.now());
-            record.setField("timestamp_ltz", OffsetDateTime.now(ZoneOffset.UTC));
+            record.setField(
+                    "timestamp_ntz",
+                    LocalDateTime.of(2025, 10, 18, 10, 10, 10, 1000 * i)
+                            .truncatedTo(ChronoUnit.MICROS));
+            record.setField(
+                    "timestamp_ltz",
+                    OffsetDateTime.of(2025, 10, 18, 10, 10, 10, 1000 * i, ZoneOffset.UTC)
+                            .truncatedTo(ChronoUnit.MICROS));
             record.setField("binary_data", ByteBuffer.wrap("Hello World!".getBytes()));
             record.setField("char_data", "char_" + i);
             record.setField("dt", partition);
