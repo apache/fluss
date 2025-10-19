@@ -48,7 +48,10 @@ Prerequisites for building Apache Fluss:
 ```bash
 git clone https://github.com/apache/fluss.git
 cd fluss
+# in case of java 11
 ./mvnw clean package -DskipTests
+# or in case of java 8
+./mvnw clean package -DskipTests -Pjava8
 ```
 
 Apache Fluss is now installed in `build-target`. The build command uses Maven Wrapper (`mvnw`) which ensures the correct Maven version is used.
