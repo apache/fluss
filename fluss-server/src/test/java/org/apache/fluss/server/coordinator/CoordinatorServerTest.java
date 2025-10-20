@@ -26,8 +26,10 @@ import org.apache.fluss.server.zk.data.CoordinatorAddress;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 
+import java.time.Duration;
 import java.util.Optional;
 
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Test for {@link CoordinatorServer} . */
@@ -38,6 +40,7 @@ class CoordinatorServerTest extends ServerTestBase {
     @BeforeEach
     void beforeEach() throws Exception {
         coordinatorServer = startCoordinatorServer(createConfiguration());
+        waitUtilCoordinatorServerElected();
     }
 
     @AfterEach
@@ -70,5 +73,14 @@ class CoordinatorServerTest extends ServerTestBase {
         verifyEndpoint(
                 optCoordinatorAddr.get().getEndpoints(),
                 coordinatorServer.getRpcServer().getBindEndpoints());
+    }
+
+    public void waitUtilCoordinatorServerElected() {
+        waitUntil(
+                () -> {
+                    return zookeeperClient.getCoordinatorLeaderAddress().isPresent();
+                },
+                Duration.ofSeconds(10),
+                String.format("Fail to wait coordinator server reelected"));
     }
 }
