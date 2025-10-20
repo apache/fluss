@@ -25,12 +25,16 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.TooManyBucketsException;
+import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -40,8 +44,10 @@ import org.apache.fluss.utils.StringUtils;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.EnumSet;
+import java.util.HashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -127,6 +133,142 @@ public class TableDescriptorValidation {
                                             k));
                         }
                     });
+        }
+    }
+
+    public static void validateTableDescriptorCompatible(
+            TablePath tablePath,
+            LakeCatalog lakeCatalog,
+            DataLakeFormat dataLakeFormat,
+            TableDescriptor newTableDescriptor,
+            TableDescriptor lakeTableDescriptor) {
+        // check distribution
+        if (!lakeTableDescriptor.getTableDistribution().isPresent()) {
+            // if the TableDistribution is not set, it indicates a log table without bucket keys
+            if (!newTableDescriptor.getTableDistribution().isPresent()
+                    || !newTableDescriptor.getTableDistribution().get().getBucketKeys().isEmpty()) {
+                throw new LakeTableAlreadyExistException(
+                        String.format(
+                                "The table %s already exists in %s catalog, but the bucket keys doesn't match, "
+                                        + "new table bucket keys %s, exist lake table doesn't have bucket keys. "
+                                        + "Please first drop the table in %s catalog or use a new table name.",
+                                tablePath,
+                                dataLakeFormat,
+                                newTableDescriptor.getTableDistribution().get().getBucketKeys(),
+                                dataLakeFormat));
+            }
+        } else {
+            if (!lakeTableDescriptor
+                    .getTableDistribution()
+                    .equals(newTableDescriptor.getTableDistribution())) {
+                throw new LakeTableAlreadyExistException(
+                        String.format(
+                                "The table %s already exists in %s catalog, but the distribution doesn't match, "
+                                        + "new table distribution %s, exist lake table distribution %s. "
+                                        + "Please first drop the table in %s catalog or use a new table name.",
+                                tablePath,
+                                dataLakeFormat,
+                                newTableDescriptor.getTableDistribution().get(),
+                                lakeTableDescriptor.getTableDistribution().get(),
+                                dataLakeFormat));
+            }
+        }
+
+        // check schema
+        if (!newTableDescriptor.getSchema().equals(lakeTableDescriptor.getSchema())) {
+            throw new LakeTableAlreadyExistException(
+                    String.format(
+                            "The table %s already exists in %s catalog, but the schema doesn't match, "
+                                    + "new table schema %s, exist lake table schema %s. "
+                                    + "Please first drop the table in %s catalog or use a new table name.",
+                            tablePath,
+                            dataLakeFormat,
+                            newTableDescriptor.getSchema(),
+                            lakeTableDescriptor.getSchema(),
+                            dataLakeFormat));
+        }
+
+        // check partition keys
+        if (!newTableDescriptor.getPartitionKeys().equals(lakeTableDescriptor.getPartitionKeys())) {
+            throw new LakeTableAlreadyExistException(
+                    String.format(
+                            "The table %s already exists in %s catalog, but the partition keys doesn't match, "
+                                    + "new table partition keys %s, exist lake table partition keys %s. "
+                                    + "Please first drop the table in %s catalog or use a new table name.",
+                            tablePath,
+                            dataLakeFormat,
+                            newTableDescriptor.getPartitionKeys(),
+                            lakeTableDescriptor.getPartitionKeys(),
+                            dataLakeFormat));
+        }
+
+        // check properties
+        if (!newTableDescriptor.getProperties().equals(lakeTableDescriptor.getProperties())) {
+            throw new LakeTableAlreadyExistException(
+                    String.format(
+                            "The table %s already exists in %s catalog, but the properties doesn't match, "
+                                    + "new table properties %s, exist lake table properties %s. "
+                                    + "Please first drop the table in %s catalog or use a new table name.",
+                            tablePath,
+                            dataLakeFormat,
+                            newTableDescriptor.getProperties(),
+                            lakeTableDescriptor.getProperties(),
+                            dataLakeFormat));
+        }
+
+        // check custom properties
+        Map<String, String> newCustomProperties =
+                new HashMap<>(newTableDescriptor.getCustomProperties());
+        Map<String, String> newLakeProperties = new HashMap<>();
+        newTableDescriptor
+                .getProperties()
+                .forEach(
+                        (k, v) -> {
+                            if (v.equals(newCustomProperties.get(k))) {
+                                newCustomProperties.remove(k);
+                            }
+                        });
+        newCustomProperties.forEach(
+                (k, v) -> {
+                    if (k.startsWith(dataLakeFormat.toString() + ".")) {
+                        newLakeProperties.put(k, v);
+                    }
+                });
+        newLakeProperties.forEach((k, v) -> newCustomProperties.remove(k));
+
+        Map<String, String> lakeCustomProperties =
+                new HashMap<>(lakeTableDescriptor.getCustomProperties());
+        Map<String, String> lakeProperties = new HashMap<>();
+        lakeTableDescriptor
+                .getProperties()
+                .forEach(
+                        (k, v) -> {
+                            if (v.equals(lakeCustomProperties.get(k))) {
+                                lakeCustomProperties.remove(k);
+                            }
+                        });
+        lakeCustomProperties.forEach(
+                (k, v) -> {
+                    if (k.startsWith(dataLakeFormat.toString() + ".")) {
+                        lakeProperties.put(k, v);
+                    }
+                });
+        lakeProperties.forEach((k, v) -> lakeCustomProperties.remove(k));
+
+        // delegate lake table properties compatibility check to lake catalog
+        lakeCatalog.validateTablePropertyCompatibility(lakeProperties, newLakeProperties);
+
+        if (!newCustomProperties.equals(lakeCustomProperties)) {
+            throw new LakeTableAlreadyExistException(
+                    String.format(
+                            "The table %s already exists in %s catalog, but the custom properties doesn't match, "
+                                    + "new table custom properties %s, exist lake table custom properties %s. "
+                                    + "Please first drop the table in %s catalog or use a new table name.",
+                            tablePath,
+                            dataLakeFormat,
+                            newCustomProperties,
+                            lakeCustomProperties,
+                            dataLakeFormat));
         }
     }
 

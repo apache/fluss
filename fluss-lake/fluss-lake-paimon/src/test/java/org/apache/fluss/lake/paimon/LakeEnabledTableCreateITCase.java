@@ -402,6 +402,200 @@ class LakeEnabledTableCreateITCase {
     }
 
     @Test
+    void testCreateLakeEnableTableWithExistLakeTable() throws Exception {
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("k1", "v1");
+        customProperties.put("paimon.file.format", "parquet");
+
+        // create log table without bucket keys
+        TableDescriptor logTableWithoutBucketKeys =
+                createTableDescriptor(
+                        2,
+                        BUCKET_NUM,
+                        Collections.emptyList(),
+                        Collections.emptyList(),
+                        customProperties,
+                        false);
+        TablePath logTablePathWithoutBucketkeys =
+                TablePath.of(DATABASE, "log_table_without_bucket_keys");
+        admin.createTable(logTablePathWithoutBucketkeys, logTableWithoutBucketKeys, false).get();
+        // drop fluss table, lake table should still exist
+        admin.dropTable(logTablePathWithoutBucketkeys, false).get();
+        // create the same fluss table again should be ok
+        admin.createTable(logTablePathWithoutBucketkeys, logTableWithoutBucketKeys, false).get();
+        admin.dropTable(logTablePathWithoutBucketkeys, false).get();
+
+        // paimon table use dynamic bucket for fluss log table without bucket keys
+        // so it should be ok to create the same fluss table with a new bucket num
+        logTableWithoutBucketKeys = logTableWithoutBucketKeys.withBucketCount(BUCKET_NUM + 1);
+        admin.createTable(logTablePathWithoutBucketkeys, logTableWithoutBucketKeys, false).get();
+        admin.dropTable(logTablePathWithoutBucketkeys, false).get();
+
+        // create log table with bucket keys will throw exception
+        TableDescriptor logTableWithoutBucketKeys1 =
+                createTableDescriptor(
+                        2,
+                        BUCKET_NUM,
+                        Arrays.asList("c1", "c2"),
+                        Collections.emptyList(),
+                        customProperties,
+                        false);
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                logTablePathWithoutBucketkeys,
+                                                logTableWithoutBucketKeys1,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(LakeTableAlreadyExistException.class)
+                .hasMessage(
+                        "The table fluss.log_table_without_bucket_keys already exists in paimon catalog, but the bucket keys doesn't match, new table bucket keys [c1, c2], exist lake table doesn't have bucket keys. Please first drop the table in paimon catalog or use a new table name.");
+
+        // create log table with bucket keys will throw exception
+        TableDescriptor logTableWithoutBucketKeys2 =
+                createTableDescriptor(
+                        3,
+                        BUCKET_NUM,
+                        Collections.emptyList(),
+                        Collections.emptyList(),
+                        customProperties,
+                        false);
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                logTablePathWithoutBucketkeys,
+                                                logTableWithoutBucketKeys2,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(LakeTableAlreadyExistException.class)
+                .hasMessage(
+                        "The table fluss.log_table_without_bucket_keys already exists in paimon catalog, but the schema doesn't match, new table schema (c1 STRING,c2 INT,c3 STRING), exist lake table schema (c1 STRING,c2 INT). Please first drop the table in paimon catalog or use a new table name.");
+
+        // create table with primary keys will throw exception
+        TableDescriptor logTableWithoutBucketKeys3 =
+                createTableDescriptor(
+                        2,
+                        BUCKET_NUM,
+                        Collections.emptyList(),
+                        Collections.emptyList(),
+                        customProperties,
+                        true);
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                logTablePathWithoutBucketkeys,
+                                                logTableWithoutBucketKeys3,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(LakeTableAlreadyExistException.class)
+                .hasMessage(
+                        "The table fluss.log_table_without_bucket_keys already exists in paimon catalog, but the bucket keys doesn't match, new table bucket keys [c1], exist lake table doesn't have bucket keys. Please first drop the table in paimon catalog or use a new table name.");
+
+        // create table with partition keys will throw exception
+        TableDescriptor logTableWithoutBucketKeys4 =
+                createTableDescriptor(
+                        2,
+                        BUCKET_NUM,
+                        Collections.emptyList(),
+                        Collections.singletonList("c1"),
+                        customProperties,
+                        false);
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                logTablePathWithoutBucketkeys,
+                                                logTableWithoutBucketKeys4,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(LakeTableAlreadyExistException.class)
+                .hasMessage(
+                        "The table fluss.log_table_without_bucket_keys already exists in paimon catalog, but the partition keys doesn't match, new table partition keys [c1], exist lake table partition keys []. Please first drop the table in paimon catalog or use a new table name.");
+
+        // create table with different custom properties will throw exception
+        customProperties.put("paimon.file.format", "orc");
+        TableDescriptor logTableWithoutBucketKeys5 =
+                createTableDescriptor(
+                        2,
+                        BUCKET_NUM,
+                        Collections.emptyList(),
+                        Collections.emptyList(),
+                        customProperties,
+                        false);
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                logTablePathWithoutBucketkeys,
+                                                logTableWithoutBucketKeys5,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessage(
+                        "The options of the existing Paimon table are not compatible with the new one. New options: {paimon.file.format=orc}");
+
+        // create log table with bucket keys
+        TableDescriptor logTableWithBucketKeys =
+                createTableDescriptor(
+                        2,
+                        BUCKET_NUM,
+                        Collections.singletonList("c1"),
+                        Collections.emptyList(),
+                        customProperties,
+                        false);
+        TablePath logTablePathWithBucketKeys = TablePath.of(DATABASE, "log_table_with_bucket_keys");
+        admin.createTable(logTablePathWithBucketKeys, logTableWithBucketKeys, false).get();
+        // drop fluss table, lake table should still exist
+        admin.dropTable(logTablePathWithBucketKeys, false).get();
+        // create the same fluss table again should be ok
+        admin.createTable(logTablePathWithBucketKeys, logTableWithBucketKeys, false).get();
+        admin.dropTable(logTablePathWithBucketKeys, false).get();
+
+        // fluss table with bucket keys will use static bucket in paimon
+        TableDescriptor logTableWithBucketKeys1 =
+                logTableWithBucketKeys.withBucketCount(BUCKET_NUM + 1);
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                logTablePathWithBucketKeys,
+                                                logTableWithBucketKeys1,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(LakeTableAlreadyExistException.class)
+                .hasMessage(
+                        "The table fluss.log_table_with_bucket_keys already exists in paimon catalog, but the distribution doesn't match, new table distribution {bucketKeys=[c1] bucketCount=4}, exist lake table distribution {bucketKeys=[c1] bucketCount=3}. Please first drop the table in paimon catalog or use a new table name.");
+
+        // create pk table
+        TableDescriptor pkTable =
+                createTableDescriptor(
+                        2,
+                        BUCKET_NUM,
+                        Collections.emptyList(),
+                        Collections.emptyList(),
+                        customProperties,
+                        true);
+        TablePath pkTablePath = TablePath.of(DATABASE, "pk_table_for_exist_lake_table");
+        admin.createTable(pkTablePath, pkTable, false).get();
+        // drop fluss table, lake table should still exist
+        admin.dropTable(pkTablePath, false).get();
+        // create the same fluss table again should be ok
+        admin.createTable(pkTablePath, pkTable, false).get();
+        admin.dropTable(pkTablePath, false).get();
+
+        // fluss table with bucket keys will use static bucket in paimon
+        TableDescriptor pkTable1 = pkTable.withBucketCount(BUCKET_NUM + 1);
+        assertThatThrownBy(() -> admin.createTable(pkTablePath, pkTable1, false).get())
+                .cause()
+                .isInstanceOf(LakeTableAlreadyExistException.class)
+                .hasMessage(
+                        "The table fluss.pk_table_for_exist_lake_table already exists in paimon catalog, but the distribution doesn't match, new table distribution {bucketKeys=[c1] bucketCount=4}, exist lake table distribution {bucketKeys=[c1] bucketCount=3}. Please first drop the table in paimon catalog or use a new table name.");
+    }
+
+    @Test
     void testAlterLakeEnabledLogTable() throws Exception {
         Map<String, String> customProperties = new HashMap<>();
         customProperties.put("k1", "v1");
@@ -475,15 +669,7 @@ class LakeEnabledTableCreateITCase {
         // try to enable lake table again
         enableLake = TableChange.set(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
         List<TableChange> finalChanges = Collections.singletonList(enableLake);
-        // TODO: After #846 is implemented, we should remove this exception assertion.
-        assertThatThrownBy(() -> admin.alterTable(logTablePath, finalChanges, false).get())
-                .cause()
-                .isInstanceOf(LakeTableAlreadyExistException.class)
-                .hasMessage(
-                        String.format(
-                                "The table %s already exists in paimon catalog, please "
-                                        + "first drop the table in paimon catalog or use a new table name.",
-                                logTablePath));
+        admin.alterTable(logTablePath, finalChanges, false).get();
     }
 
     @Test
@@ -610,6 +796,94 @@ class LakeEnabledTableCreateITCase {
         admin.alterTable(TablePath.of(DATABASE, "not_exist_table"), tableChanges, true).get();
     }
 
+    @Test
+    void testEnableLakeTableAfterAlterTableProperties() throws Exception {
+        Map<String, String> customProperties = new HashMap<>();
+        customProperties.put("k1", "v1");
+        customProperties.put("paimon.file.format", "parquet");
+
+        // create table
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(
+                                Schema.newBuilder()
+                                        .column("c1", DataTypes.INT())
+                                        .column("c2", DataTypes.STRING())
+                                        .build())
+                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, false)
+                        .customProperties(customProperties)
+                        .distributedBy(BUCKET_NUM, "c1", "c2")
+                        .build();
+        TablePath tablePath = TablePath.of(DATABASE, "enable_lake_table_after_alter_properties");
+        admin.createTable(tablePath, tableDescriptor, false).get();
+        // paimon table should not exist because lake table is disable
+        assertThatThrownBy(
+                        () ->
+                                paimonCatalog.getTable(
+                                        Identifier.create(DATABASE, tablePath.getTableName())))
+                .isInstanceOf(Catalog.TableNotExistException.class)
+                .hasMessage(String.format("Table %s does not exist.", tablePath));
+
+        // alter fluss tale properties
+        List<TableChange> tableChanges =
+                Arrays.asList(TableChange.reset("k1"), TableChange.set("k2", "v2"));
+        admin.alterTable(tablePath, tableChanges, false).get();
+        // enable lake table should be ok
+        TableChange.SetOption enableLake =
+                TableChange.set(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+        admin.alterTable(tablePath, Collections.singletonList(enableLake), false).get();
+        Table paimonTable =
+                paimonCatalog.getTable(Identifier.create(DATABASE, tablePath.getTableName()));
+        customProperties.remove("k1");
+        customProperties.put("k2", "v2");
+        Map<String, String> newProperties = new HashMap<>(tableDescriptor.getProperties());
+        newProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
+        tableDescriptor = tableDescriptor.withProperties(newProperties, customProperties);
+        verifyPaimonTable(
+                paimonTable,
+                tableDescriptor,
+                RowType.of(
+                        new DataType[] {
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.STRING(),
+                            // for __bucket, __offset, __timestamp
+                            org.apache.paimon.types.DataTypes.INT(),
+                            org.apache.paimon.types.DataTypes.BIGINT(),
+                            org.apache.paimon.types.DataTypes.TIMESTAMP_WITH_LOCAL_TIME_ZONE()
+                        },
+                        new String[] {
+                            "c1",
+                            "c2",
+                            BUCKET_COLUMN_NAME,
+                            OFFSET_COLUMN_NAME,
+                            TIMESTAMP_COLUMN_NAME
+                        }),
+                "c1,c2",
+                BUCKET_NUM);
+
+        // disable lake table
+        TableChange.SetOption diableLake =
+                TableChange.set(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "false");
+        admin.alterTable(tablePath, Collections.singletonList(diableLake), false).get();
+
+        // alter fluss tale properties when lake table is disabled
+        tableChanges = Collections.singletonList(TableChange.set("k2", "v22"));
+        admin.alterTable(tablePath, tableChanges, false).get();
+
+        // enable lake table will throw exception, because we altered the fluss table properties
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                tablePath,
+                                                Collections.singletonList(enableLake),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(LakeTableAlreadyExistException.class)
+                .hasMessage(
+                        "The table fluss.enable_lake_table_after_alter_properties already exists in paimon catalog, but the custom properties doesn't match, new table custom properties {paimon.file.format=parquet, k2=v22}, exist lake table custom properties {paimon.file.format=parquet, k2=v2}. Please first drop the table in paimon catalog or use a new table name.");
+    }
+
     private void verifyPaimonTable(
             Table paimonTable,
             TableDescriptor flussTable,
@@ -656,5 +930,33 @@ class LakeEnabledTableCreateITCase {
         // now, check schema
         RowType paimonRowType = paimonTable.rowType();
         assertThat(paimonRowType).isEqualTo(expectedRowType);
+    }
+
+    private TableDescriptor createTableDescriptor(
+            int columnNum,
+            int bucketNum,
+            List<String> bucketKeys,
+            List<String> partitionKeys,
+            Map<String, String> customProperties,
+            boolean withPrimaryKeys) {
+        Schema.Builder builder = Schema.newBuilder();
+        for (int i = 1; i <= columnNum; i++) {
+            if (i % 2 == 0) {
+                builder.column("c" + i, DataTypes.INT());
+            } else {
+                builder.column("c" + i, DataTypes.STRING());
+            }
+        }
+        if (withPrimaryKeys) {
+            builder.primaryKey("c1");
+        }
+
+        return TableDescriptor.builder()
+                .schema(builder.build())
+                .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                .customProperties(customProperties)
+                .distributedBy(bucketNum, bucketKeys)
+                .partitionedBy(partitionKeys)
+                .build();
     }
 }

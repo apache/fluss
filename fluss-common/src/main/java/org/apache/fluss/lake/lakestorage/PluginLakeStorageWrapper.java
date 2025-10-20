@@ -29,6 +29,7 @@ import org.apache.fluss.utils.TemporaryClassLoaderContext;
 import org.apache.fluss.utils.WrappingProxy;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * A wrapper around {@link LakeStoragePlugin} that ensures the plugin classloader is used for all
@@ -75,6 +76,13 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
         }
 
         @Override
+        public TableDescriptor getTable(TablePath tablePath) throws TableNotExistException {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                return inner.getTable(tablePath);
+            }
+        }
+
+        @Override
         public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
                 throws TableAlreadyExistException {
             try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
@@ -87,6 +95,14 @@ public class PluginLakeStorageWrapper implements LakeStoragePlugin {
                 throws TableNotExistException {
             try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
                 inner.alterTable(tablePath, tableChanges);
+            }
+        }
+
+        @Override
+        public void validateTablePropertyCompatibility(
+                Map<String, String> existingProperties, Map<String, String> properties) {
+            try (TemporaryClassLoaderContext ignored = TemporaryClassLoaderContext.of(loader)) {
+                inner.validateTablePropertyCompatibility(existingProperties, properties);
             }
         }
 

@@ -308,13 +308,8 @@ class FlinkCatalogTest {
         assertThat(catalog.tableExists(lakeTablePath)).isTrue();
         // drop fluss table
         catalog.dropTable(lakeTablePath, false);
-        // create the table again, should throw exception with ignore if exist = false
-        assertThatThrownBy(() -> catalog.createTable(lakeTablePath, table, false))
-                .isInstanceOf(CatalogException.class)
-                .hasMessage(
-                        String.format(
-                                "The table %s already exists in %s catalog, please first drop the table in %s catalog or use a new table name.",
-                                lakeTablePath, "paimon", "paimon"));
+        // create the table again, should be ok if lake table schema match the fluss table schema
+        catalog.createTable(lakeTablePath, table, false);
     }
 
     @Test

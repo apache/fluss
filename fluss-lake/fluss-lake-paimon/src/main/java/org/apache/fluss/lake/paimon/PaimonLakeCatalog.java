@@ -34,15 +34,19 @@ import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.schema.SchemaChange;
+import org.apache.paimon.table.Table;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.DataTypes;
 
 import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toFlussTableDescriptor;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchema;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchemaChanges;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.validatePaimonTableOptions;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -74,6 +78,17 @@ public class PaimonLakeCatalog implements LakeCatalog {
     @VisibleForTesting
     protected Catalog getPaimonCatalog() {
         return paimonCatalog;
+    }
+
+    @Override
+    public TableDescriptor getTable(TablePath tablePath) throws TableNotExistException {
+        try {
+            Identifier paimonPath = toPaimon(tablePath);
+            Table table = paimonCatalog.getTable(paimonPath);
+            return toFlussTableDescriptor(table);
+        } catch (Catalog.TableNotExistException e) {
+            throw new TableNotExistException("Table " + tablePath + " not exists.");
+        }
     }
 
     @Override
@@ -112,6 +127,12 @@ public class PaimonLakeCatalog implements LakeCatalog {
             // shouldn't happen before we support schema change
             throw new RuntimeException(e);
         }
+    }
+
+    @Override
+    public void validateTablePropertyCompatibility(
+            Map<String, String> existingProperties, Map<String, String> properties) {
+        validatePaimonTableOptions(existingProperties, properties);
     }
 
     private void createTable(Identifier tablePath, Schema schema)

@@ -25,7 +25,6 @@ import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidPartitionException;
-import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.SchemaNotExistException;
@@ -70,6 +69,8 @@ import java.util.concurrent.Callable;
 
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
+import static org.apache.fluss.server.utils.TableDescriptorValidation.validateTableDescriptorCompatible;
+import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /** A manager for metadata. */
 public class MetadataManager {
@@ -311,6 +312,21 @@ public class MetadataManager {
                 "Fail to create table " + tablePath);
     }
 
+    public void createLakeTable(
+            TablePath tablePath,
+            TableDescriptor tableToCreate,
+            @Nullable LakeCatalog lakeCatalog,
+            @Nullable DataLakeFormat dataLakeFormat) {
+        try {
+            checkNotNull(lakeCatalog).createTable(tablePath, tableToCreate);
+        } catch (TableAlreadyExistException e) {
+            TableDescriptor lakeTableDescriptor = checkNotNull(lakeCatalog).getTable(tablePath);
+
+            validateTableDescriptorCompatible(
+                    tablePath, lakeCatalog, dataLakeFormat, tableToCreate, lakeTableDescriptor);
+        }
+    }
+
     public void alterTableProperties(
             TablePath tablePath,
             List<TableChange> tableChanges,
@@ -400,21 +416,8 @@ public class MetadataManager {
             boolean isLakeTableNewlyCreated = false;
             // to enable lake table
             if (!isDataLakeEnabled(tableDescriptor)) {
-                // before create table in fluss, we may create in lake
-                try {
-                    lakeCatalog.createTable(tablePath, newDescriptor);
-                    // no need to alter lake table if it is newly created
-                    isLakeTableNewlyCreated = true;
-                } catch (TableAlreadyExistException e) {
-                    // TODO: should tolerate if the lake exist but matches our schema. This ensures
-                    // eventually consistent by idempotently creating the table multiple times. See
-                    // #846
-                    throw new LakeTableAlreadyExistException(
-                            String.format(
-                                    "The table %s already exists in %s catalog, please "
-                                            + "first drop the table in %s catalog or use a new table name.",
-                                    tablePath, dataLakeFormat, dataLakeFormat));
-                }
+                // before alter table in fluss, we may create in lake
+                createLakeTable(tablePath, newDescriptor, lakeCatalog, dataLakeFormat);
             }
 
             // only need to alter lake table if it is not newly created

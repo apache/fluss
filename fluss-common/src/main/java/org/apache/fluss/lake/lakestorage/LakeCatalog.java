@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.lakestorage;
 
 import org.apache.fluss.annotation.PublicEvolving;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.TableChange;
@@ -25,6 +26,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 
 import java.util.List;
+import java.util.Map;
 
 /**
  * A catalog interface to modify metadata in external datalake.
@@ -33,6 +35,14 @@ import java.util.List;
  */
 @PublicEvolving
 public interface LakeCatalog extends AutoCloseable {
+
+    /**
+     * Get a table in lake.
+     *
+     * @param tablePath path of the table to be created
+     * @throws TableNotExistException if the table not exists
+     */
+    TableDescriptor getTable(TablePath tablePath) throws TableNotExistException;
 
     /**
      * Create a new table in lake.
@@ -53,6 +63,26 @@ public interface LakeCatalog extends AutoCloseable {
      */
     void alterTable(TablePath tablePath, List<TableChange> tableChanges)
             throws TableNotExistException;
+
+    /**
+     * Check whether the properties of the existing lake table are compatible with the properties of
+     * the table want to be created.
+     *
+     * @param properties The properties to be validated
+     */
+    default void validateTablePropertyCompatibility(
+            Map<String, String> existingProperties, Map<String, String> properties) {
+        if (!existingProperties.equals(properties)) {
+            throw new InvalidConfigException(
+                    "The properties of the existing lake table are not compatible with "
+                            + "the properties of the table want to be created. "
+                            + "Properties of existing lake table: "
+                            + existingProperties
+                            + ", "
+                            + "properties of lake table to be created: "
+                            + properties);
+        }
+    }
 
     @Override
     default void close() throws Exception {

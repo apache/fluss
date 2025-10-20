@@ -18,9 +18,11 @@
 package org.apache.fluss.lake.paimon.utils;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.config.FlussConfigUtils;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.lake.paimon.FlussDataTypeToPaimonDataType;
+import org.apache.fluss.lake.paimon.PaimonDataTypeToFlussDataType;
 import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -34,11 +36,16 @@ import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.schema.SchemaChange;
+import org.apache.paimon.schema.TableSchema;
+import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.table.Table;
+import org.apache.paimon.types.DataField;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.RowKind;
 import org.apache.paimon.types.RowType;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -60,6 +67,7 @@ public class PaimonConversions {
     static {
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET.key());
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET_KEY.key());
+        PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.PATH.key());
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.PARTITION_GENERATE_LEGCY_NAME.key());
     }
 
@@ -199,6 +207,99 @@ public class PaimonConversions {
         return schemaBuilder.build();
     }
 
+    public static TableDescriptor toFlussTableDescriptor(Table table) {
+        FileStoreTable paimonTable = (FileStoreTable) table;
+        Map<String, String> options = table.options();
+        TableSchema paimonSchema = paimonTable.schema();
+
+        TableDescriptor.Builder builder = TableDescriptor.builder();
+
+        // extract bucket num and bucket keys
+        int paimonBuckets = paimonSchema.numBuckets();
+        if (paimonBuckets != -1) {
+            builder.distributedBy(paimonBuckets, paimonSchema.bucketKeys());
+        }
+        // if paimonBuckets == -1, we keep TableDistribution as null here.
+        // Because when create tables by Java API, we don't know the bucket num
+
+        // build schema
+        org.apache.fluss.metadata.Schema.Builder schemaBuilder =
+                org.apache.fluss.metadata.Schema.newBuilder();
+        for (DataField field : paimonSchema.fields()) {
+            if (SYSTEM_COLUMNS.containsKey(field.name())) {
+                continue;
+            }
+            schemaBuilder
+                    .column(
+                            field.name(),
+                            field.type().accept(PaimonDataTypeToFlussDataType.INSTANCE))
+                    .withComment(field.description());
+        }
+
+        // set pk
+        if (!paimonSchema.primaryKeys().isEmpty()) {
+            schemaBuilder.primaryKey(paimonSchema.primaryKeys());
+        }
+        builder.schema(schemaBuilder.build());
+
+        // set partition keys
+        builder.partitionedBy(paimonSchema.partitionKeys());
+
+        // set properties to fluss table descriptor
+        Map<String, String> properties = new HashMap<>();
+        Map<String, String> customProperties = new HashMap<>();
+        options.forEach(
+                (k, v) -> {
+                    if (!PAIMON_UNSETTABLE_OPTIONS.contains(k)) {
+                        String flussKey = convertPaimonPropertyKeyToFluss(k);
+                        if (FlussConfigUtils.isTableStorageConfig(flussKey)) {
+                            properties.put(flussKey, v);
+                        }
+                        customProperties.put(flussKey, v);
+                    }
+                });
+        builder.properties(properties);
+        builder.customProperties(customProperties);
+
+        return builder.build();
+    }
+
+    public static void validatePaimonTableOptions(
+            Map<String, String> existingOptions, Map<String, String> options) {
+        // check new options
+        Map<String, String> newOptions = new HashMap<>(options);
+        existingOptions.forEach(
+                (k, v) -> {
+                    if (v.equals(options.get(k))) {
+                        newOptions.remove(k);
+                    }
+                });
+        // currently, we don't support update options
+        if (!newOptions.isEmpty()) {
+            throw new InvalidConfigException(
+                    "The options of the existing Paimon table are not compatible with the new one. "
+                            + "New options: "
+                            + newOptions);
+        }
+
+        // check remove options
+        Map<String, String> removeOptions = new HashMap<>(existingOptions);
+        options.forEach((k, v) -> removeOptions.remove(k));
+        String changelogProducerKey =
+                convertPaimonPropertyKeyToFluss(CoreOptions.CHANGELOG_PRODUCER.key());
+        if (CoreOptions.ChangelogProducer.INPUT
+                .toString()
+                .equalsIgnoreCase(removeOptions.get(changelogProducerKey))) {
+            removeOptions.remove(changelogProducerKey);
+        }
+        if (!removeOptions.isEmpty()) {
+            throw new InvalidConfigException(
+                    "The options of the existing Paimon table are not compatible with the new one. "
+                            + "Remove options: "
+                            + removeOptions);
+        }
+    }
+
     private static void validatePaimonOptions(Map<String, String> properties) {
         properties.forEach(
                 (k, v) -> {
@@ -235,6 +336,14 @@ public class PaimonConversions {
             return key.substring(PAIMON_CONF_PREFIX.length());
         } else {
             return FLUSS_CONF_PREFIX + key;
+        }
+    }
+
+    private static String convertPaimonPropertyKeyToFluss(String key) {
+        if (key.startsWith(FLUSS_CONF_PREFIX)) {
+            return key.substring(FLUSS_CONF_PREFIX.length());
+        } else {
+            return PAIMON_CONF_PREFIX + key;
         }
     }
 }
