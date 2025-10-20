@@ -281,7 +281,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testCreateInvalidDatabaseAndTable() {
+    void testCreateInvalidDatabaseAndTable() throws Exception {
         assertThatThrownBy(
                         () ->
                                 admin.createDatabase(
@@ -290,6 +290,15 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isInstanceOf(InvalidDatabaseException.class)
                 .hasMessageContaining(
                         "Database name *invalid_db* is invalid: '*invalid_db*' contains one or more characters other than");
+        //  test internal database with '__' prefix is not allowed
+        assertThatThrownBy(
+                        () ->
+                                admin.createDatabase(
+                                                "__internal_db", DatabaseDescriptor.EMPTY, false)
+                                        .get())
+                .isInstanceOf(InvalidDatabaseException.class)
+                .hasMessageContaining(
+                        "Database name __internal_db is invalid: '__' is not allowed as prefix, since it is reserved for internal databases/internal tables/internal partitions in Fluss server");
         assertThatThrownBy(
                         () ->
                                 admin.createTable(
@@ -309,6 +318,17 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .get())
                 .isInstanceOf(InvalidDatabaseException.class)
                 .hasMessageContaining("Database name null is invalid: null string is not allowed");
+        //  test internal table with '__' prefix is not allowed
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                TablePath.of("db", "__internal_table"),
+                                                DEFAULT_TABLE_DESCRIPTOR,
+                                                false)
+                                        .get())
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(
+                        "Table name __internal_table is invalid: '__' is not allowed as prefix, since it is reserved for internal databases/internal tables/internal partitions in Fluss server");
     }
 
     @Test
@@ -747,6 +767,21 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         TablePath tablePath = TablePath.of(dbName, "test_add_and_drop_partitioned_table");
         admin.createTable(tablePath, partitionedTable, true).get();
         assertPartitionInfo(admin.listPartitionInfos(tablePath).get(), Collections.emptyList());
+
+        // test internal partition with '__' prefix is not allowed
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath,
+                                                newPartitionSpec(
+                                                        Arrays.asList("age"),
+                                                        Arrays.asList("__18")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining(
+                        "The partition value __18 is invalid: '__' is not allowed as prefix, since it is reserved for internal databases/internal tables/internal partitions in Fluss server");
 
         // add two partitions.
         admin.createPartition(tablePath, newPartitionSpec("age", "10"), false).get();
