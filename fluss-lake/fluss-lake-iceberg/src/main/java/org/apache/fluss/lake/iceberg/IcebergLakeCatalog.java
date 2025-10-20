@@ -220,8 +220,7 @@ public class IcebergLakeCatalog implements LakeCatalog {
                 // TODO: Support other types of partition keys
                 throw new InvalidTableException(
                         String.format(
-                                "Iceberg partition key only support string type, "
-                                        + "%s is not string type.",
+                                "Partition key only support string type for iceberg currently. Column `%s` is not string type.",
                                 partitionKey));
             }
             builder.identity(partitionKey);

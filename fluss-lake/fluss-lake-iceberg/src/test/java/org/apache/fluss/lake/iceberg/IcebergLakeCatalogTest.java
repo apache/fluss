@@ -435,6 +435,6 @@ class IcebergLakeCatalogTest {
                         () -> flussIcebergCatalog.createTable(t1, tableDescriptor.build()))
                 .isInstanceOf(InvalidTableException.class)
                 .hasMessage(
-                        "Iceberg partition key only support string type, c1 is not string type.");
+                        "Partition key only support string type for iceberg currently. Column `c1` is not string type.");
     }
 }
