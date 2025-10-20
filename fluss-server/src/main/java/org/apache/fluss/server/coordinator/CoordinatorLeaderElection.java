@@ -128,7 +128,6 @@ public class CoordinatorLeaderElection implements AutoCloseable {
         try {
             leaderLatch.close();
             server.closeAsync();
-            leaderLatch.start();
         } catch (Exception e) {
         }
     }

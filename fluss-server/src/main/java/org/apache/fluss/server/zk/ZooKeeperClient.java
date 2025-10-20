@@ -61,7 +61,6 @@ import org.apache.fluss.server.zk.data.ZkData.BucketRemoteLogsZNode;
 import org.apache.fluss.server.zk.data.ZkData.BucketSnapshotIdZNode;
 import org.apache.fluss.server.zk.data.ZkData.BucketSnapshotsZNode;
 import org.apache.fluss.server.zk.data.ZkData.ConfigEntityZNode;
-import org.apache.fluss.server.zk.data.ZkData.CoordinatorZNode;
 import org.apache.fluss.server.zk.data.ZkData.DatabaseZNode;
 import org.apache.fluss.server.zk.data.ZkData.DatabasesZNode;
 import org.apache.fluss.server.zk.data.ZkData.LakeTableZNode;
