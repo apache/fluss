@@ -136,6 +136,6 @@ class CoordinatorServerElectionTest {
                             && !zookeeperClient.getCoordinatorLeaderAddress().get().equals(address);
                 },
                 Duration.ofMinutes(1),
-                String.format("Fail to wait coordinator server reelected"));
+                "Fail to wait coordinator server reelected");
     }
 }

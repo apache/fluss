@@ -271,6 +271,7 @@ public final class FlussClusterExtension
             setRemoteDataDir(conf);
             coordinatorServer = new CoordinatorServer(conf);
             coordinatorServer.start();
+            waitUtilCoordinatorServerElected();
             coordinatorServerInfo =
                     // TODO, Currently, we use 0 as coordinator server id.
                     new ServerInfo(
@@ -936,6 +937,15 @@ public final class FlussClusterExtension
 
     public CoordinatorServer getCoordinatorServer() {
         return coordinatorServer;
+    }
+
+    public void waitUtilCoordinatorServerElected() {
+        waitUntil(
+                () -> {
+                    return zooKeeperClient.getCoordinatorLeaderAddress().isPresent();
+                },
+                Duration.ofSeconds(10),
+                "Fail to wait coordinator server elected");
     }
 
     // --------------------------------------------------------------------------------------------

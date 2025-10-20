@@ -81,6 +81,6 @@ class CoordinatorServerTest extends ServerTestBase {
                     return zookeeperClient.getCoordinatorLeaderAddress().isPresent();
                 },
                 Duration.ofSeconds(10),
-                String.format("Fail to wait coordinator server reelected"));
+                "Fail to wait coordinator server elected");
     }
 }
