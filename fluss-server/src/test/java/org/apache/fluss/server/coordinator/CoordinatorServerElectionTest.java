@@ -63,6 +63,7 @@ class CoordinatorServerElectionTest {
         List<CoordinatorServer> coordinatorServerList =
                 Arrays.asList(coordinatorServer1, coordinatorServer2, coordinatorServer3);
 
+        // start 3 coordinator servers
         ExecutorService executor = Executors.newFixedThreadPool(3);
         for (int i = 0; i < 3; i++) {
             CoordinatorServer server = coordinatorServerList.get(i);
@@ -76,13 +77,13 @@ class CoordinatorServerElectionTest {
                     });
         }
 
+        // random 1 become leader
         waitUntilCoordinatorServerElected();
 
         CoordinatorAddress firstLeaderAddress = zookeeperClient.getCoordinatorLeaderAddress().get();
 
-        // Find the Coordinator server leader
+        // Find the leader
         // and try to close it.
-        // Then we should get another Coordinator server leader elected
         CoordinatorServer elected = null;
         for (CoordinatorServer coordinatorServer : coordinatorServerList) {
             if (coordinatorServer.getServerId() == firstLeaderAddress.getId()) {
@@ -92,12 +93,25 @@ class CoordinatorServerElectionTest {
         }
         assertThat(elected).isNotNull();
         elected.close();
+        elected.start();
 
-        // coordinator leader changed.
+        // Then we should get another Coordinator server leader elected
         waitUntilCoordinatorServerReelected(firstLeaderAddress);
         CoordinatorAddress secondLeaderAddress =
                 zookeeperClient.getCoordinatorLeaderAddress().get();
         assertThat(secondLeaderAddress).isNotEqualTo(firstLeaderAddress);
+
+        // kill other 2 coordinator servers
+        for (CoordinatorServer coordinatorServer : coordinatorServerList) {
+            if (coordinatorServer.getServerId() != firstLeaderAddress.getId()) {
+                coordinatorServer.close();
+            }
+        }
+        // the origin coordinator server should become leader again
+        waitUntilCoordinatorServerElected();
+        CoordinatorAddress thirdLeaderAddress = zookeeperClient.getCoordinatorLeaderAddress().get();
+
+        assertThat(thirdLeaderAddress.getId()).isEqualTo(firstLeaderAddress.getId());
     }
 
     /** Create a configuration with Zookeeper address setting. */

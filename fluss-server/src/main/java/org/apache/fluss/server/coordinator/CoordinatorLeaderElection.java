@@ -27,7 +27,6 @@ import org.apache.fluss.shaded.curator5.org.apache.curator.framework.recipes.lea
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.io.IOException;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -110,10 +109,14 @@ public class CoordinatorLeaderElection implements AutoCloseable {
     }
 
     @Override
-    public void close() throws IOException {
+    public void close() {
         LOG.info("Closing LeaderLatch for server {}.", serverId);
         if (leaderLatch != null) {
-            leaderLatch.close();
+            try {
+                leaderLatch.close();
+            } catch (Exception e) {
+                LOG.error("Failed to close LeaderLatch for server {}.", serverId, e);
+            }
         }
     }
 
@@ -125,10 +128,6 @@ public class CoordinatorLeaderElection implements AutoCloseable {
         isLeader.set(false);
         LOG.info("Coordinator server {} has been fenced.", serverId);
 
-        try {
-            leaderLatch.close();
-            server.closeAsync();
-        } catch (Exception e) {
-        }
+        this.close();
     }
 }
