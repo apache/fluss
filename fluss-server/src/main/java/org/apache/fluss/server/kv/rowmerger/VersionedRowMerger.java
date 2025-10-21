@@ -50,9 +50,14 @@ public class VersionedRowMerger implements RowMerger {
     private final DeleteBehavior deleteBehavior;
 
     public VersionedRowMerger(
-            RowType schema, String versionColumnName, DeleteBehavior deleteBehavior) {
+            RowType schema, String versionColumnName, @Nullable DeleteBehavior deleteBehavior) {
         this.versionComparator = createVersionComparator(schema, versionColumnName);
-        this.deleteBehavior = deleteBehavior;
+        if (deleteBehavior == DeleteBehavior.ALLOW) {
+            throw new IllegalArgumentException(
+                    "DELETE is not supported for the versioned merge engine.");
+        }
+        // for compatibility, default to IGNORE if not specified
+        this.deleteBehavior = deleteBehavior != null ? deleteBehavior : DeleteBehavior.IGNORE;
     }
 
     @Nullable

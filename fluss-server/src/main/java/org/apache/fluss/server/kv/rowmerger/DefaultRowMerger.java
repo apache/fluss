@@ -37,14 +37,12 @@ public class DefaultRowMerger implements RowMerger {
     private final Schema schema;
     private final DeleteBehavior deleteBehavior;
 
-    public DefaultRowMerger(Schema schema, KvFormat kvFormat) {
-        this(schema, kvFormat, DeleteBehavior.ALLOW);
-    }
-
-    public DefaultRowMerger(Schema schema, KvFormat kvFormat, DeleteBehavior deleteBehavior) {
+    public DefaultRowMerger(
+            Schema schema, KvFormat kvFormat, @Nullable DeleteBehavior deleteBehavior) {
         this.schema = schema;
         this.kvFormat = kvFormat;
-        this.deleteBehavior = deleteBehavior;
+        // for compatibility, default to ALLOW if not specified
+        this.deleteBehavior = deleteBehavior != null ? deleteBehavior : DeleteBehavior.ALLOW;
         // TODO: share cache in server level when PartialUpdater is thread-safe
         this.partialUpdaterCache = new PartialUpdaterCache();
     }

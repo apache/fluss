@@ -113,8 +113,8 @@ public class TableConfig {
     }
 
     /** Gets the delete behavior of the table. */
-    public DeleteBehavior getDeleteBehavior() {
-        return config.get(ConfigOptions.TABLE_DELETE_BEHAVIOR);
+    public Optional<DeleteBehavior> getDeleteBehavior() {
+        return config.getOptional(ConfigOptions.TABLE_DELETE_BEHAVIOR);
     }
 
     /** Gets the Arrow compression type and compression level of the table. */

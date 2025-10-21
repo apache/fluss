@@ -24,7 +24,6 @@ import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
 
-import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 
@@ -80,18 +79,5 @@ class DefaultRowMergerTest {
         BinaryRow ignoredRow = partialMerger.delete(oldRow);
         assertThat(ignoredRow).isNull();
         assertThat(partialMerger.deleteBehavior()).isEqualTo(deleteBehavior);
-    }
-
-    @Test
-    void testBackwardCompatibilityConstructor() {
-        // Test the original constructor without DeleteBehavior - should default to ALLOW
-        DefaultRowMerger merger = new DefaultRowMerger(SCHEMA, KvFormat.COMPACTED);
-
-        BinaryRow oldRow = createBinaryRow(1, "old");
-
-        // Should behave like ALLOW
-        BinaryRow deletedRow = merger.delete(oldRow);
-        assertThat(deletedRow).isNull();
-        assertThat(merger.deleteBehavior()).isEqualTo(DeleteBehavior.ALLOW);
     }
 }

@@ -22,7 +22,6 @@ import org.apache.fluss.config.TableConfig;
 import org.apache.fluss.exception.InvalidTargetColumnException;
 import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
-import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
@@ -79,7 +78,6 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
-import static org.apache.fluss.config.ConfigOptions.TABLE_DELETE_BEHAVIOR;
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
@@ -607,7 +605,6 @@ class KvTabletTest {
     void testFirstRowMergeEngine(boolean doProjection) throws Exception {
         Map<String, String> config = new HashMap<>();
         config.put("table.merge-engine", "first_row");
-        config.put(TABLE_DELETE_BEHAVIOR.key(), DeleteBehavior.IGNORE.toString());
         String tableName =
                 "test_first_row_merge_engine_" + (doProjection ? "projection" : "no_projection");
         TablePath tablePath = TablePath.of("testDb", tableName);
@@ -712,7 +709,6 @@ class KvTabletTest {
     void testVersionRowMergeEngine(boolean doProjection) throws Exception {
         Map<String, String> config = new HashMap<>();
         config.put("table.merge-engine", "versioned");
-        config.put(TABLE_DELETE_BEHAVIOR.key(), DeleteBehavior.IGNORE.toString());
         config.put("table.merge-engine.versioned.ver-column", "b");
         String tableName =
                 "test_versioned_row_merge_engine_"

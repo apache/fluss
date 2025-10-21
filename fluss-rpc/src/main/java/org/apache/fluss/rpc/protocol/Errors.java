@@ -25,6 +25,7 @@ import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
+import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.DuplicateSequenceException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FencedTieringEpochException;
@@ -225,7 +226,9 @@ public enum Errors {
             "The new ISR contains at least one ineligible replica.",
             IneligibleReplicaException::new),
     INVALID_ALTER_TABLE_EXCEPTION(
-            56, "The alter table is invalid.", InvalidAlterTableException::new);
+            56, "The alter table is invalid.", InvalidAlterTableException::new),
+    DELETION_DISABLED_EXCEPTION(
+            57, "Deletion operations are disabled on this table.", DeletionDisabledException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

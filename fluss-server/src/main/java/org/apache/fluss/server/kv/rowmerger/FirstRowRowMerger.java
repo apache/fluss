@@ -32,8 +32,13 @@ public class FirstRowRowMerger implements RowMerger {
 
     private final DeleteBehavior deleteBehavior;
 
-    public FirstRowRowMerger(DeleteBehavior deleteBehavior) {
-        this.deleteBehavior = deleteBehavior;
+    public FirstRowRowMerger(@Nullable DeleteBehavior deleteBehavior) {
+        if (deleteBehavior == DeleteBehavior.ALLOW) {
+            throw new IllegalArgumentException(
+                    "DELETE is not supported for the first_row merge engine.");
+        }
+        // for compatibility, default to IGNORE if not specified
+        this.deleteBehavior = deleteBehavior != null ? deleteBehavior : DeleteBehavior.IGNORE;
     }
 
     @Nullable

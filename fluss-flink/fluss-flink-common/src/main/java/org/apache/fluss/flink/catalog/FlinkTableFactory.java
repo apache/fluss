@@ -59,6 +59,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DELETE_BEHAVIOR;
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
 import static org.apache.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
 import static org.apache.fluss.flink.utils.DataLakeUtils.getDatalakeFormat;
@@ -187,6 +188,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
                 tableOptions.get(toFlinkOption(TABLE_DATALAKE_FORMAT)),
                 tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE),
+                tableOptions.get(toFlinkOption(TABLE_DELETE_BEHAVIOR)),
                 tableOptions.get(FlinkConnectorOptions.BUCKET_NUMBER),
                 getBucketKeys(tableOptions),
                 tableOptions.get(FlinkConnectorOptions.SINK_BUCKET_SHUFFLE));

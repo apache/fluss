@@ -67,7 +67,7 @@ public interface RowMerger {
     /** Create a row merger based on the given configuration. */
     static RowMerger create(TableConfig tableConf, Schema schema, KvFormat kvFormat) {
         Optional<MergeEngineType> mergeEngineType = tableConf.getMergeEngineType();
-        DeleteBehavior deleteBehavior = tableConf.getDeleteBehavior();
+        @Nullable DeleteBehavior deleteBehavior = tableConf.getDeleteBehavior().orElse(null);
 
         if (mergeEngineType.isPresent()) {
             switch (mergeEngineType.get()) {
