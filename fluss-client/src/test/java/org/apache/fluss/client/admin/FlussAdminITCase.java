@@ -363,7 +363,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .hasRootCauseInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(
                         "Table with 'FIRST_ROW' merge engine does not support delete operations. "
-                                + "The delete behavior must be set to 'ignore' or 'disable', but got 'allow'.");
+                                + "The 'table.delete.behavior' config must be set to 'ignore' or 'disable', but got 'allow'.");
 
         // Test 4: VERSIONED merge engine with delete behavior explicitly set to ALLOW
         TablePath tablePath4 = TablePath.of("fluss", "test_allow_delete_for_versioned");
@@ -381,7 +381,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .hasRootCauseInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(
                         "Table with 'VERSIONED' merge engine does not support delete operations. "
-                                + "The delete behavior must be set to 'ignore' or 'disable', but got 'allow'.");
+                                + "The 'table.delete.behavior' config must be set to 'ignore' or 'disable', but got 'allow'.");
 
         // Test 5: Log table - not allow to set delete behavior
         TablePath tablePath5 = TablePath.of("fluss", "test_set_delete_behavior_for_log_table");
@@ -396,7 +396,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertThatThrownBy(() -> admin.createTable(tablePath5, tableDescriptor5, false).join())
                 .hasRootCauseInstanceOf(InvalidConfigException.class)
                 .hasMessageContaining(
-                        "Delete behavior configuration is only supported for primary key tables.");
+                        "The 'table.delete.behavior' configuration is only supported for primary key tables.");
     }
 
     @Test

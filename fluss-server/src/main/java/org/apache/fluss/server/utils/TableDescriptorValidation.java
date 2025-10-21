@@ -323,7 +323,7 @@ public class TableDescriptorValidation {
                 tableConf.getOptional(ConfigOptions.TABLE_DELETE_BEHAVIOR);
         if (!hasPrimaryKey && deleteBehaviorOptional.isPresent()) {
             throw new InvalidConfigException(
-                    "Delete behavior configuration is only supported for primary key tables.");
+                    "The 'table.delete.behavior' configuration is only supported for primary key tables.");
         }
 
         // For tables with merge engines, automatically set appropriate delete behavior
@@ -336,7 +336,7 @@ public class TableDescriptorValidation {
                 throw new InvalidConfigException(
                         String.format(
                                 "Table with '%s' merge engine does not support delete operations. "
-                                        + "The delete behavior must be set to 'ignore' or 'disable', but got 'allow'.",
+                                        + "The 'table.delete.behavior' config must be set to 'ignore' or 'disable', but got 'allow'.",
                                 mergeEngine));
             }
         }
