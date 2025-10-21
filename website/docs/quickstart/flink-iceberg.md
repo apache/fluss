@@ -487,7 +487,7 @@ To achieve results with sub-second data freshness, you can query the table direc
 
 ```sql  title="Flink SQL"
 -- to sum prices of all orders (combining fluss and iceberg data)
-> SELECT sum(total_price) as sum_price FROM datalake_enriched_orders;
+SELECT sum(total_price) as sum_price FROM datalake_enriched_orders;
 ```
 
 **Sample Output:**
@@ -503,7 +503,7 @@ You can execute the real-time analytics query multiple times, and the results wi
 
 Finally, you can use the following command to view the files stored in Iceberg:
 ```shell
-docker compose exec taskmanager tree /tmp/iceberg/fluss.db
+docker compose exec taskmanager tree /tmp/iceberg/fluss
 ```
 
 **Sample Output:**
