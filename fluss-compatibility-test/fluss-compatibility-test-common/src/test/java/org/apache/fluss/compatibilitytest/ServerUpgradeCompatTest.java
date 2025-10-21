@@ -17,37 +17,102 @@
 
 package org.apache.fluss.compatibilitytest;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.fluss.shaded.curator5.org.apache.curator.retry.RetryOneTime;
+import org.apache.fluss.types.DataTypes;
 
+import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
+import javax.annotation.Nullable;
+
 import java.time.Duration;
-import java.util.Arrays;
-import java.util.Collections;
+import java.util.ArrayList;
 import java.util.List;
 
-import static org.apache.fluss.compatibilitytest.TestingTableDescriptor.INT_TYPE;
-import static org.apache.fluss.compatibilitytest.TestingTableDescriptor.STRING_TYPE;
+import static org.apache.fluss.compatibilitytest.CompatEnvironment.CLIENT_SALS_PROPERTIES;
+import static org.apache.fluss.compatibilitytest.CompatEnvironment.FLUSS_06_VERSION_MAGIC;
+import static org.apache.fluss.compatibilitytest.CompatEnvironment.FLUSS_07_VERSION_MAGIC;
+import static org.apache.fluss.compatibilitytest.CompatEnvironment.FLUSS_LATEST_VERSION_MAGIC;
+import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Basic abstract class for fluss server upgrade compatibility test. */
+/** Basic class for fluss server upgrade compatibility test. */
 @Testcontainers
-public abstract class ServerUpgradeCompatTest extends CompatTest {
-    protected void serverUpgradeTestPipeline(
-            int clientVersionMagic, int lowerServerVersionMagic, int higherServerVersionMagic)
-            throws Exception {
-        // start the lower server.
-        initAndStartFlussServer(clientVersionMagic, lowerServerVersionMagic);
-        initFlussConnection(lowerServerVersionMagic);
-        initFlussAdmin();
+public class ServerUpgradeCompatTest extends CompatTest {
+    public static final Schema DATA1_LOG_SCHEMA =
+            Schema.newBuilder()
+                    .column("a", DataTypes.INT())
+                    .withComment("a is first column")
+                    .column("b", DataTypes.STRING())
+                    .withComment("b is second column")
+                    .build();
 
+    private @Nullable Connection flussConnection;
+    private @Nullable Admin admin;
+
+    // ------------------------------------------------------------------------------------------
+    // Fluss-0.6 upgrade to different fluss versions
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void testUpgradeFrom06To07() throws Exception {
+        serverUpgradeTestPipeline(FLUSS_06_VERSION_MAGIC, FLUSS_07_VERSION_MAGIC);
+    }
+
+    @Test
+    void testUpgradeFrom06ToLatest() throws Exception {
+        serverUpgradeTestPipeline(FLUSS_06_VERSION_MAGIC, FLUSS_LATEST_VERSION_MAGIC);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Fluss-0.7 upgrade to different fluss versions
+    // ------------------------------------------------------------------------------------------
+
+    @Test
+    void testUpgradeFrom07ToLatest() throws Exception {
+        serverUpgradeTestPipeline(FLUSS_07_VERSION_MAGIC, FLUSS_LATEST_VERSION_MAGIC);
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // Common methods.
+    // ------------------------------------------------------------------------------------------
+
+    protected void serverUpgradeTestPipeline(
+            int lowerServerVersionMagic, int higherServerVersionMagic) throws Exception {
+        // start the lower server.
+        initAndStartFlussServer(lowerServerVersionMagic);
+        initFlussConnection(lowerServerVersionMagic);
+
+        Admin admin = getAdmin();
         // create table and insert data.
         String dbName = "upgrade-test-db-1";
         String tableName = "upgrade-test-table-1";
-        createTableAndInsertData(dbName, tableName);
+        TablePath tablePath = TablePath.of(dbName, tableName);
+        createDatabase(admin, dbName);
+        TableDescriptor logTableDescriptor =
+                TableDescriptor.builder().schema(DATA1_LOG_SCHEMA).build();
+        createTable(admin, tablePath, logTableDescriptor);
+        int recordSize = 10;
+        List<GenericRow> expectedRows = appendLog(tablePath, 10);
+        assertThat(expectedRows).hasSize(recordSize);
 
         // stop the lower server.
         stopServer();
@@ -61,37 +126,78 @@ public abstract class ServerUpgradeCompatTest extends CompatTest {
         cleanServerMetaFromZk();
 
         // start the higher server.
-        initAndStartFlussServer(clientVersionMagic, higherServerVersionMagic);
+        initAndStartFlussServer(higherServerVersionMagic);
         initFlussConnection(higherServerVersionMagic);
-        initFlussAdmin();
 
         // get table and get data.
-        getTableAndGetData(dbName, tableName);
+        List<GenericRow> actualRecords = fetchLog(tablePath, recordSize);
+        assertThat(actualRecords).hasSize(recordSize);
+        assertThat(actualRecords).containsExactlyInAnyOrderElementsOf(expectedRows);
 
         // stop the higher server.
         stopServer();
     }
 
-    private void createTableAndInsertData(String dbName, String tableName) throws Exception {
-        createDatabase(dbName);
-        createTable(
-                new TestingTableDescriptor(
-                        dbName,
-                        tableName,
-                        Arrays.asList("a", "b", "c"),
-                        Arrays.asList(INT_TYPE, STRING_TYPE, STRING_TYPE),
-                        Collections.emptyList(),
-                        Collections.emptyList(),
-                        Collections.emptyMap()));
-        assertThat(tableExists(dbName, tableName)).isTrue();
-
-        // TODO insert data.
+    private void initFlussConnection(int serverVersion) {
+        Configuration conf = new Configuration();
+        conf.setString("bootstrap.servers", "localhost:" + coordinatorServerPort);
+        if (serverVersion >= FLUSS_07_VERSION_MAGIC) {
+            CLIENT_SALS_PROPERTIES.forEach(conf::setString);
+        }
+        flussConnection = ConnectionFactory.createConnection(conf);
+        admin = flussConnection.getAdmin();
     }
 
-    private void getTableAndGetData(String dbName, String tableName) throws Exception {
-        assertThat(tableExists(dbName, tableName)).isTrue();
+    private List<GenericRow> appendLog(TablePath tablePath, int recordSize) throws Exception {
+        List<GenericRow> expectedRows = new ArrayList<>();
+        try (Table table = getFlussConnection().getTable(tablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            for (int i = 0; i < recordSize; i++) {
+                GenericRow row = row(i, "a");
+                expectedRows.add(row);
+                appendWriter.append(row).get();
+            }
+        }
 
-        // TODO get data.
+        List<GenericRow> actualRecords = fetchLog(tablePath, recordSize);
+        assertThat(actualRecords).hasSize(recordSize);
+        assertThat(actualRecords).containsExactlyInAnyOrderElementsOf(expectedRows);
+        return expectedRows;
+    }
+
+    private List<GenericRow> fetchLog(TablePath tablePath, int expectedSize) throws Exception {
+        List<GenericRow> expectedRows = new ArrayList<>();
+        try (Table table = getFlussConnection().getTable(tablePath)) {
+            LogScanner logScanner = table.newScan().createLogScanner();
+            logScanner.subscribe(0, LogScanner.EARLIEST_OFFSET);
+
+            while (expectedRows.size() < expectedSize) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord scanRecord : scanRecords) {
+                    assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
+                    InternalRow row = scanRecord.getRow();
+                    expectedRows.add(row(row.getInt(0), row.getString(1)));
+                }
+            }
+
+            logScanner.close();
+        }
+
+        return expectedRows;
+    }
+
+    private Admin getAdmin() {
+        if (admin == null) {
+            throw new RuntimeException("admin is null, please init it first.");
+        }
+        return admin;
+    }
+
+    private Connection getFlussConnection() {
+        if (flussConnection == null) {
+            throw new RuntimeException("flussConnection is null, please init it first.");
+        }
+        return flussConnection;
     }
 
     private void cleanServerMetaFromZk() {
@@ -151,5 +257,7 @@ public abstract class ServerUpgradeCompatTest extends CompatTest {
                 },
                 Duration.ofMinutes(1),
                 "error while cleaning tablet server meta from ZooKeeper");
+
+        client.close();
     }
 }

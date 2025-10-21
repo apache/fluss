@@ -33,9 +33,6 @@
 
     <modules>
         <module>fluss-compatibility-test-common</module>
-        <module>fluss-compatibility-test-0.6</module>
-        <module>fluss-compatibility-test-0.7</module>
-        <module>fluss-compatibility-test-latest</module>
     </modules>
 
     <properties>
@@ -70,13 +67,6 @@
             <groupId>com.github.docker-java</groupId>
             <artifactId>docker-java</artifactId>
             <version>3.3.3</version>
-            <scope>test</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-test-utils</artifactId>
-            <version>${project.version}</version>
             <scope>test</scope>
         </dependency>
     </dependencies>

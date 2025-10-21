@@ -19,6 +19,7 @@ package org.apache.fluss.compatibilitytest;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.testcontainers.containers.BindMode;
 import org.testcontainers.containers.FixedHostPortGenericContainer;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.Network;
@@ -26,7 +27,9 @@ import org.testcontainers.containers.output.Slf4jLogConsumer;
 
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /** Some basic param for compatibility test. */
 public class CompatEnvironment {
@@ -36,6 +39,15 @@ public class CompatEnvironment {
     public static final Network FLUSS_NETWORK = Network.newNetwork();
     public static final String TABLET_SERVER_LOCAL_DATA_DIR = "/tmp/fluss/data";
     public static final String REMOTE_DATA_DIR = "/tmp/fluss/remote-data";
+
+    public static final Map<String, String> CLIENT_SALS_PROPERTIES = new HashMap<>();
+
+    static {
+        CLIENT_SALS_PROPERTIES.put("client.security.protocol", "SASL");
+        CLIENT_SALS_PROPERTIES.put("client.security.sasl.mechanism", "PLAIN");
+        CLIENT_SALS_PROPERTIES.put("client.security.sasl.username", "admin");
+        CLIENT_SALS_PROPERTIES.put("client.security.sasl.password", "admin-pass");
+    }
 
     // ------------------------------------------------------------------------------------------
     // Fluss-0.6 Variables/Utils
@@ -76,8 +88,7 @@ public class CompatEnvironment {
     public static final int FLUSS_07_VERSION_MAGIC = 1;
     public static final String FLUSS_07_IMAGE_TAG = "fluss/fluss:0.7.0";
 
-    public static String build07CoordinatorProperties(
-            int exposedFixedPort, boolean enableAuthentication) {
+    public static String build07CoordinatorProperties(int exposedFixedPort) {
         List<String> basicProperties =
                 new ArrayList<>(
                         Arrays.asList(
@@ -89,52 +100,42 @@ public class CompatEnvironment {
                                 "datalake.format: paimon",
                                 "datalake.paimon.metastore: filesystem",
                                 "datalake.paimon.warehouse: /tmp/paimon"));
-
-        if (enableAuthentication) {
-            basicProperties.addAll(
-                    Arrays.asList(
-                            "security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT",
-                            "security.sasl.enabled.mechanisms: PLAIN",
-                            "security.sasl.plain.jaas.config: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule "
-                                    + "required user_admin=\"admin-pass\" "
-                                    + "user_developer=\"developer-pass\" "
-                                    + "user_consumer=\"consumer-pass\";",
-                            "authorizer.enabled: true",
-                            "super.users: User:admin"));
-        }
+        basicProperties.addAll(
+                Arrays.asList(
+                        "security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT",
+                        "security.sasl.enabled.mechanisms: PLAIN",
+                        "security.sasl.plain.jaas.config: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule "
+                                + "required user_admin=\"admin-pass\" "
+                                + "user_developer=\"developer-pass\" "
+                                + "user_consumer=\"consumer-pass\";",
+                        "authorizer.enabled: true",
+                        "super.users: User:admin"));
 
         return String.join("\n", basicProperties);
     }
 
-    public static String build07TabletServerProperties(
-            int exposedFixedPort, boolean enableAuthentication) {
+    public static String build07TabletServerProperties(int exposedFixedPort) {
         List<String> basicProperties =
-                new ArrayList<>(
-                        Arrays.asList(
-                                "zookeeper.address: zookeeper:2181",
-                                "bind.listeners: INTERNAL://tablet-server:0, CLIENT://tablet-server:"
-                                        + exposedFixedPort,
-                                "advertised.listeners: CLIENT://localhost:" + exposedFixedPort,
-                                "internal.listener.name: INTERNAL",
-                                "tablet-server.id: 0",
-                                "data.dir: " + TABLET_SERVER_LOCAL_DATA_DIR,
-                                "remote.data.dir: " + REMOTE_DATA_DIR,
-                                "datalake.format: paimon",
-                                "datalake.paimon.metastore: filesystem",
-                                "datalake.paimon.warehouse: /tmp/paimon"));
-
-        if (enableAuthentication) {
-            basicProperties.addAll(
-                    Arrays.asList(
-                            "security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT",
-                            "security.sasl.enabled.mechanisms: PLAIN",
-                            "security.sasl.plain.jaas.config: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule "
-                                    + "required user_admin=\"admin-pass\" "
-                                    + "user_developer=\"developer-pass\" "
-                                    + "user_consumer=\"consumer-pass\";",
-                            "authorizer.enabled: true",
-                            "super.users: User:admin"));
-        }
+                Arrays.asList(
+                        "zookeeper.address: zookeeper:2181",
+                        "bind.listeners: INTERNAL://tablet-server:0, CLIENT://tablet-server:"
+                                + exposedFixedPort,
+                        "advertised.listeners: CLIENT://localhost:" + exposedFixedPort,
+                        "internal.listener.name: INTERNAL",
+                        "tablet-server.id: 0",
+                        "data.dir: " + TABLET_SERVER_LOCAL_DATA_DIR,
+                        "remote.data.dir: " + REMOTE_DATA_DIR,
+                        "datalake.format: paimon",
+                        "datalake.paimon.metastore: filesystem",
+                        "datalake.paimon.warehouse: /tmp/paimon",
+                        "security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT",
+                        "security.sasl.enabled.mechanisms: PLAIN",
+                        "security.sasl.plain.jaas.config: com.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule "
+                                + "required user_admin=\"admin-pass\" "
+                                + "user_developer=\"developer-pass\" "
+                                + "user_consumer=\"consumer-pass\";",
+                        "authorizer.enabled: true",
+                        "super.users: User:admin");
         return String.join("\n", basicProperties);
     }
 
@@ -144,38 +145,29 @@ public class CompatEnvironment {
 
     public static final int FLUSS_LATEST_VERSION_MAGIC = 2;
 
-    public static String buildLatestCoordinatorProperties(
-            int exposedFixedPort, boolean enableAuthentication) {
+    public static String buildLatestCoordinatorProperties(int exposedFixedPort) {
         List<String> basicProperties =
-                new ArrayList<>(
-                        Arrays.asList(
-                                "zookeeper.address: zookeeper:2181",
-                                "bind.listeners: INTERNAL://coordinator-server:0, CLIENT://coordinator-server:"
-                                        + exposedFixedPort,
-                                "advertised.listeners: CLIENT://localhost:" + exposedFixedPort,
-                                "internal.listener.name: INTERNAL",
-                                "datalake.format: paimon",
-                                "datalake.paimon.metastore: filesystem",
-                                "datalake.paimon.warehouse: /tmp/paimon"));
-
-        if (enableAuthentication) {
-            basicProperties.addAll(
-                    Arrays.asList(
-                            "security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT",
-                            "security.sasl.enabled.mechanisms: PLAIN",
-                            "security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule "
-                                    + "required user_admin=\"admin-pass\" "
-                                    + "user_developer=\"developer-pass\" "
-                                    + "user_consumer=\"consumer-pass\";",
-                            "authorizer.enabled: true",
-                            "super.users: User:admin"));
-        }
-
+                Arrays.asList(
+                        "zookeeper.address: zookeeper:2181",
+                        "bind.listeners: INTERNAL://coordinator-server:0, CLIENT://coordinator-server:"
+                                + exposedFixedPort,
+                        "advertised.listeners: CLIENT://localhost:" + exposedFixedPort,
+                        "internal.listener.name: INTERNAL",
+                        "datalake.format: paimon",
+                        "datalake.paimon.metastore: filesystem",
+                        "datalake.paimon.warehouse: /tmp/paimon",
+                        "security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT",
+                        "security.sasl.enabled.mechanisms: PLAIN",
+                        "security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule "
+                                + "required user_admin=\"admin-pass\" "
+                                + "user_developer=\"developer-pass\" "
+                                + "user_consumer=\"consumer-pass\";",
+                        "authorizer.enabled: true",
+                        "super.users: User:admin");
         return String.join("\n", basicProperties);
     }
 
-    public static String buildLatestTabletServerProperties(
-            int exposedFixedPort, boolean enableAuthentication) {
+    public static String buildLatestTabletServerProperties(int exposedFixedPort) {
         List<String> basicProperties =
                 new ArrayList<>(
                         Arrays.asList(
@@ -191,18 +183,16 @@ public class CompatEnvironment {
                                 "datalake.paimon.metastore: filesystem",
                                 "datalake.paimon.warehouse: /tmp/paimon"));
 
-        if (enableAuthentication) {
-            basicProperties.addAll(
-                    Arrays.asList(
-                            "security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT",
-                            "security.sasl.enabled.mechanisms: PLAIN",
-                            "security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule "
-                                    + "required user_admin=\"admin-pass\" "
-                                    + "user_developer=\"developer-pass\" "
-                                    + "user_consumer=\"consumer-pass\";",
-                            "authorizer.enabled: true",
-                            "super.users: User:admin"));
-        }
+        basicProperties.addAll(
+                Arrays.asList(
+                        "security.protocol.map: CLIENT:SASL, INTERNAL:PLAINTEXT",
+                        "security.sasl.enabled.mechanisms: PLAIN",
+                        "security.sasl.plain.jaas.config: org.apache.fluss.security.auth.sasl.plain.PlainLoginModule "
+                                + "required user_admin=\"admin-pass\" "
+                                + "user_developer=\"developer-pass\" "
+                                + "user_consumer=\"consumer-pass\";",
+                        "authorizer.enabled: true",
+                        "super.users: User:admin"));
 
         return String.join("\n", basicProperties);
     }
@@ -215,7 +205,8 @@ public class CompatEnvironment {
             String flussImage,
             String coordinatorProperties,
             GenericContainer<?> zkContainer,
-            int fixedExposedPort) {
+            int fixedExposedPort,
+            String remoteDataDirInHost) {
         return new FixedHostPortGenericContainer<>(flussImage)
                 .withNetwork(FLUSS_NETWORK)
                 .withEnv("FLUSS_PROPERTIES", coordinatorProperties)
@@ -223,6 +214,7 @@ public class CompatEnvironment {
                 .withNetworkAliases("coordinator-server")
                 .withExposedPorts(fixedExposedPort)
                 .withFixedExposedPort(fixedExposedPort, fixedExposedPort)
+                .withFileSystemBind(remoteDataDirInHost, REMOTE_DATA_DIR, BindMode.READ_WRITE)
                 .dependsOn(zkContainer)
                 .withLogConsumer(new Slf4jLogConsumer(LOG));
     }
@@ -232,7 +224,9 @@ public class CompatEnvironment {
             String tabletServerProperties,
             GenericContainer<?> zkContainer,
             GenericContainer<?> coordinatorContainer,
-            int fixedExposedPort) {
+            int fixedExposedPort,
+            String localDataDirInHost,
+            String remoteDataDirInHost) {
         return new FixedHostPortGenericContainer<>(flussImage)
                 .withNetwork(FLUSS_NETWORK)
                 .withEnv("FLUSS_PROPERTIES", tabletServerProperties)
@@ -240,6 +234,9 @@ public class CompatEnvironment {
                 .withNetworkAliases("tablet-server")
                 .withExposedPorts(fixedExposedPort)
                 .withFixedExposedPort(fixedExposedPort, fixedExposedPort)
+                .withFileSystemBind(
+                        localDataDirInHost, TABLET_SERVER_LOCAL_DATA_DIR, BindMode.READ_WRITE)
+                .withFileSystemBind(remoteDataDirInHost, REMOTE_DATA_DIR, BindMode.READ_WRITE)
                 .dependsOn(zkContainer, coordinatorContainer)
                 .withLogConsumer(new Slf4jLogConsumer(LOG));
     }

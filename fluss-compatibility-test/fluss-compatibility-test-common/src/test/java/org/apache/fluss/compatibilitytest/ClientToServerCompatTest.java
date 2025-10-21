@@ -17,13 +17,46 @@
 
 package org.apache.fluss.compatibilitytest;
 
-import org.apache.fluss.compatibilitytest.TestingAclBinding.AccessControlEntry;
-import org.apache.fluss.compatibilitytest.TestingAclBinding.OperationType;
-import org.apache.fluss.compatibilitytest.TestingAclBinding.PermissionType;
-import org.apache.fluss.compatibilitytest.TestingAclBinding.Resource;
-import org.apache.fluss.compatibilitytest.TestingAlterConfig.AlterConfigOpType;
-import org.apache.fluss.compatibilitytest.TestingConfigEntry.ConfigSource;
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.admin.OffsetSpec;
+import org.apache.fluss.client.table.Table;
+import org.apache.fluss.client.table.scanner.ScanRecord;
+import org.apache.fluss.client.table.scanner.log.LogScanner;
+import org.apache.fluss.client.table.scanner.log.ScanRecords;
+import org.apache.fluss.client.table.writer.AppendWriter;
+import org.apache.fluss.client.table.writer.UpsertWriter;
+import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.AlterConfig;
+import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.config.cluster.ConfigEntry;
+import org.apache.fluss.metadata.PartitionInfo;
+import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.Schema;
+import org.apache.fluss.metadata.SchemaInfo;
+import org.apache.fluss.metadata.TableChange;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.security.acl.AccessControlEntry;
+import org.apache.fluss.security.acl.AclBinding;
+import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.security.acl.FlussPrincipal;
+import org.apache.fluss.security.acl.OperationType;
+import org.apache.fluss.security.acl.PermissionType;
+import org.apache.fluss.security.acl.Resource;
+import org.apache.fluss.security.acl.ResourceType;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
+import org.junit.jupiter.api.Test;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import javax.annotation.Nullable;
@@ -37,31 +70,71 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
+import static org.apache.fluss.compatibilitytest.CompatEnvironment.CLIENT_SALS_PROPERTIES;
 import static org.apache.fluss.compatibilitytest.CompatEnvironment.FLUSS_06_VERSION_MAGIC;
 import static org.apache.fluss.compatibilitytest.CompatEnvironment.FLUSS_07_VERSION_MAGIC;
-import static org.apache.fluss.compatibilitytest.TestingAclBinding.ResourceType.CLUSTER;
-import static org.apache.fluss.compatibilitytest.TestingTableDescriptor.INT_TYPE;
-import static org.apache.fluss.compatibilitytest.TestingTableDescriptor.STRING_TYPE;
+import static org.apache.fluss.compatibilitytest.CompatEnvironment.FLUSS_LATEST_VERSION_MAGIC;
+import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Basic abstract class for fluss client connect to server compatibility test. */
+/** Basic class for fluss client connect to server compatibility test. */
 @Testcontainers
-public abstract class ClientToServerCompatTest extends CompatTest {
+public class ClientToServerCompatTest extends CompatTest {
+    public static final Schema DATA1_LOG_SCHEMA =
+            Schema.newBuilder()
+                    .column("a", DataTypes.INT())
+                    .withComment("a is first column")
+                    .column("b", DataTypes.STRING())
+                    .withComment("b is second column")
+                    .build();
 
-    protected void clientToServerTestPipeline(int clientVersionMagic, int serverVersionMagic)
-            throws Exception {
+    public static final Schema DATA1_KV_SCHEMA =
+            Schema.newBuilder()
+                    .column("a", DataTypes.INT())
+                    .withComment("a is first column")
+                    .column("b", DataTypes.STRING())
+                    .withComment("b is second column")
+                    .primaryKey("a")
+                    .build();
+
+    public static final Schema DATA1_PARTITIONED_LOG_SCHEMA =
+            Schema.newBuilder()
+                    .column("a", DataTypes.INT())
+                    .withComment("a is first column")
+                    .column("b", DataTypes.STRING())
+                    .withComment("b is second column")
+                    .column("c", DataTypes.STRING())
+                    .withComment("c is third column")
+                    .build();
+
+    private @Nullable Connection flussConnection;
+    private @Nullable Admin admin;
+
+    @Test
+    void testConnectTo06Server() throws Exception {
+        clientToServerTestPipeline(FLUSS_06_VERSION_MAGIC);
+    }
+
+    @Test
+    void testConnectTo07Server() throws Exception {
+        clientToServerTestPipeline(FLUSS_07_VERSION_MAGIC);
+    }
+
+    @Test
+    void testConnectToLatestServer() throws Exception {
+        clientToServerTestPipeline(FLUSS_LATEST_VERSION_MAGIC);
+    }
+
+    private void clientToServerTestPipeline(int serverVersionMagic) throws Exception {
         // start the server.
-        initAndStartFlussServer(clientVersionMagic, serverVersionMagic);
-
-        // init fluss connection and admin.
+        initAndStartFlussServer(serverVersionMagic);
         initFlussConnection(serverVersionMagic);
-        initFlussAdmin();
 
         // test admin compact.
-        verifyAdminOperations(clientVersionMagic, serverVersionMagic);
+        verifyAdmin(serverVersionMagic);
 
         // verify produceLog and fetchLog.
         verifyProduceAndFetchLog();
@@ -74,392 +147,526 @@ public abstract class ClientToServerCompatTest extends CompatTest {
         stopServer();
     }
 
-    abstract void verifyGetServerNodes() throws Exception;
-
-    abstract void verifyGetDatabaseInfo(String dbName) throws Exception;
-
-    abstract boolean databaseExists(String dbName) throws Exception;
-
-    abstract List<String> listDatabases() throws Exception;
-
-    abstract void dropDatabase(String dbName) throws Exception;
-
-    abstract List<String> listTables(String dbName) throws Exception;
-
-    abstract void verifyGetTableSchema(TestingTableDescriptor tableDescriptor) throws Exception;
-
-    abstract void verifyGetTableInfo(TestingTableDescriptor tableDescriptor) throws Exception;
-
-    abstract void dropTable(String dbName, String tableName) throws Exception;
-
-    /**
-     * For reset option, the value is null. Since versions Fluss-0.6/Fluss-0.7 do not support
-     * alterTable, the validation logic for ALTER TABLE is defined by the implementer themselves.
-     */
-    abstract void verifyAlterTable(
-            TestingTableDescriptor tableDescriptor,
-            Map<String, String> alterOptions,
-            int serverVersionMagic)
-            throws Exception;
-
-    abstract List<String> listPartitions(String dbName, String tableName) throws Exception;
-
-    abstract List<String> listPartitions(
-            String dbName, String tableName, Map<String, String> partitionSpec) throws Exception;
-
-    abstract void createPartition(
-            String dbName, String tableName, Map<String, String> partitionSpec) throws Exception;
-
-    abstract void dropPartition(String dbName, String tableName, Map<String, String> partitionSpec)
-            throws Exception;
-
-    abstract List<TestingAclBinding> listAnyAcls() throws Exception;
-
-    abstract void createAcl(TestingAclBinding aclBinding) throws Exception;
-
-    abstract void dropAllAcls() throws Exception;
-
-    abstract List<TestingConfigEntry> describeClusterConfigs() throws Exception;
-
-    abstract void alterClusterConfig(TestingAlterConfig alterConfig) throws Exception;
-
-    abstract Long listOffsets(
-            String dbName,
-            String tableName,
-            @Nullable String partitionName,
-            int bucket,
-            TestingOffsetSpec offsetSpec)
-            throws Exception;
-
-    private void verifyAdminOperations(int clientVersionMagic, int serverVersionMagic)
-            throws Exception {
+    private void verifyAdmin(int serverVersionMagic) throws Exception {
         verifyGetServerNodes();
-        verifyDatabaseOperations();
-        verifyTableOperations(clientVersionMagic, serverVersionMagic);
-        verifySingleFiledPartitionOperations(clientVersionMagic, serverVersionMagic);
-        // TODO verify multi-field partition operations.
+        verifyTable(serverVersionMagic);
+        verifySingleFiledPartition(serverVersionMagic);
+        verifyMultiFiledPartition(serverVersionMagic);
 
         // listOffsets has been verified in verifyProduceAndFetchLog().
-
         // LatestKvSnapshots has been verified in verifyPutKvAndLookup().
 
         // TODO LatestLakeSnapshots will be verified in lake part.
 
-        verifyAcls(clientVersionMagic, serverVersionMagic);
-        verifyClusterConfigOperations(clientVersionMagic, serverVersionMagic);
+        // for server version lower than 0.7, the acl is not supported.
+        if (serverVersionMagic > FLUSS_06_VERSION_MAGIC) {
+            verifyAcls();
+        }
+
+        // for server version lower than 0.8, alter/describe cluster configs is not supported.
+        if (serverVersionMagic > FLUSS_07_VERSION_MAGIC) {
+            verifyClusterConfig();
+        }
     }
 
-    private void verifyDatabaseOperations() throws Exception {
-        // default database "fluss" will be created automatically.
-        assertThat(listDatabases()).containsExactlyInAnyOrder("fluss");
-
-        createDatabase("db-1");
-        createDatabase("db-2");
-        verifyGetDatabaseInfo("db-1");
-        verifyGetDatabaseInfo("db-2");
-        assertThat(databaseExists("db-1")).isTrue();
-        assertThat(databaseExists("db-2")).isTrue();
-        assertThat(databaseExists("db-3")).isFalse();
-        assertThat(listDatabases()).containsExactlyInAnyOrder("db-1", "db-2", "fluss");
-        dropDatabase("db-1");
-        assertThat(databaseExists("db-1")).isFalse();
-        assertThat(listDatabases()).containsExactlyInAnyOrder("db-2", "fluss");
-        dropDatabase("db-2");
+    void initFlussConnection(int serverVersion) {
+        Configuration conf = new Configuration();
+        conf.setString("bootstrap.servers", "localhost:" + coordinatorServerPort);
+        if (serverVersion >= FLUSS_07_VERSION_MAGIC) {
+            CLIENT_SALS_PROPERTIES.forEach(conf::setString);
+        }
+        flussConnection = ConnectionFactory.createConnection(conf);
+        admin = flussConnection.getAdmin();
     }
 
-    private void verifyTableOperations(int clientVersionMagic, int serverVersionMagic)
-            throws Exception {
+    void verifyGetServerNodes() throws Exception {
+        Admin admin = getAdmin();
+        List<ServerNode> serverNodeList = admin.getServerNodes().get();
+        assertThat(serverNodeList).hasSize(2);
+        ServerNode csNode =
+                serverNodeList.get(0).serverType() == ServerType.COORDINATOR
+                        ? serverNodeList.get(0)
+                        : serverNodeList.get(1);
+        ServerNode tsNode =
+                serverNodeList.get(0).serverType() == ServerType.TABLET_SERVER
+                        ? serverNodeList.get(0)
+                        : serverNodeList.get(1);
+        assertThat(csNode.serverType()).isEqualTo(ServerType.COORDINATOR);
+        assertThat(csNode.id()).isEqualTo(0);
+        assertThat(csNode.uid()).isEqualTo("cs-0");
+
+        assertThat(tsNode.serverType()).isEqualTo(ServerType.TABLET_SERVER);
+        assertThat(tsNode.id()).isEqualTo(0);
+        assertThat(tsNode.uid()).isEqualTo("ts-0");
+    }
+
+    /** Verify table operations. */
+    private void verifyTable(int serverVersionMagic) throws Exception {
+        Admin admin = getAdmin();
         String dbName = "db-for-table-1";
-        createDatabase(dbName);
-        assertThat(databaseExists(dbName)).isTrue();
-        assertThat(listTables(dbName)).isEmpty();
+        createDatabase(admin, dbName);
+        assertThat(admin.databaseExists(dbName).get()).isTrue();
+        assertThat(admin.listTables(dbName).get()).isEmpty();
 
         // verify create log table.
         String logTableName = "log-table-1";
-        assertThat(tableExists(dbName, logTableName)).isFalse();
-        TestingTableDescriptor logTableDescriptor =
-                new TestingTableDescriptor(
-                        dbName,
-                        logTableName,
-                        List.of("a", "b"),
-                        List.of(INT_TYPE, STRING_TYPE),
-                        Collections.emptyList(),
-                        Collections.emptyList(),
-                        Collections.singletonMap("table.log.ttl", "1d"));
-        createTable(logTableDescriptor);
-        verifyGetTableSchema(logTableDescriptor);
-        verifyGetTableInfo(logTableDescriptor);
-        assertThat(tableExists(dbName, logTableName)).isTrue();
-        assertThat(listTables(dbName)).containsExactlyInAnyOrder(logTableName);
+        TablePath logTablePath = TablePath.of(dbName, logTableName);
+        assertThat(admin.tableExists(logTablePath).get()).isFalse();
+
+        TableDescriptor logTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_LOG_SCHEMA)
+                        .properties(Collections.singletonMap("table.datalake.enabled", "false"))
+                        .build();
+        createTable(admin, logTablePath, logTableDescriptor);
+        verifyGetTableSchema(logTablePath, logTableDescriptor);
+        verifyGetTableInfo(logTablePath, logTableDescriptor);
+        assertThat(admin.tableExists(logTablePath).get()).isTrue();
+        assertThat(admin.listTables(dbName).get()).containsExactlyInAnyOrder(logTableName);
 
         // verify create primary key table.
         String kvTableName = "kv-table-1";
-        assertThat(tableExists(dbName, kvTableName)).isFalse();
-        TestingTableDescriptor kvTableDescriptor =
-                new TestingTableDescriptor(
-                        dbName,
-                        kvTableName,
-                        List.of("a", "b"),
-                        List.of(INT_TYPE, STRING_TYPE),
-                        Collections.singletonList("a"),
-                        Collections.emptyList(),
-                        Collections.singletonMap("table.datalake.enabled", "false"));
-        createTable(kvTableDescriptor);
-        verifyGetTableSchema(kvTableDescriptor);
-        verifyGetTableInfo(kvTableDescriptor);
-        assertThat(tableExists(dbName, kvTableName)).isTrue();
-        assertThat(listTables(dbName)).containsExactlyInAnyOrder(logTableName, kvTableName);
+        TablePath kvTablePath = TablePath.of(dbName, kvTableName);
+        assertThat(admin.tableExists(kvTablePath).get()).isFalse();
+        TableDescriptor kvTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_KV_SCHEMA)
+                        .properties(Collections.singletonMap("table.datalake.enabled", "false"))
+                        .build();
+        createTable(admin, kvTablePath, kvTableDescriptor);
+        verifyGetTableSchema(kvTablePath, kvTableDescriptor);
+        verifyGetTableInfo(kvTablePath, kvTableDescriptor);
+        assertThat(admin.tableExists(kvTablePath).get()).isTrue();
+        assertThat(admin.listTables(dbName).get())
+                .containsExactlyInAnyOrder(logTableName, kvTableName);
 
         // test alter table, verify reset and set option.
-        if (clientVersionMagic > FLUSS_07_VERSION_MAGIC) {
+        // for server version lower than 0.8, the alterTable is not supported.
+        if (serverVersionMagic > FLUSS_07_VERSION_MAGIC) {
             verifyAlterTable(
+                    kvTablePath,
                     kvTableDescriptor,
-                    Collections.singletonMap("table.datalake.enabled", "true"),
-                    serverVersionMagic);
+                    Collections.singletonMap("table.datalake.enabled", "true"));
         }
 
-        dropTable(dbName, kvTableName);
-        assertThat(tableExists(dbName, kvTableName)).isFalse();
-        assertThat(listTables(dbName)).containsExactlyInAnyOrder(logTableName);
+        dropTable(kvTablePath);
+        assertThat(admin.tableExists(kvTablePath).get()).isFalse();
+        assertThat(admin.listTables(dbName).get()).containsExactlyInAnyOrder(logTableName);
 
-        dropTable(dbName, logTableName);
-        assertThat(listTables(dbName)).isEmpty();
+        dropTable(logTablePath);
+        assertThat(admin.listTables(dbName).get()).isEmpty();
         dropDatabase(dbName);
     }
 
-    private void verifySingleFiledPartitionOperations(int clientVersion, int serverVersionMagic)
-            throws Exception {
-        String dbName = "db-for-partition-1";
-        createDatabase(dbName);
+    private void dropDatabase(String dbName) throws Exception {
+        Admin admin = getAdmin();
+        admin.dropDatabase(dbName, false, false).get();
+    }
 
-        // create a partitioned log table with auto partition closed.
+    private void dropTable(TablePath tablePath) throws Exception {
+        Admin admin = getAdmin();
+        admin.dropTable(tablePath, false).get();
+    }
+
+    private void verifyGetTableSchema(TablePath tablePath, TableDescriptor expectedTableDescriptor)
+            throws Exception {
+        Admin admin = getAdmin();
+        SchemaInfo schemaInfo = admin.getTableSchema(tablePath).get();
+        assertThat(schemaInfo.getSchemaId()).isEqualTo(1);
+        Schema schema = schemaInfo.getSchema();
+        assertThat(expectedTableDescriptor.getSchema()).isEqualTo(schema);
+
+        // test get schema by id.
+        schemaInfo = admin.getTableSchema(tablePath, 1).get();
+        assertThat(schemaInfo.getSchemaId()).isEqualTo(1);
+        schema = schemaInfo.getSchema();
+        assertThat(expectedTableDescriptor.getSchema()).isEqualTo(schema);
+    }
+
+    private void verifyGetTableInfo(TablePath tablePath, TableDescriptor expectedTableDescriptor)
+            throws Exception {
+        Admin admin = getAdmin();
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        TableDescriptor descriptor = tableInfo.toTableDescriptor();
+        assertThat(descriptor.getSchema()).isEqualTo(expectedTableDescriptor.getSchema());
+        assertThat(descriptor.getPartitionKeys())
+                .isEqualTo(expectedTableDescriptor.getPartitionKeys());
+        Map<String, String> actualProperties = descriptor.getProperties();
+        expectedTableDescriptor
+                .getProperties()
+                .forEach((k, v) -> assertThat(actualProperties).containsEntry(k, v));
+    }
+
+    private void verifyAlterTable(
+            TablePath tablePath, TableDescriptor tableDescriptor, Map<String, String> alterOptions)
+            throws Exception {
+        Admin admin = getAdmin();
+        verifyGetTableInfo(tablePath, tableDescriptor);
+
+        List<TableChange> tableChanges = new ArrayList<>();
+        alterOptions.forEach(
+                (k, v) -> {
+                    if (v == null) {
+                        tableChanges.add(TableChange.reset(k));
+                    } else {
+                        tableChanges.add(TableChange.set(k, v));
+                    }
+                });
+
+        admin.alterTable(tablePath, tableChanges, false).get();
+        // verify changes.
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+        Map<String, String> properties = tableInfo.getProperties().toMap();
+        alterOptions.forEach(
+                (k, v) -> {
+                    if (v == null) {
+                        assertThat(properties).doesNotContainKey(k);
+                    } else {
+                        assertThat(properties).containsEntry(k, v);
+                    }
+                });
+    }
+
+    private void verifySingleFiledPartition(int serverVersionMagic) throws Exception {
+        Admin admin = getAdmin();
+        String dbName = "db-for-partition-1";
+        createDatabase(admin, dbName);
+
+        // create a partitioned log table with auto partition open.
         String logTableName = "partitioned-log-table-1";
+        TablePath logTablePath = TablePath.of(dbName, logTableName);
         Map<String, String> properties = new HashMap<>();
         properties.put("table.auto-partition.enabled", "true");
         properties.put("table.auto-partition.num-precreate", "2");
         properties.put("table.auto-partition.time-unit", "YEAR");
-        TestingTableDescriptor logTableDescriptor =
-                new TestingTableDescriptor(
-                        dbName,
-                        logTableName,
-                        List.of("a", "b", "c"),
-                        List.of(INT_TYPE, STRING_TYPE, STRING_TYPE),
-                        Collections.emptyList(),
-                        Collections.singletonList("c"),
-                        properties);
-        createTable(logTableDescriptor);
-        assertThat(tableExists(dbName, logTableName)).isTrue();
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_PARTITIONED_LOG_SCHEMA)
+                        .partitionedBy("c")
+                        .properties(properties)
+                        .build();
+        createTable(admin, logTablePath, tableDescriptor);
+        assertThat(admin.tableExists(logTablePath).get()).isTrue();
         int currentYear = LocalDate.now().getYear();
         retry(
                 Duration.ofMinutes(1),
                 () -> {
-                    List<String> partitions = listPartitions(dbName, logTableName);
+                    List<String> partitions = listPartitions(logTablePath, null);
                     assertThat(partitions)
                             .containsExactlyInAnyOrder(
                                     String.valueOf(currentYear), String.valueOf(currentYear + 1));
                 });
 
-        // verify listPartitions by spec.
-        if (clientVersion > FLUSS_06_VERSION_MAGIC) {
+        // for server version lower than 0.7, the list partitions by is not supported.
+        if (serverVersionMagic > FLUSS_06_VERSION_MAGIC) {
+            // verify listPartitions by spec.
             List<String> partitions =
                     listPartitions(
-                            dbName,
-                            logTableName,
-                            Collections.singletonMap("c", String.valueOf(currentYear)));
-            if (serverVersionMagic < FLUSS_07_VERSION_MAGIC) {
-                // 0.6 server does not support listPartitions by spec. So the result is the same as
-                // listPartitions.
-                assertThat(partitions)
-                        .containsExactlyInAnyOrder(
-                                String.valueOf(currentYear), String.valueOf(currentYear + 1));
-            } else {
-                assertThat(partitions).containsExactlyInAnyOrder(String.valueOf(currentYear));
-            }
+                            logTablePath,
+                            new PartitionSpec(
+                                    Collections.singletonMap("c", String.valueOf(currentYear))));
+            assertThat(partitions).containsExactlyInAnyOrder(String.valueOf(currentYear));
         }
 
         // verify create partition.
-        if (clientVersion > FLUSS_06_VERSION_MAGIC) {
-            createPartition(dbName, logTableName, Collections.singletonMap("c", "1997"));
-            retry(
-                    Duration.ofMinutes(1),
-                    () -> {
-                        List<String> partitions = listPartitions(dbName, logTableName);
-                        assertThat(partitions)
-                                .containsExactlyInAnyOrder(
-                                        String.valueOf(currentYear),
-                                        String.valueOf(currentYear + 1),
-                                        "1997");
-                    });
-        }
+        admin.createPartition(
+                        logTablePath,
+                        new PartitionSpec(Collections.singletonMap("c", "1997")),
+                        false)
+                .get();
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    List<String> partitions = listPartitions(logTablePath, null);
+                    assertThat(partitions)
+                            .containsExactlyInAnyOrder(
+                                    String.valueOf(currentYear),
+                                    String.valueOf(currentYear + 1),
+                                    "1997");
+                });
 
         // verify drop partition.
-        if (clientVersion > FLUSS_06_VERSION_MAGIC) {
-            dropPartition(dbName, logTableName, Collections.singletonMap("c", "1997"));
-            retry(
-                    Duration.ofMinutes(1),
-                    () -> {
-                        List<String> partitions = listPartitions(dbName, logTableName);
-                        assertThat(partitions)
-                                .containsExactlyInAnyOrder(
-                                        String.valueOf(currentYear),
-                                        String.valueOf(currentYear + 1));
-                    });
-        }
+        admin.dropPartition(
+                        logTablePath,
+                        new PartitionSpec(Collections.singletonMap("c", "1997")),
+                        false)
+                .get();
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    List<String> partitions = listPartitions(logTablePath, null);
+                    assertThat(partitions)
+                            .containsExactlyInAnyOrder(
+                                    String.valueOf(currentYear), String.valueOf(currentYear + 1));
+                });
 
-        dropTable(dbName, logTableName);
+        dropTable(logTablePath);
         dropDatabase(dbName);
     }
 
-    private void verifyAcls(int clientVersionMagic, int serverVersionMagic) throws Exception {
-        if (clientVersionMagic < FLUSS_07_VERSION_MAGIC) {
-            return;
-        }
-
-        // add acl binding.
-        TestingAclBinding aclBinding =
-                new TestingAclBinding(
-                        new Resource(CLUSTER, "fluss-cluster"),
-                        new AccessControlEntry(
-                                "guest",
-                                "User",
-                                PermissionType.ALLOW,
-                                "127.0.0.1",
-                                OperationType.DESCRIBE));
-
+    private void verifyMultiFiledPartition(int serverVersionMagic) throws Exception {
+        // for server version lower than 0.7, multi filed partition is not supported.
         if (serverVersionMagic < FLUSS_07_VERSION_MAGIC) {
-            assertThatThrownBy(() -> createAcl(aclBinding))
-                    .rootCause()
-                    .hasMessage("The server does not support CREATE_ACLS(1039)");
-            assertThatThrownBy(this::listAnyAcls)
-                    .rootCause()
-                    .hasMessage("The server does not support LIST_ACLS(1040)");
-            assertThatThrownBy(this::dropAllAcls)
-                    .rootCause()
-                    .hasMessage("The server does not support DROP_ACLS(1041)");
             return;
         }
 
-        List<TestingAclBinding> testingAclBindings = listAnyAcls();
+        Admin admin = getAdmin();
+        String dbName = "db-for-partition-2";
+        createDatabase(admin, dbName);
+
+        // create a multi filed partitioned log table with auto partition close.
+        String logTableName = "partitioned-log-table-2";
+        TablePath logTablePath = TablePath.of(dbName, logTableName);
+        Map<String, String> properties = new HashMap<>();
+        properties.put("table.auto-partition.enabled", "false");
+        TableDescriptor tableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_PARTITIONED_LOG_SCHEMA)
+                        .partitionedBy("b", "c")
+                        .properties(properties)
+                        .build();
+        createTable(admin, logTablePath, tableDescriptor);
+
+        assertThat(listPartitions(logTablePath, null)).isEmpty();
+        // create partition.
+        Map<String, String> spec = new HashMap<>();
+        spec.put("b", "b1");
+        spec.put("c", "c1");
+        admin.createPartition(logTablePath, new PartitionSpec(spec), false).get();
+        spec = new HashMap<>();
+        spec.put("b", "b1");
+        spec.put("c", "c2");
+        admin.createPartition(logTablePath, new PartitionSpec(spec), false).get();
+
+        Map<String, String> spec2 = new HashMap<>();
+        spec2.put("b", "b1");
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    List<String> partitions =
+                            listPartitions(logTablePath, new PartitionSpec(spec2));
+                    assertThat(partitions).containsExactlyInAnyOrder("b1$c1", "b1$c2");
+                });
+
+        admin.dropPartition(logTablePath, new PartitionSpec(spec), false).get();
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    List<String> partitions = listPartitions(logTablePath, null);
+                    assertThat(partitions).containsExactlyInAnyOrder("b1$c1");
+                });
+
+        dropTable(logTablePath);
+        dropDatabase(dbName);
+    }
+
+    List<String> listPartitions(TablePath tablePath, @Nullable PartitionSpec partitionSpec)
+            throws Exception {
+        Admin admin = getAdmin();
+        List<PartitionInfo> partitionInfos;
+        if (partitionSpec == null) {
+            partitionInfos = admin.listPartitionInfos(tablePath).get();
+        } else {
+            partitionInfos = admin.listPartitionInfos(tablePath, partitionSpec).get();
+        }
+
+        return partitionInfos.stream()
+                .map(PartitionInfo::getPartitionName)
+                .collect(Collectors.toList());
+    }
+
+    private void verifyAcls() throws Exception {
+        Admin admin = getAdmin();
+        List<AclBinding> testingAclBindings =
+                new ArrayList<>(admin.listAcls(AclBindingFilter.ANY).get());
         assertThat(testingAclBindings).isEmpty();
 
-        createAcl(aclBinding);
+        AclBinding aclBinding =
+                new AclBinding(
+                        new Resource(ResourceType.CLUSTER, "fluss-cluster"),
+                        new AccessControlEntry(
+                                new FlussPrincipal("guest", "User"),
+                                "127.0.0.1",
+                                OperationType.DESCRIBE,
+                                PermissionType.ALLOW));
+        admin.createAcls(Collections.singleton(aclBinding)).all().get();
 
-        testingAclBindings = listAnyAcls();
+        testingAclBindings = new ArrayList<>(admin.listAcls(AclBindingFilter.ANY).get());
         assertThat(testingAclBindings).containsExactly(aclBinding);
 
-        dropAllAcls();
-        testingAclBindings = listAnyAcls();
+        // drop all acls.
+        admin.dropAcls(Collections.singletonList(AclBindingFilter.ANY)).all().get();
+        testingAclBindings = new ArrayList<>(admin.listAcls(AclBindingFilter.ANY).get());
         assertThat(testingAclBindings).isEmpty();
     }
 
-    private void verifyClusterConfigOperations(int clientVersionMagic, int serverVersionMagic)
-            throws Exception {
-        if (clientVersionMagic <= FLUSS_07_VERSION_MAGIC) {
-            return;
-        }
-
-        TestingAlterConfig alterConfig =
-                new TestingAlterConfig("datalake.format", null, AlterConfigOpType.SET);
-        if (serverVersionMagic <= FLUSS_07_VERSION_MAGIC) {
-            assertThatThrownBy(this::describeClusterConfigs)
-                    .rootCause()
-                    .hasMessage("The server does not support DESCRIBE_CLUSTER_CONFIGS(1045)");
-            assertThatThrownBy(() -> alterClusterConfig(alterConfig))
-                    .rootCause()
-                    .hasMessage("The server does not support ALTER_CLUSTER_CONFIGS(1046)");
-            return;
-        }
-
-        List<TestingConfigEntry> configEntries = describeClusterConfigs();
-        Optional<TestingConfigEntry> first =
-                configEntries.stream().filter(e -> e.key.equals("datalake.format")).findFirst();
+    private void verifyClusterConfig() throws Exception {
+        Admin admin = getAdmin();
+        List<ConfigEntry> configEntries = new ArrayList<>(admin.describeClusterConfigs().get());
+        Optional<ConfigEntry> first =
+                configEntries.stream().filter(e -> e.key().equals("datalake.format")).findFirst();
         assertThat(first).isPresent();
-        assertThat(first.get().value).isEqualTo("paimon");
-        assertThat(first.get().source).isEqualTo(ConfigSource.INITIAL_SERVER_CONFIG);
+        assertThat(first.get().value()).isEqualTo("paimon");
+        assertThat(first.get().source()).isEqualTo(ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG);
 
-        alterClusterConfig(alterConfig);
+        AlterConfig alterConfig = new AlterConfig("datalake.format", null, AlterConfigOpType.SET);
+        admin.alterClusterConfigs(Collections.singleton(alterConfig)).get();
 
-        configEntries = describeClusterConfigs();
-        first = configEntries.stream().filter(e -> e.key.equals("datalake.format")).findFirst();
+        configEntries = new ArrayList<>(admin.describeClusterConfigs().get());
+        first = configEntries.stream().filter(e -> e.key().equals("datalake.format")).findFirst();
         assertThat(first).isPresent();
-        assertThat(first.get().value).isNull();
-        assertThat(first.get().source).isEqualTo(ConfigSource.DYNAMIC_SERVER_CONFIG);
+        assertThat(first.get().value()).isNull();
+        assertThat(first.get().source()).isEqualTo(ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
     }
 
     private void verifyProduceAndFetchLog() throws Exception {
-        String dbForLogTest = "db-for-log-1";
-        createDatabase(dbForLogTest);
+        Admin admin = getAdmin();
+        Connection flussConnection = getFlussConnection();
 
+        String dbForLogTest = "db-for-log-1";
+        createDatabase(admin, dbForLogTest);
         String logTableName = "produce-log-table-1";
-        TestingTableDescriptor logTableDescriptor =
-                new TestingTableDescriptor(
-                        dbForLogTest,
-                        logTableName,
-                        List.of("a", "b"),
-                        List.of(INT_TYPE, STRING_TYPE),
-                        Collections.emptyList(),
-                        Collections.emptyList(),
-                        Collections.emptyMap());
-        createTable(logTableDescriptor);
+        TablePath logTablePath = TablePath.of(dbForLogTest, logTableName);
+        TableDescriptor logTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_LOG_SCHEMA)
+                        .properties(Collections.singletonMap("table.datalake.enabled", "false"))
+                        .build();
+        createTable(admin, logTablePath, logTableDescriptor);
 
         long timeBeforeInput = System.currentTimeMillis();
+        int recordSize = 10;
+        List<GenericRow> expectedRows = new ArrayList<>();
+        try (Table table = flussConnection.getTable(logTablePath)) {
+            AppendWriter appendWriter = table.newAppend().createWriter();
+            for (int i = 0; i < recordSize; i++) {
+                GenericRow row = row(i, "a");
+                expectedRows.add(row);
+                appendWriter.append(row).get();
+            }
 
-        List<Object[]> inputData =
-                Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"});
-        produceLog(dbForLogTest, logTableName, inputData);
+            LogScanner logScanner = table.newScan().createLogScanner();
+            logScanner.subscribe(0, LogScanner.EARLIEST_OFFSET);
 
-        subscribe(dbForLogTest, logTableName, null, 0, 0);
-        List<Object[]> results = new ArrayList<>();
-        while (results.size() < inputData.size()) {
-            List<Object[]> poll = poll(dbForLogTest, logTableName, Duration.ofMillis(300));
-            results.addAll(poll);
+            List<GenericRow> rowList = new ArrayList<>();
+            while (rowList.size() < recordSize) {
+                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                for (ScanRecord scanRecord : scanRecords) {
+                    assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
+                    InternalRow row = scanRecord.getRow();
+                    rowList.add(row(row.getInt(0), row.getString(1)));
+                }
+            }
+            assertThat(rowList).hasSize(recordSize);
+            assertThat(rowList).containsExactlyInAnyOrderElementsOf(expectedRows);
+            logScanner.close();
         }
-        assertThat(results).containsExactlyInAnyOrderElementsOf(inputData);
 
         // test list offset here.
-        assertThat(listOffsets(dbForLogTest, logTableName, null, 0, new TestingOffsetSpec(0, null)))
-                .isEqualTo(0L);
-        assertThat(listOffsets(dbForLogTest, logTableName, null, 0, new TestingOffsetSpec(1, null)))
-                .isEqualTo(3L);
         assertThat(
-                        listOffsets(
-                                dbForLogTest,
-                                logTableName,
-                                null,
-                                0,
-                                new TestingOffsetSpec(2, timeBeforeInput)))
+                        admin.listOffsets(
+                                        logTablePath,
+                                        Collections.singletonList(0),
+                                        new OffsetSpec.EarliestSpec())
+                                .all()
+                                .get()
+                                .get(0))
+                .isEqualTo(0L);
+        assertThat(
+                        admin.listOffsets(
+                                        logTablePath,
+                                        Collections.singletonList(0),
+                                        new OffsetSpec.LatestSpec())
+                                .all()
+                                .get()
+                                .get(0))
+                .isEqualTo(10L);
+        assertThat(
+                        admin.listOffsets(
+                                        logTablePath,
+                                        Collections.singletonList(0),
+                                        new OffsetSpec.TimestampSpec(timeBeforeInput))
+                                .all()
+                                .get()
+                                .get(0))
                 .isEqualTo(0L);
 
-        dropTable(dbForLogTest, logTableName);
+        dropTable(logTablePath);
         dropDatabase(dbForLogTest);
     }
 
     private void verifyPutKvAndLookup() throws Exception {
+        Admin admin = getAdmin();
+        Connection flussConnection = getFlussConnection();
         String dbForKvTest = "db-for-kv-1";
-        createDatabase(dbForKvTest);
+        createDatabase(admin, dbForKvTest);
 
         String kvTableName = "put-kv-and-lookup-table-1";
-        TestingTableDescriptor logTableDescriptor =
-                new TestingTableDescriptor(
-                        dbForKvTest,
-                        kvTableName,
-                        List.of("a", "b"),
-                        List.of(INT_TYPE, STRING_TYPE),
-                        Collections.singletonList("a"),
-                        Collections.emptyList(),
-                        Collections.emptyMap());
-        createTable(logTableDescriptor);
+        TablePath kvTablePath = TablePath.of(dbForKvTest, kvTableName);
+        TableDescriptor kvTableDescriptor =
+                TableDescriptor.builder().schema(DATA1_KV_SCHEMA).build();
+        createTable(admin, kvTablePath, kvTableDescriptor);
 
         List<Object[]> inputData =
                 Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"});
-        putKv(dbForKvTest, kvTableName, inputData);
+        try (Table table = flussConnection.getTable(kvTablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
+            inputData.forEach(record -> upsertWriter.upsert(row(record)));
+        }
 
         // test lookup.
-        Object[] lookup = lookup(dbForKvTest, kvTableName, new Object[] {1});
-        assertThat(lookup).isEqualTo(new Object[] {1, "a"});
-        assertThat(lookup(dbForKvTest, kvTableName, new Object[] {4})).isNull();
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    Object[] lookup = lookup(flussConnection, kvTablePath, new Object[] {1});
+                    assertThat(lookup).isEqualTo(new Object[] {1, "a"});
+                });
+        assertThat(lookup(flussConnection, kvTablePath, new Object[] {4})).isNull();
 
-        dropTable(dbForKvTest, kvTableName);
+        dropTable(kvTablePath);
         dropDatabase(dbForKvTest);
+    }
+
+    private Admin getAdmin() {
+        if (admin == null) {
+            throw new RuntimeException("admin is null, please init it first.");
+        }
+        return admin;
+    }
+
+    private Connection getFlussConnection() {
+        if (flussConnection == null) {
+            throw new RuntimeException("flussConnection is null, please init it first.");
+        }
+        return flussConnection;
+    }
+
+    private static @Nullable Object[] lookup(
+            Connection flussConnection, TablePath tablePath, Object[] key) throws Exception {
+        try (Table table = flussConnection.getTable(tablePath)) {
+            RowType rowType = table.getTableInfo().getRowType();
+            InternalRow.FieldGetter[] fieldGetters =
+                    new InternalRow.FieldGetter[rowType.getFieldCount()];
+            for (int i = 0; i < rowType.getFieldCount(); i++) {
+                fieldGetters[i] = InternalRow.createFieldGetter(rowType.getTypeAt(i), i);
+            }
+
+            InternalRow row =
+                    table.newLookup().createLookuper().lookup(row(key)).get().getSingletonRow();
+            return row == null ? null : rowToObjects(row, fieldGetters);
+        }
+    }
+
+    private static Object[] rowToObjects(InternalRow row, InternalRow.FieldGetter[] fieldGetters) {
+        Object[] object = new Object[fieldGetters.length];
+        for (int i = 0; i < fieldGetters.length; i++) {
+            Object filedVar = fieldGetters[i].getFieldOrNull(row);
+            if (filedVar instanceof BinaryString) {
+                object[i] = ((BinaryString) filedVar).toString();
+            } else {
+                object[i] = filedVar;
+            }
+        }
+        return object;
     }
 }

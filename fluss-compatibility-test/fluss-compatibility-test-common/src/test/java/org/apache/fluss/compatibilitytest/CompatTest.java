@@ -17,6 +17,23 @@
 
 package org.apache.fluss.compatibilitytest;
 
+import org.apache.fluss.client.Connection;
+import org.apache.fluss.client.ConnectionFactory;
+import org.apache.fluss.client.admin.Admin;
+import org.apache.fluss.client.metadata.MetadataUpdater;
+import org.apache.fluss.cluster.Cluster;
+import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.config.Configuration;
+import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.metrics.registry.MetricRegistry;
+import org.apache.fluss.rpc.GatewayClientProxy;
+import org.apache.fluss.rpc.RpcClient;
+import org.apache.fluss.rpc.gateway.AdminGateway;
+import org.apache.fluss.rpc.metrics.ClientMetricGroup;
+
 import com.github.dockerjava.api.DockerClient;
 import com.github.dockerjava.api.command.ListImagesCmd;
 import com.github.dockerjava.api.command.RemoveImageCmd;
@@ -40,9 +57,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Duration;
-import java.util.List;
 import java.util.UUID;
 
+import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
+import static org.apache.fluss.compatibilitytest.CompatEnvironment.CLIENT_SALS_PROPERTIES;
 import static org.apache.fluss.compatibilitytest.CompatEnvironment.FLUSS_06_IMAGE_TAG;
 import static org.apache.fluss.compatibilitytest.CompatEnvironment.FLUSS_06_VERSION_MAGIC;
 import static org.apache.fluss.compatibilitytest.CompatEnvironment.FLUSS_07_IMAGE_TAG;
@@ -78,12 +96,6 @@ public abstract class CompatTest {
                     .withExposedPorts(2181)
                     .withStartupTimeout(Duration.ofSeconds(60));
 
-    private static final GenericContainer<?> SHARED_TMPFS =
-            new GenericContainer<>(DockerImageName.parse("alpine:latest"))
-                    .withNetwork(FLUSS_NETWORK)
-                    .withCommand("sh", "-c", "while true; do sleep 3600; done")
-                    .withEnv("SHARED_DIR", "/tmp/fluss");
-
     private static String latestImageName;
 
     protected @Nullable GenericContainer<?> flussCoordinator;
@@ -91,6 +103,8 @@ public abstract class CompatTest {
     protected int coordinatorServerPort;
     protected int tabletServerPort;
     private DockerClient dockerClient;
+    private File localDataDirInHostServer;
+    private File remoteDataDirInHostServer;
 
     @BeforeAll
     static void setupBeforeAll() {
@@ -127,10 +141,13 @@ public abstract class CompatTest {
     }
 
     @BeforeEach
-    public void setup() {
+    public void setup() throws Exception {
         ZOOKEEPER.start();
-        SHARED_TMPFS.start();
         dockerClient = DockerClientBuilder.getInstance().build();
+        localDataDirInHostServer =
+                Files.createTempDirectory("fluss-compat-test-local-dir").toFile();
+        remoteDataDirInHostServer =
+                Files.createTempDirectory("fluss-compat-test-remote-dir").toFile();
     }
 
     @AfterEach
@@ -148,51 +165,55 @@ public abstract class CompatTest {
         }
 
         ZOOKEEPER.stop();
-        SHARED_TMPFS.stop();
     }
 
-    abstract boolean verifyServerReady(int serverVersion) throws Exception;
-
-    abstract void initFlussConnection(int serverVersion);
-
-    abstract void initFlussAdmin();
-
-    abstract void createDatabase(String dbName) throws Exception;
-
-    abstract boolean tableExists(String dbName, String tableName) throws Exception;
-
-    abstract void createTable(TestingTableDescriptor tableDescriptor) throws Exception;
-
-    abstract void produceLog(String dbName, String tableName, List<Object[]> records)
-            throws Exception;
-
-    abstract void subscribe(
-            String dbName,
-            String tableName,
-            @Nullable Integer partitionId,
-            int bucketId,
-            long offset);
-
-    abstract List<Object[]> poll(String dbName, String tableName, Duration timeout)
-            throws Exception;
-
-    abstract void putKv(String dbName, String tableName, List<Object[]> records) throws Exception;
-
-    abstract @Nullable Object[] lookup(String dbName, String tableName, Object[] key)
-            throws Exception;
-
-    protected void initAndStartFlussServer(int clientVersionMagic, int serverVersion)
+    boolean verifyServerReady(int serverVersion, int port, int serverId, boolean isTabletServer)
             throws Exception {
-        // For Fluss-0.6 client, we need tod disable server authentication as the client is not
-        // authenticated.
-        boolean enableAuthentication = clientVersionMagic >= FLUSS_07_VERSION_MAGIC;
+        boolean serverSupportAuth = serverVersion >= FLUSS_07_VERSION_MAGIC;
+        Configuration conf = new Configuration();
+        conf.setString("bootstrap.servers", "localhost:" + port);
+        if (serverSupportAuth) {
+            CLIENT_SALS_PROPERTIES.forEach(conf::setString);
+        }
+        Connection connection = ConnectionFactory.createConnection(conf);
+        connection.close();
 
+        RpcClient rpcClient =
+                RpcClient.create(
+                        conf, new ClientMetricGroup(MetricRegistry.create(conf, null), "1"), false);
+        MetadataUpdater metadataUpdater = new MetadataUpdater(conf, rpcClient);
+        Cluster cluster =
+                sendMetadataRequestAndRebuildCluster(
+                        GatewayClientProxy.createGatewayProxy(
+                                () ->
+                                        new ServerNode(
+                                                serverId,
+                                                "localhost",
+                                                port,
+                                                isTabletServer
+                                                        ? ServerType.TABLET_SERVER
+                                                        : ServerType.COORDINATOR),
+                                rpcClient,
+                                AdminGateway.class),
+                        false,
+                        metadataUpdater.getCluster(),
+                        null,
+                        null,
+                        null);
+        boolean isReady =
+                cluster.getCoordinatorServer() != null
+                        && cluster.getAliveTabletServers().size() == 1;
+        rpcClient.close();
+        return isReady;
+    }
+
+    protected void initAndStartFlussServer(int serverVersion) throws Exception {
         if (serverVersion == FLUSS_06_VERSION_MAGIC) {
             initFluss06Server();
         } else if (serverVersion == FLUSS_07_VERSION_MAGIC) {
-            initFluss07Server(enableAuthentication);
+            initFluss07Server();
         } else if (serverVersion == FLUSS_LATEST_VERSION_MAGIC) {
-            initFlussLatestServer(enableAuthentication);
+            initFlussLatestServer();
         } else {
             throw new IllegalArgumentException("Unsupported server version: " + serverVersion);
         }
@@ -220,7 +241,8 @@ public abstract class CompatTest {
         waitUntil(
                 () -> {
                     try {
-                        return verifyServerReady(serverVersion);
+                        return verifyServerReady(serverVersion, coordinatorServerPort, 0, false)
+                                && verifyServerReady(serverVersion, tabletServerPort, 0, true);
                     } catch (Exception e) {
                         Thread.sleep(5000);
                         return false;
@@ -238,35 +260,41 @@ public abstract class CompatTest {
                         FLUSS_06_IMAGE_TAG,
                         build06CoordinatorProperties(coordinatorServerPort),
                         ZOOKEEPER,
-                        coordinatorServerPort);
+                        coordinatorServerPort,
+                        remoteDataDirInHostServer.getAbsolutePath());
         flussTabletServer =
                 initTabletServer(
                         FLUSS_06_IMAGE_TAG,
                         build06TabletServerProperties(tabletServerPort),
                         ZOOKEEPER,
                         flussCoordinator,
-                        tabletServerPort);
+                        tabletServerPort,
+                        localDataDirInHostServer.getAbsolutePath(),
+                        remoteDataDirInHostServer.getAbsolutePath());
     }
 
-    void initFluss07Server(boolean enableAuthentication) {
+    void initFluss07Server() {
         coordinatorServerPort = getAvailablePort().getPort();
         tabletServerPort = getAvailablePort().getPort();
         flussCoordinator =
                 initCoordinatorServer(
                         FLUSS_07_IMAGE_TAG,
-                        build07CoordinatorProperties(coordinatorServerPort, enableAuthentication),
+                        build07CoordinatorProperties(coordinatorServerPort),
                         ZOOKEEPER,
-                        coordinatorServerPort);
+                        coordinatorServerPort,
+                        remoteDataDirInHostServer.getAbsolutePath());
         flussTabletServer =
                 initTabletServer(
                         FLUSS_07_IMAGE_TAG,
-                        build07TabletServerProperties(tabletServerPort, enableAuthentication),
+                        build07TabletServerProperties(tabletServerPort),
                         ZOOKEEPER,
                         flussCoordinator,
-                        tabletServerPort);
+                        tabletServerPort,
+                        localDataDirInHostServer.getAbsolutePath(),
+                        remoteDataDirInHostServer.getAbsolutePath());
     }
 
-    void initFlussLatestServer(boolean enableAuthentication) throws Exception {
+    void initFlussLatestServer() throws Exception {
         // Build the latest target if it does not exist.
         if (!checkImageExists(dockerClient, latestImageName)) {
             buildDockerImageInDockerDir(latestImageName);
@@ -277,17 +305,19 @@ public abstract class CompatTest {
         flussCoordinator =
                 initCoordinatorServer(
                         latestImageName,
-                        buildLatestCoordinatorProperties(
-                                coordinatorServerPort, enableAuthentication),
+                        buildLatestCoordinatorProperties(coordinatorServerPort),
                         ZOOKEEPER,
-                        coordinatorServerPort);
+                        coordinatorServerPort,
+                        remoteDataDirInHostServer.getAbsolutePath());
         flussTabletServer =
                 initTabletServer(
                         latestImageName,
-                        buildLatestTabletServerProperties(tabletServerPort, enableAuthentication),
+                        buildLatestTabletServerProperties(tabletServerPort),
                         ZOOKEEPER,
                         flussCoordinator,
-                        tabletServerPort);
+                        tabletServerPort,
+                        localDataDirInHostServer.getAbsolutePath(),
+                        remoteDataDirInHostServer.getAbsolutePath());
     }
 
     private static void buildDockerImageInDockerDir(String imageName) throws Exception {
@@ -342,14 +372,27 @@ public abstract class CompatTest {
         new ProcessBuilder("cd", oldDir.getAbsolutePath()).start();
     }
 
-    void stopServer() {
+    void stopServer() throws Exception {
         if (flussCoordinator == null || flussTabletServer == null) {
             return;
         }
 
         flussCoordinator.stop();
         flussCoordinator = null;
+
+        // Gracefully stop the tabletServer to flush data from the pageCache to disk. Waiting 5s
+        flussTabletServer.execInContainer("./bin/tablet-server.sh", "stop");
+        Thread.sleep(2_000);
         flussTabletServer.stop();
         flussTabletServer = null;
+    }
+
+    protected void createDatabase(Admin admin, String dbName) throws Exception {
+        admin.createDatabase(dbName, DatabaseDescriptor.EMPTY, false).get();
+    }
+
+    protected void createTable(Admin admin, TablePath tablePath, TableDescriptor tableDescriptor)
+            throws Exception {
+        admin.createTable(tablePath, tableDescriptor, false).get();
     }
 }
