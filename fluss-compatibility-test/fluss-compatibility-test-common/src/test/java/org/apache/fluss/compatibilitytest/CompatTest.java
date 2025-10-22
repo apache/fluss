@@ -89,7 +89,7 @@ public abstract class CompatTest {
     private static final Logger LOG = LoggerFactory.getLogger(CompatTest.class);
 
     private static final Path PROJECT_ROOT = Paths.get("").toAbsolutePath().getParent().getParent();
-    private static final Path DOCKER_DIR = PROJECT_ROOT.resolve("docker");
+    private static final Path DOCKER_DIR = PROJECT_ROOT.resolve("docker/fluss");
     private static final Path BUILD_TARGET_DIR = PROJECT_ROOT.resolve("build-target");
 
     protected static final GenericContainer<?> ZOOKEEPER =
