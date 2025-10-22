@@ -333,6 +333,11 @@ public abstract class CompatTest {
             throw new IOException(
                     "Docker directory does not exist: " + dockerDir.getAbsolutePath());
         }
+
+        if (!DOCKER_DIR.resolve("build-target").toFile().exists()) {
+            throw new IOException("Build target directory does not exist in : " + DOCKER_DIR);
+        }
+
         ProcessBuilder processBuilder = new ProcessBuilder("docker", "build", "-t", imageName, ".");
         processBuilder.directory(dockerDir);
         processBuilder.redirectErrorStream(true);
@@ -376,13 +381,15 @@ public abstract class CompatTest {
         File oldDir = new File(".").getAbsoluteFile();
         File dockerDir = DOCKER_DIR.toFile();
 
+        // Add '-rL' to copy the file itself, not the symbolic link. Otherwise, file not found error
+        // will be thrown when building docker image in Github CI.
         ProcessBuilder processBuilder =
-                new ProcessBuilder("cp", "-rf", source.toString(), target.toString());
+                new ProcessBuilder("cp", "-rL", source.toString(), target.toString());
         processBuilder.directory(dockerDir);
         Process process = processBuilder.start();
         int exitCode = process.waitFor();
         if (exitCode != 0) {
-            throw new IOException("Docker build failed");
+            throw new IOException("File copy failed");
         }
 
         // change back to the old directory.
@@ -397,7 +404,7 @@ public abstract class CompatTest {
         flussCoordinator.stop();
         flussCoordinator = null;
 
-        // Gracefully stop the tabletServer to flush data from the pageCache to disk. Waiting 5s
+        // Gracefully stop the tabletServer to flush data from the pageCache to disk. Waiting 2s
         flussTabletServer.execInContainer("./bin/tablet-server.sh", "stop");
         Thread.sleep(2_000);
         flussTabletServer.stop();

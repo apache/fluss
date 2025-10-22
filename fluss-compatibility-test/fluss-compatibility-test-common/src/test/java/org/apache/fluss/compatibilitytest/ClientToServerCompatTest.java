@@ -611,7 +611,11 @@ public class ClientToServerCompatTest extends CompatTest {
                 Arrays.asList(new Object[] {1, "a"}, new Object[] {2, "b"}, new Object[] {3, "c"});
         try (Table table = flussConnection.getTable(kvTablePath)) {
             UpsertWriter upsertWriter = table.newUpsert().createWriter();
-            inputData.forEach(record -> upsertWriter.upsert(row(record)));
+            inputData.forEach(
+                    record -> {
+                        upsertWriter.upsert(row(record));
+                        upsertWriter.flush();
+                    });
         }
 
         // test lookup.
