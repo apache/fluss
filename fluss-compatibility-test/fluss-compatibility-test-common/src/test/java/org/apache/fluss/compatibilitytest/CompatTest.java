@@ -51,8 +51,11 @@ import org.testcontainers.utility.DockerImageName;
 
 import javax.annotation.Nullable;
 
+import java.io.BufferedReader;
 import java.io.File;
 import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -332,10 +335,24 @@ public abstract class CompatTest {
         }
         ProcessBuilder processBuilder = new ProcessBuilder("docker", "build", "-t", imageName, ".");
         processBuilder.directory(dockerDir);
+        processBuilder.redirectErrorStream(true);
         Process process = processBuilder.start();
+
+        // read the output of the process.
+        StringBuilder output = new StringBuilder();
+        try (BufferedReader reader =
+                new BufferedReader(
+                        new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                output.append(line).append(System.lineSeparator());
+            }
+        }
+
         int exitCode = process.waitFor();
         if (exitCode != 0) {
-            throw new IOException("Docker build failed");
+            throw new IOException(
+                    "Docker build failed with exit code" + exitCode + ". Output:\n" + output);
         }
 
         // change back to the old directory.
