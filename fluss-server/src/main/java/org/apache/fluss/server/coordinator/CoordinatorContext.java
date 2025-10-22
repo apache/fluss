@@ -55,7 +55,7 @@ public class CoordinatorContext {
     private static final Logger LOG = LoggerFactory.getLogger(CoordinatorContext.class);
 
     public static final int INITIAL_COORDINATOR_EPOCH = 0;
-    public static final int INITIAL_COORDINATOR_EPOCH_ZKVERSION = 0;
+    public static final int INITIAL_COORDINATOR_EPOCH_ZK_VERSION = 0;
 
     // for simplicity, we just use retry time, may consider make it a configurable value
     // and use combine retry times and retry delay
@@ -110,7 +110,7 @@ public class CoordinatorContext {
 
     private ServerInfo coordinatorServerInfo = null;
     private int coordinatorEpoch = INITIAL_COORDINATOR_EPOCH;
-    private int coordinatorEpochZkVersion = INITIAL_COORDINATOR_EPOCH_ZKVERSION;
+    private int coordinatorEpochZkVersion = INITIAL_COORDINATOR_EPOCH_ZK_VERSION;
 
     public CoordinatorContext() {}
 
@@ -131,7 +131,6 @@ public class CoordinatorContext {
         return liveCoordinatorServers;
     }
 
-    @VisibleForTesting
     public void setLiveCoordinatorServers(Set<Integer> servers) {
         liveCoordinatorServers.clear();
         liveCoordinatorServers.addAll(servers);

@@ -496,7 +496,10 @@ public class TableBucketStateMachine {
         }
         ElectionResult electionResult = optionalElectionResult.get();
         try {
-            zooKeeperClient.updateLeaderAndIsr(tableBucket, electionResult.leaderAndIsr);
+            zooKeeperClient.updateLeaderAndIsr(
+                    tableBucket,
+                    electionResult.leaderAndIsr,
+                    coordinatorContext.getCoordinatorEpoch());
         } catch (Exception e) {
             LOG.error(
                     "Fail to update bucket LeaderAndIsr for table bucket {}.",

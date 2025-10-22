@@ -82,8 +82,7 @@ class CoordinatorServerElectionTest {
 
         CoordinatorAddress firstLeaderAddress = zookeeperClient.getCoordinatorLeaderAddress().get();
 
-        // Find the leader
-        // and try to close it.
+        // Find the leader and try to close it.
         CoordinatorServer elected = null;
         for (CoordinatorServer coordinatorServer : coordinatorServerList) {
             if (coordinatorServer.getServerId() == firstLeaderAddress.getId()) {
@@ -92,6 +91,8 @@ class CoordinatorServerElectionTest {
             }
         }
         assertThat(elected).isNotNull();
+        assertThat(zookeeperClient.getCurrentEpoch().f0)
+                .isEqualTo(CoordinatorContext.INITIAL_COORDINATOR_EPOCH);
         elected.close();
         elected.start();
 
@@ -100,6 +101,8 @@ class CoordinatorServerElectionTest {
         CoordinatorAddress secondLeaderAddress =
                 zookeeperClient.getCoordinatorLeaderAddress().get();
         assertThat(secondLeaderAddress).isNotEqualTo(firstLeaderAddress);
+        assertThat(zookeeperClient.getCurrentEpoch().f0)
+                .isEqualTo(CoordinatorContext.INITIAL_COORDINATOR_EPOCH + 1);
 
         // kill other 2 coordinator servers
         for (CoordinatorServer coordinatorServer : coordinatorServerList) {
@@ -112,6 +115,8 @@ class CoordinatorServerElectionTest {
         CoordinatorAddress thirdLeaderAddress = zookeeperClient.getCoordinatorLeaderAddress().get();
 
         assertThat(thirdLeaderAddress.getId()).isEqualTo(firstLeaderAddress.getId());
+        assertThat(zookeeperClient.getCurrentEpoch().f0)
+                .isEqualTo(CoordinatorContext.INITIAL_COORDINATOR_EPOCH + 2);
     }
 
     /** Create a configuration with Zookeeper address setting. */

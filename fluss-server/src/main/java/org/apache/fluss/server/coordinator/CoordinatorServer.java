@@ -247,9 +247,6 @@ public class CoordinatorServer extends ServerBase {
             rpcServer.start();
 
             registerCoordinatorLeader();
-            // when init session, register coordinator server again
-            //            ZooKeeperUtils.registerZookeeperClientReInitSessionListener(
-            //                    zkClient, this::registerCoordinatorLeader, this);
 
             this.clientMetricGroup = new ClientMetricGroup(metricRegistry, SERVER_NAME);
             this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);

@@ -77,9 +77,7 @@ class CoordinatorServerTest extends ServerTestBase {
 
     public void waitUtilCoordinatorServerElected() {
         waitUntil(
-                () -> {
-                    return zookeeperClient.getCoordinatorLeaderAddress().isPresent();
-                },
+                () -> zookeeperClient.getCoordinatorLeaderAddress().isPresent(),
                 Duration.ofSeconds(10),
                 "Fail to wait coordinator server elected");
     }
