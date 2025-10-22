@@ -86,7 +86,7 @@ public class IndexedRowReaderTest {
                 .isEqualTo(LocalDate.of(2023, 10, 25));
         assertThat(DateTimeUtils.toLocalTime(reader.readInt()))
                 .isEqualTo(LocalTime.of(9, 30, 0, 0));
-        assertThat(reader.readBinary(20)).isEqualTo("1234567890".getBytes());
+        assertThat(reader.readBinary()).isEqualTo("1234567890".getBytes());
         assertThat(reader.readBytes()).isEqualTo("20".getBytes());
         assertThat(reader.readChar(2)).isEqualTo(BinaryString.fromString("1"));
         assertThat(reader.readString()).isEqualTo(BinaryString.fromString("hello"));

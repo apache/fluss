@@ -258,7 +258,7 @@ public class CompactedRowReader {
      *
      * @param fieldType the element type of the row
      */
-    static FieldReader createFieldReader(DataType fieldType) {
+    public static FieldReader createFieldReader(DataType fieldType) {
         final FieldReader fieldReader;
         // ordered by type root definition
         switch (fieldType.getTypeRoot()) {
@@ -325,7 +325,7 @@ public class CompactedRowReader {
      *
      * @see #createFieldReader(DataType)
      */
-    interface FieldReader extends Serializable {
+    public interface FieldReader extends Serializable {
         Object readField(CompactedRowReader reader, int pos);
     }
 }
