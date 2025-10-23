@@ -16,9 +16,6 @@
 
 package com.alibaba.fluss.testutils.classloader;
 
-import com.alibaba.fluss.utils.Preconditions;
-
-import java.io.File;
 import java.io.IOException;
 import java.net.MalformedURLException;
 import java.net.URL;
@@ -38,9 +35,7 @@ import java.util.stream.Collectors;
  */
 public class ClassLoaderTestUtils {
 
-    /**
-     * A custom exception to simulate class loading failures.
-     */
+    /** A custom exception to simulate class loading failures. */
     public static class ClassLoadingException extends Exception {
         public ClassLoadingException(String message, Throwable cause) {
             super(message, cause);
@@ -183,20 +178,23 @@ public class ClassLoaderTestUtils {
      */
     public static URLClassLoader createClassLoaderWithExclusions(
             String[] excludedPackages, String... classpathElements) {
-        URL[] urls = Arrays.stream(classpathElements)
-                .map(
-                        element -> {
-                            try {
-                                return Paths.get(element).toUri().toURL();
-                            } catch (MalformedURLException e) {
-                                throw new RuntimeException("Invalid classpath element: " + element, e);
-                            }
-                        })
-                .toArray(URL[]::new);
+        URL[] urls =
+                Arrays.stream(classpathElements)
+                        .map(
+                                element -> {
+                                    try {
+                                        return Paths.get(element).toUri().toURL();
+                                    } catch (MalformedURLException e) {
+                                        throw new RuntimeException(
+                                                "Invalid classpath element: " + element, e);
+                                    }
+                                })
+                        .toArray(URL[]::new);
 
         return new URLClassLoader(urls, ClassLoader.getSystemClassLoader()) {
             @Override
-            protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+            protected Class<?> loadClass(String name, boolean resolve)
+                    throws ClassNotFoundException {
                 // Check if the class belongs to an excluded package
                 for (String excludedPackage : excludedPackages) {
                     if (name.startsWith(excludedPackage)) {
@@ -215,7 +213,8 @@ public class ClassLoaderTestUtils {
      *
      * @param className The class name that should fail to load
      * @param classLoader The class loader to use
-     * @return A supplier that when called will attempt to load the class and throw ClassLoadingException on failure
+     * @return A supplier that when called will attempt to load the class and throw
+     *     ClassLoadingException on failure
      */
     public static Supplier<Class<?>> simulateClassLoadingFailure(
             String className, ClassLoader classLoader) {
@@ -241,33 +240,35 @@ public class ClassLoaderTestUtils {
         Thread[] threads = new Thread[classLoaders.length];
         Class<?>[] loadedClasses = new Class<?>[classLoaders.length];
         Exception[] exceptions = new Exception[classLoaders.length];
-        
+
         // Create and start threads for concurrent loading
         for (int i = 0; i < classLoaders.length; i++) {
             final int index = i;
             final ClassLoader classLoader = classLoaders[i];
-            threads[i] = new Thread(() -> {
-                try {
-                    loadedClasses[index] = classLoader.loadClass(className);
-                } catch (Exception e) {
-                    exceptions[index] = e;
-                }
-            });
+            threads[i] =
+                    new Thread(
+                            () -> {
+                                try {
+                                    loadedClasses[index] = classLoader.loadClass(className);
+                                } catch (Exception e) {
+                                    exceptions[index] = e;
+                                }
+                            });
             threads[i].start();
         }
-        
+
         // Wait for all threads to complete
         for (Thread thread : threads) {
             thread.join();
         }
-        
+
         // Check for exceptions
         for (Exception exception : exceptions) {
             if (exception != null) {
                 throw new RuntimeException("Concurrent class loading failed", exception);
             }
         }
-        
+
         return loadedClasses;
     }
 

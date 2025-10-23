@@ -27,9 +27,8 @@ import static org.assertj.core.api.Assertions.assertThat;
 /**
  * Integration test for resource cleanup scenarios.
  *
- * <p>This test verifies:
- * 1. ClassLoader unload resource release
- * 2. Plugin unload class reference cleanup
+ * <p>This test verifies: 1. ClassLoader unload resource release 2. Plugin unload class reference
+ * cleanup
  */
 public class ResourceCleanupITCase {
 
@@ -38,9 +37,9 @@ public class ResourceCleanupITCase {
     @Test
     void testClassLoaderUnloadResourceRelease() {
         // Test that ClassLoader properly releases resources when unloaded
-        URLClassLoader classLoader = ClassLoaderTestUtils.createIsolatedClassLoader(
-                tempDir.toString());
-        
+        URLClassLoader classLoader =
+                ClassLoaderTestUtils.createIsolatedClassLoader(tempDir.toString());
+
         // Load some classes
         try {
             Class<?> stringClass = classLoader.loadClass("java.lang.String");
@@ -49,7 +48,7 @@ public class ResourceCleanupITCase {
             // This shouldn't happen for java.lang.String
             throw new RuntimeException(e);
         }
-        
+
         // Verify cleanup
         boolean cleanupSuccessful = ClassLoaderTestUtils.verifyClassLoaderCleanup(classLoader);
         assertThat(cleanupSuccessful).isTrue();
@@ -58,27 +57,27 @@ public class ResourceCleanupITCase {
     @Test
     void testPluginUnloadClassReferenceCleanup() {
         // Test that plugin unload properly cleans up class references
-        URLClassLoader pluginClassLoader1 = ClassLoaderTestUtils.createIsolatedClassLoader(
-                tempDir.toString());
-        URLClassLoader pluginClassLoader2 = ClassLoaderTestUtils.createIsolatedClassLoader(
-                tempDir.toString());
-        
+        URLClassLoader pluginClassLoader1 =
+                ClassLoaderTestUtils.createIsolatedClassLoader(tempDir.toString());
+        URLClassLoader pluginClassLoader2 =
+                ClassLoaderTestUtils.createIsolatedClassLoader(tempDir.toString());
+
         // Load classes from both class loaders
         try {
             Class<?> class1 = pluginClassLoader1.loadClass("java.lang.Object");
             Class<?> class2 = pluginClassLoader2.loadClass("java.lang.Object");
-            
+
             // Verify they are different instances
             assertThat(class1).isNotEqualTo(class2);
             assertThat(class1.getName()).isEqualTo(class2.getName());
         } catch (ClassNotFoundException e) {
             throw new RuntimeException(e);
         }
-        
+
         // Clean up both class loaders
         boolean cleanup1 = ClassLoaderTestUtils.verifyClassLoaderCleanup(pluginClassLoader1);
         boolean cleanup2 = ClassLoaderTestUtils.verifyClassLoaderCleanup(pluginClassLoader2);
-        
+
         assertThat(cleanup1).isTrue();
         assertThat(cleanup2).isTrue();
     }

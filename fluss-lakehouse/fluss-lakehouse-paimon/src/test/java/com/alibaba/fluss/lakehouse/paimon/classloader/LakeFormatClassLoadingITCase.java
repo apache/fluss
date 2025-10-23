@@ -46,12 +46,12 @@ public class LakeFormatClassLoadingITCase {
     void testMultipleLakeFormatsLoadedSimultaneously() throws Exception {
         // Test that multiple lake formats can be loaded simultaneously
         // This simulates having Paimon, Iceberg, and Lance in the same JVM
-        
+
         // Create isolated class loaders for different lake formats
         String[] paimonClasspath = ClassLoaderTestUtils.getModuleClasspath("fluss-lakehouse-paimon");
         String[] icebergClasspath = ClassLoaderTestUtils.getModuleClasspath("fluss-lakehouse-iceberg");
         String[] lanceClasspath = ClassLoaderTestUtils.getModuleClasspath("fluss-lakehouse-lance");
-        
+
         // In a real implementation, these would point to actual JARs with different lake formats
         // For this test, we'll just verify the class loader creation works
         assertThat(paimonClasspath).isNotEmpty();
@@ -63,18 +63,18 @@ public class LakeFormatClassLoadingITCase {
     void testLakeFormatSchemaEvolutionClassLoading() throws Exception {
         // Test Lake format schema evolution and class loading
         Configuration config = new Configuration();
-        
+
         // Create isolated class loaders to test schema evolution scenarios
         URLClassLoader paimonClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(
                 tempDir.toString());
         URLClassLoader icebergClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(
                 tempDir.toString());
-        
+
         // Verify that we can load classes in isolation
         assertThat(paimonClassLoader).isNotNull();
         assertThat(icebergClassLoader).isNotNull();
         assertThat(paimonClassLoader).isNotEqualTo(icebergClassLoader);
-        
+
         // Clean up
         paimonClassLoader.close();
         icebergClassLoader.close();
@@ -86,15 +86,15 @@ public class LakeFormatClassLoadingITCase {
         // Create isolated class loaders for writer and reader components
         String[] writerClasspath = new String[] {tempDir.toString(), "writer-path"};
         String[] readerClasspath = new String[] {tempDir.toString(), "reader-path"};
-        
+
         URLClassLoader writerClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(
                 writerClasspath);
         URLClassLoader readerClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(
                 readerClasspath);
-        
+
         // Verify isolation
         assertThat(writerClassLoader).isNotEqualTo(readerClassLoader);
-        
+
         // Clean up
         writerClassLoader.close();
         readerClassLoader.close();
@@ -105,30 +105,30 @@ public class LakeFormatClassLoadingITCase {
         // Test cross-Lake format data migration class loading
         // This would involve loading classes from different lake formats in the same JVM
         // and ensuring they don't conflict
-        
+
         // Create isolated class loaders for different lake formats
         URLClassLoader format1ClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(
                 tempDir.toString());
         URLClassLoader format2ClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(
                 tempDir.toString());
-        
+
         // Verify they are properly isolated
         assertThat(format1ClassLoader).isNotEqualTo(format2ClassLoader);
-        
+
         // Test with exclusions for shared components
         String[] sharedPackages = new String[] {
                 "com.alibaba.fluss.lakehouse.common",
                 "com.alibaba.fluss.metadata"
         };
-        
+
         URLClassLoader format1WithExclusions = ClassLoaderTestUtils.createClassLoaderWithExclusions(
                 sharedPackages, tempDir.toString());
         URLClassLoader format2WithExclusions = ClassLoaderTestUtils.createClassLoaderWithExclusions(
                 sharedPackages, tempDir.toString());
-        
+
         assertThat(format1WithExclusions).isNotNull();
         assertThat(format2WithExclusions).isNotNull();
-        
+
         // Clean up
         format1ClassLoader.close();
         format2ClassLoader.close();
@@ -140,24 +140,24 @@ public class LakeFormatClassLoadingITCase {
     void testIsolatedClassLoaderCreation() throws Exception {
         // Test the ClassLoaderTestUtils functionality for lake scenarios
         String[] classpathElements = new String[] {tempDir.toString()};
-        
+
         // Create isolated class loader
         ClassLoader isolatedClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(classpathElements);
-        
+
         assertThat(isolatedClassLoader).isNotNull();
         assertThat(isolatedClassLoader).isNotEqualTo(ClassLoader.getSystemClassLoader());
-        
+
         // Test with exclusions (delegating certain packages to parent)
         String[] excludedPackages = new String[] {
                 "com.alibaba.fluss.metadata",
                 "com.alibaba.fluss.config"
         };
-        
+
         ClassLoader exclusionClassLoader = ClassLoaderTestUtils.createClassLoaderWithExclusions(
                 excludedPackages, classpathElements);
-        
+
         assertThat(exclusionClassLoader).isNotNull();
-        
+
         // Clean up
         isolatedClassLoader.close();
         exclusionClassLoader.close();

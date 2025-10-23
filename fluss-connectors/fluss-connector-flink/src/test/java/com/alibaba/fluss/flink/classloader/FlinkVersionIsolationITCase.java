@@ -48,20 +48,20 @@ public class FlinkVersionIsolationITCase {
     void testMultipleFlinkVersionAdaptersLoaded() throws Exception {
         // Test that we can load Flink components with isolated class loaders
         String[] flinkClasspath = ClassLoaderTestUtils.getModuleClasspath("fluss-connector-flink");
-        
+
         // Create isolated class loader for Flink components
         URLClassLoader flinkClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(flinkClasspath);
-        
+
         // Load Flink connector classes
         Class<?> flinkCatalogClass = flinkClassLoader.loadClass(FlinkCatalog.class.getName());
         Class<?> flussSinkClass = flinkClassLoader.loadClass(FlussSink.class.getName());
         Class<?> flussSourceClass = flinkClassLoader.loadClass(FlussSource.class.getName());
-        
+
         // Verify they are loaded by the isolated class loader
         assertThat(flinkCatalogClass.getClassLoader()).isEqualTo(flinkClassLoader);
         assertThat(flussSinkClass.getClassLoader()).isEqualTo(flinkClassLoader);
         assertThat(flussSourceClass.getClassLoader()).isEqualTo(flinkClassLoader);
-        
+
         flinkClassLoader.close();
     }
 
@@ -69,21 +69,21 @@ public class FlinkVersionIsolationITCase {
     void testFlinkCatalogClassLoadingIsolation() throws Exception {
         // Test Flink Catalog class loading isolation
         String[] flinkClasspath = ClassLoaderTestUtils.getModuleClasspath("fluss-connector-flink");
-        
+
         // Create isolated class loader
         URLClassLoader flinkClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(flinkClasspath);
-        
+
         // Load FlinkCatalog class
         Class<?> flinkCatalogClass = flinkClassLoader.loadClass(FlinkCatalog.class.getName());
-        
+
         // Verify it's the correct type
         assertThat(FlinkCatalog.class).isAssignableFrom(flinkCatalogClass);
-        
+
         // Create an instance to verify it works
         Configuration config = new Configuration();
         config.setString(FlinkConnectorOptions.CATALOG_NAME, "test-catalog");
         config.setString(FlinkConnectorOptions.DEFAULT_DATABASE, "test-db");
-        
+
         flinkClassLoader.close();
     }
 
@@ -91,13 +91,13 @@ public class FlinkVersionIsolationITCase {
     void testFlinkSerializerClassLoading() throws Exception {
         // Test Flink serializer class loading
         String[] flinkClasspath = ClassLoaderTestUtils.getModuleClasspath("fluss-connector-flink");
-        
+
         // Create isolated class loader
         URLClassLoader flinkClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(flinkClasspath);
-        
+
         // Try to load serializer-related classes if they exist
         // This is a placeholder test - in a real implementation we would test actual serializer classes
-        
+
         flinkClassLoader.close();
     }
 
@@ -105,18 +105,18 @@ public class FlinkVersionIsolationITCase {
     void testTableApiClassLoadingConflictDetection() throws Exception {
         // Test Table API class loading conflict detection
         String[] flinkClasspath = ClassLoaderTestUtils.getModuleClasspath("fluss-connector-flink");
-        
+
         // Create two isolated class loaders
         URLClassLoader classLoader1 = ClassLoaderTestUtils.createIsolatedClassLoader(flinkClasspath);
         URLClassLoader classLoader2 = ClassLoaderTestUtils.createIsolatedClassLoader(flinkClasspath);
-        
+
         // Load the same class from both class loaders
         Class<?> class1 = classLoader1.loadClass(FlussSource.class.getName());
         Class<?> class2 = classLoader2.loadClass(FlussSource.class.getName());
-        
+
         // Verify they are properly isolated
         assertThat(ClassLoaderTestUtils.verifyClassLoaderIsolation(class1, class2)).isTrue();
-        
+
         classLoader1.close();
         classLoader2.close();
     }
@@ -126,13 +126,13 @@ public class FlinkVersionIsolationITCase {
         // Test class loader with package exclusions
         String[] flinkClasspath = ClassLoaderTestUtils.getModuleClasspath("fluss-connector-flink");
         String[] excludedPackages = {"org.apache.flink", "com.alibaba.fluss"};
-        
+
         // Create class loader with exclusions
-        URLClassLoader classLoaderWithExclusions = 
+        URLClassLoader classLoaderWithExclusions =
             ClassLoaderTestUtils.createClassLoaderWithExclusions(excludedPackages, flinkClasspath);
-        
+
         assertThat(classLoaderWithExclusions).isNotNull();
-        
+
         classLoaderWithExclusions.close();
     }
 }

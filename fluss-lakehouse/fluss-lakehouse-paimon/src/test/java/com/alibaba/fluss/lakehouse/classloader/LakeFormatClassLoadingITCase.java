@@ -46,20 +46,20 @@ public class LakeFormatClassLoadingITCase {
     void testMultipleLakeFormatsLoadedSimultaneously() throws Exception {
         // Test that multiple lake formats can be loaded simultaneously
         String[] paimonClasspath = ClassLoaderTestUtils.getModuleClasspath("fluss-lakehouse-paimon");
-        
+
         // Create isolated class loader for Paimon components
         URLClassLoader paimonClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(paimonClasspath);
-        
+
         // Load Paimon lakehouse classes
         Class<?> paimonLakehouseClass = paimonClassLoader.loadClass(FlussLakehousePaimon.class.getName());
         Class<?> paimonSinkClass = paimonClassLoader.loadClass(PaimonLakehouseSink.class.getName());
         Class<?> paimonSourceClass = paimonClassLoader.loadClass(PaimonLakehouseSource.class.getName());
-        
+
         // Verify they are loaded by the isolated class loader
         assertThat(paimonLakehouseClass.getClassLoader()).isEqualTo(paimonClassLoader);
         assertThat(paimonSinkClass.getClassLoader()).isEqualTo(paimonClassLoader);
         assertThat(paimonSourceClass.getClassLoader()).isEqualTo(paimonClassLoader);
-        
+
         paimonClassLoader.close();
     }
 
@@ -67,16 +67,16 @@ public class LakeFormatClassLoadingITCase {
     void testLakeFormatSchemaEvolutionClassLoading() throws Exception {
         // Test lake format schema evolution class loading
         String[] paimonClasspath = ClassLoaderTestUtils.getModuleClasspath("fluss-lakehouse-paimon");
-        
+
         // Create isolated class loader
         URLClassLoader paimonClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(paimonClasspath);
-        
+
         // Load Paimon classes
         Class<?> paimonLakehouseClass = paimonClassLoader.loadClass(FlussLakehousePaimon.class.getName());
-        
+
         // Verify it's the correct type
         assertThat(FlussLakehousePaimon.class).isAssignableFrom(paimonLakehouseClass);
-        
+
         paimonClassLoader.close();
     }
 
@@ -84,18 +84,18 @@ public class LakeFormatClassLoadingITCase {
     void testLakeWriterReaderClassIsolation() throws Exception {
         // Test Lake Writer/Reader class isolation
         String[] paimonClasspath = ClassLoaderTestUtils.getModuleClasspath("fluss-lakehouse-paimon");
-        
+
         // Create isolated class loader
         URLClassLoader paimonClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(paimonClasspath);
-        
+
         // Load writer and reader classes
         Class<?> paimonSinkClass = paimonClassLoader.loadClass(PaimonLakehouseSink.class.getName());
         Class<?> paimonSourceClass = paimonClassLoader.loadClass(PaimonLakehouseSource.class.getName());
-        
+
         // Verify they are loaded by the isolated class loader
         assertThat(paimonSinkClass.getClassLoader()).isEqualTo(paimonClassLoader);
         assertThat(paimonSourceClass.getClassLoader()).isEqualTo(paimonClassLoader);
-        
+
         paimonClassLoader.close();
     }
 
@@ -103,18 +103,18 @@ public class LakeFormatClassLoadingITCase {
     void testCrossFormatDataMigrationClassLoading() throws Exception {
         // Test cross-format data migration class loading
         String[] paimonClasspath = ClassLoaderTestUtils.getModuleClasspath("fluss-lakehouse-paimon");
-        
+
         // Create two isolated class loaders to simulate different format versions
         URLClassLoader classLoader1 = ClassLoaderTestUtils.createIsolatedClassLoader(paimonClasspath);
         URLClassLoader classLoader2 = ClassLoaderTestUtils.createIsolatedClassLoader(paimonClasspath);
-        
+
         // Load the same class from both class loaders
         Class<?> class1 = classLoader1.loadClass(FlussLakehousePaimon.class.getName());
         Class<?> class2 = classLoader2.loadClass(FlussLakehousePaimon.class.getName());
-        
+
         // Verify they are properly isolated
         assertThat(ClassLoaderTestUtils.verifyClassLoaderIsolation(class1, class2)).isTrue();
-        
+
         classLoader1.close();
         classLoader2.close();
     }
@@ -123,7 +123,7 @@ public class LakeFormatClassLoadingITCase {
     void testVersionConflictSimulation() throws Exception {
         // Test simulation of version conflicts
         String[] paimonClasspath = ClassLoaderTestUtils.getModuleClasspath("fluss-lakehouse-paimon");
-        
+
         // In a real test, we would have different versions of the same JAR
         // For now, we just test that the utility method works
         assertThat(paimonClasspath).isNotEmpty();

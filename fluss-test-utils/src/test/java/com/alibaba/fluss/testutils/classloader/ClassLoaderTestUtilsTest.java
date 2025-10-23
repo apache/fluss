@@ -24,9 +24,7 @@ import java.nio.file.Path;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/**
- * Unit test for {@link ClassLoaderTestUtils}.
- */
+/** Unit test for {@link ClassLoaderTestUtils}. */
 public class ClassLoaderTestUtilsTest {
 
     @TempDir static Path tempDir;
@@ -34,9 +32,10 @@ public class ClassLoaderTestUtilsTest {
     @Test
     void testCreateIsolatedClassLoader() {
         String[] classpathElements = new String[] {tempDir.toString()};
-        
-        URLClassLoader classLoader = ClassLoaderTestUtils.createIsolatedClassLoader(classpathElements);
-        
+
+        URLClassLoader classLoader =
+                ClassLoaderTestUtils.createIsolatedClassLoader(classpathElements);
+
         assertThat(classLoader).isNotNull();
         assertThat(classLoader.getParent()).isNull(); // Isolated class loader has no parent
     }
@@ -44,14 +43,16 @@ public class ClassLoaderTestUtilsTest {
     @Test
     void testVerifyClassLoaderIsolation() throws Exception {
         String[] classpathElements = new String[] {tempDir.toString()};
-        
-        URLClassLoader classLoader1 = ClassLoaderTestUtils.createIsolatedClassLoader(classpathElements);
-        URLClassLoader classLoader2 = ClassLoaderTestUtils.createIsolatedClassLoader(classpathElements);
-        
+
+        URLClassLoader classLoader1 =
+                ClassLoaderTestUtils.createIsolatedClassLoader(classpathElements);
+        URLClassLoader classLoader2 =
+                ClassLoaderTestUtils.createIsolatedClassLoader(classpathElements);
+
         // Load the same class from both class loaders (using system class loader as fallback)
         Class<?> class1 = classLoader1.loadClass("java.lang.String");
         Class<?> class2 = classLoader2.loadClass("java.lang.String");
-        
+
         // They should be the same since they're loaded from the bootstrap class loader
         // But let's test the utility method anyway
         boolean isolated = ClassLoaderTestUtils.verifyClassLoaderIsolation(class1, class2);
@@ -63,10 +64,11 @@ public class ClassLoaderTestUtilsTest {
     void testCreateClassLoaderWithExclusions() {
         String[] classpathElements = new String[] {tempDir.toString()};
         String[] excludedPackages = {"java.lang", "java.util"};
-        
-        URLClassLoader classLoader = ClassLoaderTestUtils.createClassLoaderWithExclusions(
-            excludedPackages, classpathElements);
-        
+
+        URLClassLoader classLoader =
+                ClassLoaderTestUtils.createClassLoaderWithExclusions(
+                        excludedPackages, classpathElements);
+
         assertThat(classLoader).isNotNull();
     }
 }

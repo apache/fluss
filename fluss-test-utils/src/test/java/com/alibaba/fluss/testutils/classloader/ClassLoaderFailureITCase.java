@@ -16,8 +16,6 @@
 
 package com.alibaba.fluss.testutils.classloader;
 
-import com.alibaba.fluss.testutils.classloader.ClassLoaderTestUtils.ClassLoadingException;
-
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
@@ -31,10 +29,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Integration test for class loading failure scenarios.
  *
- * <p>This test verifies:
- * 1. Missing dependency class loading
- * 2. Version incompatibility class loading
- * 3. ClassNotFoundException handling
+ * <p>This test verifies: 1. Missing dependency class loading 2. Version incompatibility class
+ * loading 3. ClassNotFoundException handling
  */
 public class ClassLoaderFailureITCase {
 
@@ -43,18 +39,19 @@ public class ClassLoaderFailureITCase {
     @Test
     void testMissingDependencyClassLoading() {
         // Test class loading when dependencies are missing
-        URLClassLoader isolatedClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(
-                tempDir.toString());
-        
+        URLClassLoader isolatedClassLoader =
+                ClassLoaderTestUtils.createIsolatedClassLoader(tempDir.toString());
+
         // Try to load a class that doesn't exist
-        Supplier<Class<?>> classSupplier = ClassLoaderTestUtils.simulateClassLoadingFailure(
-                "com.nonexistent.Class", isolatedClassLoader);
-        
+        Supplier<Class<?>> classSupplier =
+                ClassLoaderTestUtils.simulateClassLoadingFailure(
+                        "com.nonexistent.Class", isolatedClassLoader);
+
         // Verify that it throws an exception
         assertThatThrownBy(classSupplier::get)
                 .isInstanceOf(RuntimeException.class)
                 .hasMessageContaining("Failed to load class");
-        
+
         // Clean up
         ClassLoaderTestUtils.verifyClassLoaderCleanup(isolatedClassLoader);
     }
@@ -62,24 +59,24 @@ public class ClassLoaderFailureITCase {
     @Test
     void testVersionIncompatibilityClassLoading() {
         // Test version incompatibility scenarios
-        URLClassLoader version1ClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(
-                tempDir.toString());
-        URLClassLoader version2ClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(
-                tempDir.toString());
-        
+        URLClassLoader version1ClassLoader =
+                ClassLoaderTestUtils.createIsolatedClassLoader(tempDir.toString());
+        URLClassLoader version2ClassLoader =
+                ClassLoaderTestUtils.createIsolatedClassLoader(tempDir.toString());
+
         // Load the same class name from different class loaders
-        Supplier<Class<?>> classSupplier1 = ClassLoaderTestUtils.simulateClassLoadingFailure(
-                "com.alibaba.fluss.TestClass", version1ClassLoader);
-        Supplier<Class<?>> classSupplier2 = ClassLoaderTestUtils.simulateClassLoadingFailure(
-                "com.alibaba.fluss.TestClass", version2ClassLoader);
-        
+        Supplier<Class<?>> classSupplier1 =
+                ClassLoaderTestUtils.simulateClassLoadingFailure(
+                        "com.alibaba.fluss.TestClass", version1ClassLoader);
+        Supplier<Class<?>> classSupplier2 =
+                ClassLoaderTestUtils.simulateClassLoadingFailure(
+                        "com.alibaba.fluss.TestClass", version2ClassLoader);
+
         // Both should throw ClassNotFoundException since the classes don't actually exist
-        assertThatThrownBy(classSupplier1::get)
-                .isInstanceOf(RuntimeException.class);
-        
-        assertThatThrownBy(classSupplier2::get)
-                .isInstanceOf(RuntimeException.class);
-        
+        assertThatThrownBy(classSupplier1::get).isInstanceOf(RuntimeException.class);
+
+        assertThatThrownBy(classSupplier2::get).isInstanceOf(RuntimeException.class);
+
         // But they should be different exceptions
         try {
             classSupplier1.get();
@@ -90,7 +87,7 @@ public class ClassLoaderFailureITCase {
                 assertThat(e1).isNotEqualTo(e2);
             }
         }
-        
+
         // Clean up
         ClassLoaderTestUtils.verifyClassLoaderCleanup(version1ClassLoader);
         ClassLoaderTestUtils.verifyClassLoaderCleanup(version2ClassLoader);
@@ -99,13 +96,13 @@ public class ClassLoaderFailureITCase {
     @Test
     void testClassNotFoundExceptionHandling() {
         // Test explicit ClassNotFoundException handling
-        URLClassLoader isolatedClassLoader = ClassLoaderTestUtils.createIsolatedClassLoader(
-                tempDir.toString());
-        
+        URLClassLoader isolatedClassLoader =
+                ClassLoaderTestUtils.createIsolatedClassLoader(tempDir.toString());
+
         // Try to load a class that doesn't exist
         assertThatThrownBy(() -> isolatedClassLoader.loadClass("com.nonexistent.Class"))
                 .isInstanceOf(ClassNotFoundException.class);
-        
+
         // Clean up
         ClassLoaderTestUtils.verifyClassLoaderCleanup(isolatedClassLoader);
     }
