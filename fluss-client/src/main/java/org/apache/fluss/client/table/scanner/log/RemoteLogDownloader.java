@@ -62,6 +62,7 @@ public class RemoteLogDownloader implements Closeable {
     private static final Logger LOG = LoggerFactory.getLogger(RemoteLogDownloader.class);
 
     private static final long POLL_TIMEOUT = 5000L;
+    private static final int MAX_RETRY_COUNT = 5;
 
     private final Path localLogDir;
 
@@ -151,51 +152,56 @@ public class RemoteLogDownloader implements Closeable {
             return;
         }
 
-        try {
-            // 1. cleanup the finished logs first to free up disk space
-            cleanupRemoteLogs();
+        // the semaphore will only be released after the remote file are downloaded to local
+        // successfully.
+        downloadRemoteLog(request, MAX_RETRY_COUNT, System.currentTimeMillis());
+    }
 
-            // 2. do the actual download work
-            FsPathAndFileName fsPathAndFileName = request.getFsPathAndFileName();
-            scannerMetricGroup.remoteFetchRequestCount().inc();
+    private void downloadRemoteLog(
+            RemoteLogDownloadRequest request, int retryCount, long startTime) {
+        // 1. cleanup the finished logs first to free up disk space
+        cleanupRemoteLogs();
 
-            long startTime = System.currentTimeMillis();
-            // download the remote file to local
-            remoteFileDownloader
-                    .downloadFileAsync(fsPathAndFileName, localLogDir)
-                    .whenComplete(
-                            (bytes, throwable) -> {
-                                if (throwable != null) {
-                                    LOG.error(
-                                            "Failed to download remote log segment file {}.",
-                                            fsPathAndFileName.getFileName(),
-                                            ExceptionUtils.stripExecutionException(throwable));
-                                    // release the semaphore for the failed request
-                                    prefetchSemaphore.release();
-                                    // add back the request to the queue,
-                                    // so we do not complete the request.future here
-                                    segmentsToFetch.add(request);
-                                    scannerMetricGroup.remoteFetchErrorCount().inc();
-                                } else {
-                                    LOG.info(
-                                            "Successfully downloaded remote log segment file {} to local cost {} ms.",
-                                            fsPathAndFileName.getFileName(),
-                                            System.currentTimeMillis() - startTime);
-                                    File localFile =
-                                            new File(
-                                                    localLogDir.toFile(),
-                                                    fsPathAndFileName.getFileName());
-                                    scannerMetricGroup.remoteFetchBytes().inc(bytes);
-                                    request.future.complete(localFile);
-                                }
-                            });
-        } catch (Throwable t) {
-            prefetchSemaphore.release();
-            // add back the request to the queue
-            segmentsToFetch.add(request);
-            scannerMetricGroup.remoteFetchErrorCount().inc();
-            // log the error and continue instead of shutdown the download thread
-            LOG.error("Failed to download remote log segment.", t);
+        // 2. do the actual download work
+        FsPathAndFileName fsPathAndFileName = request.getFsPathAndFileName();
+        scannerMetricGroup.remoteFetchRequestCount().inc();
+        remoteFileDownloader
+                .downloadFileAsync(fsPathAndFileName, localLogDir)
+                .whenComplete(
+                        (bytes, throwable) -> {
+                            if (throwable != null) {
+                                handleFetchException(request, throwable, retryCount, startTime);
+                            } else {
+                                LOG.info(
+                                        "Successfully downloaded remote log segment file {} to local cost {} ms.",
+                                        fsPathAndFileName.getFileName(),
+                                        System.currentTimeMillis() - startTime);
+                                File localFile =
+                                        new File(
+                                                localLogDir.toFile(),
+                                                fsPathAndFileName.getFileName());
+                                scannerMetricGroup.remoteFetchBytes().inc(bytes);
+                                request.future.complete(localFile);
+                            }
+                        });
+    }
+
+    private void handleFetchException(
+            RemoteLogDownloadRequest request, Throwable throwable, int retryCount, long startTime) {
+        LOG.error(
+                "Failed to download remote log segment file {}.",
+                request.getFsPathAndFileName().getFileName(),
+                ExceptionUtils.stripExecutionException(throwable));
+        scannerMetricGroup.remoteFetchErrorCount().inc();
+        if (retryCount <= 0) {
+            downloadRemoteLog(request, retryCount - 1, startTime);
+        } else {
+            request.future.completeExceptionally(
+                    new IOException(
+                            String.format(
+                                    "Failed to download remote log segment file %s, retry count %d",
+                                    request.getFsPathAndFileName().getFileName(), MAX_RETRY_COUNT),
+                            throwable));
         }
     }
 
