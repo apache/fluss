@@ -410,34 +410,7 @@ hdfs://namenode:8020/fluss-data
         │           ├── 7b21a889-ab06-4b74-98a5-36b542a67d0d
         │           └── d7b699d9-6547-49fc-b579-de84cc37a167
         ├── fluss_customer-1
-        │   └── 0
-        │       ├── shared
-        │       │   └── e537da08-ad8c-478d-9b80-505616e481b9
-        │       └── snap-0
-        │           ├── _METADATA
-        │           ├── 34a2dea2-8079-483f-b6d8-003a6e01bd3f
-        │           ├── b196e58d-7df2-4c95-b4fb-b1c3ebb4c622
-        │           └── f6ff8a01-d7dc-451d-a0e7-716392808405
-        ├── fluss_nation-2
-        │   └── 0
-        │       ├── shared
-        │       │   └── fd7c1369-fa5d-4396-9610-216f0affb213
-        │       └── snap-0
-        │           ├── _METADATA
-        │           ├── 0808acec-65d4-451c-b8fd-2225f045ad6d
-        │           ├── 181f67c8-0620-4e9a-9367-2a1c774b4abd
-        │           └── 5690e21f-3322-486c-93f5-5669d595cf34
-        └── fluss_order-0
-            └── 0
-                ├── shared
-                │   ├── 29affd1e-ca99-4cc5-a855-61d3c1b2c9a5
-                │   ├── 546a6113-0a63-4a17-964c-d8e37c32acc0
-                │   └── 6d9b6ddb-a2c1-4746-aedd-3217a9f51686
-                └── snap-2
-                    ├── _METADATA
-                    ├── 3fb7b4e9-9d66-44b6-b846-dba77514a1c7
-                    ├── 450997ac-8323-4708-a4ac-6bb2e71834a7
-                    └── f2b4b230-41e9-41dd-9227-337e324460a6
+        ... # Remaining entries omitted for brevity
 ```
 
 ## Integrate with Iceberg
