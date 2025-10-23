@@ -2,7 +2,26 @@
 
 > Apache Fluss (Incubating) is a streaming storage built for real-time analytics which can serve as the real-time data layer for Lakehouse architectures. 
 
-**Note:** We are currently preparing for the first release under the Apache Incubator. Previous releases were non-Apache releases.
+Apache Fluss 0.8.0 is the latest stable release.
+
+## Helm Chart
+Repo: https://downloads.apache.org/incubator/fluss/helm-chart
+
+## Apache Fluss 0.8.0
+| Artifact | Signature | SHA |
+|----------|---------|---------|
+| [Fluss Binary Release](https://downloads.apache.org/incubator/fluss/0.8.0-incubating/fluss-0.8.0-incubating-bin.tgz) | [.asc](https://downloads.apache.org/incubator/fluss/0.8.0-incubating/fluss-0.8.0-incubating-bin.tgz.asc) | [.sha512](https://downloads.apache.org/incubator/fluss/0.8.0-incubating/fluss-0.8.0-incubating-bin.tgz.sha512) |
+| [Fluss Source Release](https://downloads.apache.org/incubator/fluss/0.8.0-incubating/fluss-0.8.0-incubating-src.tgz) | [.asc](https://downloads.apache.org/incubator/fluss/0.8.0-incubating/fluss-0.8.0-incubating-src.tgz.asc) | [.sha512](https://downloads.apache.org/incubator/fluss/0.8.0-incubating/fluss-0.8.0-incubating-src.tgz.sha512) |
+| [Fluss Helm Chart](https://downloads.apache.org/incubator/fluss/helm-chart/0.8.0-incubating/fluss-0.8.0-incubating.tgz) | [.asc](https://downloads.apache.org/incubator/fluss/helm-chart/0.8.0-incubating/fluss-0.8.0-incubating.tgz.asc) | [.sha512](https://downloads.apache.org/incubator/fluss/helm-chart/0.8.0-incubating/fluss-0.8.0-incubating.tgz.sha512) |
+| [Fluss Tiering Service Jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/0.8.0-incubating/fluss-flink-tiering-0.8.0-incubating.jar) | [.asc](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/0.8.0-incubating/fluss-flink-tiering-0.8.0-incubating.jar.asc) | [.sha1](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-tiering/0.8.0-incubating/fluss-flink-tiering-0.8.0-incubating.jar.sha1) |
+| [Connector Jar for Flink 1.20](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/0.8.0-incubating/fluss-flink-1.20-0.8.0-incubating.jar) | [.asc](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/0.8.0-incubating/fluss-flink-1.20-0.8.0-incubating.jar.asc) | [.sha1](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.20/0.8.0-incubating/fluss-flink-1.20-0.8.0-incubating.jar.sha1) |
+| [Connector Jar for Flink 1.19](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.19/0.8.0-incubating/fluss-flink-1.19-0.8.0-incubating.jar) | [.asc](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.19/0.8.0-incubating/fluss-flink-1.19-0.8.0-incubating.jar.asc) | [.sha1](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.19/0.8.0-incubating/fluss-flink-1.19-0.8.0-incubating.jar.sha1) |
+| [Connector Jar for Flink 1.18](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.18/0.8.0-incubating/fluss-flink-1.18-0.8.0-incubating.jar) | [.asc](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.18/0.8.0-incubating/fluss-flink-1.18-0.8.0-incubating.jar.asc) | [.sha1](https://repo1.maven.org/maven2/org/apache/fluss/fluss-flink-1.18/0.8.0-incubating/fluss-flink-1.18-0.8.0-incubating.jar.sha1) |
+| [Filesystem Jar for S3](https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-s3/0.8.0-incubating/fluss-fs-s3-0.8.0-incubating.jar) | [.asc](https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-s3/0.8.0-incubating/fluss-fs-s3-0.8.0-incubating.jar.asc) | [.sha1](https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-s3/0.8.0-incubating/fluss-fs-s3-0.8.0-incubating.jar.sha1) |
+| [Filesystem Jar for OSS](https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-oss/0.8.0-incubating/fluss-fs-oss-0.8.0-incubating.jar) | [.asc](https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-oss/0.8.0-incubating/fluss-fs-oss-0.8.0-incubating.jar.asc) | [.sha1](https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-oss/0.8.0-incubating/fluss-fs-oss-0.8.0-incubating.jar.sha1) |
+| [Filesystem Jar for HDFS](https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-hdfs/0.8.0-incubating/fluss-fs-hdfs-0.8.0-incubating.jar) | [.asc](https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-hdfs/0.8.0-incubating/fluss-fs-hdfs-0.8.0-incubating.jar.asc) | [.sha1](https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-hdfs/0.8.0-incubating/fluss-fs-hdfs-0.8.0-incubating.jar.sha1) |
+
+------------------
 
 ## Previous Releases (Non-Apache)
 
