@@ -61,23 +61,55 @@ services:
     restart: always
     image: zookeeper:3.9.2
 
+  namenode:
+    image: apache/hadoop:3.3.6
+    hostname: namenode
+    user: root
+    command: [ "hdfs", "namenode" ]
+    ports:
+      - 9870:9870
+      - 8020:8020
+    environment:
+      ENSURE_NAMENODE_DIR: "/tmp/hadoop/dfs/name"
+      CORE-SITE.XML_fs.defaultFS: hdfs://namenode:8020
+      CORE-SITE.XML_hadoop.tmp.dir: /hadoop/tmp
+      HDFS-SITE.XML_dfs.namenode.rpc-address: namenode:8020
+      HDFS-SITE.XML_dfs.replication: 1
+      HDFS-SITE.XML_dfs.permissions.enabled: false
+      HDFS-SITE.XML_dfs.datanode.address: datanode:9866
+
+  datanode:
+    image: apache/hadoop:3.3.6
+    user: root
+    command: [ "hdfs", "datanode" ]
+    environment:
+      CORE-SITE.XML_fs.defaultFS: hdfs://namenode:8020
+      CORE-SITE.XML_hadoop.tmp.dir: /hadoop/tmp
+      HDFS-SITE.XML_dfs.namenode.rpc-address: namenode:8020
+      HDFS-SITE.XML_dfs.replication: 1
+      HDFS-SITE.XML_dfs.permissions.enabled: false
+      HDFS-SITE.XML_dfs.datanode.address: datanode:9866
+    depends_on:
+      - namenode
+  
   coordinator-server:
     image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     depends_on:
       - zookeeper
+      - namenode
+      - datanode
     environment:
       - |
         FLUSS_PROPERTIES=
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://coordinator-server:9123
-        remote.data.dir: /tmp/fluss/remote-data
+        remote.data.dir: hdfs://namenode:8020/fluss-data
         datalake.format: iceberg
         datalake.iceberg.type: hadoop
-        datalake.iceberg.warehouse: /tmp/iceberg
+        datalake.iceberg.warehouse: hdfs://namenode:8020/fluss-lake
     volumes:
-      - shared-tmpfs:/tmp/iceberg
       - ./lib:/tmp/lib
-    entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/fluss/plugins/iceberg/ && exec /docker-entrypoint.sh coordinatorServer"]
+    entrypoint: [ "sh", "-c", "cp -v /tmp/lib/*.jar /opt/fluss/plugins/iceberg/ && exec /docker-entrypoint.sh coordinatorServer" ]
 
   tablet-server:
     image: fluss/fluss:$FLUSS_DOCKER_VERSION$
@@ -90,13 +122,11 @@ services:
         zookeeper.address: zookeeper:2181
         bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
-        remote.data.dir: /tmp/fluss/remote-data
-        kv.snapshot.interval: 0s
+        remote.data.dir: hdfs://namenode:8020/fluss-data
+        kv.snapshot.interval: 10s
         datalake.format: iceberg
         datalake.iceberg.type: hadoop
-        datalake.iceberg.warehouse: /tmp/iceberg
-    volumes:
-      - shared-tmpfs:/tmp/iceberg
+        datalake.iceberg.warehouse: hdfs://namenode:8020/fluss-lake
 
   jobmanager:
     image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
@@ -107,8 +137,6 @@ services:
       - |
         FLINK_PROPERTIES=
         jobmanager.rpc.address: jobmanager
-    volumes:
-      - shared-tmpfs:/tmp/iceberg
 
   taskmanager:
     image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
@@ -122,15 +150,6 @@ services:
         taskmanager.numberOfTaskSlots: 10
         taskmanager.memory.process.size: 2048m
         taskmanager.memory.framework.off-heap.size: 256m
-    volumes:
-      - shared-tmpfs:/tmp/iceberg
-
-volumes:
-  shared-tmpfs:
-    driver: local
-    driver_opts:
-      type: "tmpfs"
-      device: "tmpfs"
 ```
 
 The Docker Compose environment consists of the following containers:
@@ -367,6 +386,60 @@ The following SQL query should return an empty result.
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
 
+### Storage
+
+Finally, you can use the following command to view the fluss kv snapshot stored in fluss remote storage:
+```shell
+docker compose exec namenode hdfs dfs -ls -R /fluss-data/ | awk '{print $8}' | grep -v '^$' | tree --fromfile .
+```
+
+**Sample Output:**
+```shell
+hdfs://namenode:8020/fluss-data
+└── kv
+    └── fluss
+        ├── enriched_orders-3
+        │   └── 0
+        │       ├── shared
+        │       │   ├── 0836f202-bdcd-498b-a94a-0520beb3d7ea
+        │       │   ├── afefc29f-d8d3-4cdb-a496-a6c271ddfac0
+        │       │   └── b67bd402-2ad4-4305-bd36-4fadf08a5200
+        │       └── snap-2
+        │           ├── _METADATA
+        │           ├── 02f02528-af03-4c88-980c-ec9f878d5476
+        │           ├── 7b21a889-ab06-4b74-98a5-36b542a67d0d
+        │           └── d7b699d9-6547-49fc-b579-de84cc37a167
+        ├── fluss_customer-1
+        │   └── 0
+        │       ├── shared
+        │       │   └── e537da08-ad8c-478d-9b80-505616e481b9
+        │       └── snap-0
+        │           ├── _METADATA
+        │           ├── 34a2dea2-8079-483f-b6d8-003a6e01bd3f
+        │           ├── b196e58d-7df2-4c95-b4fb-b1c3ebb4c622
+        │           └── f6ff8a01-d7dc-451d-a0e7-716392808405
+        ├── fluss_nation-2
+        │   └── 0
+        │       ├── shared
+        │       │   └── fd7c1369-fa5d-4396-9610-216f0affb213
+        │       └── snap-0
+        │           ├── _METADATA
+        │           ├── 0808acec-65d4-451c-b8fd-2225f045ad6d
+        │           ├── 181f67c8-0620-4e9a-9367-2a1c774b4abd
+        │           └── 5690e21f-3322-486c-93f5-5669d595cf34
+        └── fluss_order-0
+            └── 0
+                ├── shared
+                │   ├── 29affd1e-ca99-4cc5-a855-61d3c1b2c9a5
+                │   ├── 546a6113-0a63-4a17-964c-d8e37c32acc0
+                │   └── 6d9b6ddb-a2c1-4746-aedd-3217a9f51686
+                └── snap-2
+                    ├── _METADATA
+                    ├── 3fb7b4e9-9d66-44b6-b846-dba77514a1c7
+                    ├── 450997ac-8323-4708-a4ac-6bb2e71834a7
+                    └── f2b4b230-41e9-41dd-9227-337e324460a6
+```
+
 ## Integrate with Iceberg
 ### Start the Lakehouse Tiering Service
 To integrate with [Apache Iceberg](https://iceberg.apache.org/), you need to start the `Lakehouse Tiering Service`.
@@ -378,7 +451,7 @@ docker compose exec jobmanager \
     --fluss.bootstrap.servers coordinator-server:9123 \
     --datalake.format iceberg \
     --datalake.iceberg.type hadoop \
-    --datalake.iceberg.warehouse /tmp/iceberg
+    --datalake.iceberg.warehouse hdfs://namenode:8020/fluss-lake
 ```
 You should see a Flink Job to tier data from Fluss to Iceberg running in the [Flink Web UI](http://localhost:8083/).
 
@@ -501,20 +574,27 @@ SELECT sum(total_price) as sum_price FROM datalake_enriched_orders;
 
 You can execute the real-time analytics query multiple times, and the results will vary with each run as new data is continuously written to Fluss in real-time.
 
-Finally, you can use the following command to view the files stored in Iceberg:
+### Storage
+
+Finally, you can use the following command to view the files stored in Iceberg Hadoop warehouse:
 ```shell
-docker compose exec taskmanager tree /tmp/iceberg/fluss
+docker compose exec namenode hdfs dfs -ls -R /fluss-lake/ | awk '{print $8}' | grep -v '^$' | tree --fromfile .
 ```
 
 **Sample Output:**
 ```shell
-/tmp/iceberg/fluss
-└── datalake_enriched_orders
-    ├── data
-    │   └── 00000-0-abc123.parquet
-    └── metadata
-        ├── snap-1234567890123456789-1-abc123.avro
-        └── v1.metadata.json
+hdfs://namenode:8020/fluss-lake
+└── fluss
+    └── datalake_enriched_orders
+        ├── data
+        │   └── __bucket=0
+        │       └── 00000-0-3ff95845-47af-456f-83e0-8411576cfffe-00001.parquet
+        └── metadata
+            ├── 528ae521-d683-4c5e-8dd7-779a83dd9c6f-m0.avro
+            ├── snap-3496049107217731071-1-528ae521-d683-4c5e-8dd7-779a83dd9c6f.avro
+            ├── v1.metadata.json
+            ├── v2.metadata.json
+            └── version-hint.text
 ```
 The files adhere to Iceberg's standard format, enabling seamless querying with other engines such as [Spark](https://iceberg.apache.org/docs/latest/spark-queries/) and [Trino](https://trino.io/docs/current/connector/iceberg.html).
 
