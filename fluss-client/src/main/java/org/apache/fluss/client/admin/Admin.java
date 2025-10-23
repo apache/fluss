@@ -510,12 +510,12 @@ public interface Admin extends AutoCloseable {
      * <p>If one tabletServer failed adding tag, none of the tags will take effect.
      *
      * <ul>
-     *   <li>{@link AuthorizationException} If the authenticated user doesn't have reset config
-     *       access to the cluster.
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
+     *       permissions.
      *   <li>{@link ServerNotExistException} If the tabletServer in {@code tabletServers} does not
      *       exist.
-     *   <li>{@link ServerTagAlreadyExistException} If the server tag already exists when {@code
-     *       overWriteIfExists} is false.
+     *   <li>{@link ServerTagAlreadyExistException} If the server tag already exists for any one of
+     *       the tabletServers.
      * </ul>
      *
      * @param tabletServers the tabletServers we want to add server tags.
@@ -529,12 +529,12 @@ public interface Admin extends AutoCloseable {
      * <p>If one tabletServer failed removing tag, none of the tags will be removed.
      *
      * <ul>
-     *   <li>{@link AuthorizationException} If the authenticated user doesn't have reset config
-     *       access to the cluster.
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
+     *       permissions.
      *   <li>{@link ServerNotExistException} If the tabletServer in {@code tabletServers} does not
      *       exist.
-     *   <li>{@link ServerTagNotExistException} If the server tag does not exist when {@code
-     *       overWriteIfExists} is false.
+     *   <li>{@link ServerTagNotExistException} If the server tag does not exist for any one of the
+     *       tabletServers.
      * </ul>
      *
      * @param tabletServers the tabletServers we want to remove server tags.
@@ -552,8 +552,8 @@ public interface Admin extends AutoCloseable {
      * rebalance task exists, an {@link RebalanceFailureException} will be thrown.
      *
      * <ul>
-     *   <li>{@link AuthorizationException} If the authenticated user doesn't have reset config
-     *       access to the cluster.
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
+     *       permissions.
      *   <li>{@link RebalanceFailureException} If the rebalance failed. Such as there is an ongoing
      *       execution.
      * </ul>
@@ -570,8 +570,8 @@ public interface Admin extends AutoCloseable {
      * List the rebalance process.
      *
      * <ul>
-     *   <li>{@link AuthorizationException} If the authenticated user doesn't have reset config
-     *       access to the cluster.
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
+     *       permissions.
      *   <li>{@link NoRebalanceInProgressException} If there are no rebalance tasks in progress.
      * </ul>
      *
@@ -583,8 +583,8 @@ public interface Admin extends AutoCloseable {
      * Cannel the rebalance task.
      *
      * <ul>
-     *   <li>{@link AuthorizationException} If the authenticated user doesn't have reset config
-     *       access to the cluster.
+     *   <li>{@link AuthorizationException} If the authenticated user doesn't have cluster
+     *       permissions.
      *   <li>{@link NoRebalanceInProgressException} If there are no rebalance tasks in progress.
      * </ul>
      */
