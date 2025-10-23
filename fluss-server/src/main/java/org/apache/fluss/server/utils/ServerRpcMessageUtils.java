@@ -20,6 +20,8 @@ package org.apache.fluss.server.utils;
 import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ConfigEntry;
@@ -32,6 +34,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
+import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.BytesViewLogRecords;
 import org.apache.fluss.record.DefaultKvRecordBatch;
@@ -70,6 +73,7 @@ import org.apache.fluss.rpc.messages.ListAclsResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListOffsetsResponse;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
+import org.apache.fluss.rpc.messages.ListRebalanceProcessResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.LookupResponse;
 import org.apache.fluss.rpc.messages.MetadataResponse;
@@ -113,6 +117,10 @@ import org.apache.fluss.rpc.messages.PbProduceLogReqForBucket;
 import org.apache.fluss.rpc.messages.PbProduceLogRespForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvReqForBucket;
 import org.apache.fluss.rpc.messages.PbPutKvRespForBucket;
+import org.apache.fluss.rpc.messages.PbRebalancePlanForBucket;
+import org.apache.fluss.rpc.messages.PbRebalancePlanForTable;
+import org.apache.fluss.rpc.messages.PbRebalanceProcessForBucket;
+import org.apache.fluss.rpc.messages.PbRebalanceProcessForTable;
 import org.apache.fluss.rpc.messages.PbRemoteLogSegment;
 import org.apache.fluss.rpc.messages.PbRemotePathAndLocalFile;
 import org.apache.fluss.rpc.messages.PbServerNode;
@@ -129,6 +137,7 @@ import org.apache.fluss.rpc.messages.ProduceLogRequest;
 import org.apache.fluss.rpc.messages.ProduceLogResponse;
 import org.apache.fluss.rpc.messages.PutKvRequest;
 import org.apache.fluss.rpc.messages.PutKvResponse;
+import org.apache.fluss.rpc.messages.RebalanceResponse;
 import org.apache.fluss.rpc.messages.StopReplicaRequest;
 import org.apache.fluss.rpc.messages.StopReplicaResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
@@ -160,6 +169,7 @@ import org.apache.fluss.server.metadata.TableMetadata;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
 import org.apache.fluss.server.zk.data.LakeTableSnapshot;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.RebalancePlan;
 
 import javax.annotation.Nullable;
 
@@ -176,6 +186,7 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
+import java.util.function.BiConsumer;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -1690,6 +1701,142 @@ public class ServerRpcMessageUtils {
                             return pbDescribeConfig;
                         })
                 .collect(Collectors.toList());
+    }
+
+    public static RebalanceResponse makeRebalanceRespose(RebalancePlan rebalancePlan) {
+        RebalanceResponse response = new RebalanceResponse();
+        List<PbRebalancePlanForTable> planForTables = new ArrayList<>();
+
+        // for none-partitioned tables.
+        for (Map.Entry<Long, List<RebalancePlanForBucket>> planForTable :
+                rebalancePlan.getPlanForBuckets().entrySet()) {
+            PbRebalancePlanForTable pbRebalancePlanForTable =
+                    response.addPlanForTable().setTableId(planForTable.getKey());
+            List<PbRebalancePlanForBucket> planForBuckets = new ArrayList<>();
+            planForTable
+                    .getValue()
+                    .forEach(
+                            planForBucket ->
+                                    planForBuckets.add(toPbRebalancePlanForBucket(planForBucket)));
+            pbRebalancePlanForTable.addAllBucketsPlans(planForBuckets);
+            planForTables.add(pbRebalancePlanForTable);
+        }
+        response.addAllPlanForTables(planForTables);
+
+        // for partitioned tables.
+        Map<Long, Map<Long, List<PbRebalancePlanForBucket>>> planForBucketsOfPartitionedTable =
+                new HashMap<>();
+        for (Map.Entry<TablePartition, List<RebalancePlanForBucket>> planForTable :
+                rebalancePlan.getPlanForBucketsOfPartitionedTable().entrySet()) {
+            Map<Long, List<PbRebalancePlanForBucket>> bucketsPlanForPartition =
+                    planForBucketsOfPartitionedTable.computeIfAbsent(
+                            planForTable.getKey().getTableId(), k -> new HashMap<>());
+            bucketsPlanForPartition.put(
+                    planForTable.getKey().getPartitionId(),
+                    planForTable.getValue().stream()
+                            .map(ServerRpcMessageUtils::toPbRebalancePlanForBucket)
+                            .collect(Collectors.toList()));
+        }
+
+        for (Map.Entry<Long, Map<Long, List<PbRebalancePlanForBucket>>> planForPartition :
+                planForBucketsOfPartitionedTable.entrySet()) {
+            PbRebalancePlanForTable pbRebalancePlanForTable =
+                    response.addPlanForTable().setTableId(planForPartition.getKey());
+            planForPartition
+                    .getValue()
+                    .forEach(
+                            (partitionId, planForBuckets) ->
+                                    pbRebalancePlanForTable
+                                            .addPartitionsPlan()
+                                            .setPartitionId(partitionId)
+                                            .addAllBucketsPlans(planForBuckets));
+        }
+        return response;
+    }
+
+    private static PbRebalancePlanForBucket toPbRebalancePlanForBucket(
+            RebalancePlanForBucket planForBucket) {
+        PbRebalancePlanForBucket pbRebalancePlanForBucket =
+                new PbRebalancePlanForBucket()
+                        .setBucketId(planForBucket.getBucketId())
+                        .setOriginalLeader(planForBucket.getOriginalLeader())
+                        .setNewLeader(planForBucket.getNewLeader());
+        pbRebalancePlanForBucket
+                .setOriginalReplicas(
+                        planForBucket.getOriginReplicas().stream()
+                                .mapToInt(Integer::intValue)
+                                .toArray())
+                .setNewReplicas(
+                        planForBucket.getNewReplicas().stream()
+                                .mapToInt(Integer::intValue)
+                                .toArray());
+        return pbRebalancePlanForBucket;
+    }
+
+    public static ListRebalanceProcessResponse makeListRebalanceProcessResponse(
+            Map<TableBucket, RebalanceResultForBucket> ongoingRebalanceTasks,
+            Map<TableBucket, RebalanceResultForBucket> finishedRebalanceTasks) {
+        ListRebalanceProcessResponse response = new ListRebalanceProcessResponse();
+
+        Map<Long, List<PbRebalanceProcessForBucket>> processForTables = new HashMap<>();
+        Map<Long, Map<Long, List<PbRebalanceProcessForBucket>>> processForPartitions =
+                new HashMap<>();
+
+        BiConsumer<TableBucket, RebalanceResultForBucket> collectProcessResult =
+                (tableBucket, rebalanceResultForBucket) -> {
+                    if (tableBucket.getPartitionId() == null) {
+                        processForTables
+                                .computeIfAbsent(tableBucket.getTableId(), k -> new ArrayList<>())
+                                .add(
+                                        toPbRebalanceProcessForBucket(
+                                                tableBucket, rebalanceResultForBucket));
+                    } else {
+                        processForPartitions
+                                .computeIfAbsent(tableBucket.getTableId(), k -> new HashMap<>())
+                                .computeIfAbsent(
+                                        tableBucket.getPartitionId(), k -> new ArrayList<>())
+                                .add(
+                                        toPbRebalanceProcessForBucket(
+                                                tableBucket, rebalanceResultForBucket));
+                    }
+                };
+
+        ongoingRebalanceTasks.forEach(collectProcessResult);
+        finishedRebalanceTasks.forEach(collectProcessResult);
+
+        processForTables.forEach(
+                (tableId, processForBuckets) ->
+                        response.addProcessForTable()
+                                .setTableId(tableId)
+                                .addAllBucketsProcesses(processForBuckets));
+        processForPartitions.forEach(
+                (tableId, processForPartition) -> {
+                    PbRebalanceProcessForTable processForTable =
+                            response.addProcessForTable().setTableId(tableId);
+                    processForPartition.forEach(
+                            (partitionId, processForBuckets) ->
+                                    processForTable
+                                            .addPartitionsProcess()
+                                            .setPartitionId(partitionId)
+                                            .addAllBucketsProcesses(processForBuckets));
+                });
+
+        return response;
+    }
+
+    private static PbRebalanceProcessForBucket toPbRebalanceProcessForBucket(
+            TableBucket tableBucket, RebalanceResultForBucket rebalanceResultForBucket) {
+        return new PbRebalanceProcessForBucket()
+                .setBucketId(tableBucket.getBucket())
+                .setOriginalReplicas(
+                        rebalanceResultForBucket.originReplicas().stream()
+                                .mapToInt(Integer::intValue)
+                                .toArray())
+                .setNewReplicas(
+                        rebalanceResultForBucket.newReplicas().stream()
+                                .mapToInt(Integer::intValue)
+                                .toArray())
+                .setRebalanceStatus(rebalanceResultForBucket.status().getCode());
     }
 
     private static <T> Map<TableBucket, T> mergeResponse(
