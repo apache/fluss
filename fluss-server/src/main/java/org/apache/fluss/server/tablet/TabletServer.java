@@ -224,7 +224,10 @@ public class TabletServer extends ServerBase {
             // rpc client to sent request to the tablet server where the leader replica is located
             // to fetch log.
             this.clientMetricGroup =
-                    new ClientMetricGroup(metricRegistry, SERVER_NAME + "-" + serverId);
+                    new ClientMetricGroup(
+                            metricRegistry,
+                            ServerMetricUtils.validateAndGetClusterId(conf),
+                            SERVER_NAME + "-" + serverId);
             this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);
 
             this.coordinatorGateway =
