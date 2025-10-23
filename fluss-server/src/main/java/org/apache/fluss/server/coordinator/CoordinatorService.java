@@ -155,6 +155,7 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitRemot
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeListRebalanceProcessResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeRebalanceRespose;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
@@ -820,7 +821,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     @Override
     public CompletableFuture<ListRebalanceProcessResponse> listRebalanceProcess(
             ListRebalanceProcessRequest request) {
-        throw new UnsupportedOperationException("Support soon!");
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.DESCRIBE, Resource.cluster());
+        }
+
+        RebalanceManager rebalanceManager = rebalanceManagerSupplier.get();
+        return CompletableFuture.completedFuture(
+                makeListRebalanceProcessResponse(
+                        rebalanceManager.getOngoingRebalanceTasks(),
+                        rebalanceManager.getFinishedRebalanceTasks()));
     }
 
     @Override

@@ -20,11 +20,14 @@ package org.apache.fluss.client.admin;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.cluster.rebalance.GoalType;
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+import org.apache.fluss.cluster.rebalance.RebalanceResultForBucket;
 import org.apache.fluss.cluster.rebalance.ServerTag;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.replica.ReplicaManager;
@@ -38,6 +41,8 @@ import org.junit.jupiter.api.extension.RegisterExtension;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.Collections;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -130,19 +135,25 @@ public class RebalanceITCase {
         assertThat(replicaManager3.leaderCount()).isEqualTo(0);
 
         // trigger rebalance with goal set[ReplicaDistributionGoal, LeaderReplicaDistributionGoal]
-        admin.rebalance(
-                        Arrays.asList(
-                                GoalType.REPLICA_DISTRIBUTION_GOAL,
-                                GoalType.LEADER_REPLICA_DISTRIBUTION_GOAL),
-                        false)
-                .get();
+        Map<TableBucket, RebalancePlanForBucket> rebalancePlan =
+                admin.rebalance(
+                                Arrays.asList(
+                                        GoalType.REPLICA_DISTRIBUTION_GOAL,
+                                        GoalType.LEADER_REPLICA_DISTRIBUTION_GOAL),
+                                false)
+                        .get();
+
+        // verify list rebalance process
+        Map<TableBucket, RebalanceResultForBucket> rebalanceProcess =
+                admin.listRebalanceProcess().get();
+        Map<TableBucket, RebalancePlanForBucket> rebalanceProcessPlan =
+                getRebalancePlanFromResult(rebalanceProcess);
+        assertThat(rebalancePlan).containsExactlyEntriesOf(rebalanceProcessPlan);
 
         retry(
                 Duration.ofMinutes(2),
                 () -> {
-                    // TODO use admin#listRebalanceProcess to verify rebalance is finished.
-                    assertThat(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().getRebalancePlan())
-                            .isNotPresent();
+                    assertThat(admin.listRebalanceProcess().get()).isEmpty();
                     for (int i = 0; i < 4; i++) {
                         ReplicaManager replicaManager =
                                 FLUSS_CLUSTER_EXTENSION.getTabletServerById(i).getReplicaManager();
@@ -157,18 +168,20 @@ public class RebalanceITCase {
         // add server tag PERMANENT_OFFLINE for server 3, trigger all leader and replica removed
         // from server 3.
         admin.addServerTag(Collections.singletonList(3), ServerTag.PERMANENT_OFFLINE).get();
-        admin.rebalance(
-                        Arrays.asList(
-                                GoalType.REPLICA_DISTRIBUTION_GOAL,
-                                GoalType.LEADER_REPLICA_DISTRIBUTION_GOAL),
-                        false)
-                .get();
+        rebalancePlan =
+                admin.rebalance(
+                                Arrays.asList(
+                                        GoalType.REPLICA_DISTRIBUTION_GOAL,
+                                        GoalType.LEADER_REPLICA_DISTRIBUTION_GOAL),
+                                false)
+                        .get();
+        rebalanceProcess = admin.listRebalanceProcess().get();
+        rebalanceProcessPlan = getRebalancePlanFromResult(rebalanceProcess);
+        assertThat(rebalancePlan).containsExactlyEntriesOf(rebalanceProcessPlan);
         retry(
                 Duration.ofMinutes(2),
                 () -> {
-                    // TODO use admin#listRebalanceProcess to verify rebalance is finished.
-                    assertThat(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient().getRebalancePlan())
-                            .isNotPresent();
+                    assertThat(admin.listRebalanceProcess().get()).isEmpty();
                     assertThat(replicaManager3.onlineReplicas().count()).isEqualTo(0);
                     assertThat(replicaManager3.leaderCount()).isEqualTo(0);
                     for (int i = 0; i < 3; i++) {
@@ -198,5 +211,11 @@ public class RebalanceITCase {
             throws Exception {
         admin.createTable(tablePath, tableDescriptor, ignoreIfExists).get();
         return admin.getTableInfo(tablePath).get().getTableId();
+    }
+
+    private Map<TableBucket, RebalancePlanForBucket> getRebalancePlanFromResult(
+            Map<TableBucket, RebalanceResultForBucket> rebalanceProcess) {
+        return rebalanceProcess.entrySet().stream()
+                .collect(Collectors.toMap(Map.Entry::getKey, e -> e.getValue().planForBucket()));
     }
 }

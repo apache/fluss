@@ -100,6 +100,16 @@ public class RebalanceManager {
         registerRebalanceFromZookeeper();
     }
 
+    public Map<TableBucket, RebalanceResultForBucket> getOngoingRebalanceTasks() {
+        checkNotClosed();
+        return inLock(lock, () -> ongoingRebalanceTasks);
+    }
+
+    public Map<TableBucket, RebalanceResultForBucket> getFinishedRebalanceTasks() {
+        checkNotClosed();
+        return inLock(lock, () -> finishedRebalanceTasks);
+    }
+
     private void registerRebalanceFromZookeeper() {
         try {
             zkClient.getRebalancePlan()

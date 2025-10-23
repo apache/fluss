@@ -37,6 +37,10 @@ public enum RebalanceStatusForBucket {
         this.code = code;
     }
 
+    public int getCode() {
+        return code;
+    }
+
     public static RebalanceStatusForBucket of(int code) {
         for (RebalanceStatusForBucket status : RebalanceStatusForBucket.values()) {
             if (status.code == code) {

@@ -72,6 +72,7 @@ import org.apache.fluss.rpc.messages.ListDatabasesRequest;
 import org.apache.fluss.rpc.messages.ListDatabasesResponse;
 import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
+import org.apache.fluss.rpc.messages.ListRebalanceProcessRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
 import org.apache.fluss.rpc.messages.PbAlterConfig;
@@ -568,7 +569,8 @@ public class FlussAdmin implements Admin {
 
     @Override
     public CompletableFuture<Map<TableBucket, RebalanceResultForBucket>> listRebalanceProcess() {
-        throw new UnsupportedOperationException("Support soon");
+        return gateway.listRebalanceProcess(new ListRebalanceProcessRequest())
+                .thenApply(ClientRpcMessageUtils::toRebalanceProcess);
     }
 
     @Override
