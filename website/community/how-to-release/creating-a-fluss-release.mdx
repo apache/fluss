@@ -57,7 +57,7 @@ To prepare for each release, you should audit the project status in the GitHub i
 
 When contributors resolve an issue in GitHub, they are tagging it with a release milestone that will contain their changes. With the release currently underway, new issues should be resolved against a subsequent future release. Therefore, you should create a new milestone item for this subsequent release, as follows:
 
-In [GitHub Milestones](https://github.com/apache/fluss/milestones) page, add a new milestone: choose the next minor version number compared to the one currently underway. For example, add `v0.9` milestone if current version is `v0.8`. We only track the major and minor version, so no need to create milestone for bugfix versions, e.g., `v0.9.1`. 
+In [GitHub Milestones](https://github.com/apache/fluss/milestones) page, add a new milestone: choose the next minor version number compared to the one currently underway. For example, add `v0.9` milestone if current version is `v0.8`. We only track the major and minor version, so no need to create milestone for bugfix versions, e.g., `v0.9.1`.
 
 (Note: Only PMC members have access to the project administration. If you do not have access, ask on the mailing list or Slack for assistance.)
 
@@ -70,7 +70,7 @@ The list of release-blocking issues is available at the [issue page](https://git
 - If the issue has been resolved and issue was not updated, resolve it accordingly.
 - If the issue has not been resolved and it is acceptable to defer this until the next release, update the `Milestone` field to the new version you just created. Please consider discussing this with stakeholders and the dev@ mailing list, as appropriate. Use the "Bulk Change" functionality of GitHub Issue to update a batch of unresolved issues to new milestone version.
 - **If the issue has not been resolved and it is not acceptable to release until it is fixed (i.e., blocker issues), the release cannot proceed.** Instead, work with the Fluss community to resolve the issue. Add `priority=blocker` label to such issues.
-- Documentation issues for new supported features are treated as **blocker issues**. 
+- Documentation issues for new supported features are treated as **blocker issues**.
 
 ### 3. Add Milestone for all resolved issues
 
@@ -113,23 +113,23 @@ Create a release branch from the `main` branch in the cloned Fluss repository. T
 
 ```bash
 $ git checkout main
-$ git checkout -b release-${RELEASE_VERSION_SHORT}
-$ git push origin release-${RELEASE_VERSION_SHORT}
+$ git checkout -b release-${SHORT_RELEASE_VERSION}
+$ git push origin release-${SHORT_RELEASE_VERSION}
 ```
 
-Update the version in the Helm Chart in: 
+Update the version in the Helm Chart in:
 - `docker/helm/Chart.yaml`
 - `docker/helm/values.yaml`
 - `docker/helm/README.md`
 
-For example, if you are releaseing a major version `0.8.0`, you should replace all the snapshot version `0.8-SNAPSHOT` to the release version `0.8.0`. 
+For example, if you are releaseing a major version `0.8.0`, you should replace all the snapshot version `0.8-SNAPSHOT` to the release version `0.8.0`.
 
 
 And commit/push the version bump:
 
 ```bash
-$ git commit -m "Bump version to x.y.z" docker/helm/Chart.yaml docker/helm/values.yaml docker/helm/README.md
-$ git push origin release-${RELEASE_VERSION_SHORT}
+$ git commit -m "[helm] Bump version to ${RELEASE_VERSION}" docker/helm/Chart.yaml docker/helm/values.yaml docker/helm/README.md
+$ git push origin release-${SHORT_RELEASE_VERSION}
 ```
 
   </TabItem>
@@ -141,19 +141,19 @@ If you're creating a new bugfix release (e.g., 0.9.1 instead of 0.9.0), you do n
 $ git checkout release-$SHORT_RELEASE_VERSION
 ```
 
-Update the version in the Helm Chart in: 
+Update the version in the Helm Chart in:
 - `docker/helm/Chart.yaml`
 - `docker/helm/values.yaml`
 - `docker/helm/README.md`
 
-For example, if you are releaseing a bugfix version `0.8.1`, you should replace all the previous version `0.8.0` to the new version `0.8.1`. 
+For example, if you are releaseing a bugfix version `0.8.1`, you should replace all the previous version `0.8.0` to the new version `0.8.1`.
 
 
 And commit/push the version bump:
 
 ```bash
 $ git commit -m "Bump version to x.y.z" docker/helm/Chart.yaml docker/helm/values.yaml docker/helm/README.md
-$ git push origin release-${RELEASE_VERSION_SHORT}
+$ git push origin release-${SHORT_RELEASE_VERSION}
 ```
 
   </TabItem>
@@ -171,7 +171,7 @@ After creating the release branch, you should bump the version of the main branc
 ```bash
 $ cd tools
 tools $ git checkout main
-tools $ OLD_VERSION=$CURRENT_SNAPSHOT_VERSION NEW_VERSION=$NEXT_VERSION releasing/update_branch_version.sh
+tools $ OLD_VERSION=$CURRENT_SNAPSHOT_VERSION NEW_VERSION=$NEXT_SNAPSHOT_VERSION releasing/update_branch_version.sh
 tools $ git push origin main
 ```
 
@@ -191,13 +191,13 @@ Additionally, for the upgrade notes page of the version currently being released
 Commit the documentation changes, and push to the official repository.
 
 ```bash
-$ git commit -m "[docs] Create upgrade notes for $NEXT_VERSION"
+$ git commit -m "[docs] Create upgrade notes for $NEXT_SHORT_VERSION" .
 $ git push origin main
 ```
   </TabItem>
 
   <TabItem value="bugfix" label="Bugfix release">
-If you're creating a new bugfix release, you can skip this step. 
+If you're creating a new bugfix release, you can skip this step.
   </TabItem>
 </Tabs>
 
@@ -254,9 +254,10 @@ TAG="v${RELEASE_VERSION}-rc${RC_NUM}"
 Now, checkout from the release branch, and create a release candidate local branch:
 
 ```bash
-$ git checkout release-${RELEASE_VERSION_SHORT}
+$ git checkout release-${SHORT_RELEASE_VERSION}
+$ git checkout -b release-${RELEASE_VERSION}-rc${RC_NUM}
 $ cd tools
-tools $ RELEASE_CANDIDATE=$RC_NUM  RELEASE_VERSION=$RELEASE_VERSION releasing/create_release_branch.sh
+tools $ OLD_VERSION=$CURRENT_SNAPSHOT_VERSION NEW_VERSION=$RELEASE_VERSION releasing/update_branch_version.sh
 ```
 
 Tag the release commit:
@@ -273,7 +274,7 @@ First, we build the source release:
 tools $ RELEASE_VERSION=$RELEASE_VERSION releasing/create_source_release.sh
 ```
 
-This command creates a source tarball and signs it under `tools/release` directory.
+This command creates a source tarball and signs it under `tools/releasing/release` directory.
 
 
 ### 3. Create binary release files
@@ -284,7 +285,7 @@ Then, we create the binary convenience release files:
 tools $ RELEASE_VERSION=$RELEASE_VERSION releasing/create_binary_release.sh
 ```
 
-This command creates a binary tarball and signs it under `tools/release` directory.
+This command creates a binary tarball and signs it under `tools/releasing/release` directory.
 
 ### 4. Create Helm Chart package
 
@@ -294,25 +295,25 @@ Then, we create the Helm Chart packages:
 tools $ RELEASE_VERSION=$RELEASE_VERSION RELEASE_CANDIDATE=$RC_NUM releasing/create_helm_packages.sh
 ```
 
-This command creates a helm tgz and prov files under `tools/release/helm-chart` directory like following:
+This command creates a helm tgz and prov files under `tools/releasing/release/helm-chart` directory like following:
 
 ```bash
-$ tree tools/release/helm-chart
-tools/release/helm-chart
+tools $ tree releasing/release/helm-chart
+releasing/release/helm-chart
 ├── 0.8.0-incubating-rc1
-│   ├── fluss-0.8.0-incubating.tgz
-│   ├── fluss-0.8.0-incubating.tgz.asc
-│   ├── fluss-0.8.0-incubating.tgz.prov
-│   ├── fluss-0.8.0-incubating.tgz.prov.asc
-│   ├── fluss-0.8.0-incubating.tgz.prov.sha512
-│   └── fluss-0.8.0-incubating.tgz.sha512
+│     ├── fluss-0.8.0-incubating.tgz
+│     ├── fluss-0.8.0-incubating.tgz.asc
+│     ├── fluss-0.8.0-incubating.tgz.prov
+│     ├── fluss-0.8.0-incubating.tgz.prov.asc
+│     ├── fluss-0.8.0-incubating.tgz.prov.sha512
+│     └── fluss-0.8.0-incubating.tgz.sha512
 └── index.yaml
 
 2 directories, 7 files
 ```
 
 
-### 4. Stage source & binary & helm releases
+### 5. Stage source & binary & helm releases
 
 
 Next, copy the source and binary release files to the dev repository of dist.apache.org.
@@ -360,7 +361,7 @@ tools/target/fluss $ svn commit -m "Add fluss-${RELEASE_VERSION}-rc${RC_NUM}"
 (7) Verify the files are present: https://dist.apache.org/repos/dist/dev/incubator/fluss/
 
 
-### 5. Push the staging Docker images
+### 6. Stage Docker images
 
 :::note
 Make sure that you are authenticated with your Docker ID, and that your Docker ID has access to `apache/fluss`: `docker login -u <username>`. If you do not have access, you should seek help via the dev mailing list.
@@ -368,7 +369,7 @@ Make sure that you are authenticated with your Docker ID, and that your Docker I
 
 Next, we need to build and push Docker images for the release candidates. This will enable users to easily test the new functionality using the Quickstart guide in the [Fluss documentation](https://fluss.apache.org/docs/quickstart/flink/) improving accessibility and feedback during the release validation phase.
 
-From the root directory of the source code, run the following commands to build and push the fluss Docker image. 
+From the root directory of the source code, run the following commands to build and push the fluss Docker image.
 
 ```bash
 $ rm -rf docker/fluss/build-target/
@@ -389,7 +390,7 @@ docker/quickstart-flink $ docker buildx build --push --platform linux/arm64/v8,l
 
 Verify the RC images are present: https://hub.docker.com/r/apache/fluss/tags
 
-### 6. Stage maven artifacts
+### 7. Stage maven artifacts
 
 
 Next, we stage the maven artifacts:
@@ -404,7 +405,7 @@ Close the staging repository on Apache Nexus. When prompted for a description, e
 
 ![](../assets/nexus-staging.png)
 
-### 7. Push the RC tag
+### 8. Push the RC tag
 
 ```bash
 git push origin refs/tags/{$TAG}
@@ -414,9 +415,11 @@ git push origin refs/tags/{$TAG}
 
 **Checklist to proceed to the next step**
 
+- Source & binary & helm-chart distribution deployed to the dev repository of [dist.apache.org](https://dist.apache.org/repos/dist/dev/incubator/fluss/)
 - Maven artifacts deployed to the staging repository of [repository.apache.org](https://repository.apache.org/content/repositories/)
-- Source and binary distribution deployed to the dev repository of [dist.apache.org](https://dist.apache.org/repos/dist/dev/incubator/fluss/)
+- RC Docker images pushed to [DockerHub](https://hub.docker.com/r/apache/fluss/tags)
 - RC tag pushed to the [official repository](https://github.com/apache/fluss/tags)
+- TODO: update version.txt in release branch for the RC docker image
 
 
 ## Vote on the release candidate
@@ -483,14 +486,6 @@ The vote will be open for at least 72 hours. It is adopted by majority approval,
 
 Thanks,
 Release Manager
-
-[1] link
-[2] https://dist.apache.org/repos/dist/release/incubator/fluss/KEYS
-[3] link
-[4] link
-[5] link
-[6] link
-[7] link
 ```
 
 **If there are any issues found in the release candidate**, reply on the vote thread to cancel the vote. There’s no need to wait 72 hours. Proceed to the [Fix Issues](#fix-any-issues) step below and address the problem. However, some issues don’t require cancellation. For example, if an issue is found in the website pull request, just correct it on the spot and the vote can continue as-is.
@@ -499,7 +494,6 @@ For cancelling a release, the release manager needs to send an email to the rele
 
 - Delete the staging repository in Nexus
 - Remove the source / binary RC files from dist.apache.org
-- Delete the source code tag in git
 
 **If there are no issues**, reply on the vote thread to close the voting. Then, tally the votes in a separate email. Here’s an email template; please adjust as you see fit.
 
@@ -630,20 +624,31 @@ Once all issues have been resolved, you should go back and build a new release c
 
 Once the release candidate has been reviewed and approved by the community, the release should be finalized. This involves the final deployment of the release candidate to the release repositories, merging of the website changes, etc.
 
-#### Deploy artifacts to Maven Central Repository
+### 1. Deploy artifacts to Maven Central Repository
 
 Use the [Apache Nexus](https://repository.apache.org/) repository to release the staged binary artifacts to the Maven Central repository. In the `Staging Repositories` section, find the relevant release candidate `orgapachefluss-XXX` entry and click `Release`. Drop all other release candidates that are not being released.
 
-#### Deploy source and binary releases to dist.apache.org
+### 2. Deploy source & binary & helm releases
 
 Copy the source and binary releases from the dev repository to the release repository at dist.apache.org using Subversion.
 
 ```bash
-svn move -m "Release Fluss ${RELEASE_VERSION}" https://dist.apache.org/repos/dist/dev/incubator/fluss/fluss-${RELEASE_VERSION}-rc${RC_NUM} https://dist.apache.org/repos/dist/release/incubator/fluss/fluss-${RELEASE_VERSION}
+svn move -m "Release Apache Fluss ${RELEASE_VERSION}" https://dist.apache.org/repos/dist/dev/incubator/fluss/fluss-${RELEASE_VERSION}-rc${RC_NUM} https://dist.apache.org/repos/dist/release/incubator/fluss/fluss-${RELEASE_VERSION}
+svn move -m "Release Apache Fluss Helm Chart ${RELEASE_VERSION}" https://dist.apache.org/repos/dist/dev/incubator/fluss/helm-chart/${RELEASE_VERSION}-rc${RC_NUM} https://dist.apache.org/repos/dist/release/incubator/fluss/helm-chart/${RELEASE_VERSION}
 ```
 (Note: Only PPMC members have access to the release repository. If you do not have access, ask on the mailing list for assistance.)
 
-#### Remove old release candidates from dist.apache.org
+Then, update the Helm Chart repository index on https://dist.apache.org/repos/dist/release/incubator/fluss/helm-chart/index.yaml:
+
+```bash
+svn checkout https://dist.apache.org/repos/dist/release/incubator/fluss/helm-chart fluss-dist-release-helm-chart
+cd fluss-dist-release-helm-chart
+helm repo index .
+svn add index.yaml
+svn commit -m "Update Helm index for Apache Fluss ${RELEASE_VERSION} release"
+````
+
+### 3. Remove old release candidates from dist.apache.org
 
 Remove the old release candidates from https://dist.apache.org/repos/dist/dev/incubator/fluss using Subversion.
 
@@ -651,10 +656,11 @@ Remove the old release candidates from https://dist.apache.org/repos/dist/dev/in
 svn checkout https://dist.apache.org/repos/dist/dev/incubator/fluss --depth=immediates
 cd fluss
 svn remove fluss-${RELEASE_VERSION}-rc*
+svn remove helm-chart
 svn commit -m "Remove old release candidates for Apache Fluss ${RELEASE_VERSION}"
 ```
 
-#### Git tag
+### 4. Git tag
 
 Create and push a new Git tag for the released version by copying the tag for the final release candidate, as follows:
 
@@ -663,17 +669,42 @@ git tag -s "v${RELEASE_VERSION}" refs/tags/${TAG}^{} -m "Release Fluss ${RELEASE
 git push origin refs/tags/v${RELEASE_VERSION}
 ```
 
-#### TODO Docker
+### 5. Publish Docker Images
 
-#### TODO Helm Charts
+:::note
+Make sure that you are authenticated with your Docker ID, and that your Docker ID has access to `apache/fluss`: `docker login -u <username>`. If you do not have access, you should seek help via the dev mailing list.
+:::
+
+```bash
+docker tag apache/fluss:${RELEASE_VERSION}_RC${RC_NUM} apache/fluss:${RELEASE_VERSION}
+docker push apache/fluss:${RELEASE_VERSION}
+```
+
+### 6. Mark the Milestone as released in GitHub
+
+In [GitHub Milestones](https://github.com/apache/fluss/milestones), mark the current release milestone as close.
+
+(Note: Only PMC members have access to the project administration. If you do not have access, ask on the mailing list for assistance.)
+
+
+------------
 
 **Checklist to proceed to the next step**
 - Maven artifacts released and indexed in the Maven Central Repository (usually takes about a day to show up)
 - Source & binary distributions available in the release repository of https://dist.apache.org/repos/dist/release/incubator/fluss/
+- Helm Chart package available in the release repository of https://dist.apache.org/repos/dist/release/incubator/fluss/helm-chart/
 - Dev repository https://dist.apache.org/repos/dist/dev/incubator/fluss/ is empty
 - Release tagged in the source code repository
+- Docker images for the release pushed to [DockerHub](https://hub.docker.com/r/apache/fluss/tags)
+- Milestone marked as released in GitHub
 
 ## Promote the release
+
+### Merge website pull request
+
+Merge the website pull requests for the release blog and download page that were created in the [Prepare for the release](#9-pull-requests-for-release-blog-and-downloads) step.
+
+### Apache mailing lists
 
 Once the release has been finalized, the last step of the process is to promote the release within the project and beyond. Please wait for 24h after finalizing the release in accordance with the [ASF release policy](https://www.apache.org/legal/release-policy.html#release-announcements).
 
@@ -710,16 +741,20 @@ Regards,
 Release Manager
 ```
 
-#### Recordkeeping
+### Recordkeeping
 
 Use [reporter.apache.org](https://reporter.apache.org/addrelease.html?fluss) to seed the information about the release into future project reports.
 
 (Note: Only PMC members have access report releases. If you do not have access, ask on the mailing list for assistance.)
 
+-------------------------
+
 ***Checklist to declare the process completed***
 - Release announced on the dev@ and user@ mailing list.
 - Release recorded in reporter.apache.org.
 - Completion declared on the dev@ mailing list.
+- Release blog post published.
+- Download page updated.
 
 ## Improve the process
 
