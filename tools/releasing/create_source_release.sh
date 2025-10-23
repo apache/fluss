@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 
 #
-# Copyright (c) 2024 Alibaba Group Holding Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -40,8 +42,13 @@ fi
 
 if [ "$(uname)" == "Darwin" ]; then
     SHASUM="shasum -a 512"
+    # turn off xattr headers in the generated archive file on macOS
+    TAR_OPTIONS="--no-xattrs"
+    # Disable the creation of ._* files on macOS.
+    export COPYFILE_DISABLE=1
 else
     SHASUM="sha512sum"
+    TAR_OPTIONS=""
 fi
 
 ###########################
@@ -68,7 +75,7 @@ rsync -a \
   --exclude "*/dependency-reduced-pom.xml" \
   . fluss-$RELEASE_VERSION
 
-tar czf ${RELEASE_DIR}/fluss-${RELEASE_VERSION}-src.tgz fluss-$RELEASE_VERSION
+tar $TAR_OPTIONS -czf  ${RELEASE_DIR}/fluss-${RELEASE_VERSION}-src.tgz fluss-$RELEASE_VERSION
 gpg --armor --detach-sig ${RELEASE_DIR}/fluss-$RELEASE_VERSION-src.tgz
 cd ${RELEASE_DIR}
 $SHASUM fluss-$RELEASE_VERSION-src.tgz > fluss-$RELEASE_VERSION-src.tgz.sha512

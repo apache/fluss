@@ -1,4 +1,5 @@
 ---
+title: "Deploying Distributed Cluster"
 sidebar_position: 3
 ---
 
@@ -13,33 +14,37 @@ This page provides instructions on how to deploy a *distributed cluster* for Flu
 
 Fluss runs on all *UNIX-like environments*, e.g. **Linux**, **Mac OS X**.
 To build a distributed cluster, you need to have at least two nodes.
-This docs provides a simple example of how to deploy a distributed cluster on three nodes.
+This doc provides a simple example of how to deploy a distributed cluster on four nodes.
 
 ### Software Requirements
 
-Before you start to setup the system, make sure you have the following software installed **on each node**:
-- **Java 17** or higher (Java 8 and Java 11 are not recommended)
-- **Zookeeper 3.6.0** or higher (It is not recommended to use zookeeper versions below 3.6.0)
+Before you start to set up the system, make sure you have installed **Java 17** or higher **on each node** in your cluster. 
+Java 8 and Java 11 are not recommended.
 
-If your cluster does not fulfill these software requirements you will need to install/upgrade it.
+Additionally, you need a running **ZooKeeper** cluster with version 3.6.0 or higher. 
+We do not recommend to use ZooKeeper versions below 3.6.0.
+For further information how to deploy a distributed ZooKeeper cluster, see [Running Replicated ZooKeeper](https://zookeeper.apache.org/doc/r3.6.0/zookeeperStarted.html#sc_RunningReplicatedZooKeeper).
+
+If your cluster does not fulfill these software requirements, you will need to install/upgrade them.
 
 ### `JAVA_HOME` Configuration
 
-Flink requires the `JAVA_HOME` environment variable to be set on all nodes and point to the directory of your Java installation.
+Fluss requires the `JAVA_HOME` environment variable to be set on all nodes and point to the directory of your Java installation.
 
 ## Fluss Setup
 
-This part will describe how to set up Fluss cluster consisting of one coordinator server and multiple tablet servers
-across three machines. Suppose you have three nodes have ip address:
-- Node1: `192.168.10.1`
-- Node2: `192.168.10.2`
-- Node3: `192.168.10.3`
+This part will describe how to set up a Fluss cluster consisting of one CoordinatorServer and multiple TabletServers
+across four machines. Suppose you have four nodes in a `192.168.10/24` subnet with the following IP address assignment:
+- Node0: `192.168.10.100`
+- Node1: `192.168.10.101`
+- Node2: `192.168.10.102`
+- Node3: `192.168.10.103`
 
-Node1 will deploy the CoordinatorServer and one TabletServer, Node2 and Node3 will deploy one TabletServer.
+Node0 will deploy a CoordinatorServer instance. Node1, Node2 and Node3 will deploy one TabletServer instance, respectively.
 
 ### Preparation
 
-1. Make sure ZooKeeper has been deployed, and assuming the ZooKeeper address is `192.168.10.99:2181`. see [Running zookeeper cluster](https://zookeeper.apache.org/doc/r3.6.0/zookeeperStarted.html#sc_RunningReplicatedZooKeeper) to deploy a distributed ZooKeeper.
+1. Make sure ZooKeeper has been deployed. We assume that ZooKeeper listens on `192.168.10.199:2181`.
 
 2. Download Fluss
 
@@ -47,68 +52,103 @@ Node1 will deploy the CoordinatorServer and one TabletServer, Node2 and Node3 wi
 Go to the [downloads page](/downloads) and download the latest Fluss release. After downloading the latest release, copy the archive to all the nodes and extract it:
 
 ```shell
-tar -xzf fluss-0.5.0-bin.tgz
-cd fluss-0.5.0/
+tar -xzf fluss-$FLUSS_VERSION$-bin.tgz
+cd fluss-$FLUSS_VERSION$/
 ```
 
 ### Configuring Fluss
 
-After having extracted the archived files, you need to configure Fluss for the cluster by editing `conf/server.yaml`
+After having extracted the archived files, you need to configure Fluss for a distributed deployment.
+We will use the _default config file_ (`conf/server.yaml`) to configure Fluss.
+Adapt the `server.yaml` on each node as follows.
 
-For **Node1**, the config is as follows:
-```yaml
-coordinator.host: 192.168.10.1
-coordinator.port: 9123
-zookeeper.address: 192.168.10.99:2181
+**Node0**
+
+```yaml title="server.yaml"
+# coordinator server
+bind.listeners: FLUSS://192.168.10.100:9123
+
+zookeeper.address: 192.168.10.199:2181
 zookeeper.path.root: /fluss
 
-tablet-server.host: 192.168.10.1
+# When running in distributed mode, be sure to point to a remote path—
+# e.g. oss://bucket/path for OSS or hdfs://namenode:port/path for HDFS.
+# Otherwise, queries will fail with a “No such file or directory” error.
+remote.data.dir: hdfs://namenode:port/tmp/fluss-remote-data
+```
+
+**Node1**
+
+```yaml title="server.yaml"
+# tablet server
+bind.listeners: FLUSS://192.168.10.101:9123 # alternatively, setting the port to 0 assigns a random port
 tablet-server.id: 1
-```
 
-For **Node2**, the config is as follows:
-```yaml
-zookeeper.address: 192.168.10.99:2181
+zookeeper.address: 192.168.10.199:2181
 zookeeper.path.root: /fluss
 
-tablet-server.host: 192.168.10.2
+# When running in distributed mode, be sure to point to a remote path—
+# e.g. oss://bucket/path for OSS or hdfs://namenode:port/path for HDFS.
+# Otherwise, queries will fail with a “No such file or directory” error.
+remote.data.dir: hdfs://namenode:port/tmp/fluss-remote-data
+```
+
+**Node2**
+
+```yaml title="server.yaml"
+# tablet server
+bind.listeners: FLUSS://192.168.10.102:9123 # alternatively, setting the port to 0 assigns a random port
 tablet-server.id: 2
-```
 
-For **Node3**, the config is as follows:
-```yaml
-zookeeper.address: 192.168.10.99:2181
+zookeeper.address: 192.168.10.199:2181
 zookeeper.path.root: /fluss
 
-tablet-server.host: 192.168.10.3
+# When running in distributed mode, be sure to point to a remote path—
+# e.g. oss://bucket/path for OSS or hdfs://namenode:port/path for HDFS.
+# Otherwise, queries will fail with a “No such file or directory” error.
+remote.data.dir: hdfs://namenode:port/tmp/fluss-remote-data
+```
+
+**Node3**
+```yaml title="server.yaml"
+# tablet server
+bind.listeners: FLUSS://192.168.10.103:9123 # alternatively, setting the port to 0 assigns a random port
 tablet-server.id: 3
+
+zookeeper.address: 192.168.10.199:2181
+zookeeper.path.root: /fluss
+
+# When running in distributed mode, be sure to point to a remote path—
+# e.g. oss://bucket/path for OSS or hdfs://namenode:port/path for HDFS.
+# Otherwise, queries will fail with a “No such file or directory” error.
+remote.data.dir: hdfs://namenode:port/tmp/fluss-remote-data
 ```
 
 :::note
-- `tablet-server.id` is the unique id of the TabletServer, if you have multiple TabletServers, you should set different id for each TabletServer.
-- In this example, we only set the properties that must be configured, and for some other properties, you can refer to [Configuration](/docs/maintenance/configuration/) for more details.
+- `tablet-server.id` is the unique id of the TabletServer. If you have multiple TabletServers, you should set a different id for each TabletServer.
+- In this example, we only set the mandatory properties. For additional properties, you can refer to [Configuration](maintenance/configuration.md) for more details.
   :::
 
 ### Starting Fluss
 
-To start Fluss, you should first to start a CoordinatorServer in **node1** and
-then start each TabletServer in **node1**, **node2**, **node3**. The command is as follows:
+To deploy a distributed Fluss cluster, you should first start a CoordinatorServer instance on **Node0**. 
+Then, start a TabletServer instance on **Node1**, **Node2**, and **Node3**, respectively.
 
-#### Starting CoordinatorServer
+**CoordinatorServer**
 
-In **node1**, starting a CoordinatorServer:
+On **Node0**, start a CoordinatorServer as follows.
 ```shell
 ./bin/coordinator-server.sh start
 ```
 
-#### Starting TabletServer
+**TabletServer**
 
-In **node1**, **node2**, **node3**, starting a TabletServer is as follows:
+On **Node1**, **Node2** and **Node3**, start a TabletServer as follows.
 ```shell
 ./bin/tablet-server.sh start
 ```
 
-After that, the Fluss distributed cluster is started.
+After that, you have successfully deployed a distributed Fluss cluster.
 
 ## Interacting with Fluss
 
@@ -121,21 +161,21 @@ Using Flink SQL Client to interact with Fluss.
 
 #### Preparation
 
-You can start a Flink standalone cluster refer to [Flink Environment Preparation](/docs/engine-flink/getting-started#preparation-when-using-flink-sql-client)
+You can start a Flink standalone cluster refer to [Flink Environment Preparation](engine-flink/getting-started.md#preparation-when-using-flink-sql-client)
 
 **Note**: Make sure the [Fluss connector jar](/downloads/) already has copied to the `lib` directory of your Flink home.
 
 #### Add catalog
 
 In Flink SQL client, a catalog is created and named by executing the following query:
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
-  'type'='fluss',
-  'bootstrap.servers' = '192.168.10.1:9123'
+  'type' = 'fluss',
+  'bootstrap.servers' = '192.168.10.100:9123'
 );
 ```
 
 #### Do more with Fluss
 
 After the catalog is created, you can use Flink SQL Client to do more with Fluss, for example, create a table, insert data, query data, etc.
-More details please refer to [Flink Getting Started](/docs/engine-flink/getting-started/).
+More details please refer to [Flink Getting Started](engine-flink/getting-started.md).

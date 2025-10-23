@@ -1,9 +1,11 @@
 ################################################################################
-# Copyright (c) 2024 Alibaba Group Holding Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -13,10 +15,6 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 ################################################################################
-
-# These parameters are required to run ./bin/lakehouse.sh for Java 17 support.
-# They can be safely removed when using Java 8/11.
-env.java.opts.all: --add-opens=java.base/java.util=ALL-UNNAMED
 
 #==============================================================================
 # Zookeeper
@@ -33,7 +31,7 @@ zookeeper.address: localhost:2181
 # Common
 #==============================================================================
 
-# THe default bucket number to be used when creating tables if no bucket number
+# The default bucket number to be used when creating tables if no bucket number
 # is specified for the table.
 default.bucket.number: 1
 
@@ -50,27 +48,26 @@ data.dir: /tmp/fluss-data
 remote.data.dir: /tmp/fluss-remote-data
 
 #==============================================================================
-# Coordinator Server
+# Listeners
 #==============================================================================
 
-# The external address of the host on which the Coordinator Server runs and
-# can be reached by the Tablet Servers and any clients which want to connect.
-coordinator.host: localhost
+# The network address and port to which the server binds for accepting connections.
+# The format is '{listener_name}://{host}:{port}', and multiple addresses can be specified, separated by commas.
+bind.listeners: FLUSS://localhost:9123
 
-# The RPC port where the Coordinator Server is reachable.
-coordinator.port: 9123
 
 #==============================================================================
 # Tablet Server
 #==============================================================================
 
-# The external address of the host on which the Tablet Server runs and
-# can be reached by the Coordinator Server and any clients which want to connect.
-tablet-server.host: localhost
 
 # The id of the tablet server to be run, must be set and should be different
 # when running multiple tablet servers.
 tablet-server.id: 0
+
+# Controlled shutdown configuration for tablet servers
+# tablet-server.controlled-shutdown.max-retries: 3
+# tablet-server.controlled-shutdown.retry-interval: 1000ms
 
 #==============================================================================
 # OSS FileSystem

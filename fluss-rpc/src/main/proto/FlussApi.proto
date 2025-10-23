@@ -1,11 +1,12 @@
 /*
- * Copyright (c) 2024 Alibaba Group Holding Ltd.
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
+ *    http://www.apache.org/licenses/LICENSE-2.0
  *
  * Unless required by applicable law or agreed to in writing, software
  * distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,8 +17,15 @@
 syntax = "proto2";
 
 package fluss;
-option java_package = "com.alibaba.fluss.rpc.messages";
+option java_package = "org.apache.fluss.rpc.messages";
 option optimize_for = LITE_RUNTIME;
+
+/**
+* NOTICE: To ensure a smooth upgrade to Proto3 syntax while maintaining backward compatibility in
+* the future, please adhere to the following limitations:
+* 1. DO NOT USE "default" keyword, proto3 removes the support of "default"
+* 2. DO NOT USE "enum" type
+ */
 
 // the message indicates a failed request of a server failure.
 message ErrorResponse {
@@ -49,9 +57,21 @@ message GetTableSchemaResponse {
 message CreateDatabaseRequest {
   required string database_name = 1;
   required bool ignore_if_exists = 2;
+  optional bytes database_json = 3;
 }
 
 message CreateDatabaseResponse {
+}
+
+// get table request and response
+message GetDatabaseInfoRequest {
+  required string database_name = 1;
+}
+
+message GetDatabaseInfoResponse {
+  required bytes database_json = 3;
+  required int64 created_time = 4;
+  required int64 modified_time = 5;
 }
 
 // drop database request and response
@@ -88,15 +108,30 @@ message CreateTableRequest {
 message CreateTableResponse {
 }
 
+// alter table request and response
+message AlterTableRequest {
+  required PbTablePath table_path = 1;
+  required bool ignore_if_not_exists = 2;
+  repeated PbAlterConfig config_changes = 3;
+}
+
+
+message AlterTableResponse {
+}
+
+
+
 // get table request and response
-message GetTableRequest {
+message GetTableInfoRequest {
   required PbTablePath table_path = 1;
 }
 
-message GetTableResponse {
+message GetTableInfoResponse {
   required int64 table_id = 1;
   required int32 schema_id = 2;
   required bytes table_json = 3;
+  required int64 created_time = 4;
+  required int64 modified_time = 5;
 }
 
 // list tables request and response
@@ -149,6 +184,8 @@ message UpdateMetadataRequest {
   optional PbServerNode coordinator_server = 1;
   repeated PbServerNode tablet_servers = 2;
   repeated PbTableMetadata table_metadata = 3;
+  repeated PbPartitionMetadata partition_metadata = 4;
+  optional int32 coordinator_epoch = 5;
 }
 
 message UpdateMetadataResponse {
@@ -171,6 +208,8 @@ message FetchLogRequest {
   required int32 follower_server_id = 1;  // value -1 indicate the request from client.
   required int32 max_bytes = 2;
   repeated PbFetchLogReqForTable tables_req = 3;
+  optional int32 max_wait_ms = 4;
+  optional int32 min_bytes = 5;
 }
 
 message FetchLogResponse {
@@ -200,6 +239,16 @@ message LookupRequest {
 
 message LookupResponse {
   repeated PbLookupRespForBucket buckets_resp = 1;
+}
+
+// Prefix Lookup request and response
+message PrefixLookupRequest {
+  required int64 table_id = 1;
+  repeated PbPrefixLookupReqForBucket buckets_req = 2;
+}
+
+message PrefixLookupResponse {
+  repeated PbPrefixLookupRespForBucket buckets_resp = 1;
 }
 
 
@@ -288,36 +337,38 @@ message NotifyKvSnapshotOffsetRequest {
 message NotifyKvSnapshotOffsetResponse {
 }
 
-// get table kv snapshot request and response
-message GetKvSnapshotRequest {
+message GetLatestKvSnapshotsRequest {
   required PbTablePath table_path = 1;
+  optional string partition_name = 2;
 }
 
-message GetKvSnapshotResponse {
+message GetLatestKvSnapshotsResponse {
   required int64 table_id = 1;
-  repeated PbSnapshotForBucket bucket_snapshots = 2;
+  // null if it is a non-partitioned table, otherwise, it must be not null
+  optional int64 partition_id = 2;
+  repeated PbKvSnapshot latest_snapshots = 3;
 }
 
-message GetLakeTableSnapshotRequest {
-  required PbTablePath table_path = 1;
-}
-
-message GetLakeTableSnapshotResponse {
-  required PbLakeStorageInfo lakehouse_storage_info = 1;
-  required int64 table_id = 2;
-  required int64 snapshotId = 3;
-  repeated PbLakeSnapshotForBucket bucket_snapshots = 4;
-}
-
-message GetPartitionSnapshotRequest {
-  required PbTablePath table_path = 1;
-  required string partition_name = 2;
-}
-
-message GetPartitionSnapshotResponse {
+message GetKvSnapshotMetadataRequest {
   required int64 table_id = 1;
-  required int64 partition_id = 2;
-  repeated PbSnapshotForBucket bucket_snapshots = 3;
+  optional int64 partition_id = 2;
+  required int32 bucket_id = 3;
+  required int64 snapshot_id = 4;
+}
+
+message GetKvSnapshotMetadataResponse {
+  required int64 log_offset = 1;
+  repeated PbRemotePathAndLocalFile snapshot_files = 2;
+}
+
+message GetLatestLakeSnapshotRequest {
+  required PbTablePath table_path = 1;
+}
+
+message GetLatestLakeSnapshotResponse {
+  required int64 table_id = 1;
+  required int64 snapshotId = 2;
+  repeated PbLakeSnapshotForBucket bucket_snapshots = 3;
 }
 
 message GetFileSystemSecurityTokenRequest {
@@ -330,15 +381,9 @@ message GetFileSystemSecurityTokenResponse {
   repeated PbKeyValue addition_info = 4;
 }
 
-message DescribeLakeStorageRequest {
-}
-
-message DescribeLakeStorageResponse {
-  required PbLakeStorageInfo lakehouse_storage_info = 1;
-}
-
 // init writer request and response
 message InitWriterRequest {
+  repeated PbTablePath table_path = 1;
 }
 
 message InitWriterResponse {
@@ -347,11 +392,30 @@ message InitWriterResponse {
 
 message ListPartitionInfosRequest {
   required PbTablePath table_path = 1;
+  optional PbPartitionSpec partial_partition_spec = 2;
 }
 
 message ListPartitionInfosResponse {
   repeated PbPartitionInfo partitions_info = 1;
 }
+
+// create partition request and response
+message CreatePartitionRequest {
+  required PbTablePath table_path = 1;
+  required PbPartitionSpec partition_spec = 2;
+  required bool ignore_if_not_exists = 3;
+}
+
+message CreatePartitionResponse {}
+
+// drop partition request and response
+message DropPartitionRequest {
+  required PbTablePath table_path = 1;
+  required PbPartitionSpec partition_spec = 2;
+  required bool ignore_if_not_exists = 3;
+}
+
+message DropPartitionResponse {}
 
 // commit remote log manifest request and response
 message CommitRemoteLogManifestRequest {
@@ -397,6 +461,8 @@ message PbLakeTableOffsetForBucket {
   required int32 bucket_id = 2;
   optional int64 log_start_offset = 3;
   optional int64 log_end_offset = 4;
+  optional string partition_name = 5;
+  optional int64 max_timestamp = 6;
 }
 
 message CommitLakeTableSnapshotResponse {
@@ -421,10 +487,89 @@ message PbNotifyLakeTableOffsetReqForBucket {
   required int64 snapshot_id = 4;
   optional int64 log_start_offset = 5;
   optional int64 log_end_offset = 6;
+  optional int64 max_timestamp = 7;
 }
 
 message NotifyLakeTableOffsetResponse {
 }
+
+message AuthenticateRequest {
+  required string protocol = 1;
+  required bytes token = 2;
+}
+
+message AuthenticateResponse {
+  optional bytes challenge = 1;
+}
+
+// acl related requests and responses
+message ListAclsRequest{
+  required PbAclFilter acl_filter = 1;
+}
+
+message ListAclsResponse{
+  repeated PbAclInfo acl = 1;
+}
+
+message CreateAclsRequest{
+  repeated PbAclInfo acl = 1;
+}
+
+message CreateAclsResponse{
+  repeated PbCreateAclRespInfo aclRes = 1;
+}
+
+message DropAclsRequest{
+  repeated PbAclFilter acl_filter = 1;
+}
+
+message DropAclsResponse{
+  repeated PbDropAclsFilterResult filter_results = 1;
+}
+
+message LakeTieringHeartbeatRequest {
+  repeated PbHeartbeatReqForTable tiering_tables = 1;
+  repeated PbHeartbeatReqForTable finished_tables = 2;
+  repeated PbHeartbeatReqForTable failed_tables = 3;
+  // whether to request a table
+  optional bool request_table = 4;
+}
+
+message LakeTieringHeartbeatResponse {
+  // coordinator epoch
+  required int32 coordinator_epoch = 1;
+  // the returned table to tier, empty when no table is needed by the lake tiering service
+  optional PbLakeTieringTableInfo tiering_table = 2;
+  repeated PbHeartbeatRespForTable tiering_table_resp = 3;
+  repeated PbHeartbeatRespForTable finished_table_resp = 4;
+  repeated PbHeartbeatRespForTable failed_table_resp = 5;
+}
+
+message ControlledShutdownRequest {
+  required int32 tablet_server_id = 1;
+  required int32 tablet_server_epoch = 2;
+}
+
+message ControlledShutdownResponse {
+  repeated PbTableBucket remaining_leader_buckets = 1;
+}
+
+message DescribeClusterConfigsRequest{
+}
+
+
+message DescribeClusterConfigsResponse{
+  repeated PbDescribeConfig configs = 1;
+}
+
+message AlterClusterConfigsRequest{
+  repeated PbAlterConfig alter_configs = 1;
+}
+
+message AlterClusterConfigsResponse{
+}
+
+
 
 // --------------- Inner classes ----------------
 message PbApiVersion {
@@ -444,10 +589,17 @@ message PbPhysicalTablePath {
   optional string partition_name = 3;
 }
 
+// For MetadataResponse, host and port are still used for all versions.
+// For UpdateMetadataRequest,
+//   * versions <= 0.6: host and port are used.
+//   * versions >= 0.7: listeners is used to replace host and port.
+// For MetadataResponse and UpdateMetadataRequest: Fluss versions >= 0.7: we add rack for each tabletServer
 message PbServerNode {
   required int32 node_id = 1;
   required string host = 2;
   required int32 port = 3;
+  optional string listeners = 4;
+  optional string rack = 5;
 }
 
 message PbTableMetadata {
@@ -456,6 +608,11 @@ message PbTableMetadata {
   required int32 schema_id = 3;
   required bytes table_json = 4;
   repeated PbBucketMetadata bucket_metadata = 5;
+  required int64 created_time = 6;
+  required int64 modified_time = 7;
+
+  // TODO add a new filed 'deleted_table' to indicate this table is deleted in UpdateMetadataRequest.
+  // trace by: https://github.com/apache/fluss/issues/981
 }
 
 message PbPartitionMetadata {
@@ -472,6 +629,7 @@ message PbBucketMetadata {
   optional int32 leader_id = 2;
   repeated int32 replica_id = 3 [packed = true];
   // TODO: Add isr here.
+  optional int32 leader_epoch = 4;
 }
 
 message PbProduceLogReqForBucket {
@@ -550,6 +708,24 @@ message PbValue {
   optional bytes values = 1;
 }
 
+message PbValueList {
+  repeated bytes values = 1;
+}
+
+message PbPrefixLookupReqForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  repeated bytes keys = 3;
+}
+
+message PbPrefixLookupRespForBucket {
+  optional int64 partition_id = 1;
+  required int32 bucket_id = 2;
+  optional int32 error_code = 3;
+  optional string error_message = 4;
+  repeated PbValueList value_lists = 5;
+}
+
 message PbTableBucket {
   required int64 table_id = 1;
   optional int64 partition_id = 2;
@@ -626,21 +802,19 @@ message PbStopReplicaRespForBucket {
   optional string error_message = 3;
 }
 
-message PbSnapshotForBucket {
+message PbKvSnapshot {
   required int32 bucket_id = 1;
-  // empty if no any snapshot for the bucket
-  optional PbBucketSnapshot snapshot = 2;
+  // null if there is no snapshot for this bucket
+  optional int64 snapshot_id = 2;
+  // null if there is no snapshot for this bucket, then read from EARLIEST
+  optional int64 log_offset = 3;
 }
 
 message PbLakeSnapshotForBucket {
   optional int64 partition_id = 1;
   required int32 bucket_id = 2;
   optional int64 log_offset = 3;
-}
-
-message PbBucketSnapshot {
-  required int64 log_offset = 1;
-  repeated PbRemotePathAndLocalFile snapshot_files = 2;
+  optional string partition_name = 4;
 }
 
 message PbRemotePathAndLocalFile {
@@ -665,14 +839,85 @@ message PbRemoteLogSegment {
   required int64 remote_log_start_offset = 2;
   required int64 remote_log_end_offset = 3;
   required int32 segment_size_in_bytes = 4;
+  optional int64 max_timestamp = 5;
 }
 
 message PbPartitionInfo {
   required int64 partition_id = 1;
-  required string partition_name = 2;
+  required PbPartitionSpec partition_spec = 2;
 }
 
-message PbLakeStorageInfo {
-  required string lake_storage_type = 1;
-  repeated PbKeyValue catalog_properties = 2;
+message PbPartitionSpec {
+  repeated PbKeyValue partition_key_values = 1;
 }
+
+message PbCreateAclRespInfo {
+  required PbAclInfo acl = 1;
+  optional int32 error_code = 2;
+  optional string error_message = 3;
+}
+
+message PbAclInfo {
+  required string resource_name = 1;
+  required int32 resource_type = 2;
+  required string principal_name = 3;
+  required string principal_type = 4;
+  required string host = 5;
+  required int32 operation_type = 6;
+  required int32 permission_type = 7;
+}
+
+message PbAclFilter {
+  optional string resource_name = 1;
+  required int32 resource_type = 2;
+  optional string principal_name = 3;
+  optional string principal_type = 4;
+  optional string host = 5;
+  required int32 operation_type = 6;
+  required int32 permission_type = 7;
+}
+
+message PbDropAclsFilterResult {
+  repeated PbDropAclsMatchingAcl matching_acls = 1;
+  optional int32 error_code = 2;
+  optional string error_message = 3;
+
+}
+
+message PbDropAclsMatchingAcl {
+  required PbAclInfo acl = 1;
+  optional int32 error_code = 2;
+  optional string error_message = 3;
+}
+
+message PbLakeTieringTableInfo {
+  required int64 table_id = 1;
+  required PbTablePath table_path = 2;
+  required int64 tiering_epoch = 3;
+}
+
+message PbHeartbeatReqForTable {
+  required int64 table_id = 1;
+  // the coordinator epoch when the table is assigned to be tiering service
+  required int32 coordinator_epoch = 2;
+  // the tiering epoch when the table is assigned to be tiering service
+  required int64 tiering_epoch = 3;
+}
+
+message PbHeartbeatRespForTable {
+  required int64 table_id = 1;
+  optional ErrorResponse error = 2;
+}
+
+message PbAlterConfig {
+  required string config_key = 1;
+  optional string config_value = 2;
+  required int32 op_type = 3; // SET=0, DELETE=1, APPEND=2, SUBTRACT=3
+}
+
+message PbDescribeConfig{
+  required string config_key = 1;
+  optional string config_value = 2;
+  required string config_source = 3;
+}
+

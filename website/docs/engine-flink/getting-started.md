@@ -1,52 +1,65 @@
 ---
 sidebar_label: "Getting Started"
+title: "Getting Started with Flink"
 sidebar_position: 1
 ---
 
 # Getting Started with Flink Engine
 ## Quick Start
-For a quick introduction to running Flink, refer to the [Quick Start](/docs/quickstart/flink.md) guide.
+For a quick introduction to running Flink, refer to the [Quick Start](quickstart/flink.md) guide.
 
 
-## Support Flink Versions
+## Supported Flink Versions
 | Fluss Connector Versions | Supported Flink Versions |
 |--------------------------|--------------------------| 
-| 0.5                      | 1.18, 1.19, 1.20         |
+| $FLUSS_VERSION_SHORT$    | 1.18, 1.19, 1.20         |
 
 
 ## Feature Support
-Fluss only supports Apache Flink's Table API.
+Fluss supports Apache Flink's Table API and Flink's DataStream API.
 
+For Flink's Table API, Fluss supports the following features:
 
-| Feature support                                   | Flink | Notes                                  |
+| Feature Support                                   | Flink | Notes                                  |
 |---------------------------------------------------|-------|----------------------------------------|
-| [SQL create catalog](ddl.md#create-catalog)       | ✔️    |                                        |
-| [SQl create database](ddl.md#create-database)     | ✔️    |                                        |
-| [SQL drop database](ddl.md#drop-database)         | ✔️    |                                        |
-| [SQL create table](ddl.md#create-table)           | ✔️    |                                        |
-| [SQL create table like](ddl.md#create-table-like) | ✔️    |                                        |
-| [SQL drop table](ddl.md#drop-table)               | ✔️    |                                        |                                                                   |
-| [SQL select](reads.md)                            | ✔️    | Support both streaming and batch mode. |
-| [SQL insert into](writes.md)                      | ✔️    | Support both streaming and batch mode. |
-| [SQL lookup join](lookups.md)                     | ✔️    |                                        |
+| [SQL Create Catalog](ddl.md#create-catalog)       | ✔️    |                                        |
+| [SQL Create Database](ddl.md#create-database)     | ✔️    |                                        |
+| [SQL Drop Database](ddl.md#drop-database)         | ✔️    |                                        |
+| [SQL Create Table](ddl.md#create-table)           | ✔️    |                                        |
+| [SQL Create Table Like](ddl.md#create-table-like) | ✔️    |                                        |
+| [SQL Drop Table](ddl.md#drop-table)               | ✔️    |                                        |
+| [SQL Create Materialized Table](ddl.md#materialized-table) | ✔️    | Continuous refresh mode only |
+| [SQL Alter Materialized Table](ddl.md#alter-materialized-table) | ✔️    | Suspend/Resume support |
+| [SQL Drop Materialized Table](ddl.md#drop-materialized-table) | ✔️    |                                        |
+| [SQL Show Partitions](ddl.md#show-partitions)     | ✔️    |                                        |
+| [SQL Add Partition](ddl.md#add-partition)         | ✔️    |                                        |
+| [SQL Drop Partition](ddl.md#drop-partition)       | ✔️    |                                        |
+| [SQL Select](reads.md)                            | ✔️    | Support both streaming and batch mode. |
+| [SQL Limit](reads.md#limit-read)                  | ✔️    | Only for Log Table                     |
+| [SQL Insert Into](writes.md)                      | ✔️    | Support both streaming and batch mode. |
+| [SQL Delete From](writes.md#delete-from)          | ✔️    | Only in batch mode.                    |
+| [SQL Update](writes.md#update)                    | ✔️    | Only in batch mode.                    |
+| [SQL Lookup Join](lookups.md)                     | ✔️    |                                        |
+
+For Flink's DataStream API, you can see [DataStream API](docs/engine-flink/datastream.mdx) for more details.
 
 ## Preparation when using Flink SQL Client
 - **Download Flink**
 
-Flink runs on all UNIX-like environments, i.e. Linux, Mac OS X, and Cygwin (for Windows).
+Flink runs on all UNIX-like environments, i.e., Linux, Mac OS X, and Cygwin (for Windows).
 If you haven’t downloaded Flink, you can download [the binary release](https://flink.apache.org/downloads.html) of Flink, then extract the archive with the following command.
 ```shell
-tar -xzf flink-1.20.0-bin-scala_2.12.tgz
+tar -xzf flink-1.20.1-bin-scala_2.12.tgz
 ```
-- **Copy Fluss Connector Jar**
+- **Copy Fluss Flink Bundled Jar**
 
-Download [Fluss connector jar](/downloads#fluss-connector) and copy to the lib directory of your Flink home.
+Download [Fluss Flink Bundled jar](/downloads) and copy to the `lib` directory of your Flink home.
 
 ```shell
-cp fluss-connector-flink-0.5.0.jar <FLINK_HOME>/lib/
+cp fluss-flink-$FLUSS_VERSION$.jar <FLINK_HOME>/lib/
 ```
 :::note
-If you use [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](/docs/maintenance/tiered-storage/remote-storage), 
+If you use [Amazon S3](http://aws.amazon.com/s3/), [Aliyun OSS](https://www.aliyun.com/product/oss) or [HDFS(Hadoop Distributed File System)](https://hadoop.apache.org/docs/stable/) as Fluss's [remote storage](maintenance/tiered-storage/remote-storage.md),
 you should download the corresponding [Fluss filesystem jar](/downloads#filesystem-jars) and also copy it to the lib directory of your Flink home.
 :::
 
@@ -60,7 +73,7 @@ You should be able to navigate to the web UI at [localhost:8081](http://localhos
 ```shell
 ps aux | grep flink
 ```
-- **Start a sql client**
+- **Start a SQL Client**
 
 To quickly stop the cluster and all running components, you can use the provided script:
 ```shell
@@ -70,25 +83,27 @@ To quickly stop the cluster and all running components, you can use the provided
 
 ## Creating a Catalog
 You can use the following SQL statement to create a catalog.
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
-  'type'='fluss',
+  'type' = 'fluss',
   'bootstrap.servers' = 'localhost:9123'
 );
 ```
 
 :::note
 1. The `bootstrap.servers` means the Fluss server address. Before you config the `bootstrap.servers`,
-   you should start the Fluss server first. See [Deploying Fluss](/docs/install-deploy/overview/#how-to-deploy-fluss)
+   you should start the Fluss server first. See [Deploying Fluss](install-deploy/overview.md#how-to-deploy-fluss)
    for how to build a Fluss cluster.
    Here, it is assumed that there is a Fluss cluster running on your local machine and the CoordinatorServer port is 9123.
-2. The` bootstrap.servers` configuration is used to discover all nodes within the Fluss cluster. It can be set with one or more (up to three) Fluss server addresses (either CoordinatorServer or TabletServer) separated by commas.
+2. The`bootstrap.servers` configuration is used to discover all nodes within the Fluss cluster. It can be set with one or more (up to three) Fluss server addresses (either CoordinatorServer or TabletServer) separated by commas.
 :::
 
 ## Creating a Table
-```sql title="Flink SQL Client"
-USE CATALOG `fluss_catalog`;
+```sql title="Flink SQL"
+USE CATALOG fluss_catalog;
+```
 
+```sql title="Flink SQL"
 CREATE TABLE pk_table (
   shop_id BIGINT,
   user_id BIGINT,
@@ -102,27 +117,33 @@ CREATE TABLE pk_table (
 
 ## Data Writing
 To append new data to a table, you can use `INSERT INTO` in batch mode or streaming mode:
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 -- Execute the flink job in batch mode for current session context
 SET 'execution.runtime-mode' = 'batch';
+```
+
+```sql title="Flink SQL"
 -- use tableau result mode
 SET 'sql-client.execution.result-mode' = 'tableau';
+```
 
+```sql title="Flink SQL"
 INSERT INTO pk_table VALUES
   (1234, 1234, 1, 1),
   (12345, 12345, 2, 2),
   (123456, 123456, 3, 3);
 ```
+
 To update data record with the primary key (1234, 1234) in a Flink streaming job, use the UPDATE statement as follows:
 
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 -- should run in batch mode
 UPDATE pk_table SET total_amount = 4 WHERE shop_id = 1234 and user_id = 1234;
 ```
 
 To delete the data record with primary key `(12345, 12345)`, use `DELETE FROM`:
 
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 -- should run in batch mode
 DELETE FROM pk_table WHERE shop_id = 12345 and user_id = 12345;
 ```
@@ -130,21 +151,24 @@ DELETE FROM pk_table WHERE shop_id = 12345 and user_id = 12345;
 ## Data Reading
 
 To retrieve data with the primary key `(1234, 1234)`, you can perform a point query by applying a filter on the primary key:
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 -- should run in batch mode
 SELECT * FROM pk_table WHERE shop_id = 1234 and user_id = 1234;
 ```
 
 To preview a subset of the data in a table, you can use a `LIMIT` clause.
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 -- should run in batch mode
 SELECT * FROM pk_table LIMIT 10;
 ```
 
 Fluss supports processing incremental data reading in flink streaming jobs:
-```sql title="Flink SQL Client"
+```sql title="Flink SQL"
 -- Submit the flink job in streaming mode for current session.
 SET 'execution.runtime-mode' = 'streaming';
+```
+
+```sql title="Flink SQL"
 -- reading changelogs from the primary-key table from beginning.
 SELECT * FROM pk_table /*+ OPTIONS('scan.startup.mode' = 'earliest') */;
 ```

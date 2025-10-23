@@ -1,11 +1,13 @@
 #!/usr/bin/env bash
 
 #
-# Copyright (c) 2024 Alibaba Group Holding Ltd.
-#
-# Licensed under the Apache License, Version 2.0 (the "License");
-# you may not use this file except in compliance with the License.
-# You may obtain a copy of the License at
+# Licensed to the Apache Software Foundation (ASF) under one
+# or more contributor license agreements.  See the NOTICE file
+# distributed with this work for additional information
+# regarding copyright ownership.  The ASF licenses this file
+# to you under the Apache License, Version 2.0 (the
+# "License"); you may not use this file except in compliance
+# with the License.  You may obtain a copy of the License at
 #
 #      http://www.apache.org/licenses/LICENSE-2.0
 #
@@ -41,6 +43,10 @@ fi
 
 if [ "$(uname)" == "Darwin" ]; then
     SHASUM="shasum -a 512"
+    # turn off xattr headers in the generated archive file on macOS
+    TAR_OPTIONS="--no-xattrs"
+    # Disable the creation of ._* files on macOS.
+    export COPYFILE_DISABLE=1
 else
     SHASUM="sha512sum"
 fi
@@ -49,6 +55,7 @@ cd ..
 
 FLUSS_DIR=`pwd`
 RELEASE_DIR=${FLUSS_DIR}/tools/releasing/release
+mkdir -p ${RELEASE_DIR}
 
 ###########################
 
@@ -62,7 +69,7 @@ make_binary_release() {
 
   cd fluss-dist/target/fluss-${RELEASE_VERSION}-bin
   ${FLUSS_DIR}/tools/releasing/collect_license_files.sh ./fluss-${RELEASE_VERSION} ./fluss-${RELEASE_VERSION}
-  tar czf "${dir_name}.tgz" fluss-*
+  tar $TAR_OPTIONS -czf "${dir_name}.tgz" fluss-*
 
   cp fluss-*.tgz ${RELEASE_DIR}
   cd ${RELEASE_DIR}

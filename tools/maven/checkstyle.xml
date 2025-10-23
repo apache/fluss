@@ -1,10 +1,12 @@
 <?xml version="1.0"?>
 <!--
- Copyright (c) 2024 Alibaba Group Holding Ltd.
-
- Licensed under the Apache License, Version 2.0 (the "License");
- you may not use this file except in compliance with the License.
- You may obtain a copy of the License at
+ Licensed to the Apache Software Foundation (ASF) under one
+ or more contributor license agreements.  See the NOTICE file
+ distributed with this work for additional information
+ regarding copyright ownership.  The ASF licenses this file
+ to you under the Apache License, Version 2.0 (the
+ "License"); you may not use this file except in compliance
+ with the License.  You may obtain a copy of the License at
 
       http://www.apache.org/licenses/LICENSE-2.0
 
@@ -15,8 +17,8 @@
  limitations under the License.
 -->
 <!DOCTYPE module PUBLIC
-    "-//Puppy Crawl//DTD Check Configuration 1.3//EN"
-    "http://www.puppycrawl.com/dtds/configuration_1_3.dtd">
+        "-//Puppy Crawl//DTD Check Configuration 1.3//EN"
+        "http://www.puppycrawl.com/dtds/configuration_1_3.dtd">
 
 <!--
 This is a checkstyle configuration file. For descriptions of
@@ -28,10 +30,6 @@ This file is based on the checkstyle file of Apache Beam.
 
 <module name="Checker">
 
-    <module name="NewlineAtEndOfFile">
-        <!-- windows can use \r\n vs \n, so enforce the most used one ie UNIx style -->
-        <property name="lineSeparator" value="lf"/>
-    </module>
 
     <module name="RegexpSingleline">
         <!-- Checks that TODOs don't have stuff in parenthesis, e.g., username. -->
@@ -83,6 +81,10 @@ This file is based on the checkstyle file of Apache Beam.
             <property name="onCommentFormat" value="CHECKSTYLE.ON\: ([\w\|]+)"/>
             <property name="checkFormat" value="$1"/>
         </module>
+
+
+        <!-- Checks for missing Javadoc comments for class, enum, interface -->
+        <module name="MissingJavadocType"/>
 
         <!--
 
@@ -174,6 +176,12 @@ This file is based on the checkstyle file of Apache Beam.
                       value="Use AssertJ assertions instead of JUnit5 assertions (easy convert using Assertions2Assertj IntelliJ plugin)."/>
         </module>
         <module name="Regexp">
+            <property name="format" value="org\.junit\.Assert\."/>
+            <property name="illegalPattern" value="true"/>
+            <property name="message"
+                      value="Use AssertJ assertions instead of JUnit assertions (easy convert using Assertions2Assertj IntelliJ plugin)."/>
+        </module>
+        <module name="Regexp">
             <property name="format" value="org\.junit\.jupiter\.api\.Timeout"/>
             <property name="illegalPattern" value="true"/>
             <property name="message"
@@ -244,8 +252,8 @@ This file is based on the checkstyle file of Apache Beam.
              Require static importing from Preconditions.
         -->
         <module name="RegexpSinglelineJava">
-            <property name="format" value="^import com.google.common.base.Preconditions;$"/>
-            <property name="message" value="Static import functions from Guava Preconditions"/>
+            <property name="format" value="^import org.apache.fluss.utils.Preconditions;$"/>
+            <property name="message" value="Static import functions from Fluss Preconditions"/>
         </module>
 
         <module name="UnusedImports">
@@ -264,16 +272,16 @@ This file is based on the checkstyle file of Apache Beam.
         <!-- Checks for Javadoc comments.                     -->
         <!-- See http://checkstyle.sf.net/config_javadoc.html -->
         <module name="JavadocMethod">
-            <property name="scope" value="protected"/>
+            <property name="accessModifiers" value="protected"/>
             <property name="severity" value="error"/>
-            <property name="allowMissingJavadoc" value="true"/>
+            <!--            <property name="allowMissingJavadoc" value="true"/>-->
             <property name="allowMissingParamTags" value="true"/>
             <property name="allowMissingReturnTag" value="true"/>
-            <property name="allowMissingThrowsTags" value="true"/>
-            <property name="allowThrowsTagsForSubclasses" value="true"/>
-            <property name="allowUndeclaredRTE" value="true"/>
+            <!--            <property name="allowMissingThrowsTags" value="true"/>-->
+            <!--            <property name="allowThrowsTagsForSubclasses" value="true"/>-->
+            <!--            <property name="allowUndeclaredRTE" value="true"/>-->
             <!-- This check sometimes failed for with "Unable to get class information for @throws tag" for custom exceptions -->
-            <property name="suppressLoadErrors" value="true"/>
+            <!--            <property name="suppressLoadErrors" value="true"/>-->
         </module>
 
         <!-- Check that paragraph tags are used correctly in Javadoc. -->
@@ -550,6 +558,12 @@ This file is based on the checkstyle file of Apache Beam.
             <property name="severity" value="error"/>
         </module>
 
+        <!-- Forbid the use of JDK ConcurrentHashMap -->
+        <module name="IllegalInstantiation">
+            <property name="classes" value="java.util.concurrent.ConcurrentHashMap"/>
+            <message key="instantiation.avoid"
+                     value="Instantiation of {0} should be avoided. Use Fluss MapUtils.newConcurrentMap() instead. See https://github.com/apache/fluss/issues/375"/>
+        </module>
     </module>
 </module>
 
