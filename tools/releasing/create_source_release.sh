@@ -56,7 +56,7 @@ fi
 cd ..
 
 FLUSS_DIR=`pwd`
-RELEASE_DIR=${FLUSS_DIR}/tools/release
+RELEASE_DIR=${FLUSS_DIR}/tools/releasing/release
 CLONE_DIR=${RELEASE_DIR}/fluss-tmp-clone
 
 echo "Creating source package"

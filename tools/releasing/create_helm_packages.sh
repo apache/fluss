@@ -56,7 +56,7 @@ fi
 cd ..
 
 FLUSS_DIR=`pwd`
-HELM_RELEASE_DIR=${FLUSS_DIR}/tools/release/helm-chart/${RELEASE_VERSION}-rc${RELEASE_CANDIDATE}
+HELM_RELEASE_DIR=${FLUSS_DIR}/tools/releasing/release/helm-chart/${RELEASE_VERSION}-rc${RELEASE_CANDIDATE}
 
 echo "Creating helm chart package"
 

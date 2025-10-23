@@ -54,7 +54,7 @@ fi
 cd ..
 
 FLUSS_DIR=`pwd`
-RELEASE_DIR=${FLUSS_DIR}/tools/release
+RELEASE_DIR=${FLUSS_DIR}/tools/releasing/release
 mkdir -p ${RELEASE_DIR}
 
 ###########################
