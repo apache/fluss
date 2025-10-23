@@ -176,9 +176,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
     private final Supplier<RebalanceManager> rebalanceManagerSupplier;
 
-    // This parameter is only used for testing.
-    private final boolean generateUnBalanceAssignment;
-
     public CoordinatorService(
             Configuration conf,
             FileSystem remoteFileSystem,
@@ -201,8 +198,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
         this.logTableAllowCreation = conf.getBoolean(ConfigOptions.LOG_TABLE_ALLOW_CREATION);
         this.kvTableAllowCreation = conf.getBoolean(ConfigOptions.KV_TABLE_ALLOW_CREATION);
-        this.generateUnBalanceAssignment =
-                conf.getBoolean(ConfigOptions.SERVER_GENERATE_UNBALANCE_ASSIGNMENT_FOR_TEST);
         this.eventManagerSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
         this.coordinatorEpochSupplier =
@@ -303,12 +298,22 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // first, generate the assignment
         TableAssignment tableAssignment = null;
+        Map<String, String> properties = tableDescriptor.getProperties();
+        boolean generateUnbalanceAssignment;
+        if (properties.containsKey(ConfigOptions.TABLE_GENERATE_UNBALANCE_TABLE_ASSIGNMENT.key())) {
+            generateUnbalanceAssignment =
+                    Boolean.parseBoolean(
+                            properties.get(
+                                    ConfigOptions.TABLE_GENERATE_UNBALANCE_TABLE_ASSIGNMENT.key()));
+        } else {
+            generateUnbalanceAssignment = false;
+        }
         // only when it's no partitioned table do we generate the assignment for it
         if (!tableDescriptor.isPartitioned()) {
             // the replication factor must be set now
             int replicaFactor = tableDescriptor.getReplicationFactor();
             TabletServerInfo[] servers = metadataCache.getLiveServers();
-            if (generateUnBalanceAssignment) {
+            if (generateUnbalanceAssignment) {
                 // this branch is only used for testing.
                 tableAssignment =
                         new TableAssignment(
@@ -509,7 +514,9 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         int replicaFactor = table.getTableConfig().getReplicationFactor();
         TabletServerInfo[] servers = metadataCache.getLiveServers();
         Map<Integer, BucketAssignment> bucketAssignments;
-        if (generateUnBalanceAssignment) {
+
+        boolean generateUnbalanceAssignment = table.getTableConfig().generateUnbalanceAssignment();
+        if (generateUnbalanceAssignment) {
             // This branch is only used for testing.
             bucketAssignments = generateUnBalanceAssignment(table.bucketCount, replicaFactor);
         } else {

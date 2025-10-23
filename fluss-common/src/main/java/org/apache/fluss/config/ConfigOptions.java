@@ -481,15 +481,6 @@ public class ConfigOptions {
                     .withDescription(
                             "Defines how long the buffer pool will block when waiting for segments to become available.");
 
-    public static final ConfigOption<Boolean> SERVER_GENERATE_UNBALANCE_ASSIGNMENT_FOR_TEST =
-            key("server.generate-unbalance-assignment-for-test")
-                    .booleanType()
-                    .defaultValue(false)
-                    .withDescription(
-                            "Whether to generate unbalance table or partition assignment. This parameter is only used "
-                                    + "for itCase. If set to true, the assignment will always be [0,1,2] as replica factor "
-                                    + "set as 3 even if there are tabletServers more than 3.");
-
     // ------------------------------------------------------------------
     // ZooKeeper Settings
     // ------------------------------------------------------------------
@@ -1402,6 +1393,14 @@ public class ConfigOptions {
                                     + "The `ignore` behavior silently skips delete requests without error. "
                                     + "The `disable` behavior rejects delete requests with a clear error message. "
                                     + "For tables with FIRST_ROW or VERSIONED merge engines, this option defaults to `ignore`.");
+
+    public static final ConfigOption<Boolean> TABLE_GENERATE_UNBALANCE_TABLE_ASSIGNMENT =
+            key("table.generate-unbalance-table-assignment")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "This parameter is only used for test. If set to true, the assignment will always be [0,1,2] "
+                                    + "as replica factor set as 3 even if there are tabletServers more than 3.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv

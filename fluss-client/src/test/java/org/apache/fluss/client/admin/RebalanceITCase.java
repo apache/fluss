@@ -40,7 +40,6 @@ import java.util.Arrays;
 import java.util.Collections;
 
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
-import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -79,26 +78,38 @@ public class RebalanceITCase {
     void testRebalanceForLogTable() throws Exception {
         String dbName = "db-balance";
         admin.createDatabase(dbName, DatabaseDescriptor.EMPTY, false).get();
-        // create somne none partitioned log table.
+
+        TableDescriptor logDescriptor =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .distributedBy(3)
+                        .property(
+                                ConfigOptions.TABLE_GENERATE_UNBALANCE_TABLE_ASSIGNMENT.key(),
+                                "true")
+                        .build();
+        // create some none partitioned log table.
         for (int i = 0; i < 6; i++) {
             long tableId =
                     createTable(
                             new TablePath(dbName, "test-rebalance_table-" + i),
-                            DATA1_TABLE_DESCRIPTOR,
+                            logDescriptor,
                             false);
             FLUSS_CLUSTER_EXTENSION.waitUntilTableReady(tableId);
         }
 
         // create some partitioned table with partition.
-        TableDescriptor descriptor =
+        TableDescriptor partitionedDescriptor =
                 TableDescriptor.builder()
                         .schema(DATA1_SCHEMA)
                         .distributedBy(3)
+                        .property(
+                                ConfigOptions.TABLE_GENERATE_UNBALANCE_TABLE_ASSIGNMENT.key(),
+                                "true")
                         .partitionedBy("b")
                         .build();
         for (int i = 0; i < 3; i++) {
             TablePath tablePath = new TablePath(dbName, "test-rebalance_partitioned_table-" + i);
-            long tableId = createTable(tablePath, descriptor, false);
+            long tableId = createTable(tablePath, partitionedDescriptor, false);
             for (int j = 0; j < 2; j++) {
                 PartitionSpec partitionSpec =
                         new PartitionSpec(Collections.singletonMap("b", String.valueOf(j)));
@@ -185,9 +196,6 @@ public class RebalanceITCase {
 
     private static Configuration initConfig() {
         Configuration configuration = new Configuration();
-        // As we want to test rebalance, we need to set this option to true for generate unbalance
-        // buckets location in server.
-        configuration.set(ConfigOptions.SERVER_GENERATE_UNBALANCE_ASSIGNMENT_FOR_TEST, true);
         configuration.set(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
         configuration.set(ConfigOptions.DEFAULT_BUCKET_NUMBER, 3);
         return configuration;
