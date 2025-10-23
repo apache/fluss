@@ -13,7 +13,7 @@ It requires a Zookeeper ensemble to be running in the same Kubernetes cluster. I
 | [Minikube](https://minikube.sigs.k8s.io/docs/)                                 | v1.36.0 |
 | [Kubernetes](https://kubernetes.io)                                            | v1.25.3 |
 | [Helm](https://helm.sh)                                                        | v3.18.6 |
-| [Apache Fluss](https://fluss.apache.org/docs/)                                 | v0.8-SNAPSHOT  |
+| [Apache Fluss](https://fluss.apache.org/docs/)                                 | v0.8.0-incubating  |
 
 
 ## Image requirements 
@@ -26,7 +26,7 @@ In minikube, you can use the local Docker daemon to build the image without push
 
 ```bash
 eval $(minikube -p minikube docker-env)
-docker build -t fluss/fluss:0.8-SNAPSHOT .
+docker build -t fluss/fluss:0.8.0-incubating .
 ```
 
 ## Overview

@@ -23,7 +23,7 @@
 image:
   registry: ""
   repository: fluss
-  tag: "0.8-SNAPSHOT"
+  tag: "0.8.0-incubating"
   pullPolicy: IfNotPresent
   pullSecrets: []
 
