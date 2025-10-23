@@ -386,7 +386,7 @@ The following SQL query should return an empty result.
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
 
-### Storage
+## Fluss Remote Storage
 
 Finally, you can use the following command to view the fluss kv snapshot stored in fluss remote storage:
 ```shell
