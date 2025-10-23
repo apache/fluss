@@ -19,7 +19,6 @@ package org.apache.fluss.record;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.exception.CorruptMessageException;
-import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.row.arrow.ArrowReader;
@@ -35,95 +34,54 @@ import org.apache.fluss.utils.crc.Crc32C;
 import java.nio.ByteBuffer;
 import java.util.NoSuchElementException;
 
+import static org.apache.fluss.record.LogRecordBatchFormat.BASE_OFFSET_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.COMMIT_TIMESTAMP_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.LENGTH_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
+import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_LEADER_EPOCH;
+import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.attributeOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.batchSequenceOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.crcOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.lastOffsetDeltaOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.leaderEpochOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
+import static org.apache.fluss.record.LogRecordBatchFormat.recordsCountOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.schemaIdOffset;
+import static org.apache.fluss.record.LogRecordBatchFormat.writeClientIdOffset;
+
 /* This file is based on source code of Apache Kafka Project (https://kafka.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
 
 /**
- * LogRecordBatch implementation for magic 0 and above. The schema of {@link LogRecordBatch} is
- * given below:
+ * LogRecordBatch implementation for different magic version.
+ *
+ * <p>To learn more about the recordBatch format, see {@link LogRecordBatchFormat}. Supported
+ * recordBatch format:
  *
  * <ul>
- *   RecordBatch =>
- *   <li>BaseOffset => Int64
- *   <li>Length => Int32
- *   <li>Magic => Int8
- *   <li>CommitTimestamp => Int64
- *   <li>CRC => Uint32
- *   <li>SchemaId => Int16
- *   <li>Attributes => Int8
- *   <li>LastOffsetDelta => Int32
- *   <li>WriterID => Int64
- *   <li>SequenceID => Int32
- *   <li>RecordCount => Int32
- *   <li>Records => [Record]
+ *   <li>V0 => {@link LogRecordBatchFormat#LOG_MAGIC_VALUE_V0}
+ *   <li>V1 => {@link LogRecordBatchFormat#LOG_MAGIC_VALUE_V1}
  * </ul>
- *
- * <p>The CRC covers the data from the schemaId to the end of the batch (i.e. all the bytes that
- * follow the CRC). It is located after the magic byte, which means that clients must parse the
- * magic byte before deciding how to interpret the bytes between the batch length and the magic
- * byte. The CRC-32C (Castagnoli) polynomial is used for the computation. CommitTimestamp is also
- * located before the CRC, because it is determined in server side.
- *
- * <p>The field 'lastOffsetDelta is used to calculate the lastOffset of the current batch as:
- * [lastOffset = baseOffset + LastOffsetDelta] instead of [lastOffset = baseOffset + recordCount -
- * 1]. The reason for introducing this field is that there might be cases where the offset delta in
- * batch does not match the recordCount. For example, when generating CDC logs for a kv table and
- * sending a batch that only contains the deletion of non-existent kvs, no CDC logs would be
- * generated. However, we need to increment the batchSequence for the corresponding writerId to make
- * sure no {@link OutOfOrderSequenceException} will be thrown. In such a case, we would generate a
- * logRecordBatch with a LastOffsetDelta of 0 but a recordCount of 0.
- *
- * <p>The current attributes are given below:
- *
- * <pre>
- * ------------------------------------------
- * |  Unused (1-7)   |  AppendOnly Flag (0) |
- * ------------------------------------------
- * </pre>
  *
  * @since 0.1
  */
 // TODO rename to MemoryLogRecordBatch
 @PublicEvolving
 public class DefaultLogRecordBatch implements LogRecordBatch {
-    protected static final int BASE_OFFSET_LENGTH = 8;
-    public static final int LENGTH_LENGTH = 4;
-    static final int MAGIC_LENGTH = 1;
-    static final int COMMIT_TIMESTAMP_LENGTH = 8;
-    static final int CRC_LENGTH = 4;
-    static final int SCHEMA_ID_LENGTH = 2;
-    static final int ATTRIBUTE_LENGTH = 1;
-    static final int LAST_OFFSET_DELTA_LENGTH = 4;
-    static final int WRITE_CLIENT_ID_LENGTH = 8;
-    static final int BATCH_SEQUENCE_LENGTH = 4;
-    static final int RECORDS_COUNT_LENGTH = 4;
-
-    static final int BASE_OFFSET_OFFSET = 0;
-    public static final int LENGTH_OFFSET = BASE_OFFSET_OFFSET + BASE_OFFSET_LENGTH;
-    static final int MAGIC_OFFSET = LENGTH_OFFSET + LENGTH_LENGTH;
-    static final int COMMIT_TIMESTAMP_OFFSET = MAGIC_OFFSET + MAGIC_LENGTH;
-    public static final int CRC_OFFSET = COMMIT_TIMESTAMP_OFFSET + COMMIT_TIMESTAMP_LENGTH;
-    protected static final int SCHEMA_ID_OFFSET = CRC_OFFSET + CRC_LENGTH;
-    public static final int ATTRIBUTES_OFFSET = SCHEMA_ID_OFFSET + SCHEMA_ID_LENGTH;
-    static final int LAST_OFFSET_DELTA_OFFSET = ATTRIBUTES_OFFSET + ATTRIBUTE_LENGTH;
-    static final int WRITE_CLIENT_ID_OFFSET = LAST_OFFSET_DELTA_OFFSET + LAST_OFFSET_DELTA_LENGTH;
-    static final int BATCH_SEQUENCE_OFFSET = WRITE_CLIENT_ID_OFFSET + WRITE_CLIENT_ID_LENGTH;
-    public static final int RECORDS_COUNT_OFFSET = BATCH_SEQUENCE_OFFSET + BATCH_SEQUENCE_LENGTH;
-    static final int RECORDS_OFFSET = RECORDS_COUNT_OFFSET + RECORDS_COUNT_LENGTH;
-
-    public static final int RECORD_BATCH_HEADER_SIZE = RECORDS_OFFSET;
-    public static final int ARROW_CHANGETYPE_OFFSET = RECORD_BATCH_HEADER_SIZE;
-    public static final int LOG_OVERHEAD = LENGTH_OFFSET + LENGTH_LENGTH;
-
     public static final byte APPEND_ONLY_FLAG_MASK = 0x01;
 
     private MemorySegment segment;
     private int position;
+    private byte magic;
 
     public void pointTo(MemorySegment segment, int position) {
         this.segment = segment;
         this.position = position;
+        this.magic = segment.get(position + MAGIC_OFFSET);
     }
 
     public void setBaseLogOffset(long baseLogOffset) {
@@ -132,7 +90,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     @Override
     public byte magic() {
-        return segment.get(position + MAGIC_OFFSET);
+        return magic;
     }
 
     @Override
@@ -144,25 +102,43 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         segment.putLong(position + COMMIT_TIMESTAMP_OFFSET, timestamp);
     }
 
+    public void setLeaderEpoch(int leaderEpoch) {
+        if (magic >= LOG_MAGIC_VALUE_V1) {
+            segment.putInt(position + leaderEpochOffset(magic), leaderEpoch);
+        } else {
+            throw new UnsupportedOperationException(
+                    "Set leader epoch is not supported for magic v" + magic + " record batch");
+        }
+    }
+
     @Override
     public long writerId() {
-        return segment.getLong(position + WRITE_CLIENT_ID_OFFSET);
+        return segment.getLong(position + writeClientIdOffset(magic));
     }
 
     @Override
     public int batchSequence() {
-        return segment.getInt(position + BATCH_SEQUENCE_OFFSET);
+        return segment.getInt(position + batchSequenceOffset(magic));
+    }
+
+    @Override
+    public int leaderEpoch() {
+        if (magic >= LOG_MAGIC_VALUE_V1) {
+            return segment.getInt(position + leaderEpochOffset(magic));
+        } else {
+            return NO_LEADER_EPOCH;
+        }
     }
 
     @Override
     public void ensureValid() {
         int sizeInBytes = sizeInBytes();
-        if (sizeInBytes < RECORD_BATCH_HEADER_SIZE) {
+        if (sizeInBytes < recordBatchHeaderSize(magic)) {
             throw new CorruptMessageException(
                     "Record batch is corrupt (the size "
                             + sizeInBytes
                             + " is smaller than the minimum allowed overhead "
-                            + RECORD_BATCH_HEADER_SIZE
+                            + recordBatchHeaderSize(magic)
                             + ")");
         }
 
@@ -178,17 +154,18 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     @Override
     public boolean isValid() {
-        return sizeInBytes() >= RECORD_BATCH_HEADER_SIZE && checksum() == computeChecksum();
+        return sizeInBytes() >= recordBatchHeaderSize(magic) && checksum() == computeChecksum();
     }
 
     private long computeChecksum() {
         ByteBuffer buffer = segment.wrap(position, sizeInBytes());
-        return Crc32C.compute(buffer, SCHEMA_ID_OFFSET, sizeInBytes() - SCHEMA_ID_OFFSET);
+        int schemaIdOffset = schemaIdOffset(magic);
+        return Crc32C.compute(buffer, schemaIdOffset, sizeInBytes() - schemaIdOffset);
     }
 
     private byte attributes() {
         // note we're not using the byte of attributes now.
-        return segment.get(ATTRIBUTES_OFFSET + position);
+        return segment.get(attributeOffset(magic) + position);
     }
 
     @Override
@@ -198,12 +175,12 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     @Override
     public long checksum() {
-        return segment.getUnsignedInt(CRC_OFFSET + position);
+        return segment.getUnsignedInt(crcOffset(magic) + position);
     }
 
     @Override
     public short schemaId() {
-        return segment.getShort(SCHEMA_ID_OFFSET + position);
+        return segment.getShort(schemaIdOffset(magic) + position);
     }
 
     @Override
@@ -217,7 +194,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     }
 
     private int lastOffsetDelta() {
-        return segment.getInt(LAST_OFFSET_DELTA_OFFSET + position);
+        return segment.getInt(lastOffsetDeltaOffset(magic) + position);
     }
 
     @Override
@@ -227,7 +204,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
 
     @Override
     public int getRecordCount() {
-        return segment.getInt(RECORDS_COUNT_OFFSET + position);
+        return segment.getInt(position + recordsCountOffset(magic));
     }
 
     @Override
@@ -278,7 +255,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
     private CloseableIterator<LogRecord> rowRecordIterator(RowType rowType, long timestamp) {
         DataType[] fieldTypes = rowType.getChildren().toArray(new DataType[0]);
         return new LogRecordIterator() {
-            int position = DefaultLogRecordBatch.this.position + RECORD_BATCH_HEADER_SIZE;
+            int position = DefaultLogRecordBatch.this.position + recordBatchHeaderSize(magic);
             int rowId = 0;
 
             @Override
@@ -307,8 +284,9 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         if (isAppendOnly) {
             // append only batch, no change type vector,
             // the start of the arrow data is the beginning of the batch records
-            int arrowOffset = position + RECORD_BATCH_HEADER_SIZE;
-            int arrowLength = sizeInBytes() - RECORD_BATCH_HEADER_SIZE;
+            int recordBatchHeaderSize = recordBatchHeaderSize(magic);
+            int arrowOffset = position + recordBatchHeaderSize;
+            int arrowLength = sizeInBytes() - recordBatchHeaderSize;
             ArrowReader reader =
                     ArrowUtils.createArrowReader(
                             segment, arrowOffset, arrowLength, root, allocator, rowType);
@@ -321,12 +299,12 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
         } else {
             // with change type, decode the change type vector first,
             // the arrow data starts after the change type vector
-            int changeTypeOffset = position + ARROW_CHANGETYPE_OFFSET;
+            int changeTypeOffset = position + arrowChangeTypeOffset(magic);
             ChangeTypeVector changeTypeVector =
                     new ChangeTypeVector(segment, changeTypeOffset, getRecordCount());
             int arrowOffset = changeTypeOffset + changeTypeVector.sizeInBytes();
             int arrowLength =
-                    sizeInBytes() - ARROW_CHANGETYPE_OFFSET - changeTypeVector.sizeInBytes();
+                    sizeInBytes() - arrowChangeTypeOffset(magic) - changeTypeVector.sizeInBytes();
             ArrowReader reader =
                     ArrowUtils.createArrowReader(
                             segment, arrowOffset, arrowLength, root, allocator, rowType);
@@ -394,7 +372,7 @@ public class DefaultLogRecordBatch implements LogRecordBatch {
                         "Found invalid record count "
                                 + numRecords
                                 + " in magic v"
-                                + magic()
+                                + magic
                                 + " batch");
             }
             this.numRecords = numRecords;

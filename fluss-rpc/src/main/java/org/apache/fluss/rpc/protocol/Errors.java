@@ -25,9 +25,12 @@ import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
+import org.apache.fluss.exception.DeletionDisabledException;
 import org.apache.fluss.exception.DuplicateSequenceException;
 import org.apache.fluss.exception.FencedLeaderEpochException;
 import org.apache.fluss.exception.FencedTieringEpochException;
+import org.apache.fluss.exception.IneligibleReplicaException;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
@@ -43,6 +46,7 @@ import org.apache.fluss.exception.InvalidUpdateVersionException;
 import org.apache.fluss.exception.KvSnapshotNotExistException;
 import org.apache.fluss.exception.KvStorageException;
 import org.apache.fluss.exception.LakeStorageNotConfiguredException;
+import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.exception.LogOffsetOutOfRangeException;
@@ -214,7 +218,17 @@ public enum Errors {
     INVALID_SERVER_RACK_INFO_EXCEPTION(
             52, "The server rack info is invalid.", InvalidServerRackInfoException::new),
     LAKE_SNAPSHOT_NOT_EXIST(
-            53, "The lake snapshot is not exist.", LakeTableSnapshotNotExistException::new);
+            53, "The lake snapshot is not exist.", LakeTableSnapshotNotExistException::new),
+    LAKE_TABLE_ALREADY_EXIST(
+            54, "The lake table already exists.", LakeTableAlreadyExistException::new),
+    INELIGIBLE_REPLICA_EXCEPTION(
+            55,
+            "The new ISR contains at least one ineligible replica.",
+            IneligibleReplicaException::new),
+    INVALID_ALTER_TABLE_EXCEPTION(
+            56, "The alter table is invalid.", InvalidAlterTableException::new),
+    DELETION_DISABLED_EXCEPTION(
+            57, "Deletion operations are disabled on this table.", DeletionDisabledException::new);
 
     private static final Logger LOG = LoggerFactory.getLogger(Errors.class);
 

@@ -70,8 +70,9 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
-import static org.apache.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
-import static org.apache.fluss.record.LogRecordBatch.NO_WRITER_ID;
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.LogRecordReadContext.createArrowReadContext;
 import static org.apache.fluss.record.TestData.BASE_OFFSET;
 import static org.apache.fluss.record.TestData.DATA1;
@@ -150,15 +151,21 @@ public class DataTestUtils {
         return (CompactedRow) rowEncoder.finishRow();
     }
 
-    public static MemoryLogRecords genMemoryLogRecordsByObject(List<Object[]> objects)
+    public static MemoryLogRecords genMemoryLogRecordsByObject(byte magic, List<Object[]> objects)
             throws Exception {
         return createRecordsWithoutBaseLogOffset(
                 DATA1_ROW_TYPE,
                 DEFAULT_SCHEMA_ID,
                 0,
                 System.currentTimeMillis(),
+                magic,
                 objects,
                 LogFormat.ARROW);
+    }
+
+    public static MemoryLogRecords genMemoryLogRecordsByObject(List<Object[]> objects)
+            throws Exception {
+        return genMemoryLogRecordsByObject(CURRENT_LOG_MAGIC_VALUE, objects);
     }
 
     public static MemoryLogRecords genMemoryLogRecordsWithWriterId(
@@ -171,6 +178,7 @@ public class DataTestUtils {
                 DEFAULT_SCHEMA_ID,
                 baseOffset,
                 System.currentTimeMillis(),
+                CURRENT_LOG_MAGIC_VALUE,
                 writerId,
                 batchSequence,
                 changeTypes,
@@ -196,7 +204,13 @@ public class DataTestUtils {
     public static MemoryLogRecords genMemoryLogRecordsWithBaseOffset(
             long offsetBase, List<Object[]> objects) throws Exception {
         return createRecordsWithoutBaseLogOffset(
-                DATA1_ROW_TYPE, DEFAULT_SCHEMA_ID, offsetBase, -1L, objects, LogFormat.ARROW);
+                DATA1_ROW_TYPE,
+                DEFAULT_SCHEMA_ID,
+                offsetBase,
+                -1L,
+                CURRENT_LOG_MAGIC_VALUE,
+                objects,
+                LogFormat.ARROW);
     }
 
     public static MemoryLogRecords genLogRecordsWithBaseOffsetAndTimestamp(
@@ -206,6 +220,7 @@ public class DataTestUtils {
                 DEFAULT_SCHEMA_ID,
                 offsetBase,
                 maxTimestamp,
+                CURRENT_LOG_MAGIC_VALUE,
                 objects,
                 LogFormat.ARROW);
     }
@@ -316,6 +331,7 @@ public class DataTestUtils {
                         DEFAULT_SCHEMA_ID,
                         baseOffset,
                         System.currentTimeMillis(),
+                        CURRENT_LOG_MAGIC_VALUE,
                         objects,
                         logFormat));
         fileLogRecords.flush();
@@ -358,6 +374,7 @@ public class DataTestUtils {
             int schemaId,
             long offsetBase,
             long maxTimestamp,
+            byte magic,
             List<Object[]> objects,
             LogFormat logFormat)
             throws Exception {
@@ -368,6 +385,7 @@ public class DataTestUtils {
                 schemaId,
                 offsetBase,
                 maxTimestamp,
+                magic,
                 NO_WRITER_ID,
                 NO_BATCH_SEQUENCE,
                 changeTypes,
@@ -381,6 +399,7 @@ public class DataTestUtils {
             int schemaId,
             long offsetBase,
             long maxTimestamp,
+            byte magic,
             long writerId,
             int batchSequence,
             List<ChangeType> changeTypes,
@@ -393,6 +412,7 @@ public class DataTestUtils {
                 schemaId,
                 offsetBase,
                 maxTimestamp,
+                magic,
                 writerId,
                 batchSequence,
                 changeTypes,
@@ -406,6 +426,7 @@ public class DataTestUtils {
             int schemaId,
             long offsetBase,
             long maxTimestamp,
+            byte magic,
             long writerId,
             int batchSequence,
             List<ChangeType> changeTypes,
@@ -420,6 +441,7 @@ public class DataTestUtils {
                     rowType,
                     offsetBase,
                     maxTimestamp,
+                    magic,
                     schemaId,
                     writerId,
                     batchSequence,
@@ -458,7 +480,7 @@ public class DataTestUtils {
         }
         builder.setWriterState(writerId, batchSequence);
         MemoryLogRecords memoryLogRecords = MemoryLogRecords.pointToBytesView(builder.build());
-        memoryLogRecords.ensureValid();
+        memoryLogRecords.ensureValid(DEFAULT_MAGIC);
 
         ((DefaultLogRecordBatch) memoryLogRecords.batches().iterator().next())
                 .setCommitTimestamp(maxTimestamp);
@@ -470,6 +492,7 @@ public class DataTestUtils {
             RowType rowType,
             long baseLogOffset,
             long maxTimestamp,
+            byte magic,
             int schemaId,
             long writerId,
             int batchSequence,
@@ -485,6 +508,7 @@ public class DataTestUtils {
             MemoryLogRecordsArrowBuilder builder =
                     MemoryLogRecordsArrowBuilder.builder(
                             baseLogOffset,
+                            magic,
                             schemaId,
                             writer,
                             new ManagedPagedOutputView(new TestingMemorySegmentPool(10 * 1024)));
@@ -497,7 +521,7 @@ public class DataTestUtils {
 
             ((DefaultLogRecordBatch) memoryLogRecords.batches().iterator().next())
                     .setCommitTimestamp(maxTimestamp);
-            memoryLogRecords.ensureValid();
+            memoryLogRecords.ensureValid(magic);
             return memoryLogRecords;
         }
     }

@@ -20,6 +20,7 @@ package org.apache.fluss.flink.catalog;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
+import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.lake.LakeTableFactory;
 import org.apache.fluss.flink.sink.FlinkTableSink;
 import org.apache.fluss.flink.source.FlinkTableSource;
@@ -58,6 +59,7 @@ import java.util.Optional;
 import java.util.Set;
 
 import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DELETE_BEHAVIOR;
 import static org.apache.fluss.config.FlussConfigUtils.CLIENT_PREFIX;
 import static org.apache.fluss.flink.catalog.FlinkCatalog.LAKE_TABLE_SPLITTER;
 import static org.apache.fluss.flink.utils.DataLakeUtils.getDatalakeFormat;
@@ -68,7 +70,12 @@ import static org.apache.fluss.flink.utils.FlinkConversions.toFlinkOption;
 /** Factory to create table source and table sink for Fluss. */
 public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTableSinkFactory {
 
+    protected final LakeFlinkCatalog lakeFlinkCatalog;
     private volatile LakeTableFactory lakeTableFactory;
+
+    public FlinkTableFactory(LakeFlinkCatalog lakeFlinkCatalog) {
+        this.lakeFlinkCatalog = lakeFlinkCatalog;
+    }
 
     @Override
     public DynamicTableSource createDynamicTableSource(Context context) {
@@ -76,9 +83,12 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         ObjectIdentifier tableIdentifier = context.getObjectIdentifier();
         String tableName = tableIdentifier.getObjectName();
         if (tableName.contains(LAKE_TABLE_SPLITTER)) {
-            tableName = tableName.substring(0, tableName.indexOf(LAKE_TABLE_SPLITTER));
+            // Extract the lake table name: for "table$lake" -> "table"
+            // for "table$lake$snapshots" -> "table$snapshots"
+            String lakeTableName = tableName.replaceFirst("\\$lake", "");
+
             lakeTableFactory = mayInitLakeTableFactory();
-            return lakeTableFactory.createDynamicTableSource(context, tableName);
+            return lakeTableFactory.createDynamicTableSource(context, lakeTableName);
         }
 
         FactoryUtil.TableFactoryHelper helper = FactoryUtil.createTableFactoryHelper(this, context);
@@ -178,6 +188,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                 tableOptions.get(toFlinkOption(ConfigOptions.TABLE_MERGE_ENGINE)),
                 tableOptions.get(toFlinkOption(TABLE_DATALAKE_FORMAT)),
                 tableOptions.get(FlinkConnectorOptions.SINK_IGNORE_DELETE),
+                tableOptions.get(toFlinkOption(TABLE_DELETE_BEHAVIOR)),
                 tableOptions.get(FlinkConnectorOptions.BUCKET_NUMBER),
                 getBucketKeys(tableOptions),
                 tableOptions.get(FlinkConnectorOptions.SINK_BUCKET_SHUFFLE));
@@ -248,7 +259,7 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
         if (lakeTableFactory == null) {
             synchronized (this) {
                 if (lakeTableFactory == null) {
-                    lakeTableFactory = new LakeTableFactory();
+                    lakeTableFactory = new LakeTableFactory(lakeFlinkCatalog);
                 }
             }
         }

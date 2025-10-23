@@ -36,6 +36,7 @@ import org.apache.fluss.server.TabletManagerBase;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.BufferAllocator;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.memory.RootAllocator;
@@ -69,6 +70,8 @@ public final class KvManager extends TabletManagerBase {
     private static final Logger LOG = LoggerFactory.getLogger(KvManager.class);
     private final LogManager logManager;
 
+    private final TabletServerMetricGroup serverMetricGroup;
+
     private final ZooKeeperClient zkClient;
 
     private final Map<TableBucket, KvTablet> currentKvs = MapUtils.newConcurrentHashMap();
@@ -91,7 +94,8 @@ public final class KvManager extends TabletManagerBase {
             Configuration conf,
             ZooKeeperClient zkClient,
             int recoveryThreadsPerDataDir,
-            LogManager logManager)
+            LogManager logManager,
+            TabletServerMetricGroup tabletServerMetricGroup)
             throws IOException {
         super(TabletType.KV, dataDir, conf, recoveryThreadsPerDataDir);
         this.logManager = logManager;
@@ -100,10 +104,14 @@ public final class KvManager extends TabletManagerBase {
         this.zkClient = zkClient;
         this.remoteKvDir = FlussPaths.remoteKvDir(conf);
         this.remoteFileSystem = remoteKvDir.getFileSystem();
+        this.serverMetricGroup = tabletServerMetricGroup;
     }
 
     public static KvManager create(
-            Configuration conf, ZooKeeperClient zkClient, LogManager logManager)
+            Configuration conf,
+            ZooKeeperClient zkClient,
+            LogManager logManager,
+            TabletServerMetricGroup tabletServerMetricGroup)
             throws IOException {
         String dataDirString = conf.getString(ConfigOptions.DATA_DIR);
         File dataDir = new File(dataDirString).getAbsoluteFile();
@@ -112,7 +120,8 @@ public final class KvManager extends TabletManagerBase {
                 conf,
                 zkClient,
                 conf.getInt(ConfigOptions.NETTY_SERVER_NUM_WORKER_THREADS),
-                logManager);
+                logManager,
+                tabletServerMetricGroup);
     }
 
     public void startup() {
@@ -171,6 +180,7 @@ public final class KvManager extends TabletManagerBase {
                                     logTablet,
                                     tabletDir,
                                     conf,
+                                    serverMetricGroup,
                                     arrowBufferAllocator,
                                     memorySegmentPool,
                                     kvFormat,
@@ -279,6 +289,7 @@ public final class KvManager extends TabletManagerBase {
                         logTablet,
                         tabletDir,
                         conf,
+                        serverMetricGroup,
                         arrowBufferAllocator,
                         memorySegmentPool,
                         tableInfo.getTableConfig().getKvFormat(),

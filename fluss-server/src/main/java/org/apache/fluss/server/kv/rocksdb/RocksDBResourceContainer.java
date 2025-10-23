@@ -22,6 +22,7 @@ import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ReadableConfig;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.IOUtils;
 
 import org.rocksdb.BlockBasedTableConfig;
@@ -42,6 +43,7 @@ import org.slf4j.LoggerFactory;
 import javax.annotation.Nullable;
 
 import java.io.File;
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
@@ -99,7 +101,7 @@ public class RocksDBResourceContainer implements AutoCloseable {
     }
 
     /** Gets the RocksDB {@link DBOptions} to be used for RocksDB instances. */
-    public DBOptions getDbOptions() {
+    public DBOptions getDbOptions() throws IOException {
         // initial options from common profile
         DBOptions opt = createBaseCommonDBOptions();
         handlesToClose.add(opt);
@@ -175,7 +177,8 @@ public class RocksDBResourceContainer implements AutoCloseable {
     }
 
     @SuppressWarnings("ConstantConditions")
-    private DBOptions setDBOptionsFromConfigurableOptions(DBOptions currentOptions) {
+    private DBOptions setDBOptionsFromConfigurableOptions(DBOptions currentOptions)
+            throws IOException {
         currentOptions.setMaxBackgroundJobs(
                 internalGetOption(ConfigOptions.KV_MAX_BACKGROUND_THREADS));
 
@@ -280,12 +283,16 @@ public class RocksDBResourceContainer implements AutoCloseable {
      *
      * @param dbOptions The RocksDB {@link DBOptions}.
      */
-    private void relocateDefaultDbLogDir(DBOptions dbOptions) {
+    private void relocateDefaultDbLogDir(DBOptions dbOptions) throws IOException {
         String logFilePath = System.getProperty("log.file");
         if (logFilePath != null) {
             File logFile = resolveFileLocation(logFilePath);
             if (logFile != null && resolveFileLocation(logFile.getParent()) != null) {
-                dbOptions.setDbLogDir(logFile.getParent());
+                File logFileDirectory = logFile.getParentFile();
+                File rocksDbLogDirectory = FileUtils.createDirectory(logFileDirectory, "rocksdb");
+                if (resolveFileLocation(rocksDbLogDirectory.getAbsolutePath()) != null) {
+                    dbOptions.setDbLogDir(rocksDbLogDirectory.getAbsolutePath());
+                }
             }
         }
     }

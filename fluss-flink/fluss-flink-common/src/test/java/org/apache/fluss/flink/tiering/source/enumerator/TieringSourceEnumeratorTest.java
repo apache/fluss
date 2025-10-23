@@ -20,6 +20,7 @@ package org.apache.fluss.flink.tiering.source.enumerator;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
+import org.apache.fluss.flink.tiering.event.TieringFailOverEvent;
 import org.apache.fluss.flink.tiering.source.TieringTestBase;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
@@ -644,6 +645,48 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         }
     }
 
+    @Test
+    void testHandleFailOverEvent() throws Throwable {
+        TablePath tablePath1 = TablePath.of(DEFAULT_DB, "tiering-failover-test-log-table1");
+        createTable(tablePath1, DEFAULT_LOG_TABLE_DESCRIPTOR);
+
+        TablePath tablePath2 = TablePath.of(DEFAULT_DB, "tiering-failover-test-log-table2");
+        createTable(tablePath2, DEFAULT_LOG_TABLE_DESCRIPTOR);
+
+        int numSubtasks = 1;
+        try (MockSplitEnumeratorContext<TieringSplit> context =
+                new MockSplitEnumeratorContext<>(numSubtasks)) {
+            TieringSourceEnumerator enumerator =
+                    new TieringSourceEnumerator(flussConf, context, 500);
+
+            enumerator.start();
+            assertThat(context.getSplitsAssignmentSequence()).isEmpty();
+
+            // register one reader
+            int subtaskId = 0;
+            registerReader(context, enumerator, subtaskId, "localhost-" + subtaskId);
+
+            // handle split request
+            enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
+
+            // should get one tiering split, and the split is for tablePath1
+            verifyTieringSplitAssignment(context, 1, tablePath1);
+
+            // clean assignment
+            context.getSplitsAssignmentSequence().clear();
+
+            // enumerator handle TieringFailOverEvent, which will mark current tiering tablePath1 as
+            // fail, and all pending splits should be clear
+            enumerator.handleSourceEvent(subtaskId, new TieringFailOverEvent());
+
+            // handle split request
+            enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
+            // now, should get another one tiering split, the split is for tablePath2 since all
+            // pending split for tablePath1 is clear
+            verifyTieringSplitAssignment(context, 1, tablePath2);
+        }
+    }
+
     private static CommitLakeTableSnapshotRequest genCommitLakeTableSnapshotRequest(
             long tableId,
             @Nullable Long partitionId,
@@ -696,5 +739,24 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         return splits.stream()
                 .sorted(Comparator.comparing(Object::toString))
                 .collect(Collectors.toList());
+    }
+
+    private void verifyTieringSplitAssignment(
+            MockSplitEnumeratorContext<TieringSplit> context,
+            int expectedSplitSize,
+            TablePath expectedTablePath)
+            throws Throwable {
+        waitUntilTieringTableSplitAssignmentReady(context, 1, 200);
+        List<SplitsAssignment<TieringSplit>> actualAssignment =
+                context.getSplitsAssignmentSequence();
+
+        List<TieringSplit> allTieringSplits =
+                actualAssignment.stream()
+                        .flatMap(assignments -> assignments.assignment().values().stream())
+                        .flatMap(List::stream)
+                        .collect(Collectors.toList());
+        assertThat(allTieringSplits).hasSize(expectedSplitSize);
+        assertThat(allTieringSplits)
+                .allMatch(tieringSplit -> tieringSplit.getTablePath().equals(expectedTablePath));
     }
 }

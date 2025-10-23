@@ -97,7 +97,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
-                            Collections.emptyList());
+                            null,
+                            null);
 
             enumerator.start();
 
@@ -144,7 +145,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
-                            Collections.emptyList());
+                            null,
+                            null);
             enumerator.start();
             // register all read
             for (int i = 0; i < numSubtasks; i++) {
@@ -215,7 +217,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
-                            Collections.emptyList());
+                            null,
+                            null);
 
             enumerator.start();
 
@@ -261,7 +264,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
-                            Collections.emptyList());
+                            null,
+                            null);
 
             enumerator.start();
 
@@ -297,7 +301,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             OffsetsInitializer.full(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
-                            Collections.emptyList());
+                            null,
+                            null);
 
             enumerator.start();
 
@@ -357,7 +362,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                             OffsetsInitializer.earliest(),
                             DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                             streaming,
-                            Collections.emptyList(),
+                            null,
                             null);
 
             enumerator.start();
@@ -391,6 +396,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         ZooKeeperClient zooKeeperClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         try (MockSplitEnumeratorContext<SourceSplitBase> context =
                         new MockSplitEnumeratorContext<>(numSubtasks);
+                MockWorkExecutor workExecutor = new MockWorkExecutor(context);
                 FlinkSourceEnumerator enumerator =
                         new FlinkSourceEnumerator(
                                 DEFAULT_TABLE_PATH,
@@ -398,23 +404,28 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 isPrimaryKeyTable,
                                 true,
                                 context,
+                                Collections.emptySet(),
+                                Collections.emptyMap(),
+                                null,
                                 OffsetsInitializer.full(),
                                 DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                                 streaming,
-                                Collections.emptyList())) {
+                                null,
+                                null,
+                                workExecutor)) {
             Map<Long, String> partitionNameByIds =
                     waitUntilPartitions(zooKeeperClient, DEFAULT_TABLE_PATH);
             enumerator.start();
 
             // invoke partition discovery callable again and there should be pending assignments.
-            runPeriodicPartitionDiscovery(context);
+            runPeriodicPartitionDiscovery(workExecutor);
 
             // register two readers
             registerReader(context, enumerator, 0);
             registerReader(context, enumerator, 1);
 
             // invoke partition discovery callable again, shouldn't produce RemovePartitionEvent.
-            runPeriodicPartitionDiscovery(context);
+            runPeriodicPartitionDiscovery(workExecutor);
             assertThat(context.getSentSourceEvent()).isEmpty();
 
             // now, register the third reader
@@ -434,7 +445,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                     createPartitions(zooKeeperClient, DEFAULT_TABLE_PATH, newPartitions);
 
             /// invoke partition discovery callable again and there should assignments.
-            runPeriodicPartitionDiscovery(context);
+            runPeriodicPartitionDiscovery(workExecutor);
 
             expectedAssignment = expectAssignments(enumerator, tableId, newPartitionNameIds);
             actualAssignments = getLastReadersAssignments(context);
@@ -450,7 +461,7 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                     createPartitions(zooKeeperClient, DEFAULT_TABLE_PATH, newPartitions);
 
             // invoke partition discovery callable again
-            runPeriodicPartitionDiscovery(context);
+            runPeriodicPartitionDiscovery(workExecutor);
 
             // there should be partition removed events
             Map<Integer, List<SourceEvent>> sentSourceEvents = context.getSentSourceEvent();
@@ -516,7 +527,8 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
                                 OffsetsInitializer.full(),
                                 DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
                                 streaming,
-                                Collections.emptyList())) {
+                                null,
+                                null)) {
 
             // test splits for same non-partitioned bucket, should assign to same task
             TableBucket t1 = new TableBucket(tableId, 0);
@@ -587,13 +599,12 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         }
     }
 
-    private void runPeriodicPartitionDiscovery(MockSplitEnumeratorContext<SourceSplitBase> context)
-            throws Throwable {
+    private void runPeriodicPartitionDiscovery(MockWorkExecutor workExecutor) throws Throwable {
         // Fetch potential topic descriptions
-        context.runPeriodicCallable(PARTITION_DISCOVERY_CALLABLE_INDEX);
+        workExecutor.runPeriodicCallable(PARTITION_DISCOVERY_CALLABLE_INDEX);
         // Initialize offsets for discovered partitions
-        if (!context.getOneTimeCallables().isEmpty()) {
-            context.runNextOneTimeCallable();
+        if (!workExecutor.getOneTimeCallables().isEmpty()) {
+            workExecutor.runNextOneTimeCallable();
         }
     }
 

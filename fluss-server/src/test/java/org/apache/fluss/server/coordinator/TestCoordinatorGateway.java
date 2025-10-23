@@ -18,10 +18,15 @@
 package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.exception.FencedLeaderEpochException;
+import org.apache.fluss.exception.IneligibleReplicaException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.AlterTableResponse;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
 import org.apache.fluss.rpc.messages.ApiVersionsResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
@@ -30,6 +35,8 @@ import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
+import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
+import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateAclsResponse;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
@@ -40,6 +47,8 @@ import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.CreateTableResponse;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
+import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.DescribeClusterConfigsResponse;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropAclsResponse;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
@@ -87,8 +96,10 @@ import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -103,6 +114,7 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     private final @Nullable ZooKeeperClient zkClient;
     public final AtomicBoolean commitRemoteLogManifestFail = new AtomicBoolean(false);
     public final Map<TableBucket, Integer> currentLeaderEpoch = new HashMap<>();
+    private Set<Integer> shutdownTabletServers;
 
     public TestCoordinatorGateway() {
         this(null);
@@ -110,6 +122,7 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
 
     public TestCoordinatorGateway(ZooKeeperClient zkClient) {
         this.zkClient = zkClient;
+        this.shutdownTabletServers = new HashSet<>();
     }
 
     @Override
@@ -129,6 +142,11 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
 
     @Override
     public CompletableFuture<CreateTableResponse> createTable(CreateTableRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request) {
         throw new UnsupportedOperationException();
     }
 
@@ -228,7 +246,12 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
                 (tb, leaderAndIsr) -> {
                     Integer currentLeaderEpoch = this.currentLeaderEpoch.getOrDefault(tb, 0);
                     int requestLeaderEpoch = leaderAndIsr.leaderEpoch();
-
+                    Set<Integer> ineligibleReplicas = new HashSet<>();
+                    for (int replica : leaderAndIsr.isr()) {
+                        if (shutdownTabletServers.contains(replica)) {
+                            ineligibleReplicas.add(replica);
+                        }
+                    }
                     AdjustIsrResultForBucket adjustIsrResultForBucket;
                     if (requestLeaderEpoch < currentLeaderEpoch) {
                         adjustIsrResultForBucket =
@@ -237,6 +260,19 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
                                         ApiError.fromThrowable(
                                                 new FencedLeaderEpochException(
                                                         "request leader epoch is fenced.")));
+                    } else if (!ineligibleReplicas.isEmpty()) {
+                        adjustIsrResultForBucket =
+                                new AdjustIsrResultForBucket(
+                                        tb,
+                                        ApiError.fromThrowable(
+                                                new IneligibleReplicaException(
+                                                        String.format(
+                                                                "Rejecting adjustIsr request for table bucket %s because it "
+                                                                        + "specified ineligible replicas %s in the new ISR %s",
+                                                                tb,
+                                                                ineligibleReplicas,
+                                                                leaderAndIsr))));
+
                     } else {
                         adjustIsrResultForBucket =
                                 new AdjustIsrResultForBucket(
@@ -297,6 +333,12 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
     }
 
     @Override
+    public CompletableFuture<ControlledShutdownResponse> controlledShutdown(
+            ControlledShutdownRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
     public CompletableFuture<ListAclsResponse> listAcls(ListAclsRequest request) {
         throw new UnsupportedOperationException();
     }
@@ -311,7 +353,23 @@ public class TestCoordinatorGateway implements CoordinatorGateway {
         throw new UnsupportedOperationException();
     }
 
+    @Override
+    public CompletableFuture<AlterClusterConfigsResponse> alterClusterConfigs(
+            AlterClusterConfigsRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
+    @Override
+    public CompletableFuture<DescribeClusterConfigsResponse> describeClusterConfigs(
+            DescribeClusterConfigsRequest request) {
+        throw new UnsupportedOperationException();
+    }
+
     public void setCurrentLeaderEpoch(TableBucket tableBucket, int leaderEpoch) {
         currentLeaderEpoch.put(tableBucket, leaderEpoch);
+    }
+
+    public void setShutdownTabletServers(Set<Integer> shutdownTabletServers) {
+        this.shutdownTabletServers = shutdownTabletServers;
     }
 }

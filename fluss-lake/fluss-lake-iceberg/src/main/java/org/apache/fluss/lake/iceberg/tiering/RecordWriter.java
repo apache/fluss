@@ -44,7 +44,7 @@ public abstract class RecordWriter implements AutoCloseable {
         this.bucket = tableBucket.getBucket();
         this.flussRecordAsIcebergRecord =
                 new FlussRecordAsIcebergRecord(
-                        tableBucket.getBucket(), icebergSchema, flussRowType);
+                        tableBucket.getBucket(), icebergSchema.asStruct(), flussRowType);
     }
 
     public abstract void write(LogRecord record) throws Exception;

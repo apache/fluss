@@ -34,6 +34,18 @@ public class MurmurHashUtils {
     public static final int DEFAULT_SEED = 42;
 
     /**
+     * Hash unsafe bytes, length must be aligned to 4 bytes.
+     *
+     * @param base base unsafe object
+     * @param offset offset for unsafe object
+     * @param lengthInBytes length in bytes
+     * @return hash code
+     */
+    public static int hashUnsafeBytesByWords(Object base, long offset, int lengthInBytes) {
+        return hashUnsafeBytesByWords(base, offset, lengthInBytes, DEFAULT_SEED);
+    }
+
+    /**
      * Hash bytes in MemorySegment.
      *
      * @param segment segment.
@@ -60,6 +72,18 @@ public class MurmurHashUtils {
      */
     public static int hashUnsafeBytes(Object base, long offset, int lengthInBytes) {
         return hashUnsafeBytes(base, offset, lengthInBytes, DEFAULT_SEED);
+    }
+
+    /**
+     * Hash bytes in MemorySegment, length must be aligned to 4 bytes.
+     *
+     * @param segment segment.
+     * @param offset offset for MemorySegment
+     * @param lengthInBytes length in MemorySegment
+     * @return hash code
+     */
+    public static int hashBytesByWords(MemorySegment segment, int offset, int lengthInBytes) {
+        return hashBytesByWords(segment, offset, lengthInBytes, DEFAULT_SEED);
     }
 
     private static int hashBytes(MemorySegment segment, int offset, int lengthInBytes, int seed) {
@@ -104,6 +128,18 @@ public class MurmurHashUtils {
             int k1 = mixK1(halfWord);
             h1 = mixH1(h1, k1);
         }
+        return fmix(h1, lengthInBytes);
+    }
+
+    private static int hashUnsafeBytesByWords(
+            Object base, long offset, int lengthInBytes, int seed) {
+        int h1 = hashUnsafeBytesByInt(base, offset, lengthInBytes, seed);
+        return fmix(h1, lengthInBytes);
+    }
+
+    private static int hashBytesByWords(
+            MemorySegment segment, int offset, int lengthInBytes, int seed) {
+        int h1 = hashBytesByInt(segment, offset, lengthInBytes, seed);
         return fmix(h1, lengthInBytes);
     }
 

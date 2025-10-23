@@ -40,11 +40,13 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  */
 public class CompletedSnapshotHandle {
 
+    private final long snapshotId;
     private final FsPath metadataFilePath;
     private final long logOffset;
 
-    public CompletedSnapshotHandle(FsPath metadataFilePath, long logOffset) {
+    public CompletedSnapshotHandle(long snapshotId, FsPath metadataFilePath, long logOffset) {
         checkNotNull(metadataFilePath);
+        this.snapshotId = snapshotId;
         this.metadataFilePath = metadataFilePath;
         this.logOffset = logOffset;
     }
@@ -76,6 +78,10 @@ public class CompletedSnapshotHandle {
 
     public long getLogOffset() {
         return logOffset;
+    }
+
+    public long getSnapshotId() {
+        return snapshotId;
     }
 
     public void discard() throws Exception {

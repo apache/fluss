@@ -54,6 +54,12 @@ public class TablePath implements Serializable {
     // RecordAccumulator.ready)
     private Integer hash;
 
+    // Prefix reserved for internal system names. User-defined database and table and others names
+    // are not
+    // allowed to start with this prefix to prevent conflicts with system-generated identifiers.
+    // This convention aligns with and maintains compatibility with Apache Kafka's naming standards.
+    private static final String INTERNAL_NAME_PREFIX = "__";
+
     public TablePath(String databaseName, String tableName) {
         this.databaseName = databaseName;
         this.tableName = tableName;
@@ -127,18 +133,36 @@ public class TablePath implements Serializable {
 
     public static void validateDatabaseName(String databaseName) throws InvalidDatabaseException {
         String dbError = detectInvalidName(databaseName);
-        if (dbError != null) {
+        String dbInternalNameError = validatePrefix(databaseName);
+        if (dbError != null || dbInternalNameError != null) {
             throw new InvalidDatabaseException(
-                    "Database name " + databaseName + " is invalid: " + dbError);
+                    "Database name "
+                            + databaseName
+                            + " is invalid: "
+                            + (dbError != null ? dbError : dbInternalNameError));
         }
     }
 
     public static void validateTableName(String tableName) throws InvalidTableException {
         String tableError = detectInvalidName(tableName);
-        if (tableError != null) {
+        String tableInternalNameError = validatePrefix(tableName);
+        if (tableError != null || tableInternalNameError != null) {
             throw new InvalidTableException(
-                    "Table name " + tableName + " is invalid: " + tableError);
+                    "Table name "
+                            + tableName
+                            + " is invalid: "
+                            + (tableError != null ? tableError : tableInternalNameError));
         }
+    }
+
+    public static String validatePrefix(String identifier) throws InvalidTableException {
+        if (identifier != null && identifier.startsWith(INTERNAL_NAME_PREFIX)) {
+            return "'"
+                    + INTERNAL_NAME_PREFIX
+                    + "' is not allowed as prefix, since it is reserved"
+                    + " for internal databases/internal tables/internal partitions in Fluss server";
+        }
+        return null;
     }
 
     public static String detectInvalidName(String identifier) {

@@ -24,16 +24,21 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.InvalidServerRackInfoException;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.GatewayClientProxy;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.RpcServer;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
+import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
+import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
+import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.snapshot.DefaultCompletedKvSnapshotCommitter;
@@ -68,6 +73,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.apache.fluss.config.ConfigOptions.BACKGROUND_THREADS;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableBucket;
 
 /**
  * Tablet server implementation. The tablet server is responsible to manage the log tablet and kv
@@ -144,6 +150,15 @@ public class TabletServer extends ServerBase {
     @Nullable
     private Authorizer authorizer;
 
+    @GuardedBy("lock")
+    private DynamicConfigManager dynamicConfigManager;
+
+    @GuardedBy("lock")
+    private LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
+
+    @GuardedBy("lock")
+    private CoordinatorGateway coordinatorGateway;
+
     public TabletServer(Configuration conf) {
         this(conf, SystemClock.getInstance());
     }
@@ -183,16 +198,23 @@ public class TabletServer extends ServerBase {
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
-            MetadataManager metadataManager = new MetadataManager(zkClient, conf);
-            this.metadataCache = new TabletServerMetadataCache(metadataManager, zkClient);
+            this.lakeCatalogDynamicLoader =
+                    new LakeCatalogDynamicLoader(conf, pluginManager, false);
+            MetadataManager metadataManager =
+                    new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
+            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, false);
+            dynamicConfigManager.startup();
+
+            this.metadataCache = new TabletServerMetadataCache(metadataManager);
 
             this.scheduler = new FlussScheduler(conf.get(BACKGROUND_THREADS));
             scheduler.startup();
 
-            this.logManager = LogManager.create(conf, zkClient, scheduler, clock);
+            this.logManager =
+                    LogManager.create(conf, zkClient, scheduler, clock, tabletServerMetricGroup);
             logManager.startup();
 
-            this.kvManager = KvManager.create(conf, zkClient, logManager);
+            this.kvManager = KvManager.create(conf, zkClient, logManager, tabletServerMetricGroup);
             kvManager.startup();
 
             this.authorizer = AuthorizerLoader.createAuthorizer(conf, zkClient, pluginManager);
@@ -205,7 +227,7 @@ public class TabletServer extends ServerBase {
                     new ClientMetricGroup(metricRegistry, SERVER_NAME + "-" + serverId);
             this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);
 
-            CoordinatorGateway coordinatorGateway =
+            this.coordinatorGateway =
                     GatewayClientProxy.createGatewayProxy(
                             () -> metadataCache.getCoordinatorServer(interListenerName),
                             rpcClient,
@@ -237,7 +259,8 @@ public class TabletServer extends ServerBase {
                             replicaManager,
                             metadataCache,
                             metadataManager,
-                            authorizer);
+                            authorizer,
+                            dynamicConfigManager);
 
             RequestsMetrics requestsMetrics =
                     RequestsMetrics.createTabletServerRequestMetrics(tabletServerMetricGroup);
@@ -260,6 +283,9 @@ public class TabletServer extends ServerBase {
     @Override
     protected CompletableFuture<Result> closeAsync(Result result) {
         if (isShutDown.compareAndSet(false, true)) {
+
+            controlledShutDown();
+
             CompletableFuture<Void> serviceShutdownFuture = stopServices();
 
             serviceShutdownFuture.whenComplete(
@@ -396,6 +422,14 @@ public class TabletServer extends ServerBase {
                     authorizer.close();
                 }
 
+                if (dynamicConfigManager != null) {
+                    dynamicConfigManager.close();
+                }
+
+                if (lakeCatalogDynamicLoader != null) {
+                    lakeCatalogDynamicLoader.close();
+                }
+
             } catch (Throwable t) {
                 exception = ExceptionUtils.firstOrSuppressed(t, exception);
             }
@@ -404,6 +438,64 @@ public class TabletServer extends ServerBase {
                 terminationFutures.add(FutureUtils.completedExceptionally(exception));
             }
             return FutureUtils.completeAll(terminationFutures);
+        }
+    }
+
+    private void controlledShutDown() {
+        LOG.info("Starting controlled shutdown.");
+
+        // We request the CoordinatorServer to do a controlled shutdown. On failure, we backoff for
+        // a period of time and try again for a number of retries. If all the attempt fails, we
+        // simply force the shutdown.
+        boolean shutdownSucceeded = false;
+        int remainingRetries =
+                conf.getInt(ConfigOptions.TABLET_SERVER_CONTROLLED_SHUTDOWN_MAX_RETRIES);
+        long retryIntervalMs =
+                conf.get(ConfigOptions.TABLET_SERVER_CONTROLLED_SHUTDOWN_RETRY_INTERVAL).toMillis();
+
+        while (!shutdownSucceeded && remainingRetries > 0) {
+            remainingRetries--;
+
+            ControlledShutdownRequest controlledShutdownRequest =
+                    new ControlledShutdownRequest()
+                            .setTabletServerId(serverId)
+                            .setTabletServerEpoch(-1); // TODO, set correct tabletServer epoch.
+            try {
+                ControlledShutdownResponse response =
+                        coordinatorGateway.controlledShutdown(controlledShutdownRequest).get();
+                if (response.getRemainingLeaderBucketsCount() > 0) {
+                    List<TableBucket> remainingLeaderBuckets = new ArrayList<>();
+                    response.getRemainingLeaderBucketsList()
+                            .forEach(
+                                    pbTableBucket ->
+                                            remainingLeaderBuckets.add(
+                                                    toTableBucket(pbTableBucket)));
+                    LOG.warn(
+                            "TabletServer {} is still the leader for the following buckets: {} after Controlled Shutdown",
+                            serverId,
+                            remainingLeaderBuckets);
+                } else {
+                    shutdownSucceeded = true;
+                }
+            } catch (Exception e) {
+                LOG.warn("Failed to do controlled shutdown: {}", e.getMessage());
+                // do nothing and retry.
+            }
+
+            if (!shutdownSucceeded && remainingRetries > 0) {
+                try {
+                    Thread.sleep(retryIntervalMs);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    break;
+                }
+                LOG.info("Retrying controlled shutdown ({} retries remaining).", remainingRetries);
+            }
+        }
+
+        if (!shutdownSucceeded) {
+            LOG.warn(
+                    "Proceeding to do an unclean shutdown as all the controlled shutdown attempts failed.");
         }
     }
 

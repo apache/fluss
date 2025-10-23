@@ -21,22 +21,36 @@ import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 
+import javax.annotation.Nullable;
+
 import java.util.Map;
 
 import static org.apache.fluss.metrics.utils.MetricGroupUtils.makeScope;
 
 /** Metrics for the table buckets with table as parent group. */
 public class BucketMetricGroup extends AbstractMetricGroup {
-
+    // will be null if the bucket doesn't belong to a partition
+    private final @Nullable String partitionName;
     private final int bucket;
 
-    public BucketMetricGroup(MetricRegistry registry, int bucket, PhysicalTableMetricGroup parent) {
+    public BucketMetricGroup(
+            MetricRegistry registry,
+            @Nullable String partitionName,
+            int bucket,
+            TableMetricGroup parent) {
         super(registry, makeScope(parent, String.valueOf(bucket)), parent);
+        this.partitionName = partitionName;
         this.bucket = bucket;
     }
 
     @Override
     protected void putVariables(Map<String, String> variables) {
+        if (partitionName != null) {
+            variables.put("partition", partitionName);
+        } else {
+            // value of empty string indicates non-partitioned tables
+            variables.put("partition", "");
+        }
         variables.put("bucket", String.valueOf(bucket));
     }
 
@@ -45,7 +59,7 @@ public class BucketMetricGroup extends AbstractMetricGroup {
         return "bucket";
     }
 
-    public PhysicalTableMetricGroup getPhysicalTableMetricGroup() {
-        return (PhysicalTableMetricGroup) parent;
+    public TableMetricGroup getTableMetricGroup() {
+        return (TableMetricGroup) parent;
     }
 }

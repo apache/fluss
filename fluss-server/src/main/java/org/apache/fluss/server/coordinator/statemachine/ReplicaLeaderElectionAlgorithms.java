@@ -17,21 +17,100 @@
 
 package org.apache.fluss.server.coordinator.statemachine;
 
+import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine.ElectionResult;
+import org.apache.fluss.server.zk.data.LeaderAndIsr;
+
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
 
 /** The algorithms to elect the replica leader. */
 public class ReplicaLeaderElectionAlgorithms {
-    public static Optional<Integer> defaultReplicaLeaderElection(
-            List<Integer> assignments, List<Integer> aliveReplicas, List<Integer> isr) {
+
+    /**
+     * Init replica leader election when the bucket is new created.
+     *
+     * @param assignments the assignments
+     * @param aliveReplicas the alive replicas
+     * @param coordinatorEpoch the coordinator epoch
+     * @return the election result
+     */
+    public static Optional<ElectionResult> initReplicaLeaderElection(
+            List<Integer> assignments, List<Integer> aliveReplicas, int coordinatorEpoch) {
         // currently, we always use the first replica in assignment, which also in aliveReplicas and
         // isr as the leader replica.
         for (int assignment : assignments) {
-            if (aliveReplicas.contains(assignment) && isr.contains(assignment)) {
-                return Optional.of(assignment);
+            if (aliveReplicas.contains(assignment)) {
+                return Optional.of(
+                        new ElectionResult(
+                                aliveReplicas,
+                                new LeaderAndIsr(
+                                        assignment, 0, aliveReplicas, coordinatorEpoch, 0)));
             }
         }
 
+        return Optional.empty();
+    }
+
+    /**
+     * Default replica leader election, like electing leader while leader offline.
+     *
+     * @param assignments the assignments
+     * @param aliveReplicas the alive replicas
+     * @param leaderAndIsr the original leaderAndIsr
+     * @return the election result
+     */
+    public static Optional<ElectionResult> defaultReplicaLeaderElection(
+            List<Integer> assignments, List<Integer> aliveReplicas, LeaderAndIsr leaderAndIsr) {
+        // currently, we always use the first replica in assignment, which also in aliveReplicas and
+        // isr as the leader replica.
+        List<Integer> isr = leaderAndIsr.isr();
+        for (int assignment : assignments) {
+            if (aliveReplicas.contains(assignment) && isr.contains(assignment)) {
+                return Optional.of(
+                        new ElectionResult(
+                                aliveReplicas, leaderAndIsr.newLeaderAndIsr(assignment, isr)));
+            }
+        }
+
+        return Optional.empty();
+    }
+
+    /**
+     * Controlled shutdown replica leader election.
+     *
+     * @param assignments the assignments
+     * @param aliveReplicas the alive replicas
+     * @param leaderAndIsr the original leaderAndIsr
+     * @param shutdownTabletServers the shutdown tabletServers
+     * @return the election result
+     */
+    public static Optional<ElectionResult> controlledShutdownReplicaLeaderElection(
+            List<Integer> assignments,
+            List<Integer> aliveReplicas,
+            LeaderAndIsr leaderAndIsr,
+            Set<Integer> shutdownTabletServers) {
+        List<Integer> originIsr = leaderAndIsr.isr();
+        Set<Integer> isrSet = new HashSet<>(originIsr);
+        for (Integer id : assignments) {
+            if (aliveReplicas.contains(id)
+                    && isrSet.contains(id)
+                    && !shutdownTabletServers.contains(id)) {
+                Set<Integer> newAliveReplicas = new HashSet<>(aliveReplicas);
+                newAliveReplicas.removeAll(shutdownTabletServers);
+                List<Integer> newIsr =
+                        originIsr.stream()
+                                .filter(replica -> !shutdownTabletServers.contains(replica))
+                                .collect(Collectors.toList());
+                return Optional.of(
+                        new ElectionResult(
+                                new ArrayList<>(newAliveReplicas),
+                                leaderAndIsr.newLeaderAndIsr(id, newIsr)));
+            }
+        }
         return Optional.empty();
     }
 }

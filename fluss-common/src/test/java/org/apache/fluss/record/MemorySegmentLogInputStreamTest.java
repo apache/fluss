@@ -17,13 +17,16 @@
 
 package org.apache.fluss.record;
 
+import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.testutils.DataTestUtils;
 
 import org.junit.jupiter.api.Test;
 
 import java.util.Iterator;
 
-import static org.apache.fluss.record.DefaultLogRecordBatch.LOG_OVERHEAD;
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_OVERHEAD;
+import static org.apache.fluss.record.LogRecordBatchFormat.MAGIC_OFFSET;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -52,13 +55,15 @@ public class MemorySegmentLogInputStreamTest {
         iterator = getIterator(memoryLogRecords);
         assertThat(iterator.hasNext()).isFalse();
 
-        // gen batch with enough size.
+        // gen batch with not enough size.
         memoryLogRecords = MemoryLogRecords.pointToBytes(new byte[LOG_OVERHEAD]);
         iterator = getIterator(memoryLogRecords);
-        assertThat(iterator.hasNext()).isTrue();
+        assertThat(iterator.hasNext()).isFalse();
 
         // gen batch with enough size.
-        memoryLogRecords = MemoryLogRecords.pointToBytes(new byte[12]);
+        MemorySegment memory = MemorySegment.allocateHeapMemory(100);
+        memory.put(MAGIC_OFFSET, CURRENT_LOG_MAGIC_VALUE);
+        memoryLogRecords = MemoryLogRecords.pointToBytes(memory.getHeapMemory());
         iterator = getIterator(memoryLogRecords);
         assertThat(iterator.hasNext()).isTrue();
     }

@@ -65,6 +65,10 @@ bind.listeners: FLUSS://localhost:9123
 # when running multiple tablet servers.
 tablet-server.id: 0
 
+# Controlled shutdown configuration for tablet servers
+# tablet-server.controlled-shutdown.max-retries: 3
+# tablet-server.controlled-shutdown.retry-interval: 1000ms
+
 #==============================================================================
 # OSS FileSystem
 #==============================================================================

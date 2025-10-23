@@ -24,6 +24,7 @@ import org.apache.fluss.flink.utils.PushdownUtils;
 import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
 import org.apache.fluss.flink.utils.PushdownUtils.ValueConversion;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.GenericRow;
@@ -74,7 +75,8 @@ public class FlinkTableSink
     private final List<String> partitionKeys;
     private final boolean streaming;
     @Nullable private final MergeEngineType mergeEngineType;
-    private final boolean ignoreDelete;
+    private final boolean sinkIgnoreDelete;
+    private final DeleteBehavior tableDeleteBehavior;
     private final int numBucket;
     private final List<String> bucketKeys;
     private final boolean shuffleByBucketId;
@@ -92,7 +94,8 @@ public class FlinkTableSink
             boolean streaming,
             @Nullable MergeEngineType mergeEngineType,
             @Nullable DataLakeFormat lakeFormat,
-            boolean ignoreDelete,
+            boolean sinkIgnoreDelete,
+            DeleteBehavior tableDeleteBehavior,
             int numBucket,
             List<String> bucketKeys,
             boolean shuffleByBucketId) {
@@ -103,7 +106,8 @@ public class FlinkTableSink
         this.partitionKeys = partitionKeys;
         this.streaming = streaming;
         this.mergeEngineType = mergeEngineType;
-        this.ignoreDelete = ignoreDelete;
+        this.sinkIgnoreDelete = sinkIgnoreDelete;
+        this.tableDeleteBehavior = tableDeleteBehavior;
         this.numBucket = numBucket;
         this.bucketKeys = bucketKeys;
         this.shuffleByBucketId = shuffleByBucketId;
@@ -115,7 +119,7 @@ public class FlinkTableSink
         if (!streaming) {
             return ChangelogMode.insertOnly();
         } else {
-            if (primaryKeyIndexes.length > 0 || ignoreDelete) {
+            if (primaryKeyIndexes.length > 0 || sinkIgnoreDelete) {
                 // primary-key table or ignore_delete mode can accept RowKind.DELETE
                 ChangelogMode.Builder builder = ChangelogMode.newBuilder();
                 for (RowKind kind : requestedMode.getContainedKinds()) {
@@ -200,7 +204,7 @@ public class FlinkTableSink
                                 partitionKeys,
                                 lakeFormat,
                                 shuffleByBucketId,
-                                new RowDataSerializationSchema(false, ignoreDelete))
+                                new RowDataSerializationSchema(false, sinkIgnoreDelete))
                         : new FlinkSink.AppendSinkWriterBuilder<>(
                                 tablePath,
                                 flussConfig,
@@ -210,7 +214,7 @@ public class FlinkTableSink
                                 partitionKeys,
                                 lakeFormat,
                                 shuffleByBucketId,
-                                new RowDataSerializationSchema(true, ignoreDelete));
+                                new RowDataSerializationSchema(true, sinkIgnoreDelete));
 
         return new FlinkSink<>(flinkSinkWriterBuilder);
     }
@@ -235,7 +239,8 @@ public class FlinkTableSink
                         streaming,
                         mergeEngineType,
                         lakeFormat,
-                        ignoreDelete,
+                        sinkIgnoreDelete,
+                        tableDeleteBehavior,
                         numBucket,
                         bucketKeys,
                         shuffleByBucketId);
@@ -359,6 +364,14 @@ public class FlinkTableSink
                     String.format(
                             "Table %s uses the '%s' merge engine which does not support DELETE or UPDATE statements.",
                             tablePath, mergeEngineType));
+        }
+
+        // Check table-level delete behavior configuration
+        if (tableDeleteBehavior == DeleteBehavior.DISABLE) {
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "Table %s has delete behavior set to 'disable' which does not support DELETE statements.",
+                            tablePath));
         }
     }
 

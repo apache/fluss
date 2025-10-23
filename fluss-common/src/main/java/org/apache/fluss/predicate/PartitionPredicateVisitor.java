@@ -23,7 +23,10 @@ import java.util.List;
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
  * additional information regarding copyright ownership. */
 
-/** Visit the predicate and check if it only contains partition key's predicate. */
+/**
+ * Visit the predicate and check if it only contains partition key's predicate. Returns false if it
+ * contains any predicates that filters on non-partition fields.
+ */
 public class PartitionPredicateVisitor implements PredicateVisitor<Boolean> {
 
     private final List<String> partitionKeys;

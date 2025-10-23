@@ -17,6 +17,7 @@
 
 package org.apache.fluss.predicate;
 
+import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.types.DataType;
 
 import java.util.List;
@@ -37,8 +38,7 @@ public class Contains extends NullFalseLeafBinaryFunction {
 
     @Override
     public boolean test(DataType type, Object field, Object patternLiteral) {
-        String fieldString = field.toString();
-        return fieldString.contains((String) patternLiteral);
+        return ((BinaryString) field).contains((BinaryString) patternLiteral);
     }
 
     @Override

@@ -74,7 +74,11 @@ class AutoPartitionManagerTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
-        metadataManager = new MetadataManager(zookeeperClient, new Configuration());
+        metadataManager =
+                new MetadataManager(
+                        zookeeperClient,
+                        new Configuration(),
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
     }
 
     @AfterEach
@@ -289,7 +293,10 @@ class AutoPartitionManagerTest {
         AutoPartitionManager autoPartitionManager =
                 new AutoPartitionManager(
                         new TestingServerMetadataCache(3),
-                        new MetadataManager(zookeeperClient, new Configuration()),
+                        new MetadataManager(
+                                zookeeperClient,
+                                new Configuration(),
+                                new LakeCatalogDynamicLoader(new Configuration(), null, true)),
                         new Configuration(),
                         clock,
                         periodicExecutor);
@@ -363,7 +370,11 @@ class AutoPartitionManagerTest {
         int expectPartitionNumber = 10;
         Configuration config = new Configuration();
         config.set(ConfigOptions.MAX_PARTITION_NUM, expectPartitionNumber);
-        MetadataManager metadataManager = new MetadataManager(zookeeperClient, config);
+        MetadataManager metadataManager =
+                new MetadataManager(
+                        zookeeperClient,
+                        config,
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
 
         ZonedDateTime startTime =
                 LocalDateTime.parse("2024-09-10T00:00:00").atZone(ZoneId.systemDefault());
@@ -499,7 +510,11 @@ class AutoPartitionManagerTest {
 
         Configuration config = new Configuration();
         config.set(ConfigOptions.MAX_BUCKET_NUM, maxBucketNum);
-        MetadataManager metadataManager = new MetadataManager(zookeeperClient, config);
+        MetadataManager metadataManager =
+                new MetadataManager(
+                        zookeeperClient,
+                        config,
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
 
         ZonedDateTime startTime =
                 LocalDateTime.parse("2025-04-26T00:00:00").atZone(ZoneId.systemDefault());

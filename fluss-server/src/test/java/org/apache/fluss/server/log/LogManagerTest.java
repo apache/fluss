@@ -25,6 +25,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogTestBase;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.log.checkpoint.OffsetCheckpointFile;
+import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
@@ -100,7 +101,12 @@ final class LogManagerTest extends LogTestBase {
 
         registerTableInZkClient();
         logManager =
-                LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        new FlussScheduler(1),
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS);
         logManager.startup();
     }
 
@@ -194,7 +200,12 @@ final class LogManagerTest extends LogTestBase {
         logManager = null;
 
         LogManager newLogManager =
-                LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        new FlussScheduler(1),
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS);
         newLogManager.startup();
         logManager = newLogManager;
         log1 = getOrCreateLog(tablePath1, null, tableBucket1);
@@ -234,7 +245,12 @@ final class LogManagerTest extends LogTestBase {
         assertThat(new File(dataDir, CLEAN_SHUTDOWN_FILE).exists()).isTrue();
 
         LogManager newLogManager =
-                LogManager.create(conf, zkClient, new FlussScheduler(1), SystemClock.getInstance());
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        new FlussScheduler(1),
+                        SystemClock.getInstance(),
+                        TestingMetricGroups.TABLET_SERVER_METRICS);
         assertThat(new File(dataDir, CLEAN_SHUTDOWN_FILE).exists()).isTrue();
         newLogManager.startup();
         logManager = newLogManager;

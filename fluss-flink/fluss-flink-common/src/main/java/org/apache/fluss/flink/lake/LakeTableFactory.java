@@ -17,40 +17,86 @@
 
 package org.apache.fluss.flink.lake;
 
+import org.apache.fluss.config.Configuration;
+
 import org.apache.flink.table.catalog.ObjectIdentifier;
 import org.apache.flink.table.connector.source.DynamicTableSource;
 import org.apache.flink.table.factories.DynamicTableFactory;
+import org.apache.flink.table.factories.DynamicTableSourceFactory;
 import org.apache.flink.table.factories.FactoryUtil;
-import org.apache.paimon.flink.FlinkTableFactory;
 
 /** A factory to create {@link DynamicTableSource} for lake table. */
 public class LakeTableFactory {
+    private final LakeFlinkCatalog lakeFlinkCatalog;
 
-    // now, always assume is paimon, todo need to describe lake storage from
-    // to know which lake storage used
-    private final org.apache.paimon.flink.FlinkTableFactory paimonFlinkTableFactory;
-
-    public LakeTableFactory() {
-        paimonFlinkTableFactory = new FlinkTableFactory();
+    public LakeTableFactory(LakeFlinkCatalog lakeFlinkCatalog) {
+        this.lakeFlinkCatalog = lakeFlinkCatalog;
     }
 
     public DynamicTableSource createDynamicTableSource(
             DynamicTableFactory.Context context, String tableName) {
         ObjectIdentifier originIdentifier = context.getObjectIdentifier();
-        ObjectIdentifier paimonIdentifier =
+        ObjectIdentifier lakeIdentifier =
                 ObjectIdentifier.of(
                         originIdentifier.getCatalogName(),
                         originIdentifier.getDatabaseName(),
                         tableName);
+
+        // For Iceberg and Paimon, pass the table name as-is to their factory.
+        // Metadata tables will be handled internally by their respective factories.
         DynamicTableFactory.Context newContext =
                 new FactoryUtil.DefaultDynamicTableContext(
-                        paimonIdentifier,
+                        lakeIdentifier,
                         context.getCatalogTable(),
                         context.getEnrichmentOptions(),
                         context.getConfiguration(),
                         context.getClassLoader(),
                         context.isTemporary());
 
-        return paimonFlinkTableFactory.createDynamicTableSource(newContext);
+        // Get the appropriate factory based on connector type
+        DynamicTableSourceFactory factory = getLakeTableFactory();
+        return factory.createDynamicTableSource(newContext);
+    }
+
+    private DynamicTableSourceFactory getLakeTableFactory() {
+        switch (lakeFlinkCatalog.getLakeFormat()) {
+            case PAIMON:
+                return getPaimonFactory();
+            case ICEBERG:
+                return getIcebergFactory();
+            default:
+                throw new UnsupportedOperationException(
+                        "Unsupported lake connector: "
+                                + lakeFlinkCatalog.getLakeFormat()
+                                + ". Only 'paimon' and 'iceberg' are supported.");
+        }
+    }
+
+    private DynamicTableSourceFactory getPaimonFactory() {
+        return new org.apache.paimon.flink.FlinkTableFactory();
+    }
+
+    private DynamicTableSourceFactory getIcebergFactory() {
+        try {
+            // Get catalog with explicit ICEBERG format
+            org.apache.flink.table.catalog.Catalog catalog =
+                    lakeFlinkCatalog.getLakeCatalog(
+                            // we can pass empty configuration to get catalog
+                            // since the catalog should already be initialized
+                            new Configuration());
+
+            // Create FlinkDynamicTableFactory with the catalog
+            Class<?> icebergFactoryClass =
+                    Class.forName("org.apache.iceberg.flink.FlinkDynamicTableFactory");
+            Class<?> flinkCatalogClass = Class.forName("org.apache.iceberg.flink.FlinkCatalog");
+            return (DynamicTableSourceFactory)
+                    icebergFactoryClass
+                            .getDeclaredConstructor(flinkCatalogClass)
+                            .newInstance(catalog);
+        } catch (Exception e) {
+            throw new RuntimeException(
+                    "Failed to create Iceberg table factory. Please ensure iceberg-flink-runtime is on the classpath.",
+                    e);
+        }
     }
 }

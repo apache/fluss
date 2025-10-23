@@ -19,9 +19,12 @@ package org.apache.fluss.lake.iceberg;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
-import org.apache.fluss.lake.iceberg.conf.IcebergConfiguration;
+import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.IOUtils;
@@ -49,14 +52,12 @@ import java.util.Set;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
-import static org.apache.iceberg.CatalogUtil.buildIcebergCatalog;
+import static org.apache.iceberg.types.Type.TypeID.STRING;
 
 /** An Iceberg implementation of {@link LakeCatalog}. */
 public class IcebergLakeCatalog implements LakeCatalog {
 
-    public static final String ICEBERG_CATALOG_DEFAULT_NAME = "fluss-iceberg-catalog";
-
-    private static final LinkedHashMap<String, Type> SYSTEM_COLUMNS = new LinkedHashMap<>();
+    public static final LinkedHashMap<String, Type> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
     static {
         // We need __bucket system column to filter out the given bucket
@@ -74,19 +75,12 @@ public class IcebergLakeCatalog implements LakeCatalog {
     private static final String ICEBERG_CONF_PREFIX = "iceberg.";
 
     public IcebergLakeCatalog(Configuration configuration) {
-        this.icebergCatalog = createIcebergCatalog(configuration);
+        this.icebergCatalog = IcebergCatalogUtils.createIcebergCatalog(configuration);
     }
 
     @VisibleForTesting
     protected Catalog getIcebergCatalog() {
         return icebergCatalog;
-    }
-
-    private Catalog createIcebergCatalog(Configuration configuration) {
-        Map<String, String> icebergProps = configuration.toMap();
-        String catalogName = icebergProps.getOrDefault("name", ICEBERG_CATALOG_DEFAULT_NAME);
-        return buildIcebergCatalog(
-                catalogName, icebergProps, IcebergConfiguration.from(configuration).get());
     }
 
     @Override
@@ -120,6 +114,13 @@ public class IcebergLakeCatalog implements LakeCatalog {
                                 tablePath, tablePath.getDatabaseName()));
             }
         }
+    }
+
+    @Override
+    public void alterTable(TablePath tablePath, List<TableChange> tableChanges)
+            throws TableNotExistException {
+        throw new UnsupportedOperationException(
+                "Alter table is not supported for Iceberg at the moment");
     }
 
     private TableIdentifier toIcebergTableIdentifier(TablePath tablePath) {
@@ -215,6 +216,13 @@ public class IcebergLakeCatalog implements LakeCatalog {
         List<String> partitionKeys = tableDescriptor.getPartitionKeys();
         // always set identity partition with partition key
         for (String partitionKey : partitionKeys) {
+            if (!icebergSchema.findType(partitionKey).typeId().equals(STRING)) {
+                // TODO: Support other types of partition keys
+                throw new InvalidTableException(
+                        String.format(
+                                "Partition key only support string type for iceberg currently. Column `%s` is not string type.",
+                                partitionKey));
+            }
             builder.identity(partitionKey);
         }
 

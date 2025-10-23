@@ -24,7 +24,6 @@ import org.apache.fluss.client.table.Table;
 import org.apache.fluss.client.table.writer.AppendWriter;
 import org.apache.fluss.client.table.writer.TableWriter;
 import org.apache.fluss.client.table.writer.UpsertWriter;
-import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
@@ -38,13 +37,12 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
-import org.apache.fluss.types.DataTypes;
-import org.apache.fluss.utils.DateTimeUtils;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
 import org.apache.flink.core.execution.JobClient;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.iceberg.DataFile;
+import org.apache.iceberg.FileScanTask;
 import org.apache.iceberg.Snapshot;
 import org.apache.iceberg.TableScan;
 import org.apache.iceberg.catalog.Catalog;
@@ -52,6 +50,7 @@ import org.apache.iceberg.data.IcebergGenerics;
 import org.apache.iceberg.data.Record;
 import org.apache.iceberg.data.parquet.GenericParquetReaders;
 import org.apache.iceberg.hadoop.HadoopCatalog;
+import org.apache.iceberg.io.CloseableIterable;
 import org.apache.iceberg.io.CloseableIterator;
 import org.apache.iceberg.parquet.Parquet;
 import org.junit.jupiter.api.AfterAll;
@@ -60,14 +59,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
 import java.io.Closeable;
+import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.file.Files;
 import java.time.Duration;
-import java.time.LocalDate;
-import java.time.LocalTime;
-import java.time.OffsetDateTime;
-import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -84,6 +80,7 @@ import static org.apache.fluss.lake.iceberg.utils.IcebergConversions.toIceberg;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
 import static org.apache.iceberg.expressions.Expressions.equal;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -184,77 +181,65 @@ public class FlinkIcebergTieringTestBase {
         return catalog;
     }
 
-    protected long createPkTable(TablePath tablePath) throws Exception {
-        return createPkTable(tablePath, 1);
-    }
-
-    protected long createLogTable(TablePath tablePath) throws Exception {
-        return createLogTable(tablePath, 1);
-    }
-
-    protected long createLogTable(TablePath tablePath, int bucketNum) throws Exception {
-        return createLogTable(tablePath, bucketNum, false);
-    }
-
-    protected long createLogTable(TablePath tablePath, int bucketNum, boolean isPartitioned)
+    protected long createPkTable(
+            TablePath tablePath, int bucketNum, boolean enableAutoCompaction, Schema schema)
             throws Exception {
-        Schema.Builder schemaBuilder =
-                Schema.newBuilder().column("a", DataTypes.INT()).column("b", DataTypes.STRING());
-
-        TableDescriptor.Builder tableBuilder =
+        TableDescriptor.Builder pkTableBuilder =
                 TableDescriptor.builder()
-                        .distributedBy(bucketNum, "a")
+                        .schema(schema)
+                        .distributedBy(bucketNum)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
                         .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
 
-        if (isPartitioned) {
-            schemaBuilder.column("c", DataTypes.STRING());
-            tableBuilder.property(ConfigOptions.TABLE_AUTO_PARTITION_ENABLED, true);
-            tableBuilder.partitionedBy("c");
-            tableBuilder.property(
-                    ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR);
+        if (enableAutoCompaction) {
+            pkTableBuilder.property(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "true");
         }
-        tableBuilder.schema(schemaBuilder.build());
-        return createTable(tablePath, tableBuilder.build());
+        return createTable(tablePath, pkTableBuilder.build());
     }
 
-    protected long createPkTable(TablePath tablePath, int bucketNum) throws Exception {
-        TableDescriptor table1Descriptor =
+    protected long createLogTable(
+            TablePath tablePath, int bucketNum, boolean enableAutoCompaction, Schema schema)
+            throws Exception {
+        TableDescriptor.Builder tableBuilder =
                 TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("f_boolean", DataTypes.BOOLEAN())
-                                        .column("f_byte", DataTypes.TINYINT())
-                                        .column("f_short", DataTypes.SMALLINT())
-                                        .column("f_int", DataTypes.INT())
-                                        .column("f_long", DataTypes.BIGINT())
-                                        .column("f_float", DataTypes.FLOAT())
-                                        .column("f_double", DataTypes.DOUBLE())
-                                        .column("f_string", DataTypes.STRING())
-                                        .column("f_decimal1", DataTypes.DECIMAL(5, 2))
-                                        .column("f_decimal2", DataTypes.DECIMAL(20, 0))
-                                        .column("f_timestamp_ltz1", DataTypes.TIMESTAMP_LTZ(3))
-                                        .column("f_timestamp_ltz2", DataTypes.TIMESTAMP_LTZ(6))
-                                        .column("f_timestamp_ntz1", DataTypes.TIMESTAMP(3))
-                                        .column("f_timestamp_ntz2", DataTypes.TIMESTAMP(6))
-                                        .column("f_binary", DataTypes.BINARY(4))
-                                        .column("f_date", DataTypes.DATE())
-                                        .column("f_time", DataTypes.TIME())
-                                        .column("f_char", DataTypes.CHAR(3))
-                                        .column("f_bytes", DataTypes.BYTES())
-                                        .primaryKey("f_int")
-                                        .build())
-                        .distributedBy(bucketNum)
+                        .distributedBy(bucketNum, "f_int")
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
-                        .build();
-        return createTable(tablePath, table1Descriptor);
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+
+        if (enableAutoCompaction) {
+            tableBuilder.property(ConfigOptions.TABLE_DATALAKE_AUTO_COMPACTION.key(), "true");
+        }
+        tableBuilder.schema(schema);
+        return createTable(tablePath, tableBuilder.build());
     }
 
     protected long createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
         return admin.getTableInfo(tablePath).get().getTableId();
+    }
+
+    protected void assertReplicaStatus(
+            TablePath tablePath,
+            long tableId,
+            int bucketCount,
+            boolean isPartitioned,
+            Map<TableBucket, Long> expectedLogEndOffset) {
+        if (isPartitioned) {
+            Map<Long, String> partitionById =
+                    waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), tablePath);
+            for (Long partitionId : partitionById.keySet()) {
+                for (int i = 0; i < bucketCount; i++) {
+                    TableBucket tableBucket = new TableBucket(tableId, partitionId, i);
+                    assertReplicaStatus(tableBucket, expectedLogEndOffset.get(tableBucket));
+                }
+            }
+        } else {
+            for (int i = 0; i < bucketCount; i++) {
+                TableBucket tableBucket = new TableBucket(tableId, i);
+                assertReplicaStatus(tableBucket, expectedLogEndOffset.get(tableBucket));
+            }
+        }
     }
 
     protected void assertReplicaStatus(TableBucket tb, long expectedLogEndOffset) {
@@ -267,6 +252,18 @@ public class FlinkIcebergTieringTestBase {
                             .isGreaterThanOrEqualTo(0);
                     assertThat(replica.getLakeLogEndOffset()).isEqualTo(expectedLogEndOffset);
                 });
+    }
+
+    /**
+     * Wait until the default number of partitions is created. Return the map from partition id to
+     * partition name.
+     */
+    public static Map<Long, String> waitUntilPartitions(
+            ZooKeeperClient zooKeeperClient, TablePath tablePath) {
+        return waitUntilPartitions(
+                zooKeeperClient,
+                tablePath,
+                ConfigOptions.TABLE_AUTO_PARTITION_NUM_PRECREATE.defaultValue());
     }
 
     public static Map<Long, String> waitUntilPartitions(TablePath tablePath) {
@@ -325,45 +322,14 @@ public class FlinkIcebergTieringTestBase {
         }
     }
 
-    protected void checkDataInIcebergPrimaryKeyTable(
-            TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
+    protected List<Record> getIcebergRecords(TablePath tablePath) throws IOException {
+        List<Record> icebergRecords = new ArrayList<>();
         try (CloseableIterator<Record> records = getIcebergRows(tablePath)) {
-            for (InternalRow row : expectedRows) {
-                Record record = records.next();
-                assertThat(record.get(0)).isEqualTo(row.getBoolean(0));
-                assertThat(record.get(1)).isEqualTo((int) row.getByte(1));
-                assertThat(record.get(2)).isEqualTo((int) row.getShort(2));
-                assertThat(record.get(3)).isEqualTo(row.getInt(3));
-                assertThat(record.get(4)).isEqualTo(row.getLong(4));
-                assertThat(record.get(5)).isEqualTo(row.getFloat(5));
-                assertThat(record.get(6)).isEqualTo(row.getDouble(6));
-                assertThat(record.get(7)).isEqualTo(row.getString(7).toString());
-                // Iceberg expects BigDecimal for decimal types.
-                assertThat(record.get(8)).isEqualTo(row.getDecimal(8, 5, 2).toBigDecimal());
-                assertThat(record.get(9)).isEqualTo(row.getDecimal(9, 20, 0).toBigDecimal());
-                assertThat(record.get(10))
-                        .isEqualTo(
-                                OffsetDateTime.ofInstant(
-                                        row.getTimestampLtz(10, 3).toInstant(), ZoneOffset.UTC));
-                assertThat(record.get(11))
-                        .isEqualTo(
-                                OffsetDateTime.ofInstant(
-                                        row.getTimestampLtz(11, 6).toInstant(), ZoneOffset.UTC));
-                assertThat(record.get(12)).isEqualTo(row.getTimestampNtz(12, 6).toLocalDateTime());
-                assertThat(record.get(13)).isEqualTo(row.getTimestampNtz(13, 6).toLocalDateTime());
-                // Iceberg's Record interface expects ByteBuffer for binary types.
-                assertThat(record.get(14)).isEqualTo(ByteBuffer.wrap(row.getBinary(14, 4)));
-                assertThat(record.get(15))
-                        .isEqualTo(DateTimeUtils.toLocalDate(row.getInt(15)))
-                        .isEqualTo(LocalDate.of(2023, 10, 25));
-                assertThat(record.get(16))
-                        .isEqualTo(DateTimeUtils.toLocalTime(row.getInt(16)))
-                        .isEqualTo(LocalTime.of(9, 30, 0, 0));
-                assertThat(record.get(17)).isEqualTo(row.getChar(17, 3).toString());
-                assertThat(record.get(18)).isEqualTo(ByteBuffer.wrap(row.getBytes(18)));
+            while (records.hasNext()) {
+                icebergRecords.add(records.next());
             }
-            assertThat(records.hasNext()).isFalse();
         }
+        return icebergRecords;
     }
 
     protected void checkDataInIcebergAppendOnlyTable(
@@ -381,6 +347,24 @@ public class FlinkIcebergTieringTestBase {
             }
             assertThat(flussRowIterator.hasNext()).isFalse();
         }
+    }
+
+    protected void checkFileStatusInIcebergTable(
+            TablePath tablePath, int expectedFileCount, boolean shouldDeleteFileExist)
+            throws IOException {
+        org.apache.iceberg.Table table = icebergCatalog.loadTable(toIceberg(tablePath));
+        int count = 0;
+        try (CloseableIterable<FileScanTask> tasks = table.newScan().planFiles()) {
+            for (FileScanTask ignored : tasks) {
+                if (shouldDeleteFileExist) {
+                    assertThat(ignored.deletes()).isNotEmpty();
+                } else {
+                    assertThat(ignored.deletes()).isEmpty();
+                }
+                count++;
+            }
+        }
+        assertThat(count).isEqualTo(expectedFileCount);
     }
 
     protected void checkDataInIcebergAppendOnlyPartitionedTable(
@@ -512,5 +496,33 @@ public class FlinkIcebergTieringTestBase {
 
         writeRows(tablePath, rows, !tableDescriptor.hasPrimaryKey());
         return writtenRowsByPartition;
+    }
+
+    protected void waitUntilBucketSynced(
+            TablePath tablePath, long tableId, int bucketCount, boolean isPartition) {
+        if (isPartition) {
+            Map<Long, String> partitionById = waitUntilPartitions(tablePath);
+            for (Long partitionId : partitionById.keySet()) {
+                for (int i = 0; i < bucketCount; i++) {
+                    TableBucket tableBucket = new TableBucket(tableId, partitionId, i);
+                    waitUntilBucketSynced(tableBucket);
+                }
+            }
+        } else {
+            for (int i = 0; i < bucketCount; i++) {
+                TableBucket tableBucket = new TableBucket(tableId, i);
+                waitUntilBucketSynced(tableBucket);
+            }
+        }
+    }
+
+    protected void waitUntilBucketSynced(TableBucket tb) {
+        waitUntil(
+                () -> {
+                    Replica replica = getLeaderReplica(tb);
+                    return replica.getLogTablet().getLakeTableSnapshotId() >= 0;
+                },
+                Duration.ofMinutes(2),
+                "bucket " + tb + " not synced");
     }
 }

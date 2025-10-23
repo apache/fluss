@@ -107,7 +107,7 @@ public class ReplicaStateMachine {
             for (Integer replica : replicas) {
                 TableBucketReplica tableBucketReplica =
                         new TableBucketReplica(tableBucket, replica);
-                if (coordinatorContext.isReplicaAndServerOnline(replica, tableBucket)) {
+                if (coordinatorContext.isReplicaOnline(replica, tableBucket)) {
                     coordinatorContext.putReplicaState(
                             tableBucketReplica, ReplicaState.OnlineReplica);
                     onlineReplicas.add(tableBucketReplica);
@@ -419,7 +419,7 @@ public class ReplicaStateMachine {
             TableBucket tableBucket = tableBucketReplica.getTableBucket();
             int replicaId = tableBucketReplica.getReplica();
 
-            LeaderAndIsr leaderAndIsr = null;
+            LeaderAndIsr leaderAndIsr;
             if (toUpdateLeaderAndIsrList.get(tableBucket) != null) {
                 leaderAndIsr = toUpdateLeaderAndIsrList.get(tableBucket);
             } else {
@@ -451,7 +451,10 @@ public class ReplicaStateMachine {
                             : leaderAndIsr.isr().stream()
                                     .filter(id -> id != replicaId)
                                     .collect(Collectors.toList());
-            LeaderAndIsr adjustLeaderAndIsr = leaderAndIsr.newLeaderAndIsr(newLeader, newIsr);
+            LeaderAndIsr adjustLeaderAndIsr =
+                    newLeader == LeaderAndIsr.NO_LEADER
+                            ? leaderAndIsr.newLeaderAndIsr(newLeader, newIsr)
+                            : leaderAndIsr.newLeaderAndIsr(newIsr);
             adjustedLeaderAndIsr.put(tableBucketReplica, adjustLeaderAndIsr);
             toUpdateLeaderAndIsrList.put(tableBucket, adjustLeaderAndIsr);
         }

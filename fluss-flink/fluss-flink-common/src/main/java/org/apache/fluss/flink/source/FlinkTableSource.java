@@ -17,6 +17,7 @@
 
 package org.apache.fluss.flink.source;
 
+import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.source.deserializer.RowDataDeserializationSchema;
@@ -30,12 +31,15 @@ import org.apache.fluss.flink.utils.PushdownUtils;
 import org.apache.fluss.flink.utils.PushdownUtils.FieldEqual;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.predicate.GreaterOrEqual;
 import org.apache.fluss.predicate.LeafPredicate;
+import org.apache.fluss.predicate.PartitionPredicateVisitor;
 import org.apache.fluss.predicate.Predicate;
 import org.apache.fluss.predicate.PredicateBuilder;
+import org.apache.fluss.predicate.PredicateVisitor;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -72,6 +76,7 @@ import org.apache.flink.table.functions.FunctionDefinition;
 import org.apache.flink.table.functions.LookupFunction;
 import org.apache.flink.table.types.DataType;
 import org.apache.flink.table.types.logical.LogicalType;
+import org.apache.flink.types.RowKind;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -85,11 +90,13 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 
 import static org.apache.fluss.flink.utils.LakeSourceUtils.createLakeSource;
+import static org.apache.fluss.flink.utils.PredicateConverter.convertToFlussPredicate;
 import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLINK_INTERNAL_VALUE;
-import static org.apache.fluss.flink.utils.PushdownUtils.ValueConversion.FLUSS_INTERNAL_VALUE;
 import static org.apache.fluss.flink.utils.PushdownUtils.extractFieldEquals;
+import static org.apache.fluss.flink.utils.StringifyPredicateVisitor.stringifyPartitionPredicate;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.apache.fluss.utils.Preconditions.checkState;
@@ -140,11 +147,11 @@ public class FlinkTableSource
     @Nullable private RowLevelModificationType modificationScanType;
 
     // count(*) push down
-    protected boolean selectRowCount = false;
+    private boolean selectRowCount = false;
 
     private long limit = -1;
 
-    private List<FieldEqual> partitionFilters = Collections.emptyList();
+    @Nullable private Predicate partitionFilters;
 
     private final Map<String, String> tableOptions;
 
@@ -185,7 +192,10 @@ public class FlinkTableSource
         this.mergeEngineType = mergeEngineType;
         this.tableOptions = tableOptions;
         if (isDataLakeEnabled) {
-            this.lakeSource = createLakeSource(tablePath, tableOptions);
+            this.lakeSource =
+                    checkNotNull(
+                            createLakeSource(tablePath, tableOptions),
+                            "LakeSource must not be null if enable datalake");
         }
     }
 
@@ -199,7 +209,21 @@ public class FlinkTableSource
                 if (mergeEngineType == MergeEngineType.FIRST_ROW) {
                     return ChangelogMode.insertOnly();
                 } else {
-                    return ChangelogMode.all();
+                    // Check delete behavior configuration
+                    Configuration tableConf = Configuration.fromMap(tableOptions);
+                    DeleteBehavior deleteBehavior =
+                            tableConf.get(ConfigOptions.TABLE_DELETE_BEHAVIOR);
+                    if (deleteBehavior == DeleteBehavior.ALLOW) {
+                        return ChangelogMode.all();
+                    } else {
+                        // If delete operations are ignored or disabled, only insert and update are
+                        // relevant
+                        return ChangelogMode.newBuilder()
+                                .addContainedKind(RowKind.INSERT)
+                                .addContainedKind(RowKind.UPDATE_BEFORE)
+                                .addContainedKind(RowKind.UPDATE_AFTER)
+                                .build();
+                    }
                 }
             } else {
                 // append only
@@ -475,6 +499,7 @@ public class FlinkTableSource
                 && startupOptions.startupMode == FlinkConnectorOptions.ScanStartupMode.FULL
                 && hasPrimaryKey()
                 && filters.size() == primaryKeyIndexes.length) {
+
             Map<Integer, LogicalType> primaryKeyTypes = getPrimaryKeyTypes();
             List<FieldEqual> fieldEquals =
                     extractFieldEquals(
@@ -497,51 +522,60 @@ public class FlinkTableSource
             singleRowFilter = lookupRow;
             return Result.of(acceptedFilters, remainingFilters);
         } else if (isPartitioned()) {
-            // dynamic partition pushdown
-            List<FieldEqual> fieldEquals =
-                    extractFieldEquals(
-                            filters,
-                            getPartitionKeyTypes(),
-                            acceptedFilters,
-                            remainingFilters,
-                            FLUSS_INTERNAL_VALUE);
+            // apply partition filter pushdown
+            List<Predicate> converted = new ArrayList<>();
 
-            // partitions are filtered by string representations, convert the equals to string first
-            partitionFilters = stringifyFieldEquals(fieldEquals);
+            RowType partitionRowType =
+                    FlinkConversions.toFlussRowType(tableOutputType).project(partitionKeyIndexes);
+            PredicateVisitor<Boolean> checksOnlyPartitionKeys =
+                    new PartitionPredicateVisitor(partitionRowType.getFieldNames());
 
+            for (ResolvedExpression filter : filters) {
+
+                Optional<Predicate> predicateOptional =
+                        convertToFlussPredicate(partitionRowType, filter);
+
+                if (predicateOptional.isPresent()) {
+                    Predicate p = predicateOptional.get();
+                    // partition pushdown can only guarantee to filter out partitions matches the
+                    // predicate, but can't guarantee to filter out all data matches to
+                    // non-partition filter in the partition
+                    if (!p.visit(checksOnlyPartitionKeys)) {
+                        remainingFilters.add(filter);
+                    } else {
+                        acceptedFilters.add(filter);
+                    }
+                    // Convert literals in the predicate to partition string
+                    converted.add(stringifyPartitionPredicate(p));
+                } else {
+                    remainingFilters.add(filter);
+                }
+            }
+            partitionFilters = converted.isEmpty() ? null : PredicateBuilder.and(converted);
             // lake source is not null
             if (lakeSource != null) {
-                // and exist field equals, push down to lake source
-                if (!fieldEquals.isEmpty()) {
-                    // convert flink row type to fluss row type
-                    RowType flussRowType = FlinkConversions.toFlussRowType(tableOutputType);
+                List<Predicate> lakePredicates = new ArrayList<>();
+                for (ResolvedExpression filter : filters) {
+                    Optional<Predicate> predicateOptional =
+                            convertToFlussPredicate(tableOutputType, filter);
+                    predicateOptional.ifPresent(lakePredicates::add);
+                }
 
-                    List<Predicate> lakePredicates = new ArrayList<>();
-                    PredicateBuilder predicateBuilder = new PredicateBuilder(flussRowType);
-
-                    for (FieldEqual fieldEqual : fieldEquals) {
-                        lakePredicates.add(
-                                predicateBuilder.equal(
-                                        fieldEqual.fieldIndex, fieldEqual.equalValue));
-                    }
-
-                    if (!lakePredicates.isEmpty()) {
-                        final LakeSource.FilterPushDownResult filterPushDownResult =
-                                lakeSource.withFilters(lakePredicates);
-                        if (filterPushDownResult.acceptedPredicates().size()
-                                != lakePredicates.size()) {
-                            LOG.info(
-                                    "LakeSource rejected some partition filters. Falling back to Flink-side filtering.");
-                            // Flink will apply all filters to preserve correctness
-                            return Result.of(Collections.emptyList(), filters);
-                        }
+                if (!lakePredicates.isEmpty()) {
+                    final LakeSource.FilterPushDownResult filterPushDownResult =
+                            lakeSource.withFilters(lakePredicates);
+                    if (filterPushDownResult.acceptedPredicates().size() != lakePredicates.size()) {
+                        LOG.info(
+                                "LakeSource rejected some partition filters. Falling back to Flink-side filtering.");
+                        // Flink will apply all filters to preserve correctness
+                        return Result.of(Collections.emptyList(), filters);
                     }
                 }
             }
             return Result.of(acceptedFilters, remainingFilters);
-        } else {
-            return Result.of(Collections.emptyList(), filters);
         }
+
+        return Result.of(Collections.emptyList(), filters);
     }
 
     @Override
@@ -567,7 +601,11 @@ public class FlinkTableSource
                 || aggregateExpressions.size() != 1
                 || hasPrimaryKey()
                 || groupingSets.size() > 1
-                || (groupingSets.size() == 1 && groupingSets.get(0).length > 0)) {
+                || (groupingSets.size() == 1 && groupingSets.get(0).length > 0)
+                // The count pushdown feature is not supported when the data lake is enabled.
+                // Otherwise, it'll cause miss count data in lake. But In the future, we can push
+                // down count into lake.
+                || isDataLakeEnabled) {
             return false;
         }
 
@@ -597,24 +635,6 @@ public class FlinkTableSource
         return pkTypes;
     }
 
-    private Map<Integer, LogicalType> getPartitionKeyTypes() {
-        Map<Integer, LogicalType> partitionKeyTypes = new HashMap<>();
-        for (int index : partitionKeyIndexes) {
-            partitionKeyTypes.put(index, tableOutputType.getTypeAt(index));
-        }
-        return partitionKeyTypes;
-    }
-
-    private List<FieldEqual> stringifyFieldEquals(List<FieldEqual> fieldEquals) {
-        List<FieldEqual> serialize = new ArrayList<>();
-        for (FieldEqual fieldEqual : fieldEquals) {
-            // revisit this again when we support more data types for partition key
-            serialize.add(
-                    new FieldEqual(fieldEqual.fieldIndex, (fieldEqual.equalValue).toString()));
-        }
-        return serialize;
-    }
-
     // projection from pk_field_index to index_in_pk
     private int[] getKeyRowProjection() {
         int[] projection = new int[tableOutputType.getFieldCount()];
@@ -638,10 +658,5 @@ public class FlinkTableSource
     @VisibleForTesting
     public int[] getBucketKeyIndexes() {
         return bucketKeyIndexes;
-    }
-
-    @VisibleForTesting
-    public int[] getPartitionKeyIndexes() {
-        return partitionKeyIndexes;
     }
 }

@@ -32,10 +32,11 @@ public class LakeTableSnapshot {
 
     // the log offset of the bucket
 
-    // mapping from bucket id to log start/end offset,
+    // mapping from bucket id to log start/end offset or max timestamp,
     // will be null if log offset is unknown such as reading the snapshot of primary key table
     private final Map<TableBucket, Long> bucketLogStartOffset;
     private final Map<TableBucket, Long> bucketLogEndOffset;
+    private final Map<TableBucket, Long> bucketMaxTimestamp;
 
     // mapping from partition id to partition name, will be empty if the table is not partitioned
     // table
@@ -46,11 +47,13 @@ public class LakeTableSnapshot {
             long tableId,
             Map<TableBucket, Long> bucketLogStartOffset,
             Map<TableBucket, Long> bucketLogEndOffset,
+            Map<TableBucket, Long> bucketMaxTimestamp,
             Map<Long, String> partitionNameIdByPartitionId) {
         this.snapshotId = snapshotId;
         this.tableId = tableId;
         this.bucketLogStartOffset = bucketLogStartOffset;
         this.bucketLogEndOffset = bucketLogEndOffset;
+        this.bucketMaxTimestamp = bucketMaxTimestamp;
         this.partitionNameIdByPartitionId = partitionNameIdByPartitionId;
     }
 
@@ -78,12 +81,20 @@ public class LakeTableSnapshot {
         return Optional.ofNullable(bucketLogEndOffset.get(tableBucket));
     }
 
+    public Optional<Long> getMaxTimestamp(TableBucket tableBucket) {
+        return Optional.ofNullable(bucketMaxTimestamp.get(tableBucket));
+    }
+
     public Map<TableBucket, Long> getBucketLogEndOffset() {
         return bucketLogEndOffset;
     }
 
     public Map<TableBucket, Long> getBucketLogStartOffset() {
         return bucketLogStartOffset;
+    }
+
+    public Map<TableBucket, Long> getBucketMaxTimestamp() {
+        return bucketMaxTimestamp;
     }
 
     public Map<Long, String> getPartitionNameIdByPartitionId() {
@@ -100,6 +111,7 @@ public class LakeTableSnapshot {
                 && tableId == that.tableId
                 && Objects.equals(bucketLogStartOffset, that.bucketLogStartOffset)
                 && Objects.equals(bucketLogEndOffset, that.bucketLogEndOffset)
+                && Objects.equals(bucketMaxTimestamp, that.bucketMaxTimestamp)
                 && Objects.equals(partitionNameIdByPartitionId, that.partitionNameIdByPartitionId);
     }
 
@@ -110,6 +122,7 @@ public class LakeTableSnapshot {
                 tableId,
                 bucketLogStartOffset,
                 bucketLogEndOffset,
+                bucketMaxTimestamp,
                 partitionNameIdByPartitionId);
     }
 
@@ -124,6 +137,8 @@ public class LakeTableSnapshot {
                 + bucketLogStartOffset
                 + ", bucketLogEndOffset="
                 + bucketLogEndOffset
+                + ", bucketMaxTimestamp="
+                + bucketMaxTimestamp
                 + ", partitionNameIdByPartitionId="
                 + partitionNameIdByPartitionId
                 + '}';

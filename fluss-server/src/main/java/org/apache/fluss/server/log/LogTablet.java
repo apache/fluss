@@ -30,7 +30,6 @@ import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.metrics.MeterView;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.MetricGroup;
 import org.apache.fluss.record.DefaultLogRecordBatch;
@@ -41,6 +40,7 @@ import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.server.log.LocalLog.SegmentDeletionReason;
 import org.apache.fluss.server.metrics.group.BucketMetricGroup;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.concurrent.Scheduler;
@@ -117,12 +117,15 @@ public final class LogTablet {
     private volatile long remoteLogStartOffset = Long.MAX_VALUE;
     // tracking the log end offset in remote storage
     private volatile long remoteLogEndOffset = -1L;
+    // tracking the log size in remote storage
+    private volatile long remoteLogSize = 0;
 
     // tracking the log start/end offset in lakehouse storage
     private volatile long lakeTableSnapshotId = -1;
     // note: currently, for primary key table, the log start offset nerve be updated
     private volatile long lakeLogStartOffset = Long.MAX_VALUE;
     private volatile long lakeLogEndOffset = -1L;
+    private volatile long lakeMaxTimestamp = -1;
 
     private LogTablet(
             PhysicalTablePath physicalPath,
@@ -248,6 +251,10 @@ public final class LogTablet {
         return lakeLogEndOffset;
     }
 
+    public long getLakeMaxTimestamp() {
+        return lakeMaxTimestamp;
+    }
+
     public int getWriterIdCount() {
         return writerStateManager.writerIdCount();
     }
@@ -277,6 +284,7 @@ public final class LogTablet {
             PhysicalTablePath tablePath,
             File tabletDir,
             Configuration conf,
+            TabletServerMetricGroup serverMetricGroup,
             long recoveryPoint,
             Scheduler scheduler,
             LogFormat logFormat,
@@ -313,6 +321,7 @@ public final class LogTablet {
                 new LocalLog(
                         tabletDir,
                         conf,
+                        serverMetricGroup,
                         segments,
                         recoveryPoint,
                         offsets.getNextOffsetMetadata(),
@@ -337,12 +346,20 @@ public final class LogTablet {
         metricGroup.gauge(
                 MetricNames.LOG_NUM_SEGMENTS, () -> localLog.getSegments().numberOfSegments());
         metricGroup.gauge(MetricNames.LOG_END_OFFSET, localLog::getLocalLogEndOffset);
-        metricGroup.gauge(MetricNames.LOG_SIZE, () -> localLog.getSegments().sizeInBytes());
+    }
 
-        // about flush
-        metricGroup.meter(MetricNames.LOG_FLUSH_RATE, new MeterView(localLog.getFlushCount()));
-        metricGroup.histogram(
-                MetricNames.LOG_FLUSH_LATENCY_MS, localLog.getFlushLatencyHistogram());
+    public long logSize() {
+        return localLog.getSegments().sizeInBytes();
+    }
+
+    public long logicalStorageSize() {
+        if (remoteLogEndOffset <= 0L) {
+            return localLog.getSegments().sizeInBytes();
+        } else {
+            return localLog.getSegments().higherSegments(remoteLogEndOffset).stream()
+                    .mapToLong(LogSegment::getSizeInBytes)
+                    .reduce(remoteLogSize, Long::sum);
+        }
     }
 
     public void updateLeaderEndOffsetSnapshot() {
@@ -413,14 +430,18 @@ public final class LogTablet {
         synchronized (lock) {
             if (newHighWatermark.getMessageOffset() < highWatermarkMetadata.getMessageOffset()) {
                 LOG.warn(
-                        "Non-monotonic update of high watermark from {} to {}",
+                        "Non-monotonic update of high watermark from {} to {} for bucket {}",
                         highWatermarkMetadata,
-                        newHighWatermark);
+                        newHighWatermark,
+                        localLog.getTableBucket());
             }
             highWatermarkMetadata = newHighWatermark;
             // TODO log offset listener to update log offset.
         }
-        LOG.trace("Setting high watermark {}", newHighWatermark);
+        LOG.trace(
+                "Setting high watermark {} for bucket {}",
+                newHighWatermark,
+                localLog.getTableBucket());
     }
 
     /**
@@ -473,6 +494,10 @@ public final class LogTablet {
         }
     }
 
+    public void updateRemoteLogSize(long remoteLogSize) {
+        this.remoteLogSize = remoteLogSize;
+    }
+
     public void updateRemoteLogEndOffset(long remoteLogEndOffset) {
         if (remoteLogEndOffset > this.remoteLogEndOffset) {
             this.remoteLogEndOffset = remoteLogEndOffset;
@@ -510,6 +535,12 @@ public final class LogTablet {
         }
     }
 
+    public void updateLakeMaxTimestamp(long lakeMaxTimestamp) {
+        if (lakeMaxTimestamp > this.lakeMaxTimestamp) {
+            this.lakeMaxTimestamp = lakeMaxTimestamp;
+        }
+    }
+
     public void loadWriterSnapshot(long lastOffset) throws IOException {
         synchronized (lock) {
             rebuildWriterState(lastOffset, writerStateManager);
@@ -540,8 +571,9 @@ public final class LogTablet {
         long localLogStartOffset = localLog.getLocalLogStartOffset();
         if (cleanUpToOffset < localLogStartOffset) {
             LOG.debug(
-                    "Ignore the delete segments action while the input cleanUpToOffset {} "
+                    "Ignore the delete segments action for bucket {} while the input cleanUpToOffset {} "
                             + "is smaller than the current localLogStartOffset {}",
+                    getTableBucket(),
                     cleanUpToOffset,
                     localLogStartOffset);
             return;
@@ -549,8 +581,9 @@ public final class LogTablet {
 
         if (cleanUpToOffset > getHighWatermark()) {
             LOG.warn(
-                    "Ignore the delete segments action while the input cleanUpToOffset {} "
+                    "Ignore the delete segments action for bucket {} while the input cleanUpToOffset {} "
                             + "is larger than the current highWatermark {}",
+                    getTableBucket(),
                     cleanUpToOffset,
                     getHighWatermark());
             return;
@@ -643,7 +676,7 @@ public final class LogTablet {
             // now that we have valid records, offsets assigned, we need to validate the idempotent
             // state of the writers and collect some metadata.
             Either<WriterStateEntry.BatchMetadata, Collection<WriterAppendInfo>> validateResult =
-                    analyzeAndValidateWriterState(validRecords);
+                    analyzeAndValidateWriterState(validRecords, appendAsLeader);
 
             if (validateResult.isLeft()) {
                 // have duplicated batch metadata, skip the append and update append info.
@@ -689,11 +722,13 @@ public final class LogTablet {
                 // todo update the first unstable offset (which is used to compute lso)
 
                 LOG.trace(
-                        "Appended message set with last offset: {}, first offset {}, next offset: {} and messages {}",
+                        "Appended message set with last offset: {}, first offset {}, next offset: {} "
+                                + "and messages {} for bucket {}",
                         appendInfo.lastOffset(),
                         appendInfo.firstOffset(),
                         localLog.getLocalLogEndOffset(),
-                        validRecords);
+                        validRecords,
+                        getTableBucket());
 
                 if (localLog.unflushedMessages() >= logFlushIntervalMessages) {
                     flush(false);
@@ -760,11 +795,12 @@ public final class LogTablet {
         if (flushOffset > localLog.getRecoveryPoint()) {
             if (LOG.isDebugEnabled()) {
                 LOG.debug(
-                        "Flushing log up to offset {} ({}) with recovery point {}, unflushed: {}",
+                        "Flushing log up to offset {} ({}) with recovery point {}, unflushed: {}, for bucket {}",
                         offset,
                         includingOffsetStr,
                         flushOffset,
-                        localLog.unflushedMessages());
+                        localLog.unflushedMessages(),
+                        getTableBucket());
             }
 
             localLog.flush(flushOffset);
@@ -783,7 +819,9 @@ public final class LogTablet {
                     new RollParams(maxSegmentFileSize, appendInfo.lastOffset(), messageSize))) {
                 if (LOG.isDebugEnabled()) {
                     LOG.debug(
-                            "Rolling new log segment (log_size = {}/{}), offset_index_size = {}/{}, time_index_size = {}/{}",
+                            "Rolling new log segment for bucket {} (log_size = {}/{}), offset_index_size = {}/{}, "
+                                    + "time_index_size = {}/{}",
+                            getTableBucket(),
                             segment.getSizeInBytes(),
                             maxSegmentFileSize,
                             segment.offsetIndex().entries(),
@@ -836,12 +874,13 @@ public final class LogTablet {
 
         if (targetOffset >= localLog.getLocalLogEndOffset()) {
             LOG.info(
-                    "Truncate to {} has no effect as the largest offset in the log is {}.",
+                    "Truncate to {} for bucket {} has no effect as the largest offset in the log is {}.",
                     targetOffset,
+                    getTableBucket(),
                     localLog.getLocalLogEndOffset() - 1);
             return false;
         } else {
-            LOG.info("Truncating to offset {}", targetOffset);
+            LOG.info("Truncating to offset {} for bucket {}", targetOffset, getTableBucket());
             synchronized (lock) {
                 try {
                     localLog.checkIfMemoryMappedBufferClosed();
@@ -875,7 +914,7 @@ public final class LogTablet {
 
     /** Delete all data in the log and start at the new offset. */
     void truncateFullyAndStartAt(long newOffset) throws LogStorageException {
-        LOG.debug("Truncate and start at offset {}", newOffset);
+        LOG.debug("Truncate and start at offset {} for bucket {}", newOffset, getTableBucket());
         synchronized (lock) {
             try {
                 localLog.truncateFullyAndStartAt(newOffset);
@@ -923,14 +962,14 @@ public final class LogTablet {
     }
 
     public void close() {
-        LOG.debug("close log tablet");
+        LOG.debug("close log tablet for bucket {}", getTableBucket());
         synchronized (lock) {
             localLog.checkIfMemoryMappedBufferClosed();
             writerExpireCheck.cancel(true);
             try {
                 writerStateManager.takeSnapshot();
             } catch (IOException e) {
-                LOG.error("Error while taking writer snapshot.", e);
+                LOG.error("Error while taking writer snapshot for bucket {}.", getTableBucket(), e);
             }
             localLog.close();
         }
@@ -1006,7 +1045,7 @@ public final class LogTablet {
 
     /** Returns either the duplicated batch metadata (left) or the updated writers (right). */
     private Either<WriterStateEntry.BatchMetadata, Collection<WriterAppendInfo>>
-            analyzeAndValidateWriterState(MemoryLogRecords records) {
+            analyzeAndValidateWriterState(MemoryLogRecords records, boolean isAppendAsLeader) {
         Map<Long, WriterAppendInfo> updatedWriters = new HashMap<>();
 
         for (LogRecordBatch batch : records.batches()) {
@@ -1023,14 +1062,15 @@ public final class LogTablet {
                 }
 
                 // update write append info.
-                updateWriterAppendInfo(writerStateManager, batch, updatedWriters);
+                updateWriterAppendInfo(writerStateManager, batch, updatedWriters, isAppendAsLeader);
             }
         }
 
         return Either.right(updatedWriters.values());
     }
 
-    void removeExpiredWriter(long currentTimeMs) {
+    @VisibleForTesting
+    public void removeExpiredWriter(long currentTimeMs) {
         synchronized (lock) {
             writerStateManager.removeExpiredWriters(currentTimeMs);
         }
@@ -1110,14 +1150,16 @@ public final class LogTablet {
     private static void updateWriterAppendInfo(
             WriterStateManager writerStateManager,
             LogRecordBatch batch,
-            Map<Long, WriterAppendInfo> writers) {
+            Map<Long, WriterAppendInfo> writers,
+            boolean isAppendAsLeader) {
         long writerId = batch.writerId();
         // update writers.
         WriterAppendInfo appendInfo =
                 writers.computeIfAbsent(writerId, id -> writerStateManager.prepareUpdate(writerId));
         appendInfo.append(
                 batch,
-                writerStateManager.isWriterInBatchExpired(System.currentTimeMillis(), batch));
+                writerStateManager.isWriterInBatchExpired(System.currentTimeMillis(), batch),
+                isAppendAsLeader);
     }
 
     static void rebuildWriterState(
@@ -1138,7 +1180,10 @@ public final class LogTablet {
         } else {
             offsetsToSnapshot.add(Optional.of(lastOffset));
         }
-        LOG.info("Loading writer state till offset {}", lastOffset);
+        LOG.info(
+                "Loading writer state for bucket {} till offset {}",
+                segments.getTableBucket(),
+                lastOffset);
         // We want to avoid unnecessary scanning of the log to build the writer state when the
         // tablet server is being upgraded. The basic idea is to use the absence of writer
         // snapshot files to detect the upgrade case, but we have to be careful not to assume too
@@ -1164,7 +1209,8 @@ public final class LogTablet {
             }
         } else {
             LOG.info(
-                    "Reloading from writer snapshot and rebuilding writer state from offset {}",
+                    "Reloading from writer snapshot and rebuilding writer state for bucket {} from offset {}",
+                    segments.getTableBucket(),
                     lastOffset);
             boolean isEmptyBeforeTruncation =
                     writerStateManager.isEmpty() && writerStateManager.mapEndOffset() >= lastOffset;
@@ -1218,9 +1264,10 @@ public final class LogTablet {
             writerStateManager.updateMapEndOffset(lastOffset);
             writerStateManager.takeSnapshot();
             LOG.info(
-                    "Writer state recovery took {} ms for snapshot load and {} ms for segment recovery from offset {}",
+                    "Writer state recovery took {} ms for snapshot load and {} ms for segment recovery for bucket {} from offset {}",
                     segmentRecoveryStart - writerStateLoadStart,
                     System.currentTimeMillis() - segmentRecoveryStart,
+                    segments.getTableBucket(),
                     lastOffset);
         }
     }
@@ -1230,7 +1277,7 @@ public final class LogTablet {
         Map<Long, WriterAppendInfo> loadedWriters = new HashMap<>();
         for (LogRecordBatch batch : records.batches()) {
             if (batch.hasWriterId()) {
-                updateWriterAppendInfo(writerStateManager, batch, loadedWriters);
+                updateWriterAppendInfo(writerStateManager, batch, loadedWriters, true);
             }
         }
         loadedWriters.values().forEach(writerStateManager::update);

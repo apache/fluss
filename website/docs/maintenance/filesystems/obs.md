@@ -7,6 +7,22 @@ sidebar_position: 6
 
 [HuaweiCloud Object Storage Service](https://www.huaweicloud.com/product/obs.html) (HuaweiCloud OBS) is an enterprise-grade object storage solution delivering industry-leading scalability, data durability, security, and cost-efficiency. Trusted by organizations across finance, healthcare, manufacturing, and media, OBS enables you to securely store, manage, analyze, and protect unlimited data volumes for diverse scenarios like AI training, data lakes, multi-cloud backup, and real-time media processing.
 
+## Install OBS Plugin Manually
+
+HuaweiCloud OBS support is not included in the default Fluss distribution. To enable OBS support, you need to manually install the filesystem plugin into Fluss.
+
+1. **Prepare the plugin JAR**: 
+
+   - Download the `fluss-fs-obs-$FLUSS_VERSION$.jar` from the [Maven Repository](https://repo1.maven.org/maven2/org/apache/fluss/fluss-fs-obs/$FLUSS_VERSION$/fluss-fs-obs-$FLUSS_VERSION$.jar).
+   
+2. **Place the plugin**: Place the plugin JAR file in the `${FLUSS_HOME}/plugins/obs/` directory:
+   ```bash
+   mkdir -p ${FLUSS_HOME}/plugins/obs/
+   cp fluss-fs-obs-$FLUSS_VERSION$.jar ${FLUSS_HOME}/plugins/obs/
+   ```
+
+3. Restart Fluss if the cluster is already running to ensure the new plugin is loaded.
+
 ## Configurations setup
 
 To enabled HuaweiCloud OBS as remote storage, there are some required configurations that must be added to Fluss' `server.yaml`:

@@ -23,7 +23,7 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>0.8-SNAPSHOT</version>
+        <version>0.9-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-test-coverage</artifactId>
@@ -324,6 +324,7 @@
                                             org.apache.fluss.security.auth.sasl.plain.PlainSaslServer.PlainSaslServerFactory
                                         </exclude>
                                         <exclude>org.apache.fluss.security.auth.ServerAuthenticator</exclude>
+                                        <exclude>org.apache.fluss.config.cluster.AlterConfig</exclude>
                                         <!-- start exclude for flink-connector -->
                                         <exclude>org.apache.fluss.flink.utils.*</exclude>
                                         <exclude>org.apache.fluss.flink.source.*
@@ -354,9 +355,11 @@
                                             org.apache.fluss.flink.metrics.*
                                         </exclude>
                                         <!-- end exclude for flink-connector -->
-                                        <exclude>org.apache.fluss.fs.hdfs.HadoopFsPlugin
+                                        <!-- exclude flink 1.18 compatibility class for sink -->
+                                        <exclude>org.apache.flink.streaming.api.functions.sink.v2.*</exclude>
+                                        <exclude>org.apache.fluss.fs.hdfs.HdfsPlugin
                                         </exclude>
-                                        <exclude>org.apache.fluss.fs.hdfs.HadoopSecurityTokenReceiver</exclude>
+                                        <exclude>org.apache.fluss.fs.hdfs.HdfsSecurityTokenReceiver</exclude>
                                         <exclude>org.apache.fluss.fs.oss.*</exclude>
                                         <exclude>org.apache.fluss.fs.s3.*</exclude>
                                         <exclude>org.apache.fluss.fs.obs.*</exclude>
@@ -416,6 +419,8 @@
                                         </exclude>
                                         <exclude>org.apache.fluss.flink.tiering.FlussLakeTieringEntrypoint</exclude>
                                         <!-- end exclude for flink tiering service -->
+                                        <!-- exclude flink compatibility class for catalogs -->
+                                        <exclude>org.apache.flink.table.catalog.*</exclude>
                                     </excludes>
                                 </rule>
                             </rules>

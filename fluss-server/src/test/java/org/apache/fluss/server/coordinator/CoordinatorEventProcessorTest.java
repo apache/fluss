@@ -148,7 +148,11 @@ class CoordinatorEventProcessorTest {
                 ZOO_KEEPER_EXTENSION_WRAPPER
                         .getCustomExtension()
                         .getZooKeeperClient(NOPErrorHandler.INSTANCE);
-        metadataManager = new MetadataManager(zookeeperClient, new Configuration());
+        metadataManager =
+                new MetadataManager(
+                        zookeeperClient,
+                        new Configuration(),
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
 
         // register coordinator server
         zookeeperClient.registerCoordinatorLeader(
@@ -221,7 +225,7 @@ class CoordinatorEventProcessorTest {
         // mock CompletedSnapshotStore
         for (TableBucket tableBucket : allTableBuckets(t1Id, nBuckets)) {
             completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
-                    new TableBucket(tableBucket.getTableId(), tableBucket.getBucket()));
+                    t1, new TableBucket(tableBucket.getTableId(), tableBucket.getBucket()));
         }
         assertThat(completedSnapshotStoreManager.getBucketCompletedSnapshotStores()).isNotEmpty();
 
@@ -315,8 +319,7 @@ class CoordinatorEventProcessorTest {
         client.registerTabletServer(newlyServerId, tabletServerRegistration);
 
         // retry until the tablet server register event is been handled
-        retryVerifyContext(
-                ctx -> assertThat(ctx.getLiveTabletServers()).containsKey(newlyServerId));
+        retryVerifyContext(ctx -> assertThat(ctx.liveTabletServerSet()).contains(newlyServerId));
 
         initCoordinatorChannel();
         // verify the context has the exact tablet server
@@ -332,7 +335,11 @@ class CoordinatorEventProcessorTest {
         // we try to assign a replica to this newly server, every thing will
         // be fine
         // t1: {bucket0: [0, 3, 2], bucket1: [3, 2, 0]}, t2: {bucket0: [3]}
-        MetadataManager metadataManager = new MetadataManager(zookeeperClient, new Configuration());
+        MetadataManager metadataManager =
+                new MetadataManager(
+                        zookeeperClient,
+                        new Configuration(),
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
         TableAssignment table1Assignment =
                 TableAssignment.builder()
                         .add(0, BucketAssignment.of(0, 3, 2))
@@ -360,7 +367,7 @@ class CoordinatorEventProcessorTest {
 
         // retry until the server has been removed from coordinator context
         retryVerifyContext(
-                ctx -> assertThat(ctx.getLiveTabletServers()).doesNotContainKey(newlyServerId));
+                ctx -> assertThat(ctx.liveTabletServerSet()).doesNotContain(newlyServerId));
 
         // check replica state
         // all replicas should be online but the replica in the down server
@@ -397,8 +404,7 @@ class CoordinatorEventProcessorTest {
         // assume the server that comes again
         zookeeperClient.registerTabletServer(newlyServerId, tabletServerRegistration);
         // retry until the server has been added to coordinator context
-        retryVerifyContext(
-                ctx -> assertThat(ctx.getLiveTabletServers()).containsKey(newlyServerId));
+        retryVerifyContext(ctx -> assertThat(ctx.liveTabletServerSet()).contains(newlyServerId));
 
         // make sure the bucket that remains in offline should be online again
         // since the server become online
@@ -439,7 +445,11 @@ class CoordinatorEventProcessorTest {
     void testRestartTriggerReplicaToOffline() throws Exception {
         // case1: coordinator server restart, and first set the replica to online
         // but the request to the replica server fail which will then cause it offline
-        MetadataManager metadataManager = new MetadataManager(zookeeperClient, new Configuration());
+        MetadataManager metadataManager =
+                new MetadataManager(
+                        zookeeperClient,
+                        new Configuration(),
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
         TableAssignment tableAssignment =
                 TableAssignment.builder()
                         .add(0, BucketAssignment.of(0, 1, 2))
@@ -606,6 +616,7 @@ class CoordinatorEventProcessorTest {
         // mock CompletedSnapshotStore for partition1
         for (TableBucket tableBucket : allTableBuckets(tableId, partition1Id, nBuckets)) {
             completedSnapshotStoreManager.getOrCreateCompletedSnapshotStore(
+                    tablePath,
                     new TableBucket(
                             tableBucket.getTableId(),
                             tableBucket.getPartitionId(),
@@ -763,7 +774,11 @@ class CoordinatorEventProcessorTest {
                                 completedSnapshot, coordinatorEpoch, bucketLeaderEpoch),
                         responseCompletableFuture2));
         responseCompletableFuture2.get();
-        verifyReceiveRequestExceptFor(3, leader, NotifyKvSnapshotOffsetRequest.class);
+        retry(
+                Duration.ofMinutes(1),
+                () ->
+                        verifyReceiveRequestExceptFor(
+                                3, leader, NotifyKvSnapshotOffsetRequest.class));
     }
 
     @Test
@@ -807,7 +822,6 @@ class CoordinatorEventProcessorTest {
                                         assertThat(ctx.getBucketLeaderAndIsr(tableBucket))
                                                 .contains(
                                                         leaderAndIsr.newLeaderAndIsr(
-                                                                leaderAndIsr.leader(),
                                                                 leaderAndIsr.isr()))));
 
         // verify the response
@@ -829,7 +843,8 @@ class CoordinatorEventProcessorTest {
                 lakeTableTieringManager,
                 TestingMetricGroups.COORDINATOR_METRICS,
                 new Configuration(),
-                Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")));
+                Executors.newFixedThreadPool(1, new ExecutorThreadFactory("test-coordinator-io")),
+                metadataManager);
     }
 
     private void initCoordinatorChannel() throws Exception {
@@ -1082,6 +1097,7 @@ class CoordinatorEventProcessorTest {
                         .hasMessage("No requests pending for inbound response.");
             } else {
                 // should contain NotifyKvSnapshotOffsetRequest
+                assertThat(testTabletServerGateway.pendingRequestSize()).isNotZero();
                 assertThat(testTabletServerGateway.getRequest(0)).isInstanceOf(requestClass);
             }
         }

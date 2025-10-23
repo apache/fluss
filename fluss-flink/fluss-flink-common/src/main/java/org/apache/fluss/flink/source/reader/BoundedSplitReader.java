@@ -19,6 +19,7 @@ package org.apache.fluss.flink.source.reader;
 
 import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
+import org.apache.fluss.flink.lake.reader.IndexedLakeSplitRecordIterator;
 import org.apache.fluss.flink.source.split.SnapshotSplit;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.utils.CloseableIterator;
@@ -135,9 +136,14 @@ public class BoundedSplitReader implements AutoCloseable {
 
     private static class ScanRecordBatch implements CloseableIterator<ScanRecord> {
         private final CloseableIterator<InternalRow> rowIterator;
+        private int currentSplitIndex;
 
         public ScanRecordBatch(CloseableIterator<InternalRow> rowIterator) {
             this.rowIterator = rowIterator;
+            if (rowIterator instanceof IndexedLakeSplitRecordIterator) {
+                currentSplitIndex =
+                        ((IndexedLakeSplitRecordIterator) rowIterator).getCurrentLakeSplitIndex();
+            }
         }
 
         @Override
@@ -154,6 +160,10 @@ public class BoundedSplitReader implements AutoCloseable {
         public void close() {
             rowIterator.close();
         }
+
+        public int getCurrentSplitIndex() {
+            return currentSplitIndex;
+        }
     }
 
     private class RecordAndPosBatch implements CloseableIterator<RecordAndPos> {
@@ -163,7 +173,12 @@ public class BoundedSplitReader implements AutoCloseable {
 
         RecordAndPosBatch replace(CloseableIterator<ScanRecord> records) {
             this.records = records;
-            recordAndPosition.setRecord(null, NO_READ_RECORDS_COUNT);
+            if (records instanceof ScanRecordBatch) {
+                int currentSplitIndex = ((ScanRecordBatch) records).getCurrentSplitIndex();
+                recordAndPosition.setRecord(null, NO_READ_RECORDS_COUNT, currentSplitIndex);
+            } else {
+                recordAndPosition.setRecord(null, NO_READ_RECORDS_COUNT);
+            }
             return this;
         }
 

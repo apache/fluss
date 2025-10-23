@@ -23,7 +23,7 @@
     <parent>
         <groupId>org.apache.fluss</groupId>
         <artifactId>fluss</artifactId>
-        <version>0.8-SNAPSHOT</version>
+        <version>0.9-SNAPSHOT</version>
     </parent>
 
     <artifactId>fluss-dist</artifactId>
@@ -42,7 +42,7 @@
         <!--  filesystem plugin -->
         <dependency>
             <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-fs-hadoop</artifactId>
+            <artifactId>fluss-fs-hdfs</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>
@@ -57,20 +57,6 @@
         <dependency>
             <groupId>org.apache.fluss</groupId>
             <artifactId>fluss-fs-s3</artifactId>
-            <version>${project.version}</version>
-            <scope>provided</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-fs-gs</artifactId>
-            <version>${project.version}</version>
-            <scope>provided</scope>
-        </dependency>
-
-        <dependency>
-            <groupId>org.apache.fluss</groupId>
-            <artifactId>fluss-fs-obs</artifactId>
             <version>${project.version}</version>
             <scope>provided</scope>
         </dependency>

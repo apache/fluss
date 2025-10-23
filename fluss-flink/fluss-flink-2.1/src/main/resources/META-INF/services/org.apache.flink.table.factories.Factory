@@ -16,4 +16,4 @@
 # limitations under the License.
 #
 
-org.apache.fluss.flink.catalog.FlinkCatalogFactory
+org.apache.fluss.flink.catalog.Flink21CatalogFactory

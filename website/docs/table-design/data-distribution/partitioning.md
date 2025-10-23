@@ -27,7 +27,7 @@ For example, in an `Order` primary key table, the partition key can be defined a
 - **Scalability:** Partitioning large datasets distributes the data across smaller, manageable chunks, improving scalability.
 
 ## Restrictions
-- The type of the partition keys must be STRING.
+- The partition key must be a Fluss native data type and cannot be contained in a map or list.
 - For auto partition table, the partition keys can be one or more. If the table has only one partition key, it supports automatic creation and automatic expiration of partitions. Otherwise, only automatic expiration is allowed.
 - If the table is a primary key table, the partition key must be a subset of the primary key.
 - Auto-partitioning rules can only be configured at the time of creating the partitioned table; modifying the auto-partitioning rules after table creation is not supported.

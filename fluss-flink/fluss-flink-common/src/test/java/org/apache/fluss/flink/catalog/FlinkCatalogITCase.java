@@ -20,7 +20,10 @@ package org.apache.fluss.flink.catalog;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 
@@ -33,6 +36,7 @@ import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
+import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 import org.apache.flink.util.CollectionUtil;
@@ -76,12 +80,13 @@ abstract class FlinkCatalogITCase {
         Configuration clusterConf = new Configuration();
         // use a small check interval to cleanup partitions quickly
         clusterConf.set(ConfigOptions.AUTO_PARTITION_CHECK_INTERVAL, Duration.ofSeconds(3));
+        clusterConf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON);
         return clusterConf;
     }
 
     static final String CATALOG_NAME = "testcatalog";
     static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
-    static Catalog catalog;
+    static FlinkCatalog catalog;
 
     protected TableEnvironment tEnv;
 
@@ -176,10 +181,94 @@ abstract class FlinkCatalogITCase {
                 .column("r", DataTypes.TIMESTAMP_LTZ())
                 .column("s", DataTypes.ROW(DataTypes.FIELD("a", DataTypes.INT())))
                 .primaryKey("a");
+        addDefaultIndexKey(schemaBuilder);
         Schema expectedSchema = schemaBuilder.build();
         CatalogTable table =
                 (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, "test_table"));
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
+    }
+
+    @Test
+    void testAlterTable() throws Exception {
+        String ddl =
+                "create table test_alter_table_append_only ("
+                        + "a string, "
+                        + "b int) "
+                        + "with ('bucket.num' = '5', 'table.datalake.enabled' = 'true')";
+        tEnv.executeSql(ddl);
+        Schema.Builder schemaBuilder = Schema.newBuilder();
+        schemaBuilder.column("a", DataTypes.STRING()).column("b", DataTypes.INT());
+        Schema expectedSchema = schemaBuilder.build();
+        CatalogTable table =
+                (CatalogTable)
+                        catalog.getTable(
+                                new ObjectPath(DEFAULT_DB, "test_alter_table_append_only"));
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
+        Map<String, String> expectedOptions = new HashMap<>();
+        expectedOptions.put("bucket.num", "5");
+        expectedOptions.put("table.datalake.enabled", "true");
+        expectedOptions.put("table.datalake.format", "paimon");
+        assertOptionsEqual(table.getOptions(), expectedOptions);
+
+        // alter table
+        String dml =
+                "alter table test_alter_table_append_only set ('client.connect-timeout' = '240s')";
+        tEnv.executeSql(dml);
+        table =
+                (CatalogTable)
+                        catalog.getTable(
+                                new ObjectPath(DEFAULT_DB, "test_alter_table_append_only"));
+        assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
+
+        // bucket.num is unchanged, but timeout should change
+        expectedOptions.put("client.connect-timeout", "240s"); // updated
+        assertOptionsEqual(table.getOptions(), expectedOptions);
+
+        // alter table set an unsupported modification option should throw exception
+        String unSupportedDml1 =
+                "alter table test_alter_table_append_only set ('table.auto-partition.enabled' = 'true')";
+
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml1))
+                .rootCause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessage(
+                        "The option 'table.auto-partition.enabled' is not supported to alter yet.");
+
+        String unSupportedDml2 =
+                "alter table test_alter_table_append_only set ('k1' = 'v1', 'table.kv.format' = 'indexed')";
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml2))
+                .rootCause()
+                .isInstanceOf(InvalidAlterTableException.class)
+                .hasMessage("The option 'table.kv.format' is not supported to alter yet.");
+
+        String unSupportedDml3 =
+                "alter table test_alter_table_append_only set ('bucket.num' = '1000')";
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml3))
+                .rootCause()
+                .isInstanceOf(CatalogException.class)
+                .hasMessage("The option 'bucket.num' is not supported to alter yet.");
+
+        String unSupportedDml4 =
+                "alter table test_alter_table_append_only set ('bucket.key' = 'a')";
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml4))
+                .rootCause()
+                .isInstanceOf(CatalogException.class)
+                .hasMessage("The option 'bucket.key' is not supported to alter yet.");
+
+        String unSupportedDml5 =
+                "alter table test_alter_table_append_only reset ('bootstrap.servers')";
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml5))
+                .rootCause()
+                .isInstanceOf(CatalogException.class)
+                .hasMessage("The option 'bootstrap.servers' is not supported to alter yet.");
+
+        String unSupportedDml6 =
+                "alter table test_alter_table_append_only set ('paimon.file.format' = 'orc')";
+        assertThatThrownBy(() -> tEnv.executeSql(unSupportedDml6))
+                .rootCause()
+                .isInstanceOf(InvalidConfigException.class)
+                .hasMessage(
+                        "Property 'paimon.file.format' is not supported to alter which is for datalake table.");
     }
 
     @Test
@@ -203,12 +292,14 @@ abstract class FlinkCatalogITCase {
         tEnv.executeSql("create table append_only_table(a int, b int) with ('bucket.num' = '10')");
         Schema.Builder schemaBuilder = Schema.newBuilder();
         schemaBuilder.column("a", DataTypes.INT()).column("b", DataTypes.INT());
+        addDefaultIndexKey(schemaBuilder);
         Schema expectedSchema = schemaBuilder.build();
         CatalogTable table =
                 (CatalogTable) catalog.getTable(new ObjectPath(DEFAULT_DB, "append_only_table"));
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
         Map<String, String> expectedOptions = new HashMap<>();
         expectedOptions.put("bucket.num", "10");
+        expectedOptions.put("table.datalake.format", "paimon");
         assertOptionsEqual(table.getOptions(), expectedOptions);
     }
 
@@ -224,6 +315,7 @@ abstract class FlinkCatalogITCase {
                 .column("a", DataTypes.INT())
                 .column("b", DataTypes.STRING())
                 .column("dt", DataTypes.STRING());
+        addDefaultIndexKey(schemaBuilder);
         Schema expectedSchema = schemaBuilder.build();
         CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
@@ -277,6 +369,7 @@ abstract class FlinkCatalogITCase {
                         + " 'table.auto-partition.time-unit' = 'year')");
         Schema.Builder schemaBuilder = Schema.newBuilder();
         schemaBuilder.column("a", DataTypes.INT()).column("b", DataTypes.STRING());
+        addDefaultIndexKey(schemaBuilder);
         Schema expectedSchema = schemaBuilder.build();
         CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
@@ -386,6 +479,7 @@ abstract class FlinkCatalogITCase {
                 .column("b", DataTypes.STRING())
                 .column("c", DataTypes.STRING())
                 .column("hh", DataTypes.STRING());
+        addDefaultIndexKey(schemaBuilder);
         Schema expectedSchema = schemaBuilder.build();
         CatalogTable table = (CatalogTable) catalog.getTable(objectPath);
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
@@ -470,12 +564,14 @@ abstract class FlinkCatalogITCase {
                 .column("order_time", DataTypes.TIMESTAMP(3))
                 .watermark("order_time", "`order_time` - INTERVAL '5' SECOND")
                 .primaryKey("user");
+        addDefaultIndexKey(schemaBuilder);
         Schema expectedSchema = schemaBuilder.build();
         assertThat(table.getUnresolvedSchema()).isEqualTo(expectedSchema);
         Map<String, String> expectedOptions = new HashMap<>();
         expectedOptions.put("k1", "v1");
         expectedOptions.put(BUCKET_KEY.key(), "user");
         expectedOptions.put(BUCKET_NUMBER.key(), "1");
+        expectedOptions.put("table.datalake.format", "paimon");
         assertOptionsEqual(table.getOptions(), expectedOptions);
     }
 
@@ -550,10 +646,23 @@ abstract class FlinkCatalogITCase {
 
     @Test
     void testCreateTableWithUnknownOptions() {
-        // create fluss table with unknown options whose prefix is 'table.*' or 'client.*'
+        // create fluss table with unknown table.* options is invalid
+        assertThatThrownBy(
+                        () -> {
+                            tEnv.executeSql(
+                                    "create table test_table_unknown_options (a int, b int)"
+                                            + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092', "
+                                            + "'table.unknown.option' = 'table-unknown-val')");
+                        })
+                .hasRootCauseInstanceOf(InvalidConfigException.class)
+                .hasRootCauseMessage(
+                        "'table.unknown.option' is not a recognized Fluss table property in the current cluster version. "
+                                + "You may be using an older Fluss cluster that does not support this property.");
+
+        // create fluss table with unknown client.* options is ok
         tEnv.executeSql(
                 "create table test_table_unknown_options (a int, b int)"
-                        + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092', 'table.unknown.option' = 'table-unknown-val', 'client.unknown.option' = 'client-unknown-val')");
+                        + " with ('connector' = 'fluss', 'bootstrap.servers' = 'localhost:9092', 'client.unknown.option' = 'client-unknown-val')");
 
         // test table as source
         String sourcePlan = tEnv.explainSql("select * from test_table_unknown_options");
@@ -657,11 +766,32 @@ abstract class FlinkCatalogITCase {
         }
     }
 
-    private static void assertOptionsEqual(
+    @Test
+    void testCreateCatalogWithUnexistedDatabase() {
+        assertThatThrownBy(
+                        () ->
+                                tEnv.executeSql(
+                                        String.format(
+                                                "create catalog test_non_exist_database_catalog with ('type' = 'fluss', '%s' = '%s', 'default-database' = 'non-exist')",
+                                                BOOTSTRAP_SERVERS.key(),
+                                                FLUSS_CLUSTER_EXTENSION.getBootstrapServers())))
+                .rootCause()
+                .isExactlyInstanceOf(CatalogException.class)
+                .hasMessage(
+                        "The configured default-database 'non-exist' does not exist in the Fluss cluster.");
+    }
+
+    /**
+     * Before Flink 2.1, the {@link Schema} did not include an index field. Starting from Flink 2.1,
+     * Flink introduced the concept of an index, and in Fluss, the primary key is considered as an
+     * index.
+     */
+    protected void addDefaultIndexKey(Schema.Builder schemaBuilder) {}
+
+    protected static void assertOptionsEqual(
             Map<String, String> actualOptions, Map<String, String> expectedOptions) {
         actualOptions.remove(ConfigOptions.BOOTSTRAP_SERVERS.key());
         actualOptions.remove(ConfigOptions.TABLE_REPLICATION_FACTOR.key());
-        assertThat(actualOptions.size()).isEqualTo(expectedOptions.size());
         assertThat(actualOptions).isEqualTo(expectedOptions);
     }
 }

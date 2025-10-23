@@ -30,6 +30,7 @@ import javax.annotation.Nullable;
 import java.util.Arrays;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.Optional;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionException;
@@ -45,6 +46,7 @@ import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.BiConsumer;
 import java.util.function.BiFunction;
+import java.util.function.Function;
 import java.util.function.Supplier;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
@@ -771,6 +773,87 @@ public class FutureUtils {
         } else {
             return t;
         }
+    }
+
+    /**
+     * Core method to execute async-to-sync conversion with unified exception handling. This method
+     * contains all the common exception handling logic.
+     *
+     * @param futureSupplier supplier that provides the CompletableFuture
+     * @param operationName name of the operation for error messages
+     * @param <T> the type of the result
+     * @return the result directly from the CompletableFuture
+     * @throws Exception if any error occurs during the operation
+     */
+    private static <T> T asyncToSyncInternal(
+            Supplier<CompletableFuture<T>> futureSupplier, String operationName) throws Exception {
+        try {
+            return futureSupplier.get().get();
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new RuntimeException("Interrupted while waiting for " + operationName, e);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof RuntimeException) {
+                throw (RuntimeException) cause;
+            } else if (cause instanceof Exception) {
+                throw (Exception) cause;
+            } else {
+                throw new RuntimeException("Unexpected error getting " + operationName, cause);
+            }
+        }
+    }
+
+    /**
+     * Template method to convert async CompletableFuture to synchronous Optional result.
+     *
+     * @param futureSupplier supplier that provides the CompletableFuture
+     * @param operationName name of the operation for error messages
+     * @param <T> the type of the result
+     * @return Optional containing the result, or empty if the result is null
+     * @throws Exception if any error occurs during the operation
+     */
+    public static <T> Optional<T> asyncToSync(
+            Supplier<CompletableFuture<T>> futureSupplier, String operationName) throws Exception {
+        T result = asyncToSyncInternal(futureSupplier, operationName);
+        return Optional.ofNullable(result);
+    }
+
+    /**
+     * Template method to convert async CompletableFuture to synchronous Optional result with
+     * transformation.
+     *
+     * @param futureSupplier supplier that provides the CompletableFuture
+     * @param transformer function to transform the result before wrapping in Optional
+     * @param operationName name of the operation for error messages
+     * @param <T> the type of the future result
+     * @param <R> the type of the final result
+     * @return Optional containing the transformed result, or empty if the result is null
+     * @throws Exception if any error occurs during the operation
+     */
+    public static <T, R> Optional<R> asyncToSync(
+            Supplier<CompletableFuture<T>> futureSupplier,
+            Function<T, R> transformer,
+            String operationName)
+            throws Exception {
+        T result = asyncToSyncInternal(futureSupplier, operationName);
+        R transformedResult = result == null ? null : transformer.apply(result);
+        return Optional.ofNullable(transformedResult);
+    }
+
+    /**
+     * Template method to convert async CompletableFuture to synchronous result directly (not
+     * wrapped in Optional).
+     *
+     * @param futureSupplier supplier that provides the CompletableFuture
+     * @param operationName name of the operation for error messages
+     * @param <T> the type of the result
+     * @return the result directly (can be null)
+     * @throws Exception if any error occurs during the operation
+     */
+    public static <T> T asyncToSyncDirect(
+            Supplier<CompletableFuture<T>> futureSupplier, String operationName) throws Exception {
+        return asyncToSyncInternal(futureSupplier, operationName);
     }
 
     /**

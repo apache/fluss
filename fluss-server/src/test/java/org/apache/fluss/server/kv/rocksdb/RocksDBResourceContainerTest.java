@@ -108,7 +108,9 @@ class RocksDBResourceContainerTest {
         System.setProperty("log.file", logFile.getPath());
         try (RocksDBResourceContainer container = new RocksDBResourceContainer()) {
             assertThat(container.getDbOptions().infoLogLevel()).isEqualTo(InfoLogLevel.INFO_LEVEL);
-            assertThat(container.getDbOptions().dbLogDir()).isEqualTo(logFile.getParent());
+            File rocksDbLogDirectory = new File(logFile.getParent(), "rocksdb");
+            assertThat(container.getDbOptions().dbLogDir())
+                    .isEqualTo(rocksDbLogDirectory.getAbsolutePath());
         } finally {
             logFile.delete();
         }

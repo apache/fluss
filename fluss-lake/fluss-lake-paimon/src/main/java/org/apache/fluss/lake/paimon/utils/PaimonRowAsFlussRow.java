@@ -25,6 +25,8 @@ import org.apache.fluss.row.TimestampNtz;
 
 import org.apache.paimon.data.Timestamp;
 
+import static org.apache.fluss.lake.paimon.PaimonLakeCatalog.SYSTEM_COLUMNS;
+
 /** Adapter for paimon row as fluss row. */
 public class PaimonRowAsFlussRow implements InternalRow {
 
@@ -43,7 +45,7 @@ public class PaimonRowAsFlussRow implements InternalRow {
 
     @Override
     public int getFieldCount() {
-        return paimonRow.getFieldCount();
+        return paimonRow.getFieldCount() - SYSTEM_COLUMNS.size();
     }
 
     @Override

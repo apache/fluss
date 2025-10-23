@@ -27,6 +27,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.entity.ProduceLogResultForBucket;
 import org.apache.fluss.rpc.metrics.TestingClientMetricGroup;
+import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.coordinator.TestCoordinatorGateway;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
@@ -46,7 +47,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.utils.clock.Clock;
-import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.clock.ManualClock;
 import org.apache.fluss.utils.concurrent.FlussScheduler;
 import org.apache.fluss.utils.concurrent.Scheduler;
 
@@ -86,6 +87,7 @@ public class ReplicaFetcherThreadTest {
             new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     private static ZooKeeperClient zkClient;
+    private ManualClock manualClock;
     private @TempDir File tempDir;
     private TableBucket tb;
     private final int leaderServerId = 1;
@@ -106,6 +108,7 @@ public class ReplicaFetcherThreadTest {
     @BeforeEach
     public void setup() throws Exception {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
+        manualClock = new ManualClock(System.currentTimeMillis());
         Configuration conf = new Configuration();
         tb = new TableBucket(DATA1_TABLE_ID, 0);
         leaderRM = createReplicaManager(leaderServerId);
@@ -277,6 +280,77 @@ public class ReplicaFetcherThreadTest {
                 () -> assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(120L));
     }
 
+    @Test
+    void testAppendAsFollowerThrowOutOfOrderSequenceException() throws Exception {
+        Replica followerReplica = followerRM.getReplicaOrException(tb);
+
+        long writerId = 101;
+        CompletableFuture<List<ProduceLogResultForBucket>> future;
+
+        // 1. append 2 batches to leader with (writerId=101L, batchSequence=0 offset=0L)
+        future = new CompletableFuture<>();
+        leaderRM.appendRecordsToLog(
+                1000,
+                1,
+                Collections.singletonMap(
+                        tb, genMemoryLogRecordsWithWriterId(DATA1, writerId, 0, 0)),
+                future::complete);
+        assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 0L, 10L));
+
+        // 2. append the first batch to follower with (writerId=101L, batchSequence=0 offset=0L) to
+        // mock
+        // follower have already fetched one batch.
+        followerReplica.appendRecordsToFollower(
+                genMemoryLogRecordsWithWriterId(DATA1, writerId, 0, 0));
+        assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(10L);
+
+        // advance time
+        manualClock.advanceTime(Duration.ofHours(13));
+
+        // 3. append the second batch to leader with (writerId=101L, batchSequence=1 offset=10L)
+        future = new CompletableFuture<>();
+        leaderRM.appendRecordsToLog(
+                1000,
+                1,
+                Collections.singletonMap(
+                        tb, genMemoryLogRecordsWithWriterId(DATA1, writerId, 1, 0)),
+                future::complete);
+        assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 10L, 20L));
+
+        // 3. mock remove expired writer, writerId=101 will be removed.
+        assertThat(followerReplica.getLogTablet().writerStateManager().activeWriters().size())
+                .isEqualTo(1);
+        followerReplica.getLogTablet().removeExpiredWriter(manualClock.milliseconds());
+        assertThat(followerReplica.getLogTablet().writerStateManager().activeWriters().size())
+                .isEqualTo(0);
+
+        // 4. begin fetcher thread.
+        followerFetcher.addBuckets(
+                Collections.singletonMap(
+                        tb,
+                        new InitialFetchStatus(
+                                DATA1_TABLE_ID, DATA1_TABLE_PATH, leader.id(), 10L)));
+        followerFetcher.start();
+        // fetcher will force append the second batch to follower
+        retry(
+                Duration.ofSeconds(20),
+                () -> assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(20L));
+
+        // 5. mock new batch to leader with (writerId=101L, batchSequence=2 offset=20L)
+        future = new CompletableFuture<>();
+        leaderRM.appendRecordsToLog(
+                1000,
+                1,
+                Collections.singletonMap(
+                        tb, genMemoryLogRecordsWithWriterId(DATA1, writerId, 2, 0)),
+                future::complete);
+        assertThat(future.get()).containsOnly(new ProduceLogResultForBucket(tb, 20L, 30L));
+        // now fetcher will work well since the state of writerId=101 is established
+        retry(
+                Duration.ofSeconds(20),
+                () -> assertThat(followerReplica.getLocalLogEndOffset()).isEqualTo(30L));
+    }
+
     private void registerTableInZkClient() throws Exception {
         ZOO_KEEPER_EXTENSION_WRAPPER.getCustomExtension().cleanupRoot();
         zkClient.registerTable(
@@ -319,11 +393,17 @@ public class ReplicaFetcherThreadTest {
     private ReplicaManager createReplicaManager(int serverId) throws Exception {
         Configuration conf = new Configuration();
         conf.setString(ConfigOptions.DATA_DIR, tempDir.getAbsolutePath() + "/server-" + serverId);
+        conf.set(ConfigOptions.WRITER_ID_EXPIRATION_TIME, Duration.ofHours(12));
         Scheduler scheduler = new FlussScheduler(2);
         scheduler.startup();
 
         LogManager logManager =
-                LogManager.create(conf, zkClient, scheduler, SystemClock.getInstance());
+                LogManager.create(
+                        conf,
+                        zkClient,
+                        scheduler,
+                        manualClock,
+                        TestingMetricGroups.TABLET_SERVER_METRICS);
         logManager.startup();
         ReplicaManager replicaManager =
                 new TestingReplicaManager(
@@ -333,10 +413,14 @@ public class ReplicaFetcherThreadTest {
                         null,
                         zkClient,
                         serverId,
-                        new TabletServerMetadataCache(new MetadataManager(null, conf), null),
+                        new TabletServerMetadataCache(
+                                new MetadataManager(
+                                        null,
+                                        conf,
+                                        new LakeCatalogDynamicLoader(conf, null, true))),
                         RpcClient.create(conf, TestingClientMetricGroup.newInstance(), false),
                         TestingMetricGroups.TABLET_SERVER_METRICS,
-                        SystemClock.getInstance());
+                        manualClock);
         replicaManager.startup();
         return replicaManager;
     }

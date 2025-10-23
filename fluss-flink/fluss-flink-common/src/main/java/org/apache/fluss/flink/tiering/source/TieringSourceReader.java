@@ -18,7 +18,7 @@
 package org.apache.fluss.flink.tiering.source;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.config.Configuration;
+import org.apache.fluss.client.Connection;
 import org.apache.fluss.flink.tiering.source.split.TieringSplit;
 import org.apache.fluss.flink.tiering.source.state.TieringSplitState;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
@@ -40,15 +40,18 @@ public final class TieringSourceReader<WriteResult>
                 TieringSplit,
                 TieringSplitState> {
 
+    private final Connection connection;
+
     public TieringSourceReader(
             SourceReaderContext context,
-            Configuration flussConf,
+            Connection connection,
             LakeTieringFactory<WriteResult, ?> lakeTieringFactory) {
         super(
-                () -> new TieringSplitReader<>(flussConf, lakeTieringFactory),
+                () -> new TieringSplitReader<>(connection, lakeTieringFactory),
                 new TableBucketWriteResultEmitter<>(),
                 context.getConfiguration(),
                 context);
+        this.connection = connection;
     }
 
     @Override
@@ -84,5 +87,11 @@ public final class TieringSourceReader<WriteResult>
     @Override
     protected TieringSplit toSplitType(String splitId, TieringSplitState splitState) {
         return splitState.toSourceSplit();
+    }
+
+    @Override
+    public void close() throws Exception {
+        super.close();
+        connection.close();
     }
 }

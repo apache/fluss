@@ -1,6 +1,6 @@
 ---
 title: Verifying a Fluss Shaded Release
-sidebar_position: 3
+sidebar_position: 5
 ---
 
 # Verifying a Fluss Shaded Release

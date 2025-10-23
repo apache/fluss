@@ -25,6 +25,8 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.client.write.KvWriteBatch;
 import org.apache.fluss.client.write.ReadyWriteBatch;
+import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
@@ -32,6 +34,7 @@ import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.messages.CreatePartitionRequest;
 import org.apache.fluss.rpc.messages.DropPartitionRequest;
@@ -43,6 +46,8 @@ import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
 import org.apache.fluss.rpc.messages.LookupRequest;
 import org.apache.fluss.rpc.messages.MetadataRequest;
+import org.apache.fluss.rpc.messages.PbAlterConfig;
+import org.apache.fluss.rpc.messages.PbDescribeConfig;
 import org.apache.fluss.rpc.messages.PbKeyValue;
 import org.apache.fluss.rpc.messages.PbKvSnapshot;
 import org.apache.fluss.rpc.messages.PbLakeSnapshotForBucket;
@@ -347,5 +352,37 @@ public class ClientRpcMessageUtils {
         partitionSpecMap.forEach(
                 (key, value) -> pbKeyValues.add(new PbKeyValue().setKey(key).setValue(value)));
         return new PbPartitionSpec().addAllPartitionKeyValues(pbKeyValues);
+    }
+
+    public static PbAlterConfig toPbAlterConfigs(TableChange tableChange) {
+        PbAlterConfig info = new PbAlterConfig();
+        if (tableChange instanceof TableChange.SetOption) {
+            TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
+            info.setConfigKey(setOption.getKey());
+            info.setConfigValue(setOption.getValue());
+            info.setOpType(AlterConfigOpType.SET.value());
+        } else if (tableChange instanceof TableChange.ResetOption) {
+            TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
+            info.setConfigKey(resetOption.getKey());
+            info.setOpType(AlterConfigOpType.DELETE.value());
+        } else {
+            throw new IllegalArgumentException(
+                    "Unsupported table change: " + tableChange.getClass());
+        }
+        return info;
+    }
+
+    public static List<ConfigEntry> toConfigEntries(List<PbDescribeConfig> pbDescribeConfigs) {
+        return pbDescribeConfigs.stream()
+                .map(
+                        pbDescribeConfig ->
+                                new ConfigEntry(
+                                        pbDescribeConfig.getConfigKey(),
+                                        pbDescribeConfig.hasConfigValue()
+                                                ? pbDescribeConfig.getConfigValue()
+                                                : null,
+                                        ConfigEntry.ConfigSource.valueOf(
+                                                pbDescribeConfig.getConfigSource())))
+                .collect(Collectors.toList());
     }
 }

@@ -80,10 +80,6 @@ public class LeafPredicate implements Predicate {
         return literals;
     }
 
-    public LeafPredicate copyWithNewIndex(int fieldIndex) {
-        return new LeafPredicate(function, type, fieldIndex, fieldName, literals);
-    }
-
     @Override
     public boolean test(InternalRow row) {
         return function.test(type, get(row, fieldIndex, type), literals);

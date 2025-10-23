@@ -19,8 +19,12 @@ package org.apache.fluss.lake.lakestorage;
 
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.exception.TableNotExistException;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
+
+import java.util.List;
 
 /**
  * A catalog interface to modify metadata in external datalake.
@@ -39,6 +43,16 @@ public interface LakeCatalog extends AutoCloseable {
      */
     void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws TableAlreadyExistException;
+
+    /**
+     * Alter a table in lake.
+     *
+     * @param tablePath path of the table to be altered
+     * @param tableChanges The changes to be applied to the table
+     * @throws TableNotExistException if the table not exists
+     */
+    void alterTable(TablePath tablePath, List<TableChange> tableChanges)
+            throws TableNotExistException;
 
     @Override
     default void close() throws Exception {

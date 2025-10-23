@@ -42,6 +42,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import java.net.ConnectException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -156,9 +157,9 @@ final class NettyClientTest {
                                 nettyClient
                                         .sendRequest(serverNode, ApiKeys.API_VERSIONS, request)
                                         .get())
-                .isInstanceOf(ExecutionException.class)
-                .hasMessageContaining("Disconnected from node")
-                .hasRootCauseMessage("finishConnect(..) failed: Connection refused");
+                .rootCause()
+                .isInstanceOf(ConnectException.class)
+                .hasMessageContaining("Connection refused");
         assertThat(nettyClient.connections().size()).isEqualTo(0);
 
         // restart the netty server.
@@ -200,7 +201,7 @@ final class NettyClientTest {
                                 service,
                                 metricGroup,
                                 RequestsMetrics.createCoordinatorServerRequestMetrics(
-                                        metricGroup)); ) {
+                                        metricGroup))) {
             multipleEndpointsServer.start();
             ApiVersionsRequest request =
                     new ApiVersionsRequest()
@@ -231,6 +232,25 @@ final class NettyClientTest {
                 assertThat(client.connections().size()).isEqualTo(1);
             }
         }
+    }
+
+    @Test
+    void testExceptionWhenInitializeServerConnection() throws Exception {
+        ApiVersionsRequest request =
+                new ApiVersionsRequest()
+                        .setClientSoftwareName("testing_client_100")
+                        .setClientSoftwareVersion("1.0");
+        // close the netty server.
+        nettyServer.close();
+
+        // send request and create server connection.
+        assertThatThrownBy(
+                        () ->
+                                nettyClient
+                                        .sendRequest(serverNode, ApiKeys.API_VERSIONS, request)
+                                        .get())
+                .hasMessageContaining("Disconnected from node");
+        assertThat(nettyClient.connections()).isEmpty();
     }
 
     private void buildNettyServer(int serverId) throws Exception {

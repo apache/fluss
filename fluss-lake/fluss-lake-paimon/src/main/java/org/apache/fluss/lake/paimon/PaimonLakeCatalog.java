@@ -17,28 +17,32 @@
 
 package org.apache.fluss.lake.paimon;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.IOUtils;
 
-import org.apache.paimon.CoreOptions;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
+import org.apache.paimon.schema.SchemaChange;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.DataTypes;
 
 import java.util.LinkedHashMap;
 import java.util.List;
-import java.util.Map;
 
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchema;
+import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchemaChanges;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -46,7 +50,7 @@ import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
 /** A Paimon implementation of {@link LakeCatalog}. */
 public class PaimonLakeCatalog implements LakeCatalog {
 
-    private static final LinkedHashMap<String, DataType> SYSTEM_COLUMNS = new LinkedHashMap<>();
+    public static final LinkedHashMap<String, DataType> SYSTEM_COLUMNS = new LinkedHashMap<>();
 
     static {
         // We need __bucket system column to filter out the given bucket
@@ -61,22 +65,22 @@ public class PaimonLakeCatalog implements LakeCatalog {
 
     private final Catalog paimonCatalog;
 
-    // for fluss config
-    private static final String FLUSS_CONF_PREFIX = "fluss.";
-    // for paimon config
-    private static final String PAIMON_CONF_PREFIX = "paimon.";
-
     public PaimonLakeCatalog(Configuration configuration) {
         this.paimonCatalog =
                 CatalogFactory.createCatalog(
                         CatalogContext.create(Options.fromMap(configuration.toMap())));
     }
 
+    @VisibleForTesting
+    protected Catalog getPaimonCatalog() {
+        return paimonCatalog;
+    }
+
     @Override
     public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
             throws TableAlreadyExistException {
         // then, create the table
-        Identifier paimonPath = toPaimonIdentifier(tablePath);
+        Identifier paimonPath = toPaimon(tablePath);
         Schema paimonSchema = toPaimonSchema(tableDescriptor);
         try {
             createTable(paimonPath, paimonSchema);
@@ -94,6 +98,19 @@ public class PaimonLakeCatalog implements LakeCatalog {
                                         + "successfully, please try again.",
                                 tablePath, tablePath.getDatabaseName()));
             }
+        }
+    }
+
+    @Override
+    public void alterTable(TablePath tablePath, List<TableChange> tableChanges)
+            throws TableNotExistException {
+        try {
+            Identifier paimonPath = toPaimon(tablePath);
+            List<SchemaChange> paimonSchemaChanges = toPaimonSchemaChanges(tableChanges);
+            alterTable(paimonPath, paimonSchemaChanges);
+        } catch (Catalog.ColumnAlreadyExistException | Catalog.ColumnNotExistException e) {
+            // shouldn't happen before we support schema change
+            throw new RuntimeException(e);
         }
     }
 
@@ -116,77 +133,12 @@ public class PaimonLakeCatalog implements LakeCatalog {
         }
     }
 
-    private Identifier toPaimonIdentifier(TablePath tablePath) {
-        return Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
-    }
-
-    private Schema toPaimonSchema(TableDescriptor tableDescriptor) {
-        Schema.Builder schemaBuilder = Schema.newBuilder();
-        Options options = new Options();
-
-        // When bucket key is undefined, it should use dynamic bucket (bucket = -1) mode.
-        List<String> bucketKeys = tableDescriptor.getBucketKeys();
-        if (!bucketKeys.isEmpty()) {
-            int numBuckets =
-                    tableDescriptor
-                            .getTableDistribution()
-                            .flatMap(TableDescriptor.TableDistribution::getBucketCount)
-                            .orElseThrow(
-                                    () ->
-                                            new IllegalArgumentException(
-                                                    "Bucket count should be set."));
-            options.set(CoreOptions.BUCKET, numBuckets);
-            options.set(CoreOptions.BUCKET_KEY, String.join(",", bucketKeys));
-        } else {
-            options.set(CoreOptions.BUCKET, CoreOptions.BUCKET.defaultValue());
-        }
-
-        // set schema
-        for (org.apache.fluss.metadata.Schema.Column column :
-                tableDescriptor.getSchema().getColumns()) {
-            String columnName = column.getName();
-            if (SYSTEM_COLUMNS.containsKey(columnName)) {
-                throw new InvalidTableException(
-                        "Column "
-                                + columnName
-                                + " conflicts with a system column name of paimon table, please rename the column.");
-            }
-            schemaBuilder.column(
-                    columnName,
-                    column.getDataType().accept(FlussDataTypeToPaimonDataType.INSTANCE),
-                    column.getComment().orElse(null));
-        }
-
-        // add system metadata columns to schema
-        for (Map.Entry<String, DataType> systemColumn : SYSTEM_COLUMNS.entrySet()) {
-            schemaBuilder.column(systemColumn.getKey(), systemColumn.getValue());
-        }
-
-        // set pk
-        if (tableDescriptor.hasPrimaryKey()) {
-            schemaBuilder.primaryKey(
-                    tableDescriptor.getSchema().getPrimaryKey().get().getColumnNames());
-            options.set(
-                    CoreOptions.CHANGELOG_PRODUCER.key(),
-                    CoreOptions.ChangelogProducer.INPUT.toString());
-        }
-        // set partition keys
-        schemaBuilder.partitionKeys(tableDescriptor.getPartitionKeys());
-
-        // set properties to paimon schema
-        tableDescriptor.getProperties().forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
-        tableDescriptor
-                .getCustomProperties()
-                .forEach((k, v) -> setFlussPropertyToPaimon(k, v, options));
-        schemaBuilder.options(options.toMap());
-        return schemaBuilder.build();
-    }
-
-    private void setFlussPropertyToPaimon(String key, String value, Options options) {
-        if (key.startsWith(PAIMON_CONF_PREFIX)) {
-            options.set(key.substring(PAIMON_CONF_PREFIX.length()), value);
-        } else {
-            options.set(FLUSS_CONF_PREFIX + key, value);
+    private void alterTable(Identifier tablePath, List<SchemaChange> tableChanges)
+            throws Catalog.ColumnAlreadyExistException, Catalog.ColumnNotExistException {
+        try {
+            paimonCatalog.alterTable(tablePath, tableChanges, false);
+        } catch (Catalog.TableNotExistException e) {
+            throw new TableNotExistException("Table " + tablePath + " not exists.");
         }
     }
 

@@ -23,8 +23,11 @@ import org.apache.fluss.memory.OutputView;
 import org.apache.fluss.utils.MurmurHashUtils;
 
 import java.io.IOException;
+import java.nio.ByteOrder;
 
 import static org.apache.fluss.memory.MemoryUtils.UNSAFE;
+import static org.apache.fluss.row.BinarySection.HIGHEST_FIRST_BIT;
+import static org.apache.fluss.row.BinarySection.HIGHEST_SECOND_TO_EIGHTH_BIT;
 
 /* This file is based on source code of Apache Flink Project (https://flink.apache.org/), licensed by the Apache
  * Software Foundation (ASF) under the Apache License, Version 2.0. See the NOTICE file distributed with this work for
@@ -33,6 +36,9 @@ import static org.apache.fluss.memory.MemoryUtils.UNSAFE;
 /** Utilities for binary data segments which heavily uses {@link MemorySegment}. */
 @Internal
 public final class BinarySegmentUtils {
+
+    public static final boolean LITTLE_ENDIAN =
+            (ByteOrder.nativeOrder() == ByteOrder.LITTLE_ENDIAN);
 
     private static final int ADDRESS_BITS_PER_WORD = 3;
 
@@ -369,6 +375,20 @@ public final class BinarySegmentUtils {
     }
 
     /**
+     * unset bit.
+     *
+     * @param segment target segment.
+     * @param baseOffset bits base offset.
+     * @param index bit index from base offset.
+     */
+    public static void bitUnSet(MemorySegment segment, int baseOffset, int index) {
+        int offset = baseOffset + byteIndex(index);
+        byte current = segment.get(offset);
+        current &= ~(1 << (index & BIT_BYTE_INDEX_MASK));
+        segment.put(offset, current);
+    }
+
+    /**
      * read bit.
      *
      * @param segment target segment.
@@ -385,5 +405,263 @@ public final class BinarySegmentUtils {
         byte[] bytes = allocateReuseBytes(numBytes);
         copyMultiSegmentsToBytes(segments, offset, bytes, 0, numBytes);
         return MurmurHashUtils.hashUnsafeBytes(bytes, BYTE_ARRAY_BASE_OFFSET, numBytes);
+    }
+
+    /**
+     * get long from segments.
+     *
+     * @param segments target segments.
+     * @param offset value offset.
+     */
+    public static long getLong(MemorySegment[] segments, int offset) {
+        if (inFirstSegment(segments, offset, 8)) {
+            return segments[0].getLong(offset);
+        } else {
+            return getLongMultiSegments(segments, offset);
+        }
+    }
+
+    private static long getLongMultiSegments(MemorySegment[] segments, int offset) {
+        int segSize = segments[0].size();
+        int segIndex = offset / segSize;
+        int segOffset = offset - segIndex * segSize; // equal to %
+
+        if (segOffset < segSize - 7) {
+            return segments[segIndex].getLong(segOffset);
+        } else {
+            return getLongSlowly(segments, segSize, segIndex, segOffset);
+        }
+    }
+
+    private static long getLongSlowly(
+            MemorySegment[] segments, int segSize, int segNum, int segOffset) {
+        MemorySegment segment = segments[segNum];
+        long ret = 0;
+        for (int i = 0; i < 8; i++) {
+            if (segOffset == segSize) {
+                segment = segments[++segNum];
+                segOffset = 0;
+            }
+            long unsignedByte = segment.get(segOffset) & 0xff;
+            if (LITTLE_ENDIAN) {
+                ret |= (unsignedByte << (i * 8));
+            } else {
+                ret |= (unsignedByte << ((7 - i) * 8));
+            }
+            segOffset++;
+        }
+        return ret;
+    }
+
+    /**
+     * set long from segments.
+     *
+     * @param segments target segments.
+     * @param offset value offset.
+     */
+    public static void setLong(MemorySegment[] segments, int offset, long value) {
+        if (inFirstSegment(segments, offset, 8)) {
+            segments[0].putLong(offset, value);
+        } else {
+            setLongMultiSegments(segments, offset, value);
+        }
+    }
+
+    private static void setLongMultiSegments(MemorySegment[] segments, int offset, long value) {
+        int segSize = segments[0].size();
+        int segIndex = offset / segSize;
+        int segOffset = offset - segIndex * segSize; // equal to %
+
+        if (segOffset < segSize - 7) {
+            segments[segIndex].putLong(segOffset, value);
+        } else {
+            setLongSlowly(segments, segSize, segIndex, segOffset, value);
+        }
+    }
+
+    private static void setLongSlowly(
+            MemorySegment[] segments, int segSize, int segNum, int segOffset, long value) {
+        MemorySegment segment = segments[segNum];
+        for (int i = 0; i < 8; i++) {
+            if (segOffset == segSize) {
+                segment = segments[++segNum];
+                segOffset = 0;
+            }
+            long unsignedByte;
+            if (LITTLE_ENDIAN) {
+                unsignedByte = value >> (i * 8);
+            } else {
+                unsignedByte = value >> ((7 - i) * 8);
+            }
+            segment.put(segOffset, (byte) unsignedByte);
+            segOffset++;
+        }
+    }
+
+    /**
+     * Copy target segments from source byte[].
+     *
+     * @param segments target segments.
+     * @param offset target segments offset.
+     * @param bytes source byte[].
+     * @param bytesOffset source byte[] offset.
+     * @param numBytes the number bytes to copy.
+     */
+    public static void copyFromBytes(
+            MemorySegment[] segments, int offset, byte[] bytes, int bytesOffset, int numBytes) {
+        if (segments.length == 1) {
+            segments[0].put(offset, bytes, bytesOffset, numBytes);
+        } else {
+            copyMultiSegmentsFromBytes(segments, offset, bytes, bytesOffset, numBytes);
+        }
+    }
+
+    private static void copyMultiSegmentsFromBytes(
+            MemorySegment[] segments, int offset, byte[] bytes, int bytesOffset, int numBytes) {
+        int remainSize = numBytes;
+        for (MemorySegment segment : segments) {
+            int remain = segment.size() - offset;
+            if (remain > 0) {
+                int nCopy = Math.min(remain, remainSize);
+                segment.put(offset, bytes, numBytes - remainSize + bytesOffset, nCopy);
+                remainSize -= nCopy;
+                // next new segment.
+                offset = 0;
+                if (remainSize == 0) {
+                    return;
+                }
+            } else {
+                // remain is negative, let's advance to next segment
+                // now the offset = offset - segmentSize (-remain)
+                offset = -remain;
+            }
+        }
+    }
+
+    /** Gets an instance of {@link Decimal} from underlying {@link MemorySegment}. */
+    public static Decimal readDecimalData(
+            MemorySegment[] segments,
+            int baseOffset,
+            long offsetAndSize,
+            int precision,
+            int scale) {
+        final int size = ((int) offsetAndSize);
+        int subOffset = (int) (offsetAndSize >> 32);
+        byte[] bytes = new byte[size];
+        copyToBytes(segments, baseOffset + subOffset, bytes, 0, size);
+        return Decimal.fromUnscaledBytes(bytes, precision, scale);
+    }
+
+    /**
+     * Get binary, if len less than 8, will be include in variablePartOffsetAndLen.
+     *
+     * <p>Note: Need to consider the ByteOrder.
+     *
+     * @param baseOffset base offset of composite binary format.
+     * @param fieldOffset absolute start offset of 'variablePartOffsetAndLen'.
+     * @param variablePartOffsetAndLen a long value, real data or offset and len.
+     */
+    public static byte[] readBinary(
+            MemorySegment[] segments,
+            int baseOffset,
+            int fieldOffset,
+            long variablePartOffsetAndLen) {
+        long mark = variablePartOffsetAndLen & HIGHEST_FIRST_BIT;
+        if (mark == 0) {
+            final int subOffset = (int) (variablePartOffsetAndLen >> 32);
+            final int len = (int) variablePartOffsetAndLen;
+            return copyToBytes(segments, baseOffset + subOffset, len);
+        } else {
+            int len = (int) ((variablePartOffsetAndLen & HIGHEST_SECOND_TO_EIGHTH_BIT) >>> 56);
+            if (LITTLE_ENDIAN) {
+                return copyToBytes(segments, fieldOffset, len);
+            } else {
+                // fieldOffset + 1 to skip header.
+                return copyToBytes(segments, fieldOffset + 1, len);
+            }
+        }
+    }
+
+    /**
+     * Get binary string, if len less than 8, will be include in variablePartOffsetAndLen.
+     *
+     * <p>Note: Need to consider the ByteOrder.
+     *
+     * @param baseOffset base offset of composite binary format.
+     * @param fieldOffset absolute start offset of 'variablePartOffsetAndLen'.
+     * @param variablePartOffsetAndLen a long value, real data or offset and len.
+     */
+    public static BinaryString readBinaryString(
+            MemorySegment[] segments,
+            int baseOffset,
+            int fieldOffset,
+            long variablePartOffsetAndLen) {
+        long mark = variablePartOffsetAndLen & HIGHEST_FIRST_BIT;
+        if (mark == 0) {
+            final int subOffset = (int) (variablePartOffsetAndLen >> 32);
+            final int len = (int) variablePartOffsetAndLen;
+            return BinaryString.fromAddress(segments, baseOffset + subOffset, len);
+        } else {
+            int len = (int) ((variablePartOffsetAndLen & HIGHEST_SECOND_TO_EIGHTH_BIT) >>> 56);
+            if (BinarySegmentUtils.LITTLE_ENDIAN) {
+                return BinaryString.fromAddress(segments, fieldOffset, len);
+            } else {
+                // fieldOffset + 1 to skip header.
+                return BinaryString.fromAddress(segments, fieldOffset + 1, len);
+            }
+        }
+    }
+
+    /**
+     * hash segments to int, numBytes must be aligned to 4 bytes.
+     *
+     * @param segments Source segments.
+     * @param offset Source segments offset.
+     * @param numBytes the number bytes to hash.
+     */
+    public static int hashByWords(MemorySegment[] segments, int offset, int numBytes) {
+        if (inFirstSegment(segments, offset, numBytes)) {
+            return MurmurHashUtils.hashBytesByWords(segments[0], offset, numBytes);
+        } else {
+            return hashMultiSegByWords(segments, offset, numBytes);
+        }
+    }
+
+    private static int hashMultiSegByWords(MemorySegment[] segments, int offset, int numBytes) {
+        byte[] bytes = allocateReuseBytes(numBytes);
+        copyMultiSegmentsToBytes(segments, offset, bytes, 0, numBytes);
+        return MurmurHashUtils.hashUnsafeBytesByWords(bytes, BYTE_ARRAY_BASE_OFFSET, numBytes);
+    }
+
+    /**
+     * Gets an instance of {@link TimestampLtz} from underlying {@link MemorySegment}.
+     *
+     * @param segments the underlying MemorySegments
+     * @param baseOffset the base offset of current instance of {@code TimestampLtz}
+     * @param offsetAndNanos the offset of milli-seconds part and nanoseconds
+     * @return an instance of {@link TimestampLtz}
+     */
+    public static TimestampLtz readTimestampLtzData(
+            MemorySegment[] segments, int baseOffset, long offsetAndNanos) {
+        final int nanoOfMillisecond = (int) offsetAndNanos;
+        final int subOffset = (int) (offsetAndNanos >> 32);
+        final long millisecond = getLong(segments, baseOffset + subOffset);
+        return TimestampLtz.fromEpochMillis(millisecond, nanoOfMillisecond);
+    }
+
+    /**
+     * Gets an instance of {@link TimestampNtz} from underlying {@link MemorySegment}.
+     *
+     * @param segments the underlying MemorySegments
+     * @param baseOffset the base offset of current instance of {@code TimestampNtz}
+     * @param offsetAndNanos the offset of milli-seconds part and nanoseconds
+     * @return an instance of {@link TimestampNtz}
+     */
+    public static TimestampNtz readTimestampNtzData(
+            MemorySegment[] segments, int baseOffset, long offsetAndNanos) {
+        final int nanoOfMillisecond = (int) offsetAndNanos;
+        final int subOffset = (int) (offsetAndNanos >> 32);
+        final long millisecond = getLong(segments, baseOffset + subOffset);
+        return TimestampNtz.fromMillis(millisecond, nanoOfMillisecond);
     }
 }

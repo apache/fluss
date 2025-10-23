@@ -24,8 +24,11 @@ import org.apache.flink.configuration.ConfigOption;
 import org.apache.flink.configuration.ConfigOptions;
 import org.apache.flink.configuration.DescribedEnum;
 import org.apache.flink.configuration.description.InlineElement;
+import org.apache.flink.table.catalog.CatalogMaterializedTable;
+import org.apache.flink.table.catalog.IntervalFreshness;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.List;
 
 import static org.apache.flink.configuration.description.TextElement.text;
@@ -94,11 +97,15 @@ public class FlinkConnectorOptions {
     public static final ConfigOption<Duration> SCAN_PARTITION_DISCOVERY_INTERVAL =
             ConfigOptions.key("scan.partition.discovery.interval")
                     .durationType()
-                    .defaultValue(Duration.ofSeconds(10))
+                    .defaultValue(Duration.ofMinutes(1))
                     .withDescription(
                             "The time interval for the Fluss source to discover "
                                     + "the new partitions for partitioned table while scanning."
-                                    + " A non-positive value disables the partition discovery.");
+                                    + " A non-positive value disables the partition discovery. The default value is 1 "
+                                    + "minute. Currently, since Fluss Admin#listPartitions(TablePath tablePath) requires a large "
+                                    + "number of requests to ZooKeeper in server, this option cannot be set too small, "
+                                    + "as a small value would cause frequent requests and increase server load. In the future, "
+                                    + "once list partitions is optimized, the default value of this parameter can be reduced.");
 
     public static final ConfigOption<Boolean> SINK_IGNORE_DELETE =
             ConfigOptions.key("sink.ignore-delete")
@@ -131,6 +138,68 @@ public class FlinkConnectorOptions {
 
     public static final List<ConfigOption<?>> CLIENT_OPTIONS =
             FlinkConversions.toFlinkOptions(FlussConfigUtils.CLIENT_OPTIONS.values());
+
+    // --------------------------------------------------------------------------------------------
+    // modification disallowed connector options
+    // --------------------------------------------------------------------------------------------
+
+    public static final List<String> ALTER_DISALLOW_OPTIONS =
+            Arrays.asList(BUCKET_NUMBER.key(), BUCKET_KEY.key(), BOOTSTRAP_SERVERS.key());
+
+    // -------------------------------------------------------------------------------------------
+    // Only used internally to support materialized table
+    // -------------------------------------------------------------------------------------------
+
+    public static final String MATERIALIZED_TABLE_PREFIX = "materialized-table.";
+
+    public static final ConfigOption<String> MATERIALIZED_TABLE_DEFINITION_QUERY =
+            ConfigOptions.key("materialized-table.definition-query")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The definition query text of materialized table, text is expanded in contrast to the original SQL.");
+    public static final ConfigOption<String> MATERIALIZED_TABLE_INTERVAL_FRESHNESS =
+            ConfigOptions.key("materialized-table.interval-freshness")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The freshness interval of materialized table which is used to determine the physical refresh mode.");
+    public static final ConfigOption<IntervalFreshness.TimeUnit>
+            MATERIALIZED_TABLE_INTERVAL_FRESHNESS_TIME_UNIT =
+                    ConfigOptions.key("materialized-table.interval-freshness.time-unit")
+                            .enumType(IntervalFreshness.TimeUnit.class)
+                            .noDefaultValue()
+                            .withDescription("The time unit of freshness interval.");
+    public static final ConfigOption<CatalogMaterializedTable.LogicalRefreshMode>
+            MATERIALIZED_TABLE_LOGICAL_REFRESH_MODE =
+                    ConfigOptions.key("materialized-table.logical-refresh-mode")
+                            .enumType(CatalogMaterializedTable.LogicalRefreshMode.class)
+                            .noDefaultValue()
+                            .withDescription("The logical refresh mode of materialized table.");
+    public static final ConfigOption<CatalogMaterializedTable.RefreshMode>
+            MATERIALIZED_TABLE_REFRESH_MODE =
+                    ConfigOptions.key("materialized-table.refresh-mode")
+                            .enumType(CatalogMaterializedTable.RefreshMode.class)
+                            .noDefaultValue()
+                            .withDescription("The physical refresh mode of materialized table.");
+    public static final ConfigOption<CatalogMaterializedTable.RefreshStatus>
+            MATERIALIZED_TABLE_REFRESH_STATUS =
+                    ConfigOptions.key("materialized-table.refresh-status")
+                            .enumType(CatalogMaterializedTable.RefreshStatus.class)
+                            .noDefaultValue()
+                            .withDescription("The refresh status of materialized table.");
+    public static final ConfigOption<String> MATERIALIZED_TABLE_REFRESH_HANDLER_DESCRIPTION =
+            ConfigOptions.key("materialized-table.refresh-handler-description")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The summary description of materialized table's refresh handler");
+    public static final ConfigOption<String> MATERIALIZED_TABLE_REFRESH_HANDLER_BYTES =
+            ConfigOptions.key("materialized-table.refresh-handler-bytes")
+                    .stringType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "The serialized base64 bytes of refresh handler of materialized table.");
 
     // ------------------------------------------------------------------------------------------
 

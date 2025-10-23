@@ -25,11 +25,10 @@ import org.apache.fluss.exception.LogStorageException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.Counter;
-import org.apache.fluss.metrics.DescriptiveStatisticsHistogram;
 import org.apache.fluss.metrics.Histogram;
-import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.MemoryLogRecords;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 
@@ -90,6 +89,7 @@ public final class LocalLog {
     public LocalLog(
             File logTabletDir,
             Configuration config,
+            TabletServerMetricGroup serverMetricGroup,
             LogSegments segments,
             long recoveryPoint,
             LogOffsetMetadata nextOffsetMetadata,
@@ -105,9 +105,8 @@ public final class LocalLog {
         this.logFormat = logFormat;
 
         lastFlushedTime = new AtomicLong(System.currentTimeMillis());
-        flushCount = new SimpleCounter();
-        // consider won't flush frequently, we set a small window size
-        flushLatencyHistogram = new DescriptiveStatisticsHistogram(5);
+        flushCount = serverMetricGroup.logFlushCount();
+        flushLatencyHistogram = serverMetricGroup.logFlushLatencyHistogram();
         localLogStartOffset = segments.isEmpty() ? 0L : segments.firstSegmentBaseOffset().get();
         localMaxTimestamp =
                 segments.isEmpty() ? 0L : segments.lastSegment().get().maxTimestampSoFar();
@@ -123,14 +122,6 @@ public final class LocalLog {
 
     long getRecoveryPoint() {
         return recoveryPoint;
-    }
-
-    Histogram getFlushLatencyHistogram() {
-        return flushLatencyHistogram;
-    }
-
-    Counter getFlushCount() {
-        return flushCount;
     }
 
     /** The offset metadata of the next message that will be appended to the log. */
@@ -371,10 +362,11 @@ public final class LocalLog {
             throws IOException {
         if (LOG.isTraceEnabled()) {
             LOG.trace(
-                    "Reading maximum {} bytes at offset {} from log with total length {} bytes",
+                    "Reading maximum {} bytes at offset {} from log with total length {} bytes for bucket {}",
                     maxLength,
                     readOffset,
-                    segments.sizeInBytes());
+                    segments.sizeInBytes(),
+                    tableBucket);
         }
 
         long startOffset = localLogStartOffset;
@@ -480,21 +472,22 @@ public final class LocalLog {
                 // true for an active segment of size zero because one of the indexes is
                 // "full" (due to _maxEntries == 0).
                 LOG.warn(
-                        "Trying to roll a new log segment with start offset "
-                                + newOffset
-                                + " =max(provided offset = "
-                                + expectedNextOffset
-                                + ", LEO = "
-                                + getLocalLogEndOffset()
-                                + ") while it already exists and is active with size 0."
-                                + ", size of offset index: "
-                                + activeSegment.offsetIndex().entries()
-                                + ".");
+                        "Trying to roll a new log segment for bucket {} with start offset {} "
+                                + "=max(provided offset = {}, LEO = {}) while it already exists "
+                                + "and is active with size 0, size of offset index: {}.",
+                        tableBucket,
+                        newOffset,
+                        expectedNextOffset,
+                        getLocalLogEndOffset(),
+                        activeSegment.offsetIndex().entries());
                 LogSegment newSegment =
                         createAndDeleteSegment(
                                 newOffset, activeSegment, SegmentDeletionReason.LOG_ROLL);
                 updateLogEndOffset(getLocalLogEndOffset());
-                LOG.info("Rolled new log segment at offset " + newOffset);
+                LOG.info(
+                        "Rolled new log segment for bucket {} at offset {}",
+                        tableBucket,
+                        newOffset);
                 return newSegment;
             } else {
                 throw new FlussRuntimeException(
@@ -529,9 +522,9 @@ public final class LocalLog {
             for (File file : Arrays.asList(logFile, offsetIdxFile, timeIndexFile)) {
                 if (file.exists()) {
                     LOG.warn(
-                            "Newly rolled segment file "
-                                    + file.getAbsolutePath()
-                                    + " already exists; deleting it first");
+                            "Newly rolled segment file {} for bucket {} already exists; deleting it first",
+                            tableBucket,
+                            file.getAbsolutePath());
                     Files.delete(file.toPath());
                 }
             }
@@ -545,7 +538,7 @@ public final class LocalLog {
         // metadata when log rolls.
         // The next offset should not change.
         updateLogEndOffset(getLocalLogEndOffset());
-        LOG.info("Rolled new log segment at offset " + newOffset);
+        LOG.info("Rolled new log segment for bucket {} at offset {}", tableBucket, newOffset);
         return newSegment;
     }
 
@@ -556,7 +549,7 @@ public final class LocalLog {
      * @return the list of segments that were scheduled for deletion
      */
     List<LogSegment> truncateFullyAndStartAt(long newOffset) throws IOException {
-        LOG.debug("Truncate and start at offset " + newOffset);
+        LOG.debug("Truncate and start at offset {} for bucket {}", newOffset, tableBucket);
 
         checkIfMemoryMappedBufferClosed();
         List<LogSegment> segmentsToDelete = segments.values();

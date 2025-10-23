@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.compression.ArrowCompressionType;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
@@ -105,14 +106,34 @@ public class ConfigOptions {
                     .asList()
                     .defaultValues(
                             ArrayUtils.concat(
+                                    // TODO: remove core-site after implement fluss hdfs security
+                                    // utils
                                     new String[] {
-                                        "java.", "org.apache.fluss.", "javax.annotation."
+                                        "java.",
+                                        "org.apache.fluss.",
+                                        "javax.annotation.",
+                                        "org.apache.hadoop.",
+                                        "core-site",
                                     },
                                     PARENT_FIRST_LOGGING_PATTERNS))
                     .withDescription(
                             "A (semicolon-separated) list of patterns that specifies which classes should always be"
                                     + " resolved through the plugin parent ClassLoader first. A pattern is a simple prefix that is checked "
-                                    + " against the fully qualified class name. This setting should generally not be modified.");
+                                    + " against the fully qualified class name. This setting should generally not be modified. To add another "
+                                    + " pattern we recommend to use \"plugin.classloader.parent-first-patterns.additional\" instead.");
+
+    public static final ConfigOption<List<String>>
+            PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS_ADDITIONAL =
+                    key("plugin.classloader.parent-first-patterns.additional")
+                            .stringType()
+                            .asList()
+                            .defaultValues()
+                            .withDescription(
+                                    "A (semicolon-separated) list of patterns that specifies which classes should always be"
+                                            + " resolved through the plugin parent ClassLoader first. A pattern is a simple prefix that is checked "
+                                            + " against the fully qualified class name. These patterns are appended to \""
+                                            + PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS.key()
+                                            + "\".");
 
     public static final ConfigOption<Duration> AUTO_PARTITION_CHECK_INTERVAL =
             key("auto-partition.check.interval")
@@ -121,6 +142,24 @@ public class ConfigOptions {
                     .withDescription(
                             "The interval of auto partition check. "
                                     + "The default value is 10 minutes.");
+
+    public static final ConfigOption<Boolean> LOG_TABLE_ALLOW_CREATION =
+            key("allow.create.log.tables")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether to allow creation of log tables. When set to false, "
+                                    + "attempts to create log tables (tables without primary key) will be rejected. "
+                                    + "The default value is true.");
+
+    public static final ConfigOption<Boolean> KV_TABLE_ALLOW_CREATION =
+            key("allow.create.kv.tables")
+                    .booleanType()
+                    .defaultValue(true)
+                    .withDescription(
+                            "Whether to allow creation of kv tables (primary key tables). When set to false, "
+                                    + "attempts to create kv tables (tables with primary key) will be rejected. "
+                                    + "The default value is true.");
 
     public static final ConfigOption<Integer> MAX_PARTITION_NUM =
             key("max.partition.num")
@@ -380,6 +419,26 @@ public class ConfigOptions {
                                     + WRITER_ID_EXPIRATION_TIME.key()
                                     + " passing. The default value is 10 minutes.");
 
+    public static final ConfigOption<Integer> TABLET_SERVER_CONTROLLED_SHUTDOWN_MAX_RETRIES =
+            key("tablet-server.controlled-shutdown.max-retries")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "The maximum number of retries for controlled shutdown of the tablet server. "
+                                    + "During controlled shutdown, the tablet server attempts to transfer leadership "
+                                    + "of its buckets to other servers. If the transfer fails, it will retry up to "
+                                    + "this number of times before proceeding with shutdown. The default value is 3.");
+
+    public static final ConfigOption<Duration> TABLET_SERVER_CONTROLLED_SHUTDOWN_RETRY_INTERVAL =
+            key("tablet-server.controlled-shutdown.retry-interval")
+                    .durationType()
+                    .defaultValue(Duration.ofMillis(1000))
+                    .withDescription(
+                            "The interval between retries during controlled shutdown of the tablet server. "
+                                    + "When controlled shutdown fails to transfer bucket leadership, the tablet server "
+                                    + "will wait for this duration before attempting the next retry. "
+                                    + "The default value is 1000 milliseconds (1 second).");
+
     public static final ConfigOption<Integer> BACKGROUND_THREADS =
             key("server.background.threads")
                     .intType()
@@ -445,6 +504,12 @@ public class ConfigOptions {
     // ------------------------------------------------------------------------
     //  ZooKeeper Client Settings
     // ------------------------------------------------------------------------
+    public static final ConfigOption<Integer> ZOOKEEPER_MAX_INFLIGHT_REQUESTS =
+            key("zookeeper.client.max-inflight-requests")
+                    .intType()
+                    .defaultValue(100)
+                    .withDescription(
+                            "The maximum number of unacknowledged requests the client will send to ZooKeeper before blocking.");
 
     public static final ConfigOption<Duration> ZOOKEEPER_SESSION_TIMEOUT =
             key("zookeeper.client.session-timeout")
@@ -739,10 +804,10 @@ public class ConfigOptions {
     public static final ConfigOption<Integer> NETTY_CLIENT_NUM_NETWORK_THREADS =
             key("netty.client.num-network-threads")
                     .intType()
-                    .defaultValue(1)
+                    .defaultValue(4)
                     .withDescription(
                             "The number of threads that the client uses for sending requests to the "
-                                    + "network and receiving responses from network. The default value is 1");
+                                    + "network and receiving responses from network. The default value is 4");
 
     // ------------------------------------------------------------------------
     //  Client Settings
@@ -1275,7 +1340,8 @@ public class ConfigOptions {
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The data lake format of the table specifies the tiered Lakehouse storage format, such as Paimon, Iceberg, DeltaLake, or Hudi. Currently, only `paimon` is supported. "
+                            "The data lake format of the table specifies the tiered Lakehouse storage format. Currently, supported formats are `paimon`, `iceberg`, and `lance`. "
+                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi. "
                                     + "Once the `table.datalake.format` property is configured, Fluss adopts the key encoding and bucketing strategy used by the corresponding data lake format. "
                                     + "This ensures consistency in key encoding and bucketing, enabling seamless **Union Read** functionality across Fluss and Lakehouse. "
                                     + "The `table.datalake.format` can be pre-defined before enabling `table.datalake.enabled`. This allows the data lake feature to be dynamically enabled on the table without requiring table recreation. "
@@ -1315,6 +1381,18 @@ public class ConfigOptions {
                     .withDescription(
                             "The column name of the version column for the `versioned` merge engine. "
                                     + "If the merge engine is set to `versioned`, the version column must be set.");
+
+    public static final ConfigOption<DeleteBehavior> TABLE_DELETE_BEHAVIOR =
+            key("table.delete.behavior")
+                    .enumType(DeleteBehavior.class)
+                    .defaultValue(DeleteBehavior.ALLOW)
+                    .withDescription(
+                            "Defines the delete behavior for the primary key table. "
+                                    + "The supported delete behaviors are `allow`, `ignore`, and `disable`. "
+                                    + "The `allow` behavior allows normal delete operations (default). "
+                                    + "The `ignore` behavior silently skips delete requests without error. "
+                                    + "The `disable` behavior rejects delete requests with a clear error message. "
+                                    + "For tables with FIRST_ROW or VERSIONED merge engines, this option defaults to `ignore`.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for Kv
@@ -1622,8 +1700,8 @@ public class ConfigOptions {
                     .enumType(DataLakeFormat.class)
                     .noDefaultValue()
                     .withDescription(
-                            "The datalake format used by Fluss to be as lake storage, such as Paimon, Iceberg, Hudi. "
-                                    + "Now, only support Paimon.");
+                            "The datalake format used by of Fluss to be as lakehouse storage. Currently, supported formats are Paimon, Iceberg, and Lance. "
+                                    + "In the future, more kinds of data lake format will be supported, such as DeltaLake or Hudi.");
 
     // ------------------------------------------------------------------------
     //  ConfigOptions for fluss kafka

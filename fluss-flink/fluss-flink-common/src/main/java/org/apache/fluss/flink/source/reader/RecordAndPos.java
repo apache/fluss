@@ -23,9 +23,14 @@ import org.apache.fluss.flink.source.emitter.FlinkRecordEmitter;
 import java.util.Objects;
 
 /**
- * A record wrapping a Fluss {@link ScanRecord} and the {@code readRecordsCount} when the record is
- * from reading snapshot. When the record is from reading log, {@code readRecordsCount} will always
- * be {@link #NO_READ_RECORDS_COUNT}.
+ * A record wrapping a Fluss {@link ScanRecord}, the {@code readRecordsCount} when the record is
+ * from reading snapshot, the code {@code currentSplitIndex} where the record is from when the Flink
+ * source split read by split reader contains multiple splits(splittable unit), like {@link
+ * org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit} contains multiple {@link
+ * org.apache.fluss.lake.source.LakeSplit}s.
+ *
+ * <p>When the record is from reading log, {@code readRecordsCount} will always be {@link
+ * #NO_READ_RECORDS_COUNT}.
  *
  * <p>The {@code readRecordsCount} defines the point in the snapshot reader AFTER the record. Record
  * processing and updating checkpointed state happens atomically. The position points to where the
@@ -39,23 +44,36 @@ import java.util.Objects;
 public class RecordAndPos {
 
     public static final long NO_READ_RECORDS_COUNT = -1;
+    protected static final int DEFAULT_SPLIT_INDEX = 0;
 
     protected ScanRecord scanRecord;
 
     // the read records count include this record when read this record
     protected long readRecordsCount;
 
+    // the index for the current split that the record is from
+    protected int currentSplitIndex;
+
     public RecordAndPos(ScanRecord scanRecord) {
-        this(scanRecord, NO_READ_RECORDS_COUNT);
+        this(scanRecord, NO_READ_RECORDS_COUNT, DEFAULT_SPLIT_INDEX);
     }
 
     public RecordAndPos(ScanRecord scanRecord, long readRecordsCount) {
+        this(scanRecord, readRecordsCount, DEFAULT_SPLIT_INDEX);
+    }
+
+    public RecordAndPos(ScanRecord scanRecord, long readRecordsCount, int currentSplitIndex) {
         this.scanRecord = scanRecord;
         this.readRecordsCount = readRecordsCount;
+        this.currentSplitIndex = currentSplitIndex;
     }
 
     public long readRecordsCount() {
         return readRecordsCount;
+    }
+
+    public int getCurrentSplitIndex() {
+        return currentSplitIndex;
     }
 
     public ScanRecord record() {
@@ -72,12 +90,13 @@ public class RecordAndPos {
         }
         RecordAndPos that = (RecordAndPos) o;
         return readRecordsCount == that.readRecordsCount
+                && currentSplitIndex == that.currentSplitIndex
                 && Objects.equals(scanRecord, that.scanRecord);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(scanRecord, readRecordsCount);
+        return Objects.hash(scanRecord, readRecordsCount, currentSplitIndex);
     }
 
     @Override
@@ -87,6 +106,8 @@ public class RecordAndPos {
                 + scanRecord
                 + ", readRecordsCount="
                 + readRecordsCount
+                + ", currentSplitIndex="
+                + currentSplitIndex
                 + '}';
     }
 }

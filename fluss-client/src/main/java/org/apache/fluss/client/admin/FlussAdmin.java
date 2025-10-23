@@ -24,6 +24,8 @@ import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.cluster.Cluster;
 import org.apache.fluss.cluster.ServerNode;
+import org.apache.fluss.config.cluster.AlterConfig;
+import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.LeaderNotAvailableException;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
@@ -33,6 +35,7 @@ import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -41,11 +44,14 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
 import org.apache.fluss.rpc.messages.CreateTableRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsRequest;
 import org.apache.fluss.rpc.messages.DatabaseExistsResponse;
+import org.apache.fluss.rpc.messages.DescribeClusterConfigsRequest;
 import org.apache.fluss.rpc.messages.DropAclsRequest;
 import org.apache.fluss.rpc.messages.DropDatabaseRequest;
 import org.apache.fluss.rpc.messages.DropTableRequest;
@@ -62,6 +68,7 @@ import org.apache.fluss.rpc.messages.ListOffsetsRequest;
 import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
 import org.apache.fluss.rpc.messages.ListTablesRequest;
 import org.apache.fluss.rpc.messages.ListTablesResponse;
+import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbListOffsetsRespForBucket;
 import org.apache.fluss.rpc.messages.PbPartitionSpec;
 import org.apache.fluss.rpc.messages.PbTablePath;
@@ -81,11 +88,13 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeCreatePartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeDropPartitionRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makeListOffsetsRequest;
 import static org.apache.fluss.client.utils.ClientRpcMessageUtils.makePbPartitionSpec;
+import static org.apache.fluss.client.utils.ClientRpcMessageUtils.toConfigEntries;
 import static org.apache.fluss.client.utils.MetadataUtils.sendMetadataRequestAndRebuildCluster;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclBindingFilters;
@@ -233,6 +242,25 @@ public class FlussAdmin implements Admin {
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
         return gateway.createTable(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> alterTable(
+            TablePath tablePath, List<TableChange> tableChanges, boolean ignoreIfNotExists) {
+        tablePath.validate();
+        AlterTableRequest request = new AlterTableRequest();
+
+        List<PbAlterConfig> pbFlussTableChanges =
+                tableChanges.stream()
+                        .map(ClientRpcMessageUtils::toPbAlterConfigs)
+                        .collect(Collectors.toList());
+
+        request.addAllConfigChanges(pbFlussTableChanges)
+                .setIgnoreIfNotExists(ignoreIfNotExists)
+                .setTablePath()
+                .setDatabaseName(tablePath.getDatabaseName())
+                .setTableName(tablePath.getTableName());
+        return gateway.alterTable(request).thenApply(r -> null);
     }
 
     @Override
@@ -462,6 +490,49 @@ public class FlussAdmin implements Admin {
                             }
                         });
         return result;
+    }
+
+    @Override
+    public CompletableFuture<Collection<ConfigEntry>> describeClusterConfigs() {
+        CompletableFuture<Collection<ConfigEntry>> future = new CompletableFuture<>();
+        DescribeClusterConfigsRequest request = new DescribeClusterConfigsRequest();
+        gateway.describeClusterConfigs(request)
+                .whenComplete(
+                        (r, t) -> {
+                            if (t != null) {
+                                future.completeExceptionally(t);
+                            } else {
+                                future.complete(toConfigEntries(r.getConfigsList()));
+                            }
+                        });
+        return future;
+    }
+
+    @Override
+    public CompletableFuture<Void> alterClusterConfigs(Collection<AlterConfig> configs) {
+        CompletableFuture<Void> future = new CompletableFuture<>();
+
+        AlterClusterConfigsRequest request = new AlterClusterConfigsRequest();
+        for (AlterConfig alterConfig : configs) {
+            PbAlterConfig pBAlterConfig =
+                    request.addAlterConfig()
+                            .setConfigKey(alterConfig.key())
+                            .setOpType(alterConfig.opType().value);
+            if (alterConfig.value() != null) {
+                pBAlterConfig.setConfigValue(alterConfig.value());
+            }
+        }
+        gateway.alterClusterConfigs(request)
+                .whenComplete(
+                        (r, t) -> {
+                            if (t != null) {
+                                future.completeExceptionally(t);
+                            } else {
+                                future.complete(null);
+                            }
+                        });
+
+        return future;
     }
 
     @Override

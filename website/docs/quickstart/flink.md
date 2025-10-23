@@ -1,9 +1,9 @@
 ---
-title: Real-Time Analytics with Flink
+title: Real-Time Analytics with Flink (Paimon)
 sidebar_position: 1
 ---
 
-# Real-Time Analytics With Flink
+# Real-Time Analytics With Flink (Paimon)
 
 This guide will get you up and running with Apache Flink to do real-time analytics, covering some powerful features of Fluss,
 including integrating with Paimon.
@@ -442,7 +442,7 @@ SELECT snapshot_id, total_record_count FROM datalake_enriched_orders$lake$snapsh
 |           1 |                650 |
 +-------------+--------------------+
 ```
-**Note:** Make sure to wait for the checkpoints (~30s) to complete before querying the snapshots, otherwise the result will be empty.
+**Note:** Make sure to wait for the configured `datalake.freshness` (~30s) to complete before querying the snapshots, otherwise the result will be empty.
 
 Run the following SQL to do analytics on Paimon data:
 ```sql  title="Flink SQL"

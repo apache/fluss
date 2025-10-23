@@ -18,6 +18,7 @@
 package org.apache.fluss.server.replica;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.exception.OutOfOrderSequenceException;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -48,6 +49,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -57,8 +59,9 @@ import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.compression.ArrowCompressionInfo.DEFAULT_COMPRESSION;
-import static org.apache.fluss.record.LogRecordBatch.NO_BATCH_SEQUENCE;
-import static org.apache.fluss.record.LogRecordBatch.NO_WRITER_ID;
+import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH;
 import static org.apache.fluss.record.TestData.DATA1_PHYSICAL_TABLE_PATH_PK;
@@ -75,10 +78,12 @@ import static org.apache.fluss.testutils.DataTestUtils.createBasicMemoryLogRecor
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecordBatch;
 import static org.apache.fluss.testutils.DataTestUtils.genKvRecords;
 import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsByObject;
+import static org.apache.fluss.testutils.DataTestUtils.genMemoryLogRecordsWithWriterId;
 import static org.apache.fluss.testutils.DataTestUtils.getKeyValuePairs;
 import static org.apache.fluss.testutils.LogRecordsAssert.assertThatLogRecords;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link Replica}. */
 final class ReplicaTest extends ReplicaTestBase {
@@ -127,6 +132,40 @@ final class ReplicaTest extends ReplicaTestBase {
                 DATA1_TABLE_ID, 0, Integer.MAX_VALUE, DATA1_ROW_TYPE, DEFAULT_COMPRESSION, null);
         LogReadInfo logReadInfo = logReplica.fetchRecords(fetchParams);
         assertLogRecordsEquals(DATA1_ROW_TYPE, logReadInfo.getFetchedData().getRecords(), DATA1);
+    }
+
+    @Test
+    void testAppendRecordsWithOutOfOrderBatchSequence() throws Exception {
+        Replica logReplica =
+                makeLogReplica(DATA1_PHYSICAL_TABLE_PATH, new TableBucket(DATA1_TABLE_ID, 1));
+        makeLogReplicaAsLeader(logReplica);
+
+        long writerId = 101L;
+
+        // 1. append a batch with batchSequence = 0
+        logReplica.appendRecordsToLeader(genMemoryLogRecordsWithWriterId(DATA1, writerId, 0, 0), 0);
+
+        // manual advance time and remove expired writer, the state of writer 101 will be removed
+        manualClock.advanceTime(Duration.ofHours(12));
+        manualClock.advanceTime(Duration.ofSeconds(1));
+        assertThat(logReplica.getLogTablet().writerStateManager().activeWriters().size())
+                .isEqualTo(1);
+        logReplica.getLogTablet().removeExpiredWriter(manualClock.milliseconds());
+        assertThat(logReplica.getLogTablet().writerStateManager().activeWriters().size())
+                .isEqualTo(0);
+
+        // 2. try to append an out of ordered batch as leader, will throw
+        // OutOfOrderSequenceException
+        assertThatThrownBy(
+                        () ->
+                                logReplica.appendRecordsToLeader(
+                                        genMemoryLogRecordsWithWriterId(DATA1, writerId, 2, 10), 0))
+                .isInstanceOf(OutOfOrderSequenceException.class);
+        assertThat(logReplica.getLocalLogEndOffset()).isEqualTo(10);
+
+        // 3. try to append an out of ordered batch as follower
+        logReplica.appendRecordsToFollower(genMemoryLogRecordsWithWriterId(DATA1, writerId, 2, 10));
+        assertThat(logReplica.getLocalLogEndOffset()).isEqualTo(20);
     }
 
     @Test
@@ -440,6 +479,106 @@ final class ReplicaTest extends ReplicaTestBase {
     }
 
     @Test
+    void testBrokenSnapshotRecovery(@TempDir File snapshotKvTabletDir) throws Exception {
+        TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
+
+        // create test context with custom snapshot store
+        TestSnapshotContext testKvSnapshotContext =
+                new TestSnapshotContext(snapshotKvTabletDir.getPath());
+        ManuallyTriggeredScheduledExecutorService scheduledExecutorService =
+                testKvSnapshotContext.scheduledExecutorService;
+        TestingCompletedKvSnapshotCommitter kvSnapshotStore =
+                testKvSnapshotContext.testKvSnapshotStore;
+
+        // create a replica and make it leader
+        Replica kvReplica =
+                makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+        makeKvReplicaAsLeader(kvReplica);
+
+        // put initial data and create first snapshot
+        KvRecordBatch kvRecords =
+                genKvRecordBatch(
+                        Tuple2.of("k1", new Object[] {1, "a"}),
+                        Tuple2.of("k2", new Object[] {2, "b"}));
+        putRecordsToLeader(kvReplica, kvRecords);
+
+        // trigger first snapshot
+        scheduledExecutorService.triggerNonPeriodicScheduledTask();
+        kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 0);
+
+        // put more data and create second snapshot
+        kvRecords =
+                genKvRecordBatch(
+                        Tuple2.of("k1", new Object[] {3, "c"}),
+                        Tuple2.of("k3", new Object[] {4, "d"}));
+        putRecordsToLeader(kvReplica, kvRecords);
+
+        // trigger second snapshot
+        scheduledExecutorService.triggerNonPeriodicScheduledTask();
+        kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 1);
+
+        // put more data and create third snapshot (this will be the broken one)
+        kvRecords =
+                genKvRecordBatch(
+                        Tuple2.of("k4", new Object[] {5, "e"}),
+                        Tuple2.of("k5", new Object[] {6, "f"}));
+        putRecordsToLeader(kvReplica, kvRecords);
+
+        // trigger third snapshot
+        scheduledExecutorService.triggerNonPeriodicScheduledTask();
+        CompletedSnapshot snapshot2 = kvSnapshotStore.waitUntilSnapshotComplete(tableBucket, 2);
+
+        // verify that snapshot2 is the latest one before we break it
+        assertThat(kvSnapshotStore.getLatestCompletedSnapshot(tableBucket).getSnapshotID())
+                .isEqualTo(2);
+
+        // now simulate the latest snapshot (snapshot2) being broken by
+        // deleting its metadata files and unshared SST files
+        // This simulates file corruption while ZK metadata remains intact
+        snapshot2.getKvSnapshotHandle().discard();
+
+        // ZK metadata should still show snapshot2 as latest (file corruption hasn't been detected
+        // yet)
+        assertThat(kvSnapshotStore.getLatestCompletedSnapshot(tableBucket).getSnapshotID())
+                .isEqualTo(2);
+
+        // make the replica follower to destroy the current kv tablet
+        makeKvReplicaAsFollower(kvReplica, 1);
+
+        // create a new replica with the same snapshot context
+        // During initialization, it will try to use snapshot2 but find it broken,
+        // then handle the broken snapshot and fall back to snapshot1
+        testKvSnapshotContext =
+                new TestSnapshotContext(snapshotKvTabletDir.getPath(), kvSnapshotStore);
+        kvReplica = makeKvReplica(DATA1_PHYSICAL_TABLE_PATH_PK, tableBucket, testKvSnapshotContext);
+
+        // make it leader again - this should trigger the broken snapshot recovery logic
+        // The system should detect that snapshot2 files are missing, clean up its metadata,
+        // and successfully recover using snapshot1
+        makeKvReplicaAsLeader(kvReplica, 2);
+
+        // verify that KvTablet is successfully initialized despite the broken snapshot
+        assertThat(kvReplica.getKvTablet()).isNotNull();
+        KvTablet kvTablet = kvReplica.getKvTablet();
+
+        // verify that the data from snapshot1 is restored (snapshot2 was broken and cleaned up)
+        // snapshot1 should contain: k1->3,c and k3->4,d
+        List<Tuple2<byte[], byte[]>> expectedKeyValues =
+                getKeyValuePairs(
+                        genKvRecords(
+                                Tuple2.of("k1", new Object[] {3, "c"}),
+                                Tuple2.of("k3", new Object[] {4, "d"})));
+        verifyGetKeyValues(kvTablet, expectedKeyValues);
+
+        // Verify the core functionality: KvTablet successfully initialized despite broken snapshot
+        // The key test is that the system can handle broken snapshots and recover correctly
+
+        // Verify that we successfully simulated the broken snapshot condition
+        File metadataFile = new File(snapshot2.getMetadataFilePath().getPath());
+        assertThat(metadataFile.exists()).isFalse();
+    }
+
+    @Test
     void testRestore(@TempDir Path snapshotKvTabletDirPath) throws Exception {
         TableBucket tableBucket = new TableBucket(DATA1_TABLE_ID_PK, 1);
         TestSnapshotContext testKvSnapshotContext =
@@ -571,6 +710,7 @@ final class ReplicaTest extends ReplicaTestBase {
                 DEFAULT_SCHEMA_ID,
                 baseOffset,
                 -1L,
+                CURRENT_LOG_MAGIC_VALUE,
                 NO_WRITER_ID,
                 NO_BATCH_SEQUENCE,
                 changeTypes,

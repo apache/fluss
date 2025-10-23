@@ -21,13 +21,17 @@ import org.apache.fluss.config.ConfigOption;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.ReadableConfig;
+import org.apache.fluss.config.TableConfig;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.TooManyBucketsException;
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.TableDescriptor;
+import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
@@ -44,6 +48,8 @@ import java.util.Set;
 import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
+import static org.apache.fluss.config.FlussConfigUtils.isAlterableTableOption;
+import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -67,14 +73,21 @@ public class TableDescriptorValidation {
         Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
 
         // check properties should only contain table.* options,
-        // and this cluster know it,
-        // and value is valid
+        // and this cluster know it, and value is valid
         for (String key : tableConf.keySet()) {
             if (!TABLE_OPTIONS.containsKey(key)) {
-                throw new InvalidConfigException(
-                        String.format(
-                                "'%s' is not a Fluss table property. Please use '.customProperty(..)' to set custom properties.",
-                                key));
+                if (isTableStorageConfig(key)) {
+                    throw new InvalidConfigException(
+                            String.format(
+                                    "'%s' is not a recognized Fluss table property in the current cluster version. "
+                                            + "You may be using an older Fluss cluster that does not support this property.",
+                                    key));
+                } else {
+                    throw new InvalidConfigException(
+                            String.format(
+                                    "'%s' is not a Fluss table property. Please use '.customProperty(..)' to set custom properties.",
+                                    key));
+                }
             }
             ConfigOption<?> option = TABLE_OPTIONS.get(key);
             validateOptionValue(tableConf, option);
@@ -88,9 +101,35 @@ public class TableDescriptorValidation {
         checkLogFormat(tableConf, hasPrimaryKey);
         checkArrowCompression(tableConf);
         checkMergeEngine(tableConf, hasPrimaryKey, schema);
+        checkDeleteBehavior(tableConf, hasPrimaryKey);
         checkTieredLog(tableConf);
         checkPartition(tableConf, tableDescriptor.getPartitionKeys(), schema);
         checkSystemColumns(schema);
+    }
+
+    public static void validateAlterTableProperties(
+            TableInfo currentTable, Set<String> tableKeysToChange, Set<String> customKeysToChange) {
+        tableKeysToChange.forEach(
+                k -> {
+                    if (isTableStorageConfig(k) && !isAlterableTableOption(k)) {
+                        throw new InvalidAlterTableException(
+                                "The option '" + k + "' is not supported to alter yet.");
+                    }
+                });
+
+        TableConfig currentConfig = currentTable.getTableConfig();
+        if (currentConfig.isDataLakeEnabled() && currentConfig.getDataLakeFormat().isPresent()) {
+            String format = currentConfig.getDataLakeFormat().get().toString();
+            customKeysToChange.forEach(
+                    k -> {
+                        if (k.startsWith(format + ".")) {
+                            throw new InvalidConfigException(
+                                    String.format(
+                                            "Property '%s' is not supported to alter which is for datalake table.",
+                                            k));
+                        }
+                    });
+        }
     }
 
     private static void checkSystemColumns(RowType schema) {
@@ -275,6 +314,30 @@ public class TableDescriptorValidation {
                                             + "partition is enabled, please set table property '%s'.",
                                     ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT.key()));
                 }
+            }
+        }
+    }
+
+    private static void checkDeleteBehavior(Configuration tableConf, boolean hasPrimaryKey) {
+        Optional<DeleteBehavior> deleteBehaviorOptional =
+                tableConf.getOptional(ConfigOptions.TABLE_DELETE_BEHAVIOR);
+        if (!hasPrimaryKey && deleteBehaviorOptional.isPresent()) {
+            throw new InvalidConfigException(
+                    "The 'table.delete.behavior' configuration is only supported for primary key tables.");
+        }
+
+        // For tables with merge engines, automatically set appropriate delete behavior
+        MergeEngineType mergeEngine = tableConf.get(ConfigOptions.TABLE_MERGE_ENGINE);
+        if (mergeEngine == MergeEngineType.FIRST_ROW || mergeEngine == MergeEngineType.VERSIONED) {
+            // For FIRST_ROW and VERSIONED merge engines, delete operations are not supported
+            // If user explicitly sets delete behavior to ALLOW, throw an exception
+            if (deleteBehaviorOptional.isPresent()
+                    && deleteBehaviorOptional.get() == DeleteBehavior.ALLOW) {
+                throw new InvalidConfigException(
+                        String.format(
+                                "Table with '%s' merge engine does not support delete operations. "
+                                        + "The 'table.delete.behavior' config must be set to 'ignore' or 'disable', but got 'allow'.",
+                                mergeEngine));
             }
         }
     }

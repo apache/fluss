@@ -162,14 +162,19 @@ public class LogFetcher implements Closeable {
      * Set up a fetch request for any node that we have assigned buckets for which doesn't already
      * have an in-flight fetch or pending fetch data.
      */
-    public synchronized void sendFetches() {
-        Map<Integer, FetchLogRequest> fetchRequestMap = prepareFetchLogRequests();
-        fetchRequestMap.forEach(
-                (nodeId, fetchLogRequest) -> {
-                    LOG.debug("Adding pending request for node id {}", nodeId);
-                    nodesWithPendingFetchRequests.add(nodeId);
-                    sendFetchRequest(nodeId, fetchLogRequest);
-                });
+    public void sendFetches() {
+        checkAndUpdateMetadata(fetchableBuckets());
+        synchronized (this) {
+            // NOTE: Don't perform heavy I/O operations or synchronous waits inside this lock to
+            // avoid blocking the future complete of FetchLogResponse.
+            Map<Integer, FetchLogRequest> fetchRequestMap = prepareFetchLogRequests();
+            fetchRequestMap.forEach(
+                    (nodeId, fetchLogRequest) -> {
+                        LOG.debug("Adding pending request for node id {}", nodeId);
+                        nodesWithPendingFetchRequests.add(nodeId);
+                        sendFetchRequest(nodeId, fetchLogRequest);
+                    });
+        }
     }
 
     /**
@@ -188,6 +193,31 @@ public class LogFetcher implements Closeable {
 
     public void wakeup() {
         logFetchBuffer.wakeup();
+    }
+
+    private void checkAndUpdateMetadata(List<TableBucket> tableBuckets) {
+        // If the table is partitioned table, check if we need update partition metadata.
+        List<Long> partitionIds = isPartitioned ? new ArrayList<>() : null;
+        // If the table is none-partitioned table, check if we need update table metadata.
+        boolean needUpdate = false;
+        for (TableBucket tb : tableBuckets) {
+            if (getTableBucketLeader(tb) != null) {
+                continue;
+            }
+
+            if (isPartitioned) {
+                partitionIds.add(tb.getPartitionId());
+            } else {
+                needUpdate = true;
+                break;
+            }
+        }
+
+        if (isPartitioned && !partitionIds.isEmpty()) {
+            metadataUpdater.updateMetadata(Collections.singleton(tablePath), null, partitionIds);
+        } else if (needUpdate) {
+            metadataUpdater.updateTableOrPartitionMetadata(tablePath, null);
+        }
     }
 
     private void sendFetchRequest(int destination, FetchLogRequest fetchLogRequest) {
@@ -243,18 +273,21 @@ public class LogFetcher implements Closeable {
         return new TableOrPartitions(tableIdsInFetchRequest, tablePartitionsInFetchRequest);
     }
 
-    private static class TableOrPartitions {
+    /** A helper class to hold table ids or table partitions. */
+    @VisibleForTesting
+    static class TableOrPartitions {
         private final @Nullable Set<Long> tableIds;
         private final @Nullable Set<TablePartition> tablePartitions;
 
-        private TableOrPartitions(
+        TableOrPartitions(
                 @Nullable Set<Long> tableIds, @Nullable Set<TablePartition> tablePartitions) {
             this.tableIds = tableIds;
             this.tablePartitions = tablePartitions;
         }
     }
 
-    private void invalidTableOrPartitions(TableOrPartitions tableOrPartitions) {
+    @VisibleForTesting
+    void invalidTableOrPartitions(TableOrPartitions tableOrPartitions) {
         Set<PhysicalTablePath> physicalTablePaths =
                 metadataUpdater.getPhysicalTablePathByIds(
                         tableOrPartitions.tableIds, tableOrPartitions.tablePartitions);
@@ -404,9 +437,6 @@ public class LogFetcher implements Closeable {
                 LOG.trace(
                         "Skipping fetch request for bucket {} because leader is not available.",
                         tb);
-                // try to get the latest metadata info of this table because the leader for this
-                // bucket is unknown.
-                metadataUpdater.updateTableOrPartitionMetadata(tablePath, tb.getPartitionId());
             } else if (nodesWithPendingFetchRequests.contains(leader)) {
                 LOG.trace(
                         "Skipping fetch request for bucket {} because previous request "
@@ -472,7 +502,6 @@ public class LogFetcher implements Closeable {
     }
 
     private Integer getTableBucketLeader(TableBucket tableBucket) {
-        metadataUpdater.checkAndUpdateMetadata(tablePath, tableBucket);
         if (metadataUpdater.getBucketLocation(tableBucket).isPresent()) {
             BucketLocation bucketLocation = metadataUpdater.getBucketLocation(tableBucket).get();
             if (bucketLocation.getLeader() != null) {

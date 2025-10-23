@@ -20,8 +20,6 @@ package org.apache.fluss.server.metadata;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.PartitionNotExistException;
-import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
@@ -29,6 +27,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
+import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.tablet.TabletServer;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
@@ -63,7 +62,6 @@ import static org.apache.fluss.server.testutils.RpcMessageTestUtils.newDropTable
 import static org.apache.fluss.server.testutils.TableMetadataAssert.assertTableMetadata;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.assertj.core.api.Assertions.assertThat;
-import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** IT Case for metadata update. */
 class MetadataUpdateITCase {
@@ -84,7 +82,9 @@ class MetadataUpdateITCase {
         zkClient = FLUSS_CLUSTER_EXTENSION.getZooKeeperClient();
         metadataManager =
                 new MetadataManager(
-                        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), new Configuration());
+                        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
+                        new Configuration(),
+                        new LakeCatalogDynamicLoader(new Configuration(), null, true));
     }
 
     @Test
@@ -372,22 +372,18 @@ class MetadataUpdateITCase {
                                         TableMetadata tableMetadataFromZk =
                                                 getTableMetadataFromZk(tablePath, tableId);
                                         assertTableMetadata(
-                                                        serverMetadataCache.getTableMetadata(
-                                                                tablePath))
+                                                        serverMetadataCache
+                                                                .getTableMetadata(tablePath)
+                                                                .get())
                                                 .isEqualTo(tableMetadataFromZk);
                                     }
                                 } else {
                                     assertThat(serverMetadataCache.getTablePath(tableId))
                                             .isNotPresent();
-                                    assertThatThrownBy(
-                                                    () ->
-                                                            serverMetadataCache.getTableMetadata(
-                                                                    tableContext.tablePath))
-                                            .isInstanceOf(TableNotExistException.class)
-                                            .hasMessageContaining(
-                                                    "Table '"
-                                                            + tableContext.tablePath
-                                                            + "' does not exist.");
+                                    assertThat(
+                                                    serverMetadataCache.getTableMetadata(
+                                                            tableContext.tablePath))
+                                            .isEmpty();
                                 }
                             });
                     expectedPartitionNameById.forEach(
@@ -407,24 +403,19 @@ class MetadataUpdateITCase {
                                                     tableContext.partitionName,
                                                     partitionId);
                                     assertPartitionMetadata(
-                                                    serverMetadataCache.getPartitionMetadata(
-                                                            physicalTablePath))
+                                                    serverMetadataCache
+                                                            .getPartitionMetadata(physicalTablePath)
+                                                            .get())
                                             .isEqualTo(partitionMetadataFromZk);
                                 } else {
                                     assertThat(
                                                     serverMetadataCache.getPhysicalTablePath(
                                                             partitionId))
                                             .isNotPresent();
-                                    assertThatThrownBy(
-                                                    () ->
-                                                            serverMetadataCache
-                                                                    .getPartitionMetadata(
-                                                                            physicalTablePath))
-                                            .isInstanceOf(PartitionNotExistException.class)
-                                            .hasMessageContaining(
-                                                    "Table partition '"
-                                                            + physicalTablePath
-                                                            + "' does not exist.");
+                                    assertThat(
+                                                    serverMetadataCache.getPartitionMetadata(
+                                                            physicalTablePath))
+                                            .isEmpty();
                                 }
                             });
                 });

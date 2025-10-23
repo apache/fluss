@@ -17,15 +17,19 @@
 
 package org.apache.fluss.plugin;
 
-import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterables;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.io.File;
 import java.nio.file.Path;
+import java.util.List;
 import java.util.Optional;
+
+import static org.apache.fluss.config.ConfigOptions.PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS;
+import static org.apache.fluss.config.ConfigOptions.PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS_ADDITIONAL;
 
 /** Stores the configuration for plugins mechanism. */
 @SuppressWarnings("OptionalUsedAsFieldOrParameterType")
@@ -62,9 +66,13 @@ public class PluginConfig {
     public static PluginConfig fromConfiguration(Configuration configuration) {
         return new PluginConfig(
                 getPluginsDir().map(File::toPath),
-                configuration
-                        .get(ConfigOptions.PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS)
-                        .toArray(new String[0]));
+                getPluginParentFirstLoaderPatterns(configuration));
+    }
+
+    private static String[] getPluginParentFirstLoaderPatterns(Configuration config) {
+        List<String> base = config.get(PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS);
+        List<String> append = config.get(PLUGIN_ALWAYS_PARENT_FIRST_LOADER_PATTERNS_ADDITIONAL);
+        return Iterables.toArray(Iterables.concat(base, append), String.class);
     }
 
     public static Optional<File> getPluginsDir() {

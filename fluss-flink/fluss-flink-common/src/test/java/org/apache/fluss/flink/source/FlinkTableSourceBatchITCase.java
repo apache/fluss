@@ -45,6 +45,7 @@ import java.util.Map;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.assertResultsIgnoreOrder;
+import static org.apache.fluss.flink.source.testutils.FlinkRowAssertionsUtils.collectRowsWithTimeout;
 import static org.apache.fluss.server.testutils.FlussClusterExtension.BUILTIN_DATABASE;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
@@ -189,7 +190,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         // normal scan
         String query = String.format("SELECT * FROM %s limit 2", tableName);
         CloseableIterator<Row> iterRows = tEnv.executeSql(query).collect();
-        List<String> collected = assertAndCollectRecords(iterRows, 2);
+        List<String> collected = collectRowsWithTimeout(iterRows, 2);
         List<String> expected =
                 Arrays.asList(
                         "+I[1, address1, name1]",
@@ -203,14 +204,14 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         // limit which is larger than all the data.
         query = String.format("SELECT * FROM %s limit 10", tableName);
         iterRows = tEnv.executeSql(query).collect();
-        collected = assertAndCollectRecords(iterRows, 5);
+        collected = collectRowsWithTimeout(iterRows, 5);
         assertThat(collected).isSubsetOf(expected);
         assertThat(collected).hasSize(5);
 
         // projection scan
         query = String.format("SELECT id, name FROM %s limit 3", tableName);
         iterRows = tEnv.executeSql(query).collect();
-        collected = assertAndCollectRecords(iterRows, 3);
+        collected = collectRowsWithTimeout(iterRows, 3);
         expected =
                 Arrays.asList(
                         "+I[1, name1]",
@@ -237,7 +238,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         // normal scan
         String query = String.format("SELECT * FROM %s limit 2", tableName);
         CloseableIterator<Row> iterRows = tEnv.executeSql(query).collect();
-        List<String> collected = assertAndCollectRecords(iterRows, 2);
+        List<String> collected = collectRowsWithTimeout(iterRows, 2);
         List<String> expected =
                 Arrays.asList(
                         "+I[1, address1, name1]",
@@ -251,7 +252,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         // projection scan
         query = String.format("SELECT id, name FROM %s limit 3", tableName);
         iterRows = tEnv.executeSql(query).collect();
-        collected = assertAndCollectRecords(iterRows, 3);
+        collected = collectRowsWithTimeout(iterRows, 3);
         expected =
                 Arrays.asList(
                         "+I[1, name1]",
@@ -266,7 +267,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         String partitionTable = preparePartitionedLogTable();
         query = String.format("SELECT id, name FROM %s limit 3", partitionTable);
         iterRows = tEnv.executeSql(query).collect();
-        collected = assertAndCollectRecords(iterRows, 3);
+        collected = collectRowsWithTimeout(iterRows, 3);
         assertThat(collected).isSubsetOf(expected);
         assertThat(collected).hasSize(3);
     }
@@ -286,7 +287,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                                         + "fields=[count1$0])",
                                 tableName));
         CloseableIterator<Row> iterRows = tEnv.executeSql(query).collect();
-        List<String> collected = assertAndCollectRecords(iterRows, 1);
+        List<String> collected = collectRowsWithTimeout(iterRows, 1);
         List<String> expected = Collections.singletonList(String.format("+I[%s]", expectedRows));
         assertThat(collected).isEqualTo(expected);
 

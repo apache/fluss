@@ -28,7 +28,7 @@ import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import org.apache.fluss.server.entity.CommitRemoteLogManifestData;
 import org.apache.fluss.server.log.LogSegment;
 import org.apache.fluss.server.log.LogTablet;
-import org.apache.fluss.server.metrics.group.PhysicalTableMetricGroup;
+import org.apache.fluss.server.metrics.group.TableMetricGroup;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.utils.clock.Clock;
 
@@ -121,7 +121,7 @@ public class LogTieringTask implements Runnable {
 
         try {
             LogTablet logTablet = replica.getLogTablet();
-            PhysicalTableMetricGroup metricGroup = replica.tableMetrics();
+            TableMetricGroup metricGroup = replica.tableMetrics();
             maybeUpdateCopiedOffset(logTablet);
 
             // Get these candidate log segments to copy and these expired remote log segments to
@@ -200,8 +200,9 @@ public class LogTieringTask implements Runnable {
             long fromOffset = Math.max(copiedOffset + 1, log.localLogStartOffset());
             candidateLogSegments = candidateLogSegments(log, fromOffset, highWatermark);
             LOG.debug(
-                    "Candidate log segments: logLocalStartOffset: {}, copiedOffset: {}, "
+                    "Candidate log segments for bucket {}: logLocalStartOffset: {}, copiedOffset: {}, "
                             + "fromOffset: {}, highWatermark: {} and candidateLogSegments: {}",
+                    tableBucket,
                     log.localLogStartOffset(),
                     copiedOffset,
                     fromOffset,
@@ -216,7 +217,8 @@ public class LogTieringTask implements Runnable {
             }
         } else {
             LOG.debug(
-                    "Skipping copying segments to remote, current read-offset:{}, and highWatermark:{}",
+                    "Skipping copying segments for bucket {} to remote, current read-offset:{}, and highWatermark:{}",
+                    tableBucket,
                     copiedOffset,
                     highWatermark);
         }
@@ -234,7 +236,7 @@ public class LogTieringTask implements Runnable {
             LogTablet log,
             List<EnrichedLogSegment> segments,
             List<RemoteLogSegment> copiedSegments,
-            PhysicalTableMetricGroup metricGroup)
+            TableMetricGroup metricGroup)
             throws Exception {
         long endOffset = -1;
         for (EnrichedLogSegment enrichedSegment : segments) {
@@ -314,7 +316,10 @@ public class LogTieringTask implements Runnable {
             remoteLogManifestPath =
                     remoteLogStorage.writeRemoteLogManifestSnapshot(newRemoteLogManifest);
         } catch (Exception e) {
-            LOG.error("Write remote log manifest file to remote storage failed.", e);
+            LOG.error(
+                    "Write remote log manifest file to remote storage failed for bucket {}.",
+                    tableBucket,
+                    e);
             return false;
         }
 
@@ -322,6 +327,7 @@ public class LogTieringTask implements Runnable {
         // to try to commit this snapshot.
         long newRemoteLogStartOffset = newRemoteLogManifest.getRemoteLogStartOffset();
         long newRemoteLogEndOffset = newRemoteLogManifest.getRemoteLogEndOffset();
+        long newRemoteLogSize = newRemoteLogManifest.getRemoteLogSize();
         int retrySendCommitTimes = 1;
         while (retrySendCommitTimes <= 10) {
             try {
@@ -356,14 +362,16 @@ public class LogTieringTask implements Runnable {
                     logTablet.updateRemoteLogStartOffset(newRemoteLogStartOffset);
                     // make the local log cleaner clean log segments that are committed to remote.
                     logTablet.updateRemoteLogEndOffset(newRemoteLogEndOffset);
+                    logTablet.updateRemoteLogSize(newRemoteLogSize);
                     return true;
                 }
             } catch (Exception e) {
                 // the commit failed with unexpected exception, like network error, we will
                 // retry send.
                 LOG.error(
-                        "The {} time try to commit remote log manifest failed.",
+                        "The {} time try to commit remote log manifest failed for bucket {}.",
                         retrySendCommitTimes,
+                        tableBucket,
                         e);
                 retrySendCommitTimes++;
             }
@@ -449,15 +457,16 @@ public class LogTieringTask implements Runnable {
 
     /** Delete the remote log segment files. */
     private void deleteRemoteLogSegmentFiles(
-            List<RemoteLogSegment> remoteLogSegmentList, PhysicalTableMetricGroup metricGroup) {
+            List<RemoteLogSegment> remoteLogSegmentList, TableMetricGroup metricGroup) {
         for (RemoteLogSegment remoteLogSegment : remoteLogSegmentList) {
             try {
                 remoteLogStorage.deleteLogSegmentFiles(remoteLogSegment);
                 metricGroup.remoteLogDeleteRequests().inc();
             } catch (Exception e) {
                 LOG.error(
-                        "Error occurred while deleting remote log segment files: {}, "
+                        "Error occurred while deleting remote log segment files: {} for bucket {}, "
                                 + "the delete files operation will be skipped.",
+                        tableBucket,
                         remoteLogSegment,
                         e);
                 metricGroup.remoteLogDeleteErrors().inc();

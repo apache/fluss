@@ -64,6 +64,7 @@ import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.security.acl.Resource;
+import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.RpcServiceBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.coordinator.MetadataManager;
@@ -72,6 +73,7 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.log.FetchParams;
 import org.apache.fluss.server.log.ListOffsetsParam;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
+import org.apache.fluss.server.metadata.TabletServerMetadataProvider;
 import org.apache.fluss.server.replica.ReplicaManager;
 import org.apache.fluss.server.utils.ServerRpcMessageUtils;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -122,6 +124,7 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
     private final String serviceName;
     private final ReplicaManager replicaManager;
     private final TabletServerMetadataCache metadataCache;
+    private final TabletServerMetadataProvider metadataFunctionProvider;
 
     public TabletService(
             int serverId,
@@ -130,11 +133,20 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
             ReplicaManager replicaManager,
             TabletServerMetadataCache metadataCache,
             MetadataManager metadataManager,
-            @Nullable Authorizer authorizer) {
-        super(remoteFileSystem, ServerType.TABLET_SERVER, zkClient, metadataManager, authorizer);
+            @Nullable Authorizer authorizer,
+            DynamicConfigManager dynamicConfigManager) {
+        super(
+                remoteFileSystem,
+                ServerType.TABLET_SERVER,
+                zkClient,
+                metadataManager,
+                authorizer,
+                dynamicConfigManager);
         this.serviceName = "server-" + serverId;
         this.replicaManager = replicaManager;
         this.metadataCache = metadataCache;
+        this.metadataFunctionProvider =
+                new TabletServerMetadataProvider(zkClient, metadataManager, metadataCache);
     }
 
     @Override
@@ -282,16 +294,15 @@ public final class TabletService extends RpcServiceBase implements TabletServerG
 
     @Override
     public CompletableFuture<MetadataResponse> metadata(MetadataRequest request) {
-        return CompletableFuture.completedFuture(
-                makeMetadataResponse(
+        MetadataResponse metadataResponse =
+                processMetadataRequest(
                         request,
                         currentListenerName(),
                         currentSession(),
                         authorizer,
                         metadataCache,
-                        metadataCache::getTableMetadata,
-                        metadataCache::getPhysicalTablePath,
-                        metadataCache::getPartitionMetadata));
+                        metadataFunctionProvider);
+        return CompletableFuture.completedFuture(metadataResponse);
     }
 
     @Override

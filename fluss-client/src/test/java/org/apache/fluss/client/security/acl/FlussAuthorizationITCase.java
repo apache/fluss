@@ -28,6 +28,9 @@ import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.config.MemorySize;
+import org.apache.fluss.config.cluster.AlterConfig;
+import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.AuthorizationException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
@@ -69,6 +72,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.ExecutionException;
 
+import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR_PK;
@@ -653,6 +657,81 @@ public class FlussAuthorizationITCase {
         }
     }
 
+    @Test
+    void testDynamicConfigs() throws ExecutionException, InterruptedException {
+        assertThatThrownBy(() -> guestAdmin.describeClusterConfigs().get())
+                .rootCause()
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate DESCRIBE on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                guestPrincipal));
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.cluster(),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.DESCRIBE,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+        Collection<ConfigEntry> configToResourceConfigs = guestAdmin.describeClusterConfigs().get();
+        assertThat(configToResourceConfigs)
+                .contains(
+                        new ConfigEntry(
+                                DATALAKE_FORMAT.key(),
+                                "paimon",
+                                ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG));
+
+        assertThatThrownBy(
+                        () ->
+                                guestAdmin
+                                        .alterClusterConfigs(
+                                                Collections.singletonList(
+                                                        new AlterConfig(
+                                                                DATALAKE_FORMAT.key(),
+                                                                null,
+                                                                AlterConfigOpType.SET)))
+                                        .get())
+                .rootCause()
+                .hasMessageContaining(
+                        String.format(
+                                "Principal %s have no authorization to operate ALTER on resource Resource{type=CLUSTER, name='fluss-cluster'}",
+                                guestPrincipal));
+
+        rootAdmin
+                .createAcls(
+                        Collections.singletonList(
+                                new AclBinding(
+                                        Resource.cluster(),
+                                        new AccessControlEntry(
+                                                guestPrincipal,
+                                                "*",
+                                                OperationType.ALTER,
+                                                PermissionType.ALLOW))))
+                .all()
+                .get();
+        guestAdmin
+                .alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(), null, AlterConfigOpType.SET)))
+                .get();
+        assertThat(guestAdmin.describeClusterConfigs().get())
+                .contains(
+                        new ConfigEntry(
+                                DATALAKE_FORMAT.key(),
+                                null,
+                                ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG))
+                .doesNotContain(
+                        new ConfigEntry(
+                                DATALAKE_FORMAT.key(),
+                                "paimon",
+                                ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG));
+    }
+
     private static Configuration initConfig() {
         Configuration conf = new Configuration();
         conf.setInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR, 3);
@@ -661,7 +740,7 @@ public class FlussAuthorizationITCase {
         // set a shorter max lag time to make tests in FlussFailServerTableITCase faster
         conf.set(ConfigOptions.LOG_REPLICA_MAX_LAG_TIME, Duration.ofSeconds(10));
         // set default datalake format for the cluster and enable datalake tables
-        conf.set(ConfigOptions.DATALAKE_FORMAT, DataLakeFormat.PAIMON);
+        conf.set(DATALAKE_FORMAT, DataLakeFormat.PAIMON);
 
         conf.set(ConfigOptions.CLIENT_WRITER_BUFFER_MEMORY_SIZE, MemorySize.parse("1mb"));
         conf.set(ConfigOptions.CLIENT_WRITER_BATCH_SIZE, MemorySize.parse("1kb"));

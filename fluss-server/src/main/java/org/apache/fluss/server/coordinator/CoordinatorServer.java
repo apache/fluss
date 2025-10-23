@@ -23,17 +23,13 @@ import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.IllegalConfigurationException;
-import org.apache.fluss.lake.lakestorage.LakeCatalog;
-import org.apache.fluss.lake.lakestorage.LakeStorage;
-import org.apache.fluss.lake.lakestorage.LakeStoragePlugin;
-import org.apache.fluss.lake.lakestorage.LakeStoragePluginSetUp;
-import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.RpcServer;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.rpc.netty.server.RequestsMetrics;
+import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.ServerBase;
 import org.apache.fluss.server.authorizer.Authorizer;
 import org.apache.fluss.server.authorizer.AuthorizerLoader;
@@ -59,16 +55,12 @@ import javax.annotation.concurrent.GuardedBy;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
-
-import static org.apache.fluss.server.utils.LakeStorageUtils.extractLakeProperties;
-import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
  * Coordinator server implementation. The coordinator server is responsible to:
@@ -142,6 +134,12 @@ public class CoordinatorServer extends ServerBase {
     @GuardedBy("lock")
     private CoordinatorContext coordinatorContext;
 
+    @GuardedBy("lock")
+    private DynamicConfigManager dynamicConfigManager;
+
+    @GuardedBy("lock")
+    private LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
+
     public CoordinatorServer(Configuration conf) {
         super(conf);
         validateConfigs(conf);
@@ -173,6 +171,11 @@ public class CoordinatorServer extends ServerBase {
 
             this.zkClient = ZooKeeperUtils.startZookeeperClient(conf, this);
 
+            this.lakeCatalogDynamicLoader = new LakeCatalogDynamicLoader(conf, pluginManager, true);
+            this.dynamicConfigManager = new DynamicConfigManager(zkClient, conf, true);
+            dynamicConfigManager.register(lakeCatalogDynamicLoader);
+            dynamicConfigManager.startup();
+
             this.coordinatorContext = new CoordinatorContext();
             this.metadataCache = new CoordinatorMetadataCache();
 
@@ -183,7 +186,8 @@ public class CoordinatorServer extends ServerBase {
 
             this.lakeTableTieringManager = new LakeTableTieringManager();
 
-            MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+            MetadataManager metadataManager =
+                    new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
             this.coordinatorService =
                     new CoordinatorService(
                             conf,
@@ -193,8 +197,9 @@ public class CoordinatorServer extends ServerBase {
                             metadataCache,
                             metadataManager,
                             authorizer,
-                            createLakeCatalog(),
-                            lakeTableTieringManager);
+                            lakeCatalogDynamicLoader,
+                            lakeTableTieringManager,
+                            dynamicConfigManager);
 
             this.rpcServer =
                     RpcServer.create(
@@ -240,26 +245,12 @@ public class CoordinatorServer extends ServerBase {
                             lakeTableTieringManager,
                             serverMetricGroup,
                             conf,
-                            ioExecutor);
+                            ioExecutor,
+                            metadataManager);
             coordinatorEventProcessor.startup();
 
             createDefaultDatabase();
         }
-    }
-
-    @Nullable
-    private LakeCatalog createLakeCatalog() {
-        DataLakeFormat dataLakeFormat = conf.get(ConfigOptions.DATALAKE_FORMAT);
-        if (dataLakeFormat == null) {
-            return null;
-        }
-        LakeStoragePlugin lakeStoragePlugin =
-                LakeStoragePluginSetUp.fromDataLakeFormat(dataLakeFormat.toString(), pluginManager);
-        Map<String, String> lakeProperties = extractLakeProperties(conf);
-        LakeStorage lakeStorage =
-                lakeStoragePlugin.createLakeStorage(
-                        Configuration.fromMap(checkNotNull(lakeProperties)));
-        return lakeStorage.createLakeCatalog();
     }
 
     @Override
@@ -321,7 +312,8 @@ public class CoordinatorServer extends ServerBase {
     }
 
     private void createDefaultDatabase() {
-        MetadataManager metadataManager = new MetadataManager(zkClient, conf);
+        MetadataManager metadataManager =
+                new MetadataManager(zkClient, conf, lakeCatalogDynamicLoader);
         List<String> databases = metadataManager.listDatabases();
         if (databases.isEmpty()) {
             metadataManager.createDatabase(DEFAULT_DATABASE, DatabaseDescriptor.EMPTY, true);
@@ -449,6 +441,18 @@ public class CoordinatorServer extends ServerBase {
             }
 
             try {
+                if (dynamicConfigManager != null) {
+                    dynamicConfigManager.close();
+                }
+
+                if (lakeCatalogDynamicLoader != null) {
+                    lakeCatalogDynamicLoader.close();
+                }
+            } catch (Throwable t) {
+                exception = ExceptionUtils.firstOrSuppressed(t, exception);
+            }
+
+            try {
                 if (rpcClient != null) {
                     rpcClient.close();
                 }
@@ -495,6 +499,10 @@ public class CoordinatorServer extends ServerBase {
     @VisibleForTesting
     public @Nullable Authorizer getAuthorizer() {
         return authorizer;
+    }
+
+    public DynamicConfigManager getDynamicConfigManager() {
+        return dynamicConfigManager;
     }
 
     private static void validateConfigs(Configuration conf) {

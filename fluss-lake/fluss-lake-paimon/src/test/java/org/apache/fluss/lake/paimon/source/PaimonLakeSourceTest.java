@@ -126,7 +126,7 @@ class PaimonLakeSourceTest extends PaimonSourceTestBase {
         // of filters
         assertThat(paimonSplit.dataSplit().dataFiles()).hasSize(1);
 
-        // read data with filter to mae sure the reader with filter works properly
+        // read data with filter to make sure the reader with filter works properly
         List<Row> actual = new ArrayList<>();
         org.apache.fluss.row.InternalRow.FieldGetter[] fieldGetters =
                 org.apache.fluss.row.InternalRow.createFieldGetters(

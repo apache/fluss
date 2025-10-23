@@ -29,6 +29,7 @@ import org.apache.fluss.utils.json.JsonSerdeUtils;
 import javax.annotation.Nullable;
 
 import java.nio.charset.StandardCharsets;
+import java.util.Map;
 
 /** The data and path stored in ZooKeeper nodes (znodes). */
 public final class ZkData {
@@ -647,6 +648,74 @@ public final class ZkData {
                         "expected a string in format ResourceType:ResourceName but got "
                                 + resourceStr);
             }
+        }
+    }
+
+    /**
+     * The znode for the dynamic configs. The znode path is:
+     *
+     * <p>/config
+     */
+    public static final class ConfigZNode {
+        public static String path() {
+            return "/config";
+        }
+    }
+
+    /**
+     * The znode for a specific config entity. The znode path is:
+     *
+     * <p>/config/[entityType]/[entityName]
+     */
+    public static final class ConfigEntityZNode {
+        public static final String ENTITY_TYPE = "server";
+        public static final String ENTITY_NAME = "global";
+
+        public static String path() {
+            return ConfigZNode.path() + "/" + ENTITY_TYPE + "/" + ENTITY_NAME;
+        }
+
+        public static byte[] encode(Map<String, String> properties) {
+            return JsonSerdeUtils.writeValueAsBytes(properties, ConfigJsonSerde.INSTANCE);
+        }
+
+        public static Map<String, String> decode(byte[] json) {
+            return JsonSerdeUtils.readValue(json, ConfigJsonSerde.INSTANCE);
+        }
+    }
+
+    /**
+     * The znode for tracking dynamic config entity changes. This znode serves as a root node for
+     * all config entity change notifications. The znode path is:
+     *
+     * <p>/config/changes
+     */
+    public static final class ConfigEntityChangeNotificationZNode {
+        public static String path() {
+            return ConfigZNode.path() + "/changes";
+        }
+    }
+
+    /**
+     * The znode for individual entity changes change notifications. Each notification is stored as
+     * a sequential child node under the {@link ConfigEntityChangeNotificationZNode} with a prefix.
+     * The znode path follows this structure:
+     *
+     * <p>/config/changes/config_changes_[sequenceNumber]
+     */
+    public static final class ConfigEntityChangeNotificationSequenceZNode {
+        private static final String SEQUENT_NUMBER_PREFIX = "config_change_";
+
+        public static String pathPrefix() {
+            return ConfigEntityChangeNotificationZNode.path() + "/" + SEQUENT_NUMBER_PREFIX;
+        }
+
+        public static String prefix() {
+            return SEQUENT_NUMBER_PREFIX;
+        }
+
+        public static byte[] encode() {
+            return new byte[0];
         }
     }
 }

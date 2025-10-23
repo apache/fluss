@@ -17,37 +17,46 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.AlterConfig;
+import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidCoordinatorException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.fs.FileSystem;
-import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
+import org.apache.fluss.metadata.DeleteBehavior;
+import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.metadata.PartitionSpec;
-import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
-import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
-import org.apache.fluss.metadata.TableInfo;
-import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.messages.AdjustIsrRequest;
 import org.apache.fluss.rpc.messages.AdjustIsrResponse;
+import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.AlterTableResponse;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitKvSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotResponse;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestRequest;
 import org.apache.fluss.rpc.messages.CommitRemoteLogManifestResponse;
+import org.apache.fluss.rpc.messages.ControlledShutdownRequest;
+import org.apache.fluss.rpc.messages.ControlledShutdownResponse;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateAclsResponse;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
@@ -68,6 +77,7 @@ import org.apache.fluss.rpc.messages.LakeTieringHeartbeatRequest;
 import org.apache.fluss.rpc.messages.LakeTieringHeartbeatResponse;
 import org.apache.fluss.rpc.messages.MetadataRequest;
 import org.apache.fluss.rpc.messages.MetadataResponse;
+import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbHeartbeatReqForTable;
 import org.apache.fluss.rpc.messages.PbHeartbeatRespForTable;
 import org.apache.fluss.rpc.netty.server.Session;
@@ -76,6 +86,7 @@ import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
 import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.security.acl.Resource;
+import org.apache.fluss.server.DynamicConfigManager;
 import org.apache.fluss.server.RpcServiceBase;
 import org.apache.fluss.server.authorizer.AclCreateResult;
 import org.apache.fluss.server.authorizer.AclDeleteResult;
@@ -85,18 +96,17 @@ import org.apache.fluss.server.coordinator.event.AdjustIsrReceivedEvent;
 import org.apache.fluss.server.coordinator.event.CommitKvSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitLakeTableSnapshotEvent;
 import org.apache.fluss.server.coordinator.event.CommitRemoteLogManifestEvent;
+import org.apache.fluss.server.coordinator.event.ControlledShutdownEvent;
 import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.entity.CommitKvSnapshotData;
 import org.apache.fluss.server.entity.LakeTieringTableInfo;
+import org.apache.fluss.server.entity.TablePropertyChanges;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
-import org.apache.fluss.server.metadata.BucketMetadata;
-import org.apache.fluss.server.metadata.PartitionMetadata;
-import org.apache.fluss.server.metadata.ServerMetadataCache;
-import org.apache.fluss.server.metadata.TableMetadata;
+import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
+import org.apache.fluss.server.metadata.CoordinatorMetadataProvider;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.data.BucketAssignment;
-import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
@@ -106,14 +116,14 @@ import org.apache.fluss.utils.concurrent.FutureUtils;
 import javax.annotation.Nullable;
 
 import java.io.UncheckedIOException;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
+import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindingFilters;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toAclBindings;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.fromTablePath;
@@ -123,52 +133,55 @@ import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getCommitRemot
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getPartitionSpec;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeCreateAclsResponse;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeDropAclsResponse;
+import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTableChanges;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toTablePath;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.utils.PartitionUtils.validatePartitionSpec;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
-import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** An RPC Gateway service for coordinator server. */
 public final class CoordinatorService extends RpcServiceBase implements CoordinatorGateway {
 
     private final int defaultBucketNumber;
     private final int defaultReplicationFactor;
+    private final boolean logTableAllowCreation;
+    private final boolean kvTableAllowCreation;
     private final Supplier<EventManager> eventManagerSupplier;
     private final Supplier<Integer> coordinatorEpochSupplier;
-    private final ServerMetadataCache metadataCache;
+    private final CoordinatorMetadataCache metadataCache;
 
-    // null if the cluster hasn't configured datalake format
-    private final @Nullable DataLakeFormat dataLakeFormat;
-    private final @Nullable LakeCatalog lakeCatalog;
     private final LakeTableTieringManager lakeTableTieringManager;
+    private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
 
     public CoordinatorService(
             Configuration conf,
             FileSystem remoteFileSystem,
             ZooKeeperClient zkClient,
             Supplier<CoordinatorEventProcessor> coordinatorEventProcessorSupplier,
-            ServerMetadataCache metadataCache,
+            CoordinatorMetadataCache metadataCache,
             MetadataManager metadataManager,
             @Nullable Authorizer authorizer,
-            @Nullable LakeCatalog lakeCatalog,
-            LakeTableTieringManager lakeTableTieringManager) {
-        super(remoteFileSystem, ServerType.COORDINATOR, zkClient, metadataManager, authorizer);
+            LakeCatalogDynamicLoader lakeCatalogDynamicLoader,
+            LakeTableTieringManager lakeTableTieringManager,
+            DynamicConfigManager dynamicConfigManager) {
+        super(
+                remoteFileSystem,
+                ServerType.COORDINATOR,
+                zkClient,
+                metadataManager,
+                authorizer,
+                dynamicConfigManager);
         this.defaultBucketNumber = conf.getInt(ConfigOptions.DEFAULT_BUCKET_NUMBER);
         this.defaultReplicationFactor = conf.getInt(ConfigOptions.DEFAULT_REPLICATION_FACTOR);
+        this.logTableAllowCreation = conf.getBoolean(ConfigOptions.LOG_TABLE_ALLOW_CREATION);
+        this.kvTableAllowCreation = conf.getBoolean(ConfigOptions.KV_TABLE_ALLOW_CREATION);
         this.eventManagerSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEventManager();
         this.coordinatorEpochSupplier =
                 () -> coordinatorEventProcessorSupplier.get().getCoordinatorEpoch();
-        this.dataLakeFormat = conf.getOptional(ConfigOptions.DATALAKE_FORMAT).orElse(null);
-        this.lakeCatalog = lakeCatalog;
         this.lakeTableTieringManager = lakeTableTieringManager;
         this.metadataCache = metadataCache;
-        checkState(
-                (dataLakeFormat == null) == (lakeCatalog == null),
-                "dataLakeFormat and lakeCatalog must both be null or both non-null, but dataLakeFormat is %s, lakeCatalog is %s.",
-                dataLakeFormat,
-                lakeCatalog);
+        this.lakeCatalogDynamicLoader = lakeCatalogDynamicLoader;
     }
 
     @Override
@@ -178,7 +191,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     @Override
     public void shutdown() {
-        IOUtils.closeQuietly(lakeCatalog, "lake catalog");
+        IOUtils.closeQuietly(lakeCatalogDynamicLoader, "lake catalog");
     }
 
     @Override
@@ -244,8 +257,15 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             }
         }
 
+        LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer();
+
+        // Check table creation permissions based on table type
+        validateTableCreationPermission(tableDescriptor, tablePath);
+
         // apply system defaults if the config is not set
-        tableDescriptor = applySystemDefaults(tableDescriptor);
+        tableDescriptor =
+                applySystemDefaults(tableDescriptor, lakeCatalogContainer.getDataLakeFormat());
 
         // the distribution and bucket count must be set now
         //noinspection OptionalGetWithoutIsPresent
@@ -266,13 +286,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         // before create table in fluss, we may create in lake
         if (isDataLakeEnabled(tableDescriptor)) {
             try {
-                checkNotNull(lakeCatalog).createTable(tablePath, tableDescriptor);
+                checkNotNull(lakeCatalogContainer.getLakeCatalog())
+                        .createTable(tablePath, tableDescriptor);
             } catch (TableAlreadyExistException e) {
-                throw new TableAlreadyExistException(
+                throw new LakeTableAlreadyExistException(
                         String.format(
                                 "The table %s already exists in %s catalog, please "
                                         + "first drop the table in %s catalog or use a new table name.",
-                                tablePath, dataLakeFormat, dataLakeFormat));
+                                tablePath,
+                                lakeCatalogContainer.getDataLakeFormat(),
+                                lakeCatalogContainer.getDataLakeFormat()));
             }
         }
 
@@ -283,7 +306,66 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return CompletableFuture.completedFuture(new CreateTableResponse());
     }
 
-    private TableDescriptor applySystemDefaults(TableDescriptor tableDescriptor) {
+    @Override
+    public CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request) {
+        TablePath tablePath = toTablePath(request.getTablePath());
+        tablePath.validate();
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.table(tablePath));
+        }
+
+        List<TableChange> tableChanges = toTableChanges(request.getConfigChangesList());
+        TablePropertyChanges tablePropertyChanges = toTablePropertyChanges(tableChanges);
+
+        LakeCatalogDynamicLoader.LakeCatalogContainer lakeCatalogContainer =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer();
+        metadataManager.alterTableProperties(
+                tablePath,
+                tableChanges,
+                tablePropertyChanges,
+                request.isIgnoreIfNotExists(),
+                lakeCatalogContainer.getLakeCatalog(),
+                lakeCatalogContainer.getDataLakeFormat(),
+                lakeTableTieringManager);
+
+        return CompletableFuture.completedFuture(new AlterTableResponse());
+    }
+
+    public static TablePropertyChanges toTablePropertyChanges(List<TableChange> tableChanges) {
+        TablePropertyChanges.Builder builder = TablePropertyChanges.builder();
+        if (tableChanges.isEmpty()) {
+            return builder.build();
+        }
+
+        for (TableChange tableChange : tableChanges) {
+            if (tableChange instanceof TableChange.SetOption) {
+                TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
+                String optionKey = setOption.getKey();
+                if (isTableStorageConfig(optionKey)) {
+                    builder.setTableProperty(optionKey, setOption.getValue());
+                } else {
+                    // otherwise, it's considered as custom property
+                    builder.setCustomProperty(optionKey, setOption.getValue());
+                }
+            } else if (tableChange instanceof TableChange.ResetOption) {
+                TableChange.ResetOption resetOption = (TableChange.ResetOption) tableChange;
+                String optionKey = resetOption.getKey();
+                if (isTableStorageConfig(optionKey)) {
+                    builder.resetTableProperty(optionKey);
+                } else {
+                    // otherwise, it's considered as custom property
+                    builder.resetCustomProperty(optionKey);
+                }
+            } else {
+                throw new InvalidAlterTableException(
+                        "Unsupported alter table change: " + tableChange);
+            }
+        }
+        return builder.build();
+    }
+
+    private TableDescriptor applySystemDefaults(
+            TableDescriptor tableDescriptor, DataLakeFormat dataLakeFormat) {
         TableDescriptor newDescriptor = tableDescriptor;
 
         // not set bucket num
@@ -324,6 +406,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                             ConfigOptions.TABLE_DATALAKE_ENABLED.key()));
         }
 
+        // For tables with first_row or versioned merge engines, automatically set to IGNORE if
+        // delete behavior is not set
+        Configuration tableConf = Configuration.fromMap(tableDescriptor.getProperties());
+        MergeEngineType mergeEngine =
+                tableConf.getOptional(ConfigOptions.TABLE_MERGE_ENGINE).orElse(null);
+        if (mergeEngine == MergeEngineType.FIRST_ROW || mergeEngine == MergeEngineType.VERSIONED) {
+            if (tableDescriptor.hasPrimaryKey()
+                    && !tableConf.getOptional(ConfigOptions.TABLE_DELETE_BEHAVIOR).isPresent()) {
+                Map<String, String> newProperties = new HashMap<>(newDescriptor.getProperties());
+                newProperties.put(
+                        ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), DeleteBehavior.IGNORE.name());
+                newDescriptor = newDescriptor.withProperties(newProperties);
+            }
+        }
         return newDescriptor;
     }
 
@@ -368,7 +464,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // first, validate the partition spec, and get resolved partition spec.
         PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
-        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec);
+        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, true);
         ResolvedPartitionSpec partitionToCreate =
                 ResolvedPartitionSpec.fromPartitionSpec(table.partitionKeys, partitionSpec);
 
@@ -409,7 +505,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         // first, validate the partition spec.
         PartitionSpec partitionSpec = getPartitionSpec(request.getPartitionSpec());
-        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec);
+        validatePartitionSpec(tablePath, table.partitionKeys, partitionSpec, false);
         ResolvedPartitionSpec partitionToDrop =
                 ResolvedPartitionSpec.fromPartitionSpec(table.partitionKeys, partitionSpec);
 
@@ -424,17 +520,16 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
         AccessContextEvent<MetadataResponse> metadataResponseAccessContextEvent =
                 new AccessContextEvent<>(
-                        ctx ->
-                                makeMetadataResponse(
-                                        request,
-                                        listenerName,
-                                        session,
-                                        authorizer,
-                                        metadataCache,
-                                        (tablePath) -> getTableMetadata(ctx, tablePath),
-                                        ctx::getPhysicalTablePath,
-                                        (physicalTablePath) ->
-                                                getPartitionMetadata(ctx, physicalTablePath)));
+                        ctx -> {
+                            return processMetadataRequest(
+                                    request,
+                                    listenerName,
+                                    session,
+                                    authorizer,
+                                    metadataCache,
+                                    new CoordinatorMetadataProvider(
+                                            zkClient, metadataManager, ctx));
+                        });
         eventManagerSupplier.get().put(metadataResponseAccessContextEvent);
         return metadataResponseAccessContextEvent.getResultFuture();
     }
@@ -567,6 +662,64 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         return CompletableFuture.completedFuture(heartbeatResponse);
     }
 
+    @Override
+    public CompletableFuture<ControlledShutdownResponse> controlledShutdown(
+            ControlledShutdownRequest request) {
+        CompletableFuture<ControlledShutdownResponse> response = new CompletableFuture<>();
+        eventManagerSupplier
+                .get()
+                .put(
+                        new ControlledShutdownEvent(
+                                request.getTabletServerId(),
+                                request.getTabletServerEpoch(),
+                                response));
+        return response;
+    }
+
+    @Override
+    public CompletableFuture<AlterClusterConfigsResponse> alterClusterConfigs(
+            AlterClusterConfigsRequest request) {
+        CompletableFuture<AlterClusterConfigsResponse> future = new CompletableFuture<>();
+        List<PbAlterConfig> infos = request.getAlterConfigsList();
+        if (infos.isEmpty()) {
+            return CompletableFuture.completedFuture(new AlterClusterConfigsResponse());
+        }
+
+        if (authorizer != null) {
+            authorizer.authorize(currentSession(), OperationType.ALTER, Resource.cluster());
+        }
+
+        List<AlterConfig> serverConfigChanges =
+                infos.stream()
+                        .map(
+                                info ->
+                                        new AlterConfig(
+                                                info.getConfigKey(),
+                                                info.hasConfigValue()
+                                                        ? info.getConfigValue()
+                                                        : null,
+                                                AlterConfigOpType.from((byte) info.getOpType())))
+                        .collect(Collectors.toList());
+        AccessContextEvent<Void> accessContextEvent =
+                new AccessContextEvent<>(
+                        (context) -> {
+                            try {
+                                dynamicConfigManager.alterConfigs(serverConfigChanges);
+                                future.complete(new AlterClusterConfigsResponse());
+                            } catch (Exception e) {
+                                future.completeExceptionally(e);
+                            }
+                            return null;
+                        });
+        eventManagerSupplier.get().put(accessContextEvent);
+        return future;
+    }
+
+    @VisibleForTesting
+    public DataLakeFormat getDataLakeFormat() {
+        return lakeCatalogDynamicLoader.getLakeCatalogContainer().getDataLakeFormat();
+    }
+
     private void validateHeartbeatRequest(
             PbHeartbeatReqForTable heartbeatReqForTable, int currentEpoch) {
         if (heartbeatReqForTable.getCoordinatorEpoch() != currentEpoch) {
@@ -579,75 +732,29 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         }
     }
 
-    private TableMetadata getTableMetadata(CoordinatorContext ctx, TablePath tablePath) {
-        // always get table info from zk.
-        TableInfo tableInfo = metadataManager.getTable(tablePath);
-        long tableId = ctx.getTableIdByPath(tablePath);
-        List<BucketMetadata> bucketMetadataList;
-        if (tableId == TableInfo.UNKNOWN_TABLE_ID) {
-            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
-            // https://github.com/apache/fluss/issues/483
-            // get table assignment from zk.
-            bucketMetadataList =
-                    getTableMetadataFromZk(
-                            zkClient, tablePath, tableInfo.getTableId(), tableInfo.isPartitioned());
-        } else {
-            // get table assignment from coordinatorContext.
-            bucketMetadataList =
-                    getBucketMetadataFromContext(
-                            ctx, tableId, null, ctx.getTableAssignment(tableId));
-        }
-        return new TableMetadata(tableInfo, bucketMetadataList);
-    }
+    /**
+     * Validates whether the table creation is allowed based on the table type and configuration.
+     *
+     * @param tableDescriptor the table descriptor to validate
+     * @param tablePath the table path for error reporting
+     * @throws InvalidTableException if table creation is not allowed
+     */
+    private void validateTableCreationPermission(
+            TableDescriptor tableDescriptor, TablePath tablePath) {
+        boolean hasPrimaryKey = tableDescriptor.hasPrimaryKey();
 
-    private PartitionMetadata getPartitionMetadata(
-            CoordinatorContext ctx, PhysicalTablePath partitionPath) {
-        TablePath tablePath =
-                new TablePath(partitionPath.getDatabaseName(), partitionPath.getTableName());
-        String partitionName = partitionPath.getPartitionName();
-        long tableId = ctx.getTableIdByPath(tablePath);
-        if (tableId == TableInfo.UNKNOWN_TABLE_ID) {
-            // TODO no need to get assignment from zk if refactor client metadata cache. Trace by
-            // https://github.com/apache/fluss/issues/483
-            return getPartitionMetadataFromZk(partitionPath, zkClient);
+        if (hasPrimaryKey) {
+            // This is a KV table (Primary Key Table)
+            if (!kvTableAllowCreation) {
+                throw new InvalidTableException(
+                        "Creation of Primary Key Tables is disallowed in the cluster.");
+            }
         } else {
-            Optional<Long> partitionIdOpt = ctx.getPartitionId(partitionPath);
-            if (partitionIdOpt.isPresent()) {
-                long partitionId = partitionIdOpt.get();
-                List<BucketMetadata> bucketMetadataList =
-                        getBucketMetadataFromContext(
-                                ctx,
-                                tableId,
-                                partitionId,
-                                ctx.getPartitionAssignment(
-                                        new TablePartition(tableId, partitionId)));
-                return new PartitionMetadata(
-                        tableId, partitionName, partitionId, bucketMetadataList);
-            } else {
-                return getPartitionMetadataFromZk(partitionPath, zkClient);
+            // This is a Log table
+            if (!logTableAllowCreation) {
+                throw new InvalidTableException(
+                        "Creation of Log Tables is disallowed in the cluster.");
             }
         }
-    }
-
-    private static List<BucketMetadata> getBucketMetadataFromContext(
-            CoordinatorContext ctx,
-            long tableId,
-            @Nullable Long partitionId,
-            Map<Integer, List<Integer>> tableAssigment) {
-        List<BucketMetadata> bucketMetadataList = new ArrayList<>();
-        tableAssigment.forEach(
-                (bucketId, serverIds) -> {
-                    TableBucket tableBucket = new TableBucket(tableId, partitionId, bucketId);
-                    Optional<LeaderAndIsr> optLeaderAndIsr = ctx.getBucketLeaderAndIsr(tableBucket);
-                    Integer leader = optLeaderAndIsr.map(LeaderAndIsr::leader).orElse(null);
-                    BucketMetadata bucketMetadata =
-                            new BucketMetadata(
-                                    bucketId,
-                                    leader,
-                                    ctx.getBucketLeaderEpoch(tableBucket),
-                                    serverIds);
-                    bucketMetadataList.add(bucketMetadata);
-                });
-        return bucketMetadataList;
     }
 }

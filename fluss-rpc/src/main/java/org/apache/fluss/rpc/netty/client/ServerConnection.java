@@ -17,6 +17,7 @@
 
 package org.apache.fluss.rpc.netty.client;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.exception.DisconnectException;
 import org.apache.fluss.exception.FlussRuntimeException;
@@ -57,7 +58,7 @@ import java.util.ArrayDeque;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
-import java.util.function.Consumer;
+import java.util.function.BiConsumer;
 
 import static org.apache.fluss.utils.IOUtils.closeQuietly;
 
@@ -103,15 +104,20 @@ final class ServerConnection {
             ServerNode node,
             ClientMetricGroup clientMetricGroup,
             ClientAuthenticator authenticator,
+            BiConsumer<ServerConnection, Throwable> closeCallback,
             boolean isInnerClient) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
         this.connectionMetricGroup = clientMetricGroup.createConnectionMetricGroup(node.uid());
+        this.authenticator = authenticator;
+        this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
+        whenClose(closeCallback);
+
+        // connect and handle should be last in case of other variables are nullable and close
+        // callback is not registered when connection established.
         bootstrap
                 .connect(node.host(), node.port())
                 .addListener(future -> establishConnection((ChannelFuture) future, isInnerClient));
-        this.authenticator = authenticator;
-        this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
     }
 
     public ServerNode getServerNode() {
@@ -130,8 +136,8 @@ final class ServerConnection {
     }
 
     /** Register a callback to be called when the connection is closed. */
-    public void whenClose(Consumer<Throwable> closeCallback) {
-        closeFuture.whenComplete((v, throwable) -> closeCallback.accept(throwable));
+    private void whenClose(BiConsumer<ServerConnection, Throwable> closeCallback) {
+        closeFuture.whenComplete((v, throwable) -> closeCallback.accept(this, throwable));
     }
 
     /** Close the connection. */
@@ -170,39 +176,18 @@ final class ServerConnection {
             }
 
             if (channel != null) {
-                channel.close()
-                        .addListener(
-                                (ChannelFutureListener)
-                                        future -> {
+                // Close the channel directly, without waiting for the channel to close properly.
+                channel.close();
+            }
 
-                                            // when finishing, if netty successfully closes the
-                                            // channel, then the provided exception is used as
-                                            // the reason for the closing. If there was something
-                                            // wrong at the netty side, then that exception is
-                                            // prioritized over the provided one.
-                                            if (future.isSuccess()) {
-                                                if (cause instanceof ClosedChannelException) {
-                                                    // the ClosedChannelException is expected
-                                                    closeFuture.complete(null);
-                                                } else {
-                                                    closeFuture.completeExceptionally(cause);
-                                                }
-                                            } else {
-                                                LOG.warn(
-                                                        "Something went wrong when trying to close connection due to : ",
-                                                        cause);
-                                                closeFuture.completeExceptionally(future.cause());
-                                            }
-                                        });
+            // TODO all return completeExceptionally will let some test cases blocked, so we
+            // need to find why the test cases are blocked and remove the if statement.
+            if (cause instanceof ClosedChannelException
+                    || cause.getCause() instanceof ConnectException) {
+                // the ClosedChannelException and ConnectException is expected.
+                closeFuture.complete(null);
             } else {
-                // TODO all return completeExceptionally will let some test cases blocked, so we
-                // need to find why the test cases are blocked and remove the if statement.
-                if (cause.getCause() instanceof ConnectException) {
-                    // the ConnectException is expected
-                    closeFuture.complete(null);
-                } else {
-                    closeFuture.completeExceptionally(cause);
-                }
+                closeFuture.completeExceptionally(cause);
             }
 
             connectionMetricGroup.close();
@@ -491,7 +476,8 @@ final class ServerConnection {
      * <li>READY: connection is ready to send requests.
      * <li>DISCONNECTED: connection is failed to establish.
      */
-    private enum ConnectionState {
+    @VisibleForTesting
+    enum ConnectionState {
         CONNECTING,
         CHECKING_API_VERSIONS,
         AUTHENTICATING,
@@ -564,5 +550,10 @@ final class ServerConnection {
         public String ipAddress() {
             return ((InetSocketAddress) channel.remoteAddress()).getAddress().getHostAddress();
         }
+    }
+
+    @VisibleForTesting
+    ConnectionState getConnectionState() {
+        return state;
     }
 }

@@ -341,7 +341,8 @@ public class RocksIncrementalSnapshot implements AutoCloseable {
 
         @Nonnull private final Map<String, KvFileHandle> confirmedSstFiles;
 
-        private PreviousSnapshot(@Nullable Collection<KvFileHandleAndLocalPath> confirmedSstFiles) {
+        protected PreviousSnapshot(
+                @Nullable Collection<KvFileHandleAndLocalPath> confirmedSstFiles) {
             this.confirmedSstFiles =
                     confirmedSstFiles != null
                             ? confirmedSstFiles.stream()

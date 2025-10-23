@@ -26,14 +26,17 @@ import org.apache.paimon.utils.InstantiationUtil;
 
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
+import java.io.DataInputStream;
 import java.io.IOException;
 
 /** Serializer for paimon split. */
 public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSplit> {
 
+    private static final int VERSION_1 = 1;
+
     @Override
     public int getVersion() {
-        return 1;
+        return VERSION_1;
     }
 
     @Override
@@ -42,6 +45,7 @@ public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSp
         DataOutputViewStreamWrapper view = new DataOutputViewStreamWrapper(out);
         DataSplit dataSplit = paimonSplit.dataSplit();
         InstantiationUtil.serializeObject(view, dataSplit);
+        view.writeBoolean(paimonSplit.isBucketUnAware());
         return out.toByteArray();
     }
 
@@ -51,9 +55,16 @@ public class PaimonSplitSerializer implements SimpleVersionedSerializer<PaimonSp
         DataSplit dataSplit;
         try {
             dataSplit = InstantiationUtil.deserializeObject(in, getClass().getClassLoader());
+
+            if (version == VERSION_1) {
+                DataInputStream dis = new DataInputStream(in);
+                boolean isBucketUnAware = dis.readBoolean();
+                return new PaimonSplit(dataSplit, isBucketUnAware);
+            } else {
+                throw new IOException("Unsupported PaimonSplit serialization version: " + version);
+            }
         } catch (ClassNotFoundException e) {
-            throw new IOException(e);
+            throw new IOException("Failed to deserialize PaimonSplit", e);
         }
-        return new PaimonSplit(dataSplit);
     }
 }

@@ -26,7 +26,7 @@ import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link org.apache.fluss.utils.concurrent.ExecutorThreadFactory}. . */
+/** Test for {@link org.apache.fluss.utils.concurrent.ExecutorThreadFactory}. */
 public class ExecutorThreadFactoryTest {
 
     @Test

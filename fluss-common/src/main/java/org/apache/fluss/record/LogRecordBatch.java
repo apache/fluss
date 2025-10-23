@@ -26,6 +26,9 @@ import org.apache.fluss.utils.CloseableIterator;
 
 import java.util.Iterator;
 
+import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V0;
+import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
+
 /**
  * A record batch is a container for {@link LogRecord LogRecords}.
  *
@@ -33,17 +36,15 @@ import java.util.Iterator;
  */
 @PublicEvolving
 public interface LogRecordBatch {
-
-    /** The "magic" values. */
-    byte LOG_MAGIC_VALUE_V0 = 0;
-
-    /** The current "magic" value. */
+    /**
+     * The current "magic" value. Even though we already support LOG_MAGIC_VALUE_V1, for
+     * compatibility reasons — specifically, a higher-version Fluss Client (which supports
+     * LOG_MAGIC_VALUE_V1) cannot write to a lower-version Fluss Server (which only supports
+     * LOG_MAGIC_VALUE_V0) — we are unable to guarantee compatibility at this time. Therefore, we
+     * will keep the current log magic value set to LOG_MAGIC_VALUE_V0 for now, and only upgrade it
+     * to LOG_MAGIC_VALUE_V1 once the compatibility issue is resolved.
+     */
     byte CURRENT_LOG_MAGIC_VALUE = LOG_MAGIC_VALUE_V0;
-
-    /** Value used if non-idempotent. */
-    long NO_WRITER_ID = -1L;
-
-    int NO_BATCH_SEQUENCE = -1;
 
     /**
      * Check whether the checksum of this batch is correct.
@@ -128,6 +129,13 @@ public interface LogRecordBatch {
      * @return batch base sequence
      */
     int batchSequence();
+
+    /**
+     * Get leader epoch of this bucket for this log record batch.
+     *
+     * @return leader epoch
+     */
+    int leaderEpoch();
 
     /**
      * Get the size in bytes of this batch, including the size of the record and the batch overhead.

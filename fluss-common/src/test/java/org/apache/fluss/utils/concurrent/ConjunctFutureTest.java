@@ -40,7 +40,7 @@ import java.util.stream.IntStream;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
-/** Tests for the {@link ConjunctFuture} and its sub classes. */
+/** Tests for the {@link ConjunctFuture} and its subclasses. */
 @ExtendWith(ParameterizedTestExtension.class)
 public class ConjunctFutureTest {
     private static final List<FutureFactory> PARAMETERS =

@@ -22,6 +22,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.IllegalConfigurationException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.flink.utils.FlinkConversionsTest;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.utils.ExceptionUtils;
 
@@ -31,12 +32,16 @@ import org.apache.flink.table.catalog.Catalog;
 import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogDatabaseImpl;
+import org.apache.flink.table.catalog.CatalogMaterializedTable;
 import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.Column;
+import org.apache.flink.table.catalog.IntervalFreshness;
 import org.apache.flink.table.catalog.ObjectPath;
+import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.ResolvedSchema;
+import org.apache.flink.table.catalog.TableChange;
 import org.apache.flink.table.catalog.UniqueConstraint;
 import org.apache.flink.table.catalog.WatermarkSpec;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
@@ -59,6 +64,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.RegisterExtension;
 
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.HashMap;
@@ -67,12 +73,15 @@ import java.util.Map;
 import java.util.Optional;
 
 import static org.apache.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_KEY;
 import static org.apache.fluss.flink.FlinkConnectorOptions.BUCKET_NUMBER;
 import static org.apache.fluss.flink.FlinkConnectorOptions.SCAN_STARTUP_MODE;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.addOptions;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.checkEqualsIgnoreSchema;
 import static org.apache.fluss.flink.utils.CatalogTableTestUtils.checkEqualsRespectSchema;
+import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -81,12 +90,25 @@ class FlinkCatalogTest {
 
     @RegisterExtension
     public static final FlussClusterExtension FLUSS_CLUSTER_EXTENSION =
-            FlussClusterExtension.builder().setNumOfTabletServers(1).build();
+            FlussClusterExtension.builder()
+                    .setClusterConf(initConfig())
+                    .setNumOfTabletServers(1)
+                    .build();
 
     private static final String CATALOG_NAME = "test-catalog";
-    private static final String DEFAULT_DB = "default";
+    private static final String DEFAULT_DB = FlinkCatalogOptions.DEFAULT_DATABASE.defaultValue();
+
+    private static final FlinkConversionsTest.TestRefreshHandler REFRESH_HANDLER =
+            new FlinkConversionsTest.TestRefreshHandler("jobID: xxx, clusterId: yyy");
+
     static Catalog catalog;
     private final ObjectPath tableInDefaultDb = new ObjectPath(DEFAULT_DB, "t1");
+
+    private static Configuration initConfig() {
+        Configuration configuration = new Configuration();
+        configuration.set(ConfigOptions.DATALAKE_FORMAT, PAIMON);
+        return configuration;
+    }
 
     private ResolvedSchema createSchema() {
         return new ResolvedSchema(
@@ -112,6 +134,28 @@ class FlinkCatalogTest {
                         Collections.emptyList(),
                         options);
         return new ResolvedCatalogTable(origin, resolvedSchema);
+    }
+
+    private CatalogMaterializedTable newCatalogMaterializedTable(
+            ResolvedSchema resolvedSchema,
+            CatalogMaterializedTable.RefreshMode refreshMode,
+            Map<String, String> options) {
+        CatalogMaterializedTable origin =
+                CatalogMaterializedTable.newBuilder()
+                        .schema(Schema.newBuilder().fromResolvedSchema(resolvedSchema).build())
+                        .comment("test comment")
+                        .options(options)
+                        .partitionKeys(Collections.emptyList())
+                        .definitionQuery("select first, second, third from t")
+                        .freshness(IntervalFreshness.of("5", IntervalFreshness.TimeUnit.SECOND))
+                        .logicalRefreshMode(
+                                refreshMode == CatalogMaterializedTable.RefreshMode.CONTINUOUS
+                                        ? CatalogMaterializedTable.LogicalRefreshMode.CONTINUOUS
+                                        : CatalogMaterializedTable.LogicalRefreshMode.FULL)
+                        .refreshMode(refreshMode)
+                        .refreshStatus(CatalogMaterializedTable.RefreshStatus.INITIALIZING)
+                        .build();
+        return new ResolvedCatalogMaterializedTable(origin, resolvedSchema);
     }
 
     @BeforeAll
@@ -244,15 +288,33 @@ class FlinkCatalogTest {
         assertThatThrownBy(() -> catalog.renameTable(this.tableInDefaultDb, "newName", false))
                 .isInstanceOf(UnsupportedOperationException.class);
 
-        assertThatThrownBy(() -> catalog.alterTable(this.tableInDefaultDb, null, false))
-                .isInstanceOf(UnsupportedOperationException.class);
-
         // Test lake table handling - should throw TableNotExistException for non-existent lake
         // table
         ObjectPath lakePath = new ObjectPath(DEFAULT_DB, "regularTable$lake");
         assertThatThrownBy(() -> catalog.getTable(lakePath))
                 .isInstanceOf(TableNotExistException.class)
                 .hasMessageContaining("regularTable$lake does not exist");
+    }
+
+    @Test
+    void testCreateAlreadyExistsLakeTable() throws Exception {
+        Map<String, String> options = new HashMap<>();
+        options.put(TABLE_DATALAKE_ENABLED.key(), "true");
+        options.put(TABLE_DATALAKE_FORMAT.key(), PAIMON.name());
+
+        ObjectPath lakeTablePath = new ObjectPath(DEFAULT_DB, "lake_table");
+        CatalogTable table = this.newCatalogTable(options);
+        catalog.createTable(lakeTablePath, table, false);
+        assertThat(catalog.tableExists(lakeTablePath)).isTrue();
+        // drop fluss table
+        catalog.dropTable(lakeTablePath, false);
+        // create the table again, should throw exception with ignore if exist = false
+        assertThatThrownBy(() -> catalog.createTable(lakeTablePath, table, false))
+                .isInstanceOf(CatalogException.class)
+                .hasMessage(
+                        String.format(
+                                "The table %s already exists in %s catalog, please first drop the table in %s catalog or use a new table name.",
+                                lakeTablePath, "paimon", "paimon"));
     }
 
     @Test
@@ -359,6 +421,125 @@ class FlinkCatalogTest {
     }
 
     @Test
+    void testCreateAndDropMaterializedTable() throws Exception {
+        ObjectPath mt1 = new ObjectPath(DEFAULT_DB, "mt1");
+        CatalogMaterializedTable materializedTable =
+                newCatalogMaterializedTable(
+                        this.createSchema(),
+                        CatalogMaterializedTable.RefreshMode.CONTINUOUS,
+                        Collections.emptyMap());
+        catalog.createTable(mt1, materializedTable, false);
+
+        assertThat(catalog.tableExists(mt1)).isTrue();
+        // create the table again, should throw exception with ignore if exist = false
+        assertThatThrownBy(() -> catalog.createTable(mt1, materializedTable, false))
+                .isInstanceOf(TableAlreadyExistException.class)
+                .hasMessage(
+                        String.format(
+                                "Table (or view) %s already exists in Catalog %s.",
+                                mt1, CATALOG_NAME));
+
+        // should be ok since we set ignore if exist = true
+        catalog.createTable(mt1, materializedTable, true);
+        // get the table and check
+        CatalogBaseTable tableCreated = catalog.getTable(mt1);
+
+        // put bucket key option
+        Map<String, String> addedOptions = new HashMap<>();
+        addedOptions.put(BUCKET_KEY.key(), "first,third");
+        addedOptions.put(BUCKET_NUMBER.key(), "1");
+        CatalogMaterializedTable expectedTable = addOptions(materializedTable, addedOptions);
+        checkEqualsRespectSchema(tableCreated, expectedTable);
+        assertThat(tableCreated.getDescription().get()).isEqualTo("test comment");
+
+        // list tables
+        List<String> tables = catalog.listTables(DEFAULT_DB);
+        assertThat(tables.size()).isEqualTo(1L);
+        assertThat(tables.get(0)).isEqualTo(mt1.getObjectName());
+        catalog.dropTable(mt1, false);
+        assertThat(catalog.listTables(DEFAULT_DB)).isEmpty();
+
+        // drop the table again, should throw exception with ignoreIfNotExists = false
+        assertThatThrownBy(() -> catalog.dropTable(mt1, false))
+                .isInstanceOf(TableNotExistException.class)
+                .hasMessage(
+                        String.format(
+                                "Table (or view) %s does not exist in Catalog %s.",
+                                mt1, CATALOG_NAME));
+        // should be ok since we set ignoreIfNotExists = true
+        catalog.dropTable(mt1, true);
+
+        // create table from an non-exist db
+        ObjectPath nonExistDbPath = ObjectPath.fromString("non.exist");
+
+        // remove bucket-key
+        materializedTable.getOptions().remove("bucket-key");
+        assertThatThrownBy(() -> catalog.createTable(nonExistDbPath, materializedTable, false))
+                .isInstanceOf(DatabaseNotExistException.class)
+                .hasMessage(
+                        "Database %s does not exist in Catalog %s.",
+                        nonExistDbPath.getDatabaseName(), CATALOG_NAME);
+    }
+
+    @Test
+    void testAlterMaterializedTable() throws Exception {
+        ObjectPath mt2 = new ObjectPath(DEFAULT_DB, "mt2");
+        CatalogMaterializedTable materializedTable =
+                newCatalogMaterializedTable(
+                        this.createSchema(),
+                        CatalogMaterializedTable.RefreshMode.CONTINUOUS,
+                        Collections.emptyMap());
+        catalog.createTable(mt2, materializedTable, false);
+
+        assertThat(catalog.tableExists(mt2)).isTrue();
+
+        // alter materialized table refresh status and handler
+        // put bucket key option
+        Map<String, String> addedOptions = new HashMap<>();
+        addedOptions.put(BUCKET_KEY.key(), "first,third");
+        addedOptions.put(BUCKET_NUMBER.key(), "1");
+        CatalogMaterializedTable expectedMaterializedTable =
+                materializedTable
+                        .copy(
+                                CatalogMaterializedTable.RefreshStatus.ACTIVATED,
+                                REFRESH_HANDLER.asSummaryString(),
+                                REFRESH_HANDLER.toBytes())
+                        .copy(addedOptions);
+
+        List<TableChange> tableChanges = new ArrayList<>();
+        tableChanges.add(
+                new TableChange.ModifyRefreshStatus(
+                        CatalogMaterializedTable.RefreshStatus.ACTIVATED));
+        tableChanges.add(
+                new TableChange.ModifyRefreshHandler(
+                        REFRESH_HANDLER.asSummaryString(), REFRESH_HANDLER.toBytes()));
+        catalog.alterTable(mt2, expectedMaterializedTable, tableChanges, false);
+
+        CatalogBaseTable updatedTable = catalog.getTable(mt2);
+        checkEqualsRespectSchema(updatedTable, expectedMaterializedTable);
+
+        catalog.dropTable(mt2, false);
+    }
+
+    @Test
+    void testCreateUnsupportedMaterializedTable() {
+        CatalogMaterializedTable materializedTable =
+                newCatalogMaterializedTable(
+                        this.createSchema(),
+                        CatalogMaterializedTable.RefreshMode.FULL,
+                        Collections.emptyMap());
+        // Fluss doesn't support insert overwrite in batch mode now, so full refresh mode is not
+        // supported now.
+        assertThatThrownBy(
+                        () ->
+                                catalog.createTable(
+                                        new ObjectPath(DEFAULT_DB, "mt"), materializedTable, false))
+                .isInstanceOf(UnsupportedOperationException.class)
+                .hasMessage(
+                        "Fluss currently supports only continuous refresh mode for materialized tables.");
+    }
+
+    @Test
     void testDatabase() throws Exception {
         // test create db1
         catalog.createDatabase("db1", new CatalogDatabaseImpl(Collections.emptyMap(), null), false);
@@ -407,8 +588,7 @@ class FlinkCatalogTest {
         CatalogTable expectedTable = addOptions(table, addedOptions);
         checkEqualsRespectSchema((CatalogTable) tableCreated, expectedTable);
         assertThat(catalog.listTables("db1")).isEqualTo(Collections.singletonList("t1"));
-        assertThat(catalog.listDatabases())
-                .isEqualTo(Arrays.asList(DEFAULT_DB, "db1", "db2", "fluss"));
+        assertThat(catalog.listDatabases()).isEqualTo(Arrays.asList("db1", "db2", DEFAULT_DB));
         // test drop db1;
         // should throw exception since db1 is not empty and we set cascade = false
         assertThatThrownBy(() -> catalog.dropDatabase("db1", false, false))
@@ -424,10 +604,10 @@ class FlinkCatalogTest {
         // should be ok since we set ignoreIfNotExists = true
         catalog.dropDatabase("db1", true, true);
         // test list db
-        assertThat(catalog.listDatabases()).isEqualTo(Arrays.asList(DEFAULT_DB, "db2", "fluss"));
+        assertThat(catalog.listDatabases()).isEqualTo(Arrays.asList("db2", DEFAULT_DB));
         catalog.dropDatabase("db2", false, true);
         // should be empty
-        assertThat(catalog.listDatabases()).isEqualTo(Arrays.asList(DEFAULT_DB, "fluss"));
+        assertThat(catalog.listDatabases()).isEqualTo(Collections.singletonList(DEFAULT_DB));
         // should throw exception since the db is not exist and we set ignoreIfNotExists = false
         assertThatThrownBy(() -> catalog.listTables("unknown"))
                 .isInstanceOf(DatabaseNotExistException.class)
@@ -465,7 +645,7 @@ class FlinkCatalogTest {
         catalog.createTable(path1, table, false);
         assertThatThrownBy(() -> catalog.listPartitions(path1))
                 .isInstanceOf(TableNotPartitionedException.class)
-                .hasMessage("Table default.t1 in catalog test-catalog is not partitioned.");
+                .hasMessage("Table fluss.t1 in catalog test-catalog is not partitioned.");
 
         // create partition table and list partitions.
         ObjectPath path2 = new ObjectPath(DEFAULT_DB, "partitioned_t1");
@@ -501,7 +681,7 @@ class FlinkCatalogTest {
         assertThatThrownBy(() -> catalog.listPartitions(path2, invalidTestSpec))
                 .isInstanceOf(CatalogException.class)
                 .hasMessage(
-                        "Failed to list partitions of table default.partitioned_t1 in test-catalog, by partitionSpec CatalogPartitionSpec{{second=}}");
+                        "Failed to list partitions of table fluss.partitioned_t1 in test-catalog, by partitionSpec CatalogPartitionSpec{{second=}}");
 
         // NEW: Test dropPartition functionality
         CatalogPartitionSpec firstPartSpec = catalogPartitionSpecs.get(0);
@@ -520,7 +700,7 @@ class FlinkCatalogTest {
                 .isInstanceOf(
                         org.apache.flink.table.catalog.exceptions.PartitionNotExistException.class)
                 .hasMessage(
-                        "Partition CatalogPartitionSpec{{first=999}} of table default.partitioned_t1 in catalog test-catalog does not exist.");
+                        "Partition CatalogPartitionSpec{{first=999}} of table fluss.partitioned_t1 in catalog test-catalog does not exist.");
 
         // Should not throw with ignoreIfNotExists = true
         catalog.dropPartition(path2, nonExistentSpec, true);

@@ -20,6 +20,22 @@ This release process is suggested to operate on MacOS or Linux systems, and the 
 - GnuPG 2.x
 - Git
 - SVN
+- [Helm](https://helm.sh/docs/intro/install/) and [helm-gpg](https://github.com/technosophos/helm-gpg) plugin
+- [Docker](https://docs.docker.com/get-started/get-docker/)
+
+:::note
+If you encounter issues installing `helm-gpg` using the command  
+```bash
+helm plugin install https://github.com/technosophos/helm-gpg
+```  
+you can install it manually by cloning the repository to a local directory and then running:  
+```bash
+helm plugin install /path/to/your/helm-gpg
+```  
+
+This approach bypasses potential network or Git submodule issues during plugin installation.
+:::
+
 
 ## GPG Key
 

@@ -27,19 +27,39 @@ public class LakeSnapshotAndFlussLogSplitState extends SourceSplitState {
 
     private long recordsToSkip;
     private final LakeSnapshotAndFlussLogSplit split;
+    private int currentLakeSplitIndex;
+    private long nextLogOffset;
+
+    private boolean isLakeSplitFinished;
 
     public LakeSnapshotAndFlussLogSplitState(LakeSnapshotAndFlussLogSplit split) {
         super(split);
         this.recordsToSkip = split.getRecordsToSkip();
         this.split = split;
+        this.currentLakeSplitIndex = split.getCurrentLakeSplitIndex();
+        this.nextLogOffset = split.getStartingOffset();
+        this.isLakeSplitFinished = split.isLakeSplitFinished();
     }
 
     public void setRecordsToSkip(long recordsToSkip) {
         this.recordsToSkip = recordsToSkip;
     }
 
+    public void setCurrentLakeSplitIndex(int currentLakeSplitIndex) {
+        this.currentLakeSplitIndex = currentLakeSplitIndex;
+    }
+
+    public void setNextLogOffset(long nextOffset) {
+        // if set offset, means lake splits is finished
+        isLakeSplitFinished = true;
+        this.nextLogOffset = nextOffset;
+    }
+
     @Override
     public SourceSplitBase toSourceSplit() {
-        return split.updateWithRecordsToSkip(recordsToSkip);
+        return split.updateWithCurrentLakeSplitIndex(currentLakeSplitIndex)
+                .updateWithRecordsToSkip(recordsToSkip)
+                .updateWithStartingOffset(nextLogOffset)
+                .updateWithLakeSplitFinished(isLakeSplitFinished);
     }
 }

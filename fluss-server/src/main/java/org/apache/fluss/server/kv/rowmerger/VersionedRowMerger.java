@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.kv.rowmerger;
 
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.MergeEngineType;
 import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.TimestampLtz;
@@ -46,8 +47,17 @@ public class VersionedRowMerger implements RowMerger {
 
     private final Comparator<BinaryRow> versionComparator;
 
-    public VersionedRowMerger(RowType schema, String versionColumnName) {
+    private final DeleteBehavior deleteBehavior;
+
+    public VersionedRowMerger(
+            RowType schema, String versionColumnName, @Nullable DeleteBehavior deleteBehavior) {
         this.versionComparator = createVersionComparator(schema, versionColumnName);
+        if (deleteBehavior == DeleteBehavior.ALLOW) {
+            throw new IllegalArgumentException(
+                    "DELETE is not supported for the versioned merge engine.");
+        }
+        // for compatibility, default to IGNORE if not specified
+        this.deleteBehavior = deleteBehavior != null ? deleteBehavior : DeleteBehavior.IGNORE;
     }
 
     @Nullable
@@ -65,8 +75,8 @@ public class VersionedRowMerger implements RowMerger {
     }
 
     @Override
-    public boolean supportsDelete() {
-        return false;
+    public DeleteBehavior deleteBehavior() {
+        return deleteBehavior;
     }
 
     @Override

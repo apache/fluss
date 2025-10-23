@@ -20,10 +20,9 @@ package org.apache.fluss.server.kv.prewrite;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.metrics.Counter;
-import org.apache.fluss.metrics.DescriptiveStatisticsHistogram;
 import org.apache.fluss.metrics.Histogram;
-import org.apache.fluss.metrics.SimpleCounter;
 import org.apache.fluss.server.kv.KvBatchWriter;
+import org.apache.fluss.server.metrics.group.TabletServerMetricGroup;
 import org.apache.fluss.utils.MurmurHashUtils;
 
 import javax.annotation.Nullable;
@@ -61,7 +60,7 @@ import static org.apache.fluss.utils.UnsafeUtils.BYTE_ARRAY_BASE_OFFSET;
  *   <li>Buffer all the key-value pairs that are waiting for the corresponding WAL to be persisted.
  *       And flush these key-value pairs whose WAL has been persisted to underlying kv storage.
  *   <li>A temporary in-memory key-value buffer for put/get a key. Since Fluss will lookup the
- *       previous written data to generate CDC as WAL, it need a buffer to buffer the data been
+ *       previous written data to generate CDC as WAL, it needs a buffer to buffer the data been
  *       written before but is still waiting for the WAL to be persisted before flush to underlying
  *       kv storage.
  * </ol>
@@ -104,14 +103,14 @@ public class KvPreWriteBuffer implements AutoCloseable {
     // the max LSN in the buffer
     private long maxLogSequenceNumber = -1;
 
-    public KvPreWriteBuffer(KvBatchWriter kvBatchWriter) {
+    public KvPreWriteBuffer(
+            KvBatchWriter kvBatchWriter, TabletServerMetricGroup serverMetricGroup) {
         this.kvBatchWriter = kvBatchWriter;
 
-        flushCount = new SimpleCounter();
-        // consider won't flush frequently, we set a small window size
-        flushLatencyHistogram = new DescriptiveStatisticsHistogram(5);
-        truncateAsDuplicatedCount = new SimpleCounter();
-        truncateAsErrorCount = new SimpleCounter();
+        flushCount = serverMetricGroup.kvFlushCount();
+        flushLatencyHistogram = serverMetricGroup.kvFlushLatencyHistogram();
+        truncateAsDuplicatedCount = serverMetricGroup.kvTruncateAsDuplicatedCount();
+        truncateAsErrorCount = serverMetricGroup.kvTruncateAsErrorCount();
     }
 
     /**

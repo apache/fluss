@@ -28,6 +28,7 @@ import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.predicate.Predicate;
+import org.apache.paimon.table.BucketMode;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.source.DataSplit;
 import org.apache.paimon.table.source.InnerTableScan;
@@ -67,12 +68,14 @@ public class PaimonSplitPlanner implements Planner<PaimonSplit> {
             try (Catalog catalog = getCatalog()) {
                 FileStoreTable fileStoreTable = getTable(catalog, tablePath, snapshotId);
                 InnerTableScan tableScan = fileStoreTable.newScan();
+                boolean isBucketUnAware = fileStoreTable.bucketMode() == BucketMode.BUCKET_UNAWARE;
+
                 if (predicate != null) {
                     tableScan = tableScan.withFilter(predicate);
                 }
                 for (Split split : tableScan.plan().splits()) {
                     DataSplit dataSplit = (DataSplit) split;
-                    splits.add(new PaimonSplit(dataSplit));
+                    splits.add(new PaimonSplit(dataSplit, isBucketUnAware));
                 }
             }
             return splits;

@@ -74,7 +74,11 @@ public class TableScan implements Scan {
             int index = rowType.getFieldIndex(projectedColumnNames.get(i));
             if (index < 0) {
                 throw new IllegalArgumentException(
-                        "Field " + projectedColumnNames.get(i) + " not found in table schema.");
+                        String.format(
+                                "Field '%s' not found in table schema. Available fields: %s, Table: %s",
+                                projectedColumnNames.get(i),
+                                rowType.getFieldNames(),
+                                tableInfo.getTablePath()));
             }
             columnIndexes[i] = index;
         }
@@ -89,7 +93,10 @@ public class TableScan implements Scan {
     @Override
     public LogScanner createLogScanner() {
         if (limit != null) {
-            throw new UnsupportedOperationException("LogScanner doesn't support limit pushdown.");
+            throw new UnsupportedOperationException(
+                    String.format(
+                            "LogScanner doesn't support limit pushdown. Table: %s, requested limit: %d",
+                            tableInfo.getTablePath(), limit));
         }
         return new LogScannerImpl(
                 conn.getConfiguration(),
@@ -104,7 +111,9 @@ public class TableScan implements Scan {
     public BatchScanner createBatchScanner(TableBucket tableBucket) {
         if (limit == null) {
             throw new UnsupportedOperationException(
-                    "Currently, BatchScanner is only available when limit is set.");
+                    String.format(
+                            "Currently, BatchScanner is only available when limit is set. Table: %s, bucket: %s",
+                            tableInfo.getTablePath(), tableBucket));
         }
         return new LimitBatchScanner(
                 tableInfo, tableBucket, conn.getMetadataUpdater(), projectedColumns, limit);
@@ -114,7 +123,9 @@ public class TableScan implements Scan {
     public BatchScanner createBatchScanner(TableBucket tableBucket, long snapshotId) {
         if (limit != null) {
             throw new UnsupportedOperationException(
-                    "Currently, SnapshotBatchScanner doesn't support limit pushdown.");
+                    String.format(
+                            "Currently, SnapshotBatchScanner doesn't support limit pushdown. Table: %s, bucket: %s, snapshot ID: %d, requested limit: %d",
+                            tableInfo.getTablePath(), tableBucket, snapshotId, limit));
         }
         String scannerTmpDir =
                 conn.getConfiguration().getString(ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR);
@@ -123,7 +134,11 @@ public class TableScan implements Scan {
         try {
             snapshotMeta = admin.getKvSnapshotMetadata(tableBucket, snapshotId).get();
         } catch (Exception e) {
-            throw new FlussRuntimeException("Failed to get snapshot metadata", e);
+            throw new FlussRuntimeException(
+                    String.format(
+                            "Failed to get snapshot metadata for table bucket %s, snapshot ID: %d, Table: %s",
+                            tableBucket, snapshotId, tableInfo.getTablePath()),
+                    e);
         }
 
         return new KvSnapshotBatchScanner(

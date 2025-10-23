@@ -49,6 +49,7 @@ import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
  * paimon table.
  */
 public class PaimonLakeSource implements LakeSource<PaimonSplit> {
+    private static final long serialVersionUID = 1L;
 
     private final Configuration paimonConfig;
     private final TablePath tablePath;
@@ -76,9 +77,10 @@ public class PaimonLakeSource implements LakeSource<PaimonSplit> {
         List<Predicate> unConsumedPredicates = new ArrayList<>();
         List<Predicate> consumedPredicates = new ArrayList<>();
         List<org.apache.paimon.predicate.Predicate> converted = new ArrayList<>();
+        RowType rowType = getRowType(tablePath);
         for (Predicate predicate : predicates) {
             Optional<org.apache.paimon.predicate.Predicate> optPredicate =
-                    FlussToPaimonPredicateConverter.convert(getRowType(tablePath), predicate);
+                    FlussToPaimonPredicateConverter.convert(rowType, predicate);
             if (optPredicate.isPresent()) {
                 consumedPredicates.add(predicate);
                 converted.add(optPredicate.get());

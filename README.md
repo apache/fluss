@@ -15,6 +15,7 @@
   <a href="https://github.com/apache/fluss/actions/workflows/ci.yaml"><img src="https://github.com/apache/fluss/actions/workflows/ci.yaml/badge.svg?branch=main" alt="CI"></a>
   <a href="https://github.com/apache/fluss/blob/main/LICENSE"><img src="https://img.shields.io/badge/license-Apache%202-4EB1BA.svg" alt="License"></a>
   <a href="https://join.slack.com/t/apache-fluss/shared_invite/zt-33wlna581-QAooAiCmnYboJS8D_JUcYw"><img src="https://img.shields.io/badge/slack-join_chat-brightgreen.svg?logo=slack" alt="Slack"></a>
+  <a href="https://deepwiki.com/apache/fluss"><img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki"></a>
 </p>
 
 ## What is Apache Fluss (Incubating)?
@@ -26,7 +27,7 @@ Apache Spark, and StarRocks are coming soon.
 
 **Fluss (German: river, pronounced `/flus/`)** enables streaming data continuously converging, distributing and flowing into lakes, like a river 🌊
 
-# Features
+## Features
 
 - **Sub-Second Latency**: Low-latency streaming reads/writes optimized for real-time applications with Apache Flink.
 - **Columnar Stream**: 10x improvement in streaming read performance with efficient pushdown projections.
@@ -47,7 +48,10 @@ Prerequisites for building Apache Fluss:
 ```bash
 git clone https://github.com/apache/fluss.git
 cd fluss
+# in case of java 11
 ./mvnw clean package -DskipTests
+# or in case of java 8
+./mvnw clean package -DskipTests -Pjava8
 ```
 
 Apache Fluss is now installed in `build-target`. The build command uses Maven Wrapper (`mvnw`) which ensures the correct Maven version is used.

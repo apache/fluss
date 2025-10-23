@@ -59,6 +59,7 @@ import java.nio.file.Files;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
 import java.util.List;
@@ -206,7 +207,7 @@ public abstract class FlinkPaimonTieringTestBase {
 
     /**
      * Wait until the default number of partitions is created. Return the map from partition id to
-     * partition name. .
+     * partition name.
      */
     public static Map<Long, String> waitUntilPartitions(
             ZooKeeperClient zooKeeperClient, TablePath tablePath) {
@@ -255,10 +256,16 @@ public abstract class FlinkPaimonTieringTestBase {
     }
 
     protected long createLogTable(TablePath tablePath, int bucketNum) throws Exception {
-        return createLogTable(tablePath, bucketNum, false);
+        return createLogTable(
+                tablePath, bucketNum, false, Collections.emptyMap(), Collections.emptyMap());
     }
 
-    protected long createLogTable(TablePath tablePath, int bucketNum, boolean isPartitioned)
+    protected long createLogTable(
+            TablePath tablePath,
+            int bucketNum,
+            boolean isPartitioned,
+            Map<String, String> properties,
+            Map<String, String> customProperties)
             throws Exception {
         Schema.Builder schemaBuilder =
                 Schema.newBuilder().column("a", DataTypes.INT()).column("b", DataTypes.STRING());
@@ -276,11 +283,19 @@ public abstract class FlinkPaimonTieringTestBase {
             tableBuilder.property(
                     ConfigOptions.TABLE_AUTO_PARTITION_TIME_UNIT, AutoPartitionTimeUnit.YEAR);
         }
+        tableBuilder.properties(properties);
+        tableBuilder.customProperties(customProperties);
         tableBuilder.schema(schemaBuilder.build());
         return createTable(tablePath, tableBuilder.build());
     }
 
     protected long createFullTypeLogTable(TablePath tablePath, int bucketNum, boolean isPartitioned)
+            throws Exception {
+        return createFullTypeLogTable(tablePath, bucketNum, isPartitioned, true);
+    }
+
+    protected long createFullTypeLogTable(
+            TablePath tablePath, int bucketNum, boolean isPartitioned, boolean lakeEnabled)
             throws Exception {
         Schema.Builder schemaBuilder =
                 Schema.newBuilder()
@@ -301,10 +316,12 @@ public abstract class FlinkPaimonTieringTestBase {
                         .column("f_binary", DataTypes.BINARY(4));
 
         TableDescriptor.Builder tableBuilder =
-                TableDescriptor.builder()
-                        .distributedBy(bucketNum, "f_int")
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+                TableDescriptor.builder().distributedBy(bucketNum, "f_int");
+        if (lakeEnabled) {
+            tableBuilder
+                    .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
+                    .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        }
 
         if (isPartitioned) {
             schemaBuilder.column("p", DataTypes.STRING());
@@ -321,8 +338,25 @@ public abstract class FlinkPaimonTieringTestBase {
         return createPkTable(tablePath, 1);
     }
 
+    protected long createPkTable(
+            TablePath tablePath,
+            Map<String, String> tableProperties,
+            Map<String, String> tableCustomProperties)
+            throws Exception {
+        return createPkTable(tablePath, 1, tableProperties, tableCustomProperties);
+    }
+
     protected long createPkTable(TablePath tablePath, int bucketNum) throws Exception {
-        TableDescriptor table1Descriptor =
+        return createPkTable(tablePath, bucketNum, Collections.emptyMap(), Collections.emptyMap());
+    }
+
+    protected long createPkTable(
+            TablePath tablePath,
+            int bucketNum,
+            Map<String, String> tableProperties,
+            Map<String, String> tableCustomProperties)
+            throws Exception {
+        TableDescriptor.Builder tableDescriptor =
                 TableDescriptor.builder()
                         .schema(
                                 Schema.newBuilder()
@@ -332,9 +366,10 @@ public abstract class FlinkPaimonTieringTestBase {
                                         .build())
                         .distributedBy(bucketNum)
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
-                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500))
-                        .build();
-        return createTable(tablePath, table1Descriptor);
+                        .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+        tableDescriptor.customProperties(tableCustomProperties);
+        tableDescriptor.properties(tableProperties);
+        return createTable(tablePath, tableDescriptor.build());
     }
 
     protected void dropTable(TablePath tablePath) throws Exception {
@@ -414,7 +449,7 @@ public abstract class FlinkPaimonTieringTestBase {
                 "bucket " + tb + "not synced");
     }
 
-    protected void checkDataInPaimonPrimayKeyTable(
+    protected void checkDataInPaimonPrimaryKeyTable(
             TablePath tablePath, List<InternalRow> expectedRows) throws Exception {
         Iterator<org.apache.paimon.data.InternalRow> paimonRowIterator =
                 getPaimonRowCloseableIterator(tablePath);

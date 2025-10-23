@@ -9,7 +9,7 @@ sidebar_position: 1
 For a quick introduction to running Flink, refer to the [Quick Start](quickstart/flink.md) guide.
 
 
-## Support Flink Versions
+## Supported Flink Versions
 | Fluss Connector Versions | Supported Flink Versions |
 |--------------------------|--------------------------| 
 | $FLUSS_VERSION_SHORT$    | 1.18, 1.19, 1.20         |
@@ -20,23 +20,26 @@ Fluss supports Apache Flink's Table API and Flink's DataStream API.
 
 For Flink's Table API, Fluss supports the following features:
 
-| Feature support                                   | Flink | Notes                                  |
+| Feature Support                                   | Flink | Notes                                  |
 |---------------------------------------------------|-------|----------------------------------------|
-| [SQL create catalog](ddl.md#create-catalog)       | ✔️    |                                        |
-| [SQL create database](ddl.md#create-database)     | ✔️    |                                        |
-| [SQL drop database](ddl.md#drop-database)         | ✔️    |                                        |
-| [SQL create table](ddl.md#create-table)           | ✔️    |                                        |
-| [SQL create table like](ddl.md#create-table-like) | ✔️    |                                        |
-| [SQL drop table](ddl.md#drop-table)               | ✔️    |                                        |
-| [SQL show partitions](ddl.md#show-partitions)     | ✔️    |                                        |
-| [SQL add partition](ddl.md#add-partition)         | ✔️    |                                        |
-| [SQL drop partition](ddl.md#drop-partition)       | ✔️    |                                        |
-| [SQL select](reads.md)                            | ✔️    | Support both streaming and batch mode. |
-| [SQL limit](reads.md#limit-read)                  | ✔️    | Only for Log Table                     |
-| [SQL insert into](writes.md)                      | ✔️    | Support both streaming and batch mode. |
-| [SQL delete from](writes.md#delete-from)          | ✔️    | Only in batch mode.                    |
-| [SQL update](writes.md#update)                    | ✔️    | Only in batch mode.                    |
-| [SQL lookup join](lookups.md)                     | ✔️    |                                        |
+| [SQL Create Catalog](ddl.md#create-catalog)       | ✔️    |                                        |
+| [SQL Create Database](ddl.md#create-database)     | ✔️    |                                        |
+| [SQL Drop Database](ddl.md#drop-database)         | ✔️    |                                        |
+| [SQL Create Table](ddl.md#create-table)           | ✔️    |                                        |
+| [SQL Create Table Like](ddl.md#create-table-like) | ✔️    |                                        |
+| [SQL Drop Table](ddl.md#drop-table)               | ✔️    |                                        |
+| [SQL Create Materialized Table](ddl.md#materialized-table) | ✔️    | Continuous refresh mode only |
+| [SQL Alter Materialized Table](ddl.md#alter-materialized-table) | ✔️    | Suspend/Resume support |
+| [SQL Drop Materialized Table](ddl.md#drop-materialized-table) | ✔️    |                                        |
+| [SQL Show Partitions](ddl.md#show-partitions)     | ✔️    |                                        |
+| [SQL Add Partition](ddl.md#add-partition)         | ✔️    |                                        |
+| [SQL Drop Partition](ddl.md#drop-partition)       | ✔️    |                                        |
+| [SQL Select](reads.md)                            | ✔️    | Support both streaming and batch mode. |
+| [SQL Limit](reads.md#limit-read)                  | ✔️    | Only for Log Table                     |
+| [SQL Insert Into](writes.md)                      | ✔️    | Support both streaming and batch mode. |
+| [SQL Delete From](writes.md#delete-from)          | ✔️    | Only in batch mode.                    |
+| [SQL Update](writes.md#update)                    | ✔️    | Only in batch mode.                    |
+| [SQL Lookup Join](lookups.md)                     | ✔️    |                                        |
 
 For Flink's DataStream API, you can see [DataStream API](docs/engine-flink/datastream.mdx) for more details.
 

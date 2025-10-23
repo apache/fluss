@@ -17,7 +17,13 @@
 
 package org.apache.fluss.lake.iceberg.utils;
 
+import org.apache.fluss.lake.iceberg.source.FlussRowAsIcebergRecord;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypes;
+import org.apache.fluss.types.RowType;
 
 import org.apache.iceberg.PartitionField;
 import org.apache.iceberg.PartitionKey;
@@ -27,12 +33,15 @@ import org.apache.iceberg.Table;
 import org.apache.iceberg.catalog.TableIdentifier;
 import org.apache.iceberg.expressions.Expression;
 import org.apache.iceberg.expressions.Expressions;
+import org.apache.iceberg.types.Type;
+import org.apache.iceberg.types.Types;
 
 import javax.annotation.Nullable;
 
 import java.util.List;
 
 import static org.apache.fluss.metadata.ResolvedPartitionSpec.PARTITION_SPEC_SEPARATOR;
+import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 
 /** Utility class for static conversions between Fluss and Iceberg types. */
 public class IcebergConversions {
@@ -70,13 +79,55 @@ public class IcebergConversions {
                         Expressions.and(
                                 expression,
                                 Expressions.equal(
-                                        partitionFields.get(partitionIndex++).name(), partition));
+                                        table.schema()
+                                                .findColumnName(
+                                                        partitionFields
+                                                                .get(partitionIndex++)
+                                                                .sourceId()),
+                                        partition));
             }
         }
-        expression =
-                Expressions.and(
-                        expression,
-                        Expressions.equal(partitionFields.get(partitionIndex).name(), bucket));
+        expression = Expressions.and(expression, Expressions.equal(BUCKET_COLUMN_NAME, bucket));
         return expression;
+    }
+
+    public static Object toIcebergLiteral(Types.NestedField field, Object flussLiteral) {
+        InternalRow flussRow = GenericRow.of(flussLiteral);
+        FlussRowAsIcebergRecord flussRowAsIcebergRecord =
+                new FlussRowAsIcebergRecord(
+                        Types.StructType.of(field),
+                        RowType.of(convertIcebergTypeToFlussType(field.type())),
+                        flussRow);
+        return flussRowAsIcebergRecord.get(0, field.type().typeId().javaClass());
+    }
+
+    /** Converts Iceberg data types to Fluss data types. */
+    private static DataType convertIcebergTypeToFlussType(Type icebergType) {
+        if (icebergType instanceof Types.BooleanType) {
+            return DataTypes.BOOLEAN();
+        } else if (icebergType instanceof Types.IntegerType) {
+            return DataTypes.INT();
+        } else if (icebergType instanceof Types.LongType) {
+            return DataTypes.BIGINT();
+        } else if (icebergType instanceof Types.DoubleType) {
+            return DataTypes.DOUBLE();
+        } else if (icebergType instanceof Types.TimeType) {
+            return DataTypes.TIME();
+        } else if (icebergType instanceof Types.TimestampType) {
+            Types.TimestampType timestampType = (Types.TimestampType) icebergType;
+            if (timestampType.shouldAdjustToUTC()) {
+                return DataTypes.TIMESTAMP_LTZ();
+            } else {
+                return DataTypes.TIMESTAMP();
+            }
+        } else if (icebergType instanceof Types.StringType) {
+            return DataTypes.STRING();
+        } else if (icebergType instanceof Types.DecimalType) {
+            Types.DecimalType decimalType = (Types.DecimalType) icebergType;
+            return DataTypes.DECIMAL(decimalType.precision(), decimalType.scale());
+        }
+        throw new UnsupportedOperationException(
+                "Unsupported data type conversion for Iceberg type: "
+                        + icebergType.getClass().getName());
     }
 }

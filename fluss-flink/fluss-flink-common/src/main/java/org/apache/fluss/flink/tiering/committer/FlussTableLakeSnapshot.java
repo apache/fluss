@@ -22,6 +22,7 @@ import org.apache.fluss.utils.types.Tuple2;
 
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Set;
 
 /** A lake snapshot for a Fluss table. */
 class FlussTableLakeSnapshot {
@@ -34,10 +35,15 @@ class FlussTableLakeSnapshot {
     // if the bucket is not of a partition, the partition_name is null
     private final Map<Tuple2<TableBucket, String>, Long> logEndOffsets;
 
+    // <table_bucket, partition_name> -> max timestamps,
+    // if the bucket is not of a partition, the partition_name is null
+    private final Map<Tuple2<TableBucket, String>, Long> maxTimestamps;
+
     FlussTableLakeSnapshot(long tableId, long lakeSnapshotId) {
         this.tableId = tableId;
         this.lakeSnapshotId = lakeSnapshotId;
         this.logEndOffsets = new HashMap<>();
+        this.maxTimestamps = new HashMap<>();
     }
 
     public long tableId() {
@@ -48,16 +54,27 @@ class FlussTableLakeSnapshot {
         return lakeSnapshotId;
     }
 
-    public Map<Tuple2<TableBucket, String>, Long> logEndOffsets() {
-        return logEndOffsets;
+    public Set<Tuple2<TableBucket, String>> tablePartitionBuckets() {
+        return logEndOffsets.keySet();
     }
 
-    public void addBucketOffset(TableBucket bucket, long offset) {
+    public void addBucketOffsetAndTimestamp(TableBucket bucket, long offset, long timestamp) {
         logEndOffsets.put(Tuple2.of(bucket, null), offset);
+        maxTimestamps.put(Tuple2.of(bucket, null), timestamp);
     }
 
-    public void addPartitionBucketOffset(TableBucket bucket, String partitionName, long offset) {
+    public void addPartitionBucketOffsetAndTimestamp(
+            TableBucket bucket, String partitionName, long offset, long timestamp) {
         logEndOffsets.put(Tuple2.of(bucket, partitionName), offset);
+        maxTimestamps.put(Tuple2.of(bucket, partitionName), timestamp);
+    }
+
+    public long getLogEndOffset(Tuple2<TableBucket, String> bucketPartition) {
+        return logEndOffsets.get(bucketPartition);
+    }
+
+    public long getMaxTimestamp(Tuple2<TableBucket, String> bucketPartition) {
+        return maxTimestamps.get(bucketPartition);
     }
 
     @Override
@@ -69,6 +86,8 @@ class FlussTableLakeSnapshot {
                 + lakeSnapshotId
                 + ", logEndOffsets="
                 + logEndOffsets
+                + ", maxTimestamps="
+                + maxTimestamps
                 + '}';
     }
 }

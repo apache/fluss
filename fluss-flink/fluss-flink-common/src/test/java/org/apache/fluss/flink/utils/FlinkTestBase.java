@@ -35,6 +35,7 @@ import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.server.coordinator.LakeCatalogDynamicLoader;
 import org.apache.fluss.server.coordinator.MetadataManager;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
@@ -43,7 +44,6 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.test.util.AbstractTestBase;
-import org.apache.flink.types.Row;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -61,7 +61,6 @@ import java.util.Set;
 import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitValue;
-import static org.assertj.core.api.Assertions.assertThat;
 
 /** A base class for testing with Fluss cluster prepared. */
 public class FlinkTestBase extends AbstractTestBase {
@@ -182,18 +181,6 @@ public class FlinkTestBase extends AbstractTestBase {
         return admin.getTableInfo(tablePath).get().getTableId();
     }
 
-    public static List<String> assertAndCollectRecords(
-            org.apache.flink.util.CloseableIterator<Row> iterator, int expectedNum)
-            throws Exception {
-        List<String> actual = new ArrayList<>(expectedNum);
-        for (int i = 0; i < expectedNum; i++) {
-            actual.add(iterator.next().toString());
-        }
-        assertThat(iterator.hasNext()).isFalse();
-        iterator.close();
-        return actual;
-    }
-
     protected void waitUntilSnapshot(long tableId, long snapshotId) {
         for (int i = 0; i < DEFAULT_BUCKET_NUM; i++) {
             TableBucket tableBucket = new TableBucket(tableId, i);
@@ -203,7 +190,7 @@ public class FlinkTestBase extends AbstractTestBase {
 
     /**
      * Wait until the default number of partitions is created. Return the map from partition id to
-     * partition name. .
+     * partition name.
      */
     public static Map<Long, String> waitUntilPartitions(
             ZooKeeperClient zooKeeperClient, TablePath tablePath) {
@@ -234,7 +221,11 @@ public class FlinkTestBase extends AbstractTestBase {
     public static Map<Long, String> createPartitions(
             ZooKeeperClient zkClient, TablePath tablePath, List<String> partitionsToCreate)
             throws Exception {
-        MetadataManager metadataManager = new MetadataManager(zkClient, new Configuration());
+        MetadataManager metadataManager =
+                new MetadataManager(
+                        zkClient,
+                        new Configuration(),
+                        new LakeCatalogDynamicLoader(new Configuration(), null, false));
         TableInfo tableInfo = metadataManager.getTable(tablePath);
         Map<Long, String> newPartitionIds = new HashMap<>();
         for (String partition : partitionsToCreate) {
@@ -275,7 +266,7 @@ public class FlinkTestBase extends AbstractTestBase {
             throws Exception {
         List<InternalRow> rows = new ArrayList<>();
         List<String> expectedRowValues = new ArrayList<>();
-        for (String partition : partitions) {
+        for (Object partition : partitions) {
             for (int i = 0; i < 10; i++) {
                 rows.add(row(i, "v1", partition));
                 expectedRowValues.add(String.format("+I[%d, v1, %s]", i, partition));

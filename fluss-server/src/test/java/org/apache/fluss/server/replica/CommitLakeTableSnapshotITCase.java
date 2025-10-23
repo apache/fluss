@@ -104,21 +104,25 @@ class CommitLakeTableSnapshotITCase {
         long snapshotId = 1;
         long dataLakeLogStartOffset = 0;
         long dataLakeLogEndOffset = 50;
+        long dataLakeMaxTimestamp = System.currentTimeMillis();
         CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest =
                 genCommitLakeTableSnapshotRequest(
                         tableId,
                         BUCKET_NUM,
                         snapshotId,
                         dataLakeLogStartOffset,
-                        dataLakeLogEndOffset);
+                        dataLakeLogEndOffset,
+                        dataLakeMaxTimestamp);
         coordinatorGateway.commitLakeTableSnapshot(commitLakeTableSnapshotRequest).get();
 
         Map<TableBucket, Long> bucketsLogStartOffset = new HashMap<>();
         Map<TableBucket, Long> bucketsLogEndOffset = new HashMap<>();
+        Map<TableBucket, Long> bucketsMaxTimestamp = new HashMap<>();
         for (int bucket = 0; bucket < BUCKET_NUM; bucket++) {
             TableBucket tb = new TableBucket(tableId, bucket);
             bucketsLogStartOffset.put(tb, dataLakeLogStartOffset);
             bucketsLogEndOffset.put(tb, dataLakeLogEndOffset);
+            bucketsMaxTimestamp.put(tb, dataLakeMaxTimestamp);
             Replica replica = FLUSS_CLUSTER_EXTENSION.waitAndGetLeaderReplica(tb);
             retry(
                     Duration.ofMinutes(2),
@@ -127,6 +131,7 @@ class CommitLakeTableSnapshotITCase {
                         assertThat(logTablet.getLakeLogStartOffset())
                                 .isEqualTo(dataLakeLogStartOffset);
                         assertThat(logTablet.getLakeLogEndOffset()).isEqualTo(dataLakeLogEndOffset);
+                        assertThat(logTablet.getLakeMaxTimestamp()).isEqualTo(dataLakeMaxTimestamp);
                     });
         }
 
@@ -136,6 +141,7 @@ class CommitLakeTableSnapshotITCase {
                         tableId,
                         bucketsLogStartOffset,
                         bucketsLogEndOffset,
+                        bucketsMaxTimestamp,
                         Collections.emptyMap());
         checkLakeTableDataInZk(tableId, expectedDataLakeTieredInfo);
     }
@@ -146,7 +152,12 @@ class CommitLakeTableSnapshotITCase {
     }
 
     private static CommitLakeTableSnapshotRequest genCommitLakeTableSnapshotRequest(
-            long tableId, int buckets, long snapshotId, long logStartOffset, long logEndOffset) {
+            long tableId,
+            int buckets,
+            long snapshotId,
+            long logStartOffset,
+            long logEndOffset,
+            long maxTimestamp) {
         CommitLakeTableSnapshotRequest commitLakeTableSnapshotRequest =
                 new CommitLakeTableSnapshotRequest();
         PbLakeTableSnapshotInfo reqForTable = commitLakeTableSnapshotRequest.addTablesReq();
@@ -161,6 +172,7 @@ class CommitLakeTableSnapshotITCase {
             lakeTableOffsetForBucket.setBucketId(tb.getBucket());
             lakeTableOffsetForBucket.setLogStartOffset(logStartOffset);
             lakeTableOffsetForBucket.setLogEndOffset(logEndOffset);
+            lakeTableOffsetForBucket.setMaxTimestamp(maxTimestamp);
         }
         return commitLakeTableSnapshotRequest;
     }

@@ -1,6 +1,6 @@
 ---
 title: Creating a Fluss Shaded Release
-sidebar_position: 2
+sidebar_position: 4
 ---
 
 # Creating a Fluss Shaded Release
@@ -61,7 +61,7 @@ NEXT_VERSION="2.0-incubating"
 
 #### 2. Verify Java and Maven Version
 
-All of the following steps require to use **Maven 3.8.6** and **Java 8**. Modify your `PATH` environment variable accordingly if needed.
+Run `mvn -v` and `java -version` on your local machine. All of the following steps require to use **Maven 3.8.6** and **Java 11**. Modify your `PATH` environment variable accordingly if needed.
 
 #### 3. Clone fluss-shaded into a fresh workspace
 
@@ -99,10 +99,10 @@ The newly created branch and updated master branch need to be pushed to the offi
 - Release Manager’s GPG key is published to [dist.apache.org](https://dist.apache.org/repos/dist/release/incubator/fluss/KEYS)
 - Release Manager’s GPG key is configured in git configuration
 - Release Manager's GPG key is configured as the default gpg key.
-- Release Manager has `org.apache.fluss` listed under `Staging Profiles` in Nexus
+- Release Manager has `org.apache.fluss` listed under `Staging Profiles` in [Apache Nexus repository](https://repository.apache.org/).
 - Release Manager’s Nexus User Token is configured in `settings.xml`
 - There are no release blocking GitHub issues
-- Release branch (`release-x.0`) has been created and pushed
+- Release branch (`release-x.y`) has been created and pushed
 - Main branch has been updated to the next version and pushed
 
 ## Build a release candidate
@@ -186,7 +186,7 @@ tools $ releasing/deploy_staging_jars.sh
 
 Review all staged artifacts in the staging repositories(https://repository.apache.org/#stagingRepositories). They should contain all relevant parts for each module, including pom.xml, jar, test jar, source, test source, javadoc, etc. Carefully review any new artifacts. (fluss-shaded doesn’t deploy test jar, source jar, and javadoc jar, see the [issue](https://github.com/apache/fluss-shaded/blob/main/README.md#sources) for more details)
 
-Close the staging repository on Apache Nexus. When prompted for a description, enter `Apache Fluss (Incubating), version X, release candidate Y`. You can find the staging repository URL (`https://repository.apache.org/content/repositories/orgapachefluss-[STAGING_ID]/`) once the staging repository is closed successfully.
+Close the staging repository on Apache Nexus. When prompted for a description, enter `Apache Fluss Shaded (Incubating), version X, release candidate Y`. You can find the staging repository URL (`https://repository.apache.org/content/repositories/orgapachefluss-[STAGING_ID]/`) once the staging repository is closed successfully.
 
 ![](../assets/nexus-staging.png)
 

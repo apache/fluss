@@ -27,6 +27,9 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.AutoPartitionTimeUnit;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.config.cluster.AlterConfig;
+import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
@@ -45,9 +48,9 @@ import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.FsPathAndFileName;
-import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -55,6 +58,7 @@ import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -65,10 +69,13 @@ import org.apache.fluss.types.DataTypes;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
+import javax.annotation.Nullable;
+
 import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -78,6 +85,9 @@ import java.util.concurrent.ExecutionException;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
+import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
+import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -165,7 +175,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isEqualTo(
                         DEFAULT_TABLE_DESCRIPTOR
                                 .withReplicationFactor(3)
-                                .withDataLakeFormat(DataLakeFormat.PAIMON));
+                                .withDataLakeFormat(PAIMON));
         assertThat(schemaInfo2).isEqualTo(schemaInfo);
         assertThat(tableInfo.getCreatedTime()).isEqualTo(tableInfo.getModifiedTime());
         assertThat(tableInfo.getCreatedTime()).isLessThan(timestampAfterCreate);
@@ -190,7 +200,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isEqualTo(
                         DEFAULT_TABLE_DESCRIPTOR
                                 .withReplicationFactor(3)
-                                .withDataLakeFormat(DataLakeFormat.PAIMON));
+                                .withDataLakeFormat(PAIMON));
         assertThat(schemaInfo2).isEqualTo(schemaInfo);
         // assert created time
         assertThat(tableInfo.getCreatedTime())
@@ -198,7 +208,82 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testCreateInvalidDatabaseAndTable() {
+    void testAlterTable() throws Exception {
+        // create table
+        TablePath tablePath = TablePath.of("test_db", "alter_table_1");
+        admin.createTable(tablePath, DEFAULT_TABLE_DESCRIPTOR, false).get();
+
+        TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+
+        TableDescriptor existingTableDescriptor = tableInfo.toTableDescriptor();
+        Map<String, String> updateProperties =
+                new HashMap<>(existingTableDescriptor.getProperties());
+        Map<String, String> updateCustomProperties =
+                new HashMap<>(existingTableDescriptor.getCustomProperties());
+        updateCustomProperties.put("client.connect-timeout", "240s");
+
+        TableDescriptor newTableDescriptor =
+                TableDescriptor.builder()
+                        .schema(existingTableDescriptor.getSchema())
+                        .comment(existingTableDescriptor.getComment().orElse("test table"))
+                        .partitionedBy(existingTableDescriptor.getPartitionKeys())
+                        .distributedBy(
+                                existingTableDescriptor
+                                        .getTableDistribution()
+                                        .get()
+                                        .getBucketCount()
+                                        .orElse(3),
+                                existingTableDescriptor.getBucketKeys())
+                        .properties(updateProperties)
+                        .customProperties(updateCustomProperties)
+                        .build();
+
+        List<TableChange> tableChanges = new ArrayList<>();
+        TableChange tableChange = TableChange.set("client.connect-timeout", "240s");
+        tableChanges.add(tableChange);
+        // alter table
+        admin.alterTable(tablePath, tableChanges, false).get();
+
+        TableInfo alteredTableInfo = admin.getTableInfo(tablePath).get();
+        TableDescriptor alteredTableDescriptor = alteredTableInfo.toTableDescriptor();
+        assertThat(alteredTableDescriptor).isEqualTo(newTableDescriptor);
+
+        // throw exception if table not exist
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                TablePath.of("test_db", "alter_table_not_exist"),
+                                                tableChanges,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(TableNotExistException.class);
+        // should success if ignore not exist
+        admin.alterTable(TablePath.of("test_db", "alter_table_not_exist"), tableChanges, true)
+                .get();
+
+        // throw exception if database not exist
+        assertThatThrownBy(
+                        () ->
+                                admin.alterTable(
+                                                TablePath.of(
+                                                        "test_db_not_exist",
+                                                        "alter_table_not_exist"),
+                                                tableChanges,
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(TableNotExistException.class);
+        // should success if ignore not exist
+        admin.alterTable(
+                        TablePath.of("test_db_not_exist", "alter_table_not_exist"),
+                        tableChanges,
+                        true)
+                .get();
+    }
+
+    @Test
+    void testCreateInvalidDatabaseAndTable() throws Exception {
         assertThatThrownBy(
                         () ->
                                 admin.createDatabase(
@@ -207,6 +292,15 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 .isInstanceOf(InvalidDatabaseException.class)
                 .hasMessageContaining(
                         "Database name *invalid_db* is invalid: '*invalid_db*' contains one or more characters other than");
+        //  test internal database with '__' prefix is not allowed
+        assertThatThrownBy(
+                        () ->
+                                admin.createDatabase(
+                                                "__internal_db", DatabaseDescriptor.EMPTY, false)
+                                        .get())
+                .isInstanceOf(InvalidDatabaseException.class)
+                .hasMessageContaining(
+                        "Database name __internal_db is invalid: '__' is not allowed as prefix, since it is reserved for internal databases/internal tables/internal partitions in Fluss server");
         assertThatThrownBy(
                         () ->
                                 admin.createTable(
@@ -226,6 +320,103 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .get())
                 .isInstanceOf(InvalidDatabaseException.class)
                 .hasMessageContaining("Database name null is invalid: null string is not allowed");
+        //  test internal table with '__' prefix is not allowed
+        assertThatThrownBy(
+                        () ->
+                                admin.createTable(
+                                                TablePath.of("db", "__internal_table"),
+                                                DEFAULT_TABLE_DESCRIPTOR,
+                                                false)
+                                        .get())
+                .isInstanceOf(InvalidTableException.class)
+                .hasMessageContaining(
+                        "Table name __internal_table is invalid: '__' is not allowed as prefix, since it is reserved for internal databases/internal tables/internal partitions in Fluss server");
+    }
+
+    @Test
+    void testCreateTableWithDeleteBehavior() {
+        // Test 1: FIRST_ROW merge engine - should set delete behavior to IGNORE
+        TablePath tablePath1 = TablePath.of("fluss", "test_ignore_delete_for_first_row");
+        Map<String, String> properties1 = new HashMap<>();
+        properties1.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "first_row");
+
+        TableDescriptor tableDescriptor1 =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_SCHEMA)
+                        .comment("first row merge engine table")
+                        .properties(properties1)
+                        .build();
+        admin.createTable(tablePath1, tableDescriptor1, false).join();
+
+        // Get the table and verify delete behavior is changed to IGNORE
+        TableInfo tableInfo1 = admin.getTableInfo(tablePath1).join();
+        assertThat(tableInfo1.getTableConfig().getDeleteBehavior()).hasValue(DeleteBehavior.IGNORE);
+
+        // Test 2: VERSIONED merge engine - should set delete behavior to IGNORE
+        TablePath tablePath2 = TablePath.of("fluss", "test_ignore_delete_for_versioned");
+        Map<String, String> properties2 = new HashMap<>();
+        properties2.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "versioned");
+        properties2.put(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "age");
+        TableDescriptor tableDescriptor2 =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_SCHEMA)
+                        .comment("versioned merge engine table")
+                        .properties(properties2)
+                        .build();
+        admin.createTable(tablePath2, tableDescriptor2, false).join();
+        // Get the table and verify delete behavior is changed to IGNORE
+        TableInfo tableInfo2 = admin.getTableInfo(tablePath2).join();
+        assertThat(tableInfo2.getTableConfig().getDeleteBehavior()).hasValue(DeleteBehavior.IGNORE);
+
+        // Test 3: FIRST_ROW merge engine with delete behavior explicitly set to ALLOW
+        TablePath tablePath3 = TablePath.of("fluss", "test_allow_delete_for_first_row");
+        Map<String, String> properties3 = new HashMap<>();
+        properties3.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "first_row");
+        properties3.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "ALLOW");
+        TableDescriptor tableDescriptor3 =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_SCHEMA)
+                        .comment("first row merge engine table")
+                        .properties(properties3)
+                        .build();
+        assertThatThrownBy(() -> admin.createTable(tablePath3, tableDescriptor3, false).join())
+                .hasRootCauseInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(
+                        "Table with 'FIRST_ROW' merge engine does not support delete operations. "
+                                + "The 'table.delete.behavior' config must be set to 'ignore' or 'disable', but got 'allow'.");
+
+        // Test 4: VERSIONED merge engine with delete behavior explicitly set to ALLOW
+        TablePath tablePath4 = TablePath.of("fluss", "test_allow_delete_for_versioned");
+        Map<String, String> properties4 = new HashMap<>();
+        properties4.put(ConfigOptions.TABLE_MERGE_ENGINE.key(), "versioned");
+        properties4.put(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN.key(), "age");
+        properties4.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "ALLOW");
+        TableDescriptor tableDescriptor4 =
+                TableDescriptor.builder()
+                        .schema(DEFAULT_SCHEMA)
+                        .comment("versioned merge engine table")
+                        .properties(properties4)
+                        .build();
+        assertThatThrownBy(() -> admin.createTable(tablePath4, tableDescriptor4, false).join())
+                .hasRootCauseInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(
+                        "Table with 'VERSIONED' merge engine does not support delete operations. "
+                                + "The 'table.delete.behavior' config must be set to 'ignore' or 'disable', but got 'allow'.");
+
+        // Test 5: Log table - not allow to set delete behavior
+        TablePath tablePath5 = TablePath.of("fluss", "test_set_delete_behavior_for_log_table");
+        Map<String, String> properties5 = new HashMap<>();
+        properties5.put(ConfigOptions.TABLE_DELETE_BEHAVIOR.key(), "IGNORE");
+        TableDescriptor tableDescriptor5 =
+                TableDescriptor.builder()
+                        .schema(DATA1_SCHEMA)
+                        .comment("log table")
+                        .properties(properties5)
+                        .build();
+        assertThatThrownBy(() -> admin.createTable(tablePath5, tableDescriptor5, false).join())
+                .hasRootCauseInstanceOf(InvalidConfigException.class)
+                .hasMessageContaining(
+                        "The 'table.delete.behavior' configuration is only supported for primary key tables.");
     }
 
     @Test
@@ -390,7 +581,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                     .isEqualTo(
                             DEFAULT_TABLE_DESCRIPTOR
                                     .withReplicationFactor(3)
-                                    .withDataLakeFormat(DataLakeFormat.PAIMON));
+                                    .withDataLakeFormat(PAIMON));
         }
     }
 
@@ -648,29 +839,6 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testCreateIllegalPartitionTable() {
-        String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
-        TableDescriptor partitionedTable =
-                TableDescriptor.builder()
-                        .schema(
-                                Schema.newBuilder()
-                                        .column("id", DataTypes.STRING())
-                                        .column("name", DataTypes.STRING())
-                                        .column("dt", DataTypes.DATE())
-                                        .build())
-                        .distributedBy(3, "id")
-                        .partitionedBy("name", "dt")
-                        .build();
-        TablePath tablePath = TablePath.of(dbName, "test_create_illegal_partitioned_table_1");
-        assertThatThrownBy(() -> admin.createTable(tablePath, partitionedTable, true).get())
-                .cause()
-                .isInstanceOf(InvalidTableException.class)
-                .hasMessageContaining(
-                        "Currently, partitioned table supported partition key type are [STRING], "
-                                + "but got partition key 'dt' with data type DATE.");
-    }
-
-    @Test
     void testAddAndDropPartitions() throws Exception {
         String dbName = DEFAULT_TABLE_PATH.getDatabaseName();
         TableDescriptor partitionedTable =
@@ -687,6 +855,21 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         TablePath tablePath = TablePath.of(dbName, "test_add_and_drop_partitioned_table");
         admin.createTable(tablePath, partitionedTable, true).get();
         assertPartitionInfo(admin.listPartitionInfos(tablePath).get(), Collections.emptyList());
+
+        // test internal partition with '__' prefix is not allowed
+        assertThatThrownBy(
+                        () ->
+                                admin.createPartition(
+                                                tablePath,
+                                                newPartitionSpec(
+                                                        Arrays.asList("age"),
+                                                        Arrays.asList("__18")),
+                                                false)
+                                        .get())
+                .cause()
+                .isInstanceOf(InvalidPartitionException.class)
+                .hasMessageContaining(
+                        "The partition value __18 is invalid: '__' is not allowed as prefix, since it is reserved for internal databases/internal tables/internal partitions in Fluss server");
 
         // add two partitions.
         admin.createPartition(tablePath, newPartitionSpec("age", "10"), false).get();
@@ -884,6 +1067,55 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                                         .get())
                 .cause()
                 .isInstanceOf(TooManyPartitionsException.class);
+    }
+
+    @Test
+    void testDynamicConfigs() throws ExecutionException, InterruptedException {
+        assertThat(
+                        FLUSS_CLUSTER_EXTENSION
+                                .getCoordinatorServer()
+                                .getCoordinatorService()
+                                .getDataLakeFormat())
+                .isEqualTo(PAIMON);
+
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(), null, AlterConfigOpType.SET)))
+                .get();
+        assertThat(
+                        FLUSS_CLUSTER_EXTENSION
+                                .getCoordinatorServer()
+                                .getCoordinatorService()
+                                .getDataLakeFormat())
+                .isNull();
+        assertConfigEntry(
+                DATALAKE_FORMAT.key(), null, ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
+
+        // Delete dynamic configs to use the initial value(from server.yaml)
+        admin.alterClusterConfigs(
+                        Collections.singletonList(
+                                new AlterConfig(
+                                        DATALAKE_FORMAT.key(), null, AlterConfigOpType.DELETE)))
+                .get();
+        assertThat(
+                        FLUSS_CLUSTER_EXTENSION
+                                .getCoordinatorServer()
+                                .getCoordinatorService()
+                                .getDataLakeFormat())
+                .isEqualTo(PAIMON);
+        assertConfigEntry(
+                DATALAKE_FORMAT.key(), "paimon", ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG);
+    }
+
+    private void assertConfigEntry(
+            String key, @Nullable String value, ConfigEntry.ConfigSource source)
+            throws ExecutionException, InterruptedException {
+        Collection<ConfigEntry> configEntries = admin.describeClusterConfigs().get();
+        List<String> configKeys =
+                configEntries.stream().map(ConfigEntry::key).collect(Collectors.toList());
+        assertThat(configKeys).doesNotHaveDuplicates();
+        assertThat(configEntries).contains(new ConfigEntry(key, value, source));
     }
 
     private void assertNoBucketSnapshot(KvSnapshots snapshots, int expectBucketNum) {

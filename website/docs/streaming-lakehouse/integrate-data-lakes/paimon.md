@@ -5,10 +5,14 @@ sidebar_position: 1
 
 # Paimon
 
+## Introduction
+
 [Apache Paimon](https://paimon.apache.org/) innovatively combines a lake format with an LSM (Log-Structured Merge-tree) structure, bringing efficient updates into the lake architecture. 
 To integrate Fluss with Paimon, you must enable lakehouse storage and configure Paimon as the lakehouse storage. For more details, see [Enable Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md#enable-lakehouse-storage).
 
-## Introduction
+## Configure Paimon as LakeHouse Storage
+
+For general guidance on configuring Paimon as the lakehouse storage, you can refer to [Lakehouse Storage](maintenance/tiered-storage/lakehouse-storage.md) documentation. When starting the tiering service, make sure to use Paimon-specific configurations as parameters.
 
 When a table is created or altered with the option `'table.datalake.enabled' = 'true'`, Fluss will automatically create a corresponding Paimon table with the same table path.
 The schema of the Paimon table matches that of the Fluss table, except for the addition of three system columns at the end: `__bucket`, `__offset`, and `__timestamp`.  
@@ -68,6 +72,10 @@ You can choose between two views of the table:
 
 #### Read Data Only in Paimon
 
+##### Prerequisites
+Download the [paimon-flink.jar](https://paimon.apache.org/docs/1.2/) that matches your Flink version, and place it in the `FLINK_HOME/lib` directory
+
+##### Read Paimon Data
 To read only data stored in Paimon, use the `$lake` suffix in the table name. The following example demonstrates this:
 
 ```sql title="Flink SQL"
@@ -88,18 +96,36 @@ For further information, refer to Paimon’s [SQL Query documentation](https://p
 
 #### Union Read of Data in Fluss and Paimon
 
+##### Prerequisites
+Download the [fluss-lake-paimon-$FLUSS_VERSION$.jar](https://repo1.maven.org/maven2/org/apache/fluss/fluss-lake-paimon/$FLUSS_VERSION$/fluss-lake-paimon-$FLUSS_VERSION$.jar), and place it into `${FLINK_HOME}/lib`.
+
+##### Union Read
 To read the full dataset, which includes both Fluss (fresh) and Paimon (historical) data, simply query the table without any suffix. The following example illustrates this:
 
 ```sql title="Flink SQL"
+-- Set execution mode to streaming or batch, here just take batch as an example
+SET 'execution.runtime-mode' = 'batch';
+
 -- Query will union data from Fluss and Paimon
 SELECT SUM(order_count) AS total_orders FROM ads_nation_purchase_power;
 ```
+It supports both batch and streaming modes, using Paimon for historical data and Fluss for fresh data:
+- In batch mode
 
-This query may run slower than reading only from Paimon, but it returns the most up-to-date data. If you execute the query multiple times, you may observe different results due to continuous data ingestion.
+  The query may run slower than reading only from Paimon because it needs to merge rows from both Paimon and Fluss. However, it returns the most up-to-date results. Multiple executions of the query may produce different outputs due to continuous data ingestion.
+
+- In streaming mode
+
+  Flink first reads the latest Paimon snapshot (tiered via tiering service), then switches to Fluss starting from the log offset aligned with that snapshot, ensuring exactly-once semantics.
+  This design enables Fluss to store only a small portion of the dataset in the Fluss cluster, reducing costs, while Paimon serves as the source of complete historical data when needed. 
+
+Key behavior for data retention:
+- **Expired Fluss log data** (controlled by `table.log.ttl`) remains accessible via Iceberg if previously tiered
+- **Cleaned-up partitions** in partitioned tables (controlled by `table.auto-partition.num-retention`) remain accessible via Iceberg if previously tiered
 
 ### Reading with other Engines
 
-Since the data tiered to Paimon from Fluss is stored as a standard Paimon table, you can use any engine that supports Paimon to read it. Below is an example using [StarRocks](https://paimon.apache.org/docs/master/engines/starrocks/):
+Since the data tiered to Paimon from Fluss is stored as a standard Paimon table, you can use any engine that supports Paimon to read it. Below is an example using [StarRocks](https://paimon.apache.org/docs/1.2/ecosystem/starrocks/):
 
 First, create a Paimon catalog in StarRocks:
 
@@ -149,3 +175,52 @@ The following table shows the mapping between [Fluss data types](table-design/da
 | TIMESTAMP WITH LOCAL TIMEZONE | TIMESTAMP WITH LOCAL TIMEZONE |
 | BINARY                        | BINARY                        |
 | BYTES                         | BYTES                         |
+
+## 📊 Snapshot Metadata
+
+Fluss adds specific metadata to Paimon snapshots for traceability:
+
+- **commit-user**: Set to `__fluss_lake_tiering` to identify Fluss-generated snapshots
+- **fluss-offsets**: JSON string containing the Fluss bucket offset mapping to track the tiering progress
+
+#### Non-Partitioned Tables
+
+For non-partitioned tables, the metadata structure of `fluss-offsets` is:
+
+```json
+[
+  {"bucket": 0, "offset": 1234},
+  {"bucket": 1, "offset": 5678},
+  {"bucket": 2, "offset": 9012}
+]
+```
+
+#### Partitioned Tables
+
+For partitioned tables, the metadata structure includes partition information:
+
+```json
+[
+  {
+    "partition_name": "date=2025",
+    "partition_id": 0,
+    "bucket": 0,
+    "offset": 3
+  },
+  {
+    "partition_name": "date=2025",
+    "partition_id": 1,
+    "bucket": 0,
+    "offset": 3
+  }
+]
+```
+
+#### Metadata Fields Explanation
+
+| Field            | Description                                  | Example                      |
+|------------------|----------------------------------------------|------------------------------|
+| `partition_id`   | Unique identifier in Fluss for the partition | `0`, `1`                     |
+| `bucket`         | Bucket identifier within the partition       | `0`, `1`, `2`                |
+| `partition_name` | Human-readable partition name                | `"date=2025"`, `"date=2026"` |
+| `offset`         | Offset within the partition's log            | `3`, `1000`                  |

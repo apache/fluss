@@ -87,9 +87,24 @@ Partition pruning is an optimization technique for Fluss partitioned tables. It 
 This optimization is especially useful in streaming scenarios for [Multi-Field Partitioned Tables](table-design/data-distribution/partitioning.md#multi-field-partitioned-tables) that has many partitions.
 The partition pruning also supports dynamically pruning new created partitions during streaming read.
 
-:::note
-1. Currently, **only equality conditions** (e.g., `c_nationkey = 'US'`) are supported for partition pruning. Operators like `<`, `>`, `OR`, and `IN` are not yet supported.
-:::
+The supported filter operators for partition pruning on the partition fields are:
+- `=`
+- `>`
+- `<`
+- `>=`
+- `<=`
+- `<>`
+- `IN (...)`
+- `NOT IN (...)`
+- `IS NULL`
+- `IS NOT NULL`
+- `IS TRUE`
+- `IS FALSE`
+- `LIKE 'abc%'` for prefix matching
+- `LIKE '%abc'` for suffix matching
+- `LIKE '%abc%'` for substring matching
+- OR conjunctions of filter conditions
+- AND conjunctions of filter conditions
 
 #### Example
 

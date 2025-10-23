@@ -29,9 +29,9 @@ public class BucketOffsetJsonSerde
 
     public static final BucketOffsetJsonSerde INSTANCE = new BucketOffsetJsonSerde();
     private static final String PARTITION_ID = "partition_id";
-    private static final String BUCKET_ID = "bucket_id";
+    private static final String BUCKET_ID = "bucket";
     private static final String PARTITION_NAME = "partition_name";
-    private static final String LOG_OFFSET = "log_offset";
+    private static final String LOG_OFFSET = "offset";
 
     @Override
     public BucketOffset deserialize(JsonNode node) {

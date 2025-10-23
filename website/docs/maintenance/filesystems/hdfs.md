@@ -53,3 +53,17 @@ fluss.hadoop.dfs.web.authentication.kerberos.principal: HTTP/_HOST@REALM.COM
 # Client principal and keytab (adjust paths as needed)  
 fluss.hadoop.hadoop.security.kerberos.ticket.cache.path: /tmp/krb5cc_1000
 ```
+
+#### Use Machine Hadoop Environment Configuration
+
+Fluss includes bundled Hadoop libraries with version 3.3.4 for deploying Fluss in machine without Hadoop installed. 
+For most use cases, these work perfectly. However, you should configure your machine's native Hadoop environment if:
+1. Your HDFS uses kerberos security
+2. You need to avoid version conflicts between Fluss's bundled hadoop libraries and your HDFS cluster
+
+Fluss automatically loads HDFS dependencies on the machine via the `HADOOP_CLASSPATH` environment variable.
+Make sure that the `HADOOP_CLASSPATH` environment variable is set up (it can be checked by running `echo $HADOOP_CLASSPATH`).
+If not, set it up using
+```bash
+export HADOOP_CLASSPATH=`hadoop classpath`
+```

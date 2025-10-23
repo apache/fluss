@@ -142,12 +142,12 @@ public class FlussSourceEnumeratorStateSerializer
             out.writeBoolean(true);
             out.writeInt(remainingHybridLakeFlussSplits.size());
             SourceSplitSerializer sourceSplitSerializer = new SourceSplitSerializer(lakeSource);
+            out.writeInt(sourceSplitSerializer.getVersion());
             for (SourceSplitBase split : remainingHybridLakeFlussSplits) {
                 byte[] serializeBytes = sourceSplitSerializer.serialize(split);
                 out.writeInt(serializeBytes.length);
                 out.write(serializeBytes);
             }
-
         } else {
             // write that hybrid lake fluss splits is null
             out.writeBoolean(false);
@@ -161,13 +161,12 @@ public class FlussSourceEnumeratorStateSerializer
             int numSplits = in.readInt();
             List<SourceSplitBase> splits = new ArrayList<>(numSplits);
             SourceSplitSerializer sourceSplitSerializer = new SourceSplitSerializer(lakeSource);
+            int version = in.readInt();
             for (int i = 0; i < numSplits; i++) {
                 int splitSizeInBytes = in.readInt();
                 byte[] splitBytes = new byte[splitSizeInBytes];
                 in.readFully(splitBytes);
-                splits.add(
-                        sourceSplitSerializer.deserialize(
-                                sourceSplitSerializer.getVersion(), splitBytes));
+                splits.add(sourceSplitSerializer.deserialize(version, splitBytes));
             }
             return splits;
         } else {

@@ -23,23 +23,41 @@ import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.TimestampLtz;
+import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataTypeRoot;
 
 import java.time.ZonedDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
-import java.util.Collections;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
 import static org.apache.fluss.metadata.TablePath.detectInvalidName;
+import static org.apache.fluss.metadata.TablePath.validatePrefix;
 
 /** Utils for partition. */
 public class PartitionUtils {
 
-    // TODO Support other data types, trace by https://github.com/apache/fluss/issues/489
     public static final List<DataTypeRoot> PARTITION_KEY_SUPPORTED_TYPES =
-            Collections.singletonList(DataTypeRoot.STRING);
+            Arrays.asList(
+                    DataTypeRoot.CHAR,
+                    DataTypeRoot.STRING,
+                    DataTypeRoot.BOOLEAN,
+                    DataTypeRoot.BINARY,
+                    DataTypeRoot.BYTES,
+                    DataTypeRoot.TINYINT,
+                    DataTypeRoot.SMALLINT,
+                    DataTypeRoot.INTEGER,
+                    DataTypeRoot.DATE,
+                    DataTypeRoot.TIME_WITHOUT_TIME_ZONE,
+                    DataTypeRoot.BIGINT,
+                    DataTypeRoot.FLOAT,
+                    DataTypeRoot.DOUBLE,
+                    DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE,
+                    DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE);
 
     private static final String YEAR_FORMAT = "yyyy";
     private static final String QUARTER_FORMAT = "yyyyQ";
@@ -48,7 +66,10 @@ public class PartitionUtils {
     private static final String HOUR_FORMAT = "yyyyMMddHH";
 
     public static void validatePartitionSpec(
-            TablePath tablePath, List<String> partitionKeys, PartitionSpec partitionSpec) {
+            TablePath tablePath,
+            List<String> partitionKeys,
+            PartitionSpec partitionSpec,
+            boolean isCreate) {
         Map<String, String> partitionSpecMap = partitionSpec.getSpecMap();
         if (partitionKeys.size() != partitionSpecMap.size()) {
             throw new InvalidPartitionException(
@@ -69,16 +90,21 @@ public class PartitionUtils {
             }
         }
 
-        validatePartitionValues(reOrderedPartitionValues);
+        validatePartitionValues(reOrderedPartitionValues, isCreate);
     }
 
     @VisibleForTesting
-    static void validatePartitionValues(List<String> partitionValues) {
+    static void validatePartitionValues(List<String> partitionValues, boolean isCreate) {
         for (String value : partitionValues) {
-            String invalidName = detectInvalidName(value);
-            if (invalidName != null) {
+            String invalidNameError = detectInvalidName(value);
+            if (invalidNameError != null || (isCreate && validatePrefix(value) != null)) {
                 throw new InvalidPartitionException(
-                        "The partition value " + value + " is invalid: " + invalidName);
+                        "The partition value "
+                                + value
+                                + " is invalid: "
+                                + (invalidNameError != null
+                                        ? invalidNameError
+                                        : validatePrefix(value)));
             }
         }
     }
@@ -133,5 +159,67 @@ public class PartitionUtils {
 
     private static String getFormattedTime(ZonedDateTime zonedDateTime, String format) {
         return DateTimeFormatter.ofPattern(format).format(zonedDateTime);
+    }
+
+    public static String convertValueOfType(Object value, DataTypeRoot type) {
+        String stringPartitionKey = "";
+        switch (type) {
+            case CHAR:
+            case STRING:
+                stringPartitionKey = ((BinaryString) value).toString();
+                break;
+            case BOOLEAN:
+                Boolean booleanValue = (Boolean) value;
+                stringPartitionKey = booleanValue.toString();
+                break;
+            case BINARY:
+            case BYTES:
+                byte[] bytesValue = (byte[]) value;
+                stringPartitionKey = PartitionNameConverters.hexString(bytesValue);
+                break;
+            case TINYINT:
+                Byte tinyIntValue = (Byte) value;
+                stringPartitionKey = tinyIntValue.toString();
+                break;
+            case SMALLINT:
+                Short smallIntValue = (Short) value;
+                stringPartitionKey = smallIntValue.toString();
+                break;
+            case INTEGER:
+                Integer intValue = (Integer) value;
+                stringPartitionKey = intValue.toString();
+                break;
+            case BIGINT:
+                Long bigIntValue = (Long) value;
+                stringPartitionKey = bigIntValue.toString();
+                break;
+            case DATE:
+                Integer dateValue = (Integer) value;
+                stringPartitionKey = PartitionNameConverters.dayToString(dateValue);
+                break;
+            case TIME_WITHOUT_TIME_ZONE:
+                Integer timeValue = (Integer) value;
+                stringPartitionKey = PartitionNameConverters.milliToString(timeValue);
+                break;
+            case FLOAT:
+                Float floatValue = (Float) value;
+                stringPartitionKey = PartitionNameConverters.reformatFloat(floatValue);
+                break;
+            case DOUBLE:
+                Double doubleValue = (Double) value;
+                stringPartitionKey = PartitionNameConverters.reformatDouble(doubleValue);
+                break;
+            case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                TimestampLtz timeStampLTZValue = (TimestampLtz) value;
+                stringPartitionKey = PartitionNameConverters.timestampToString(timeStampLTZValue);
+                break;
+            case TIMESTAMP_WITHOUT_TIME_ZONE:
+                TimestampNtz timeStampNTZValue = (TimestampNtz) value;
+                stringPartitionKey = PartitionNameConverters.timestampToString(timeStampNTZValue);
+                break;
+            default:
+                throw new IllegalArgumentException("Unsupported DataTypeRoot: " + type);
+        }
+        return stringPartitionKey;
     }
 }

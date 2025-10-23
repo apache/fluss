@@ -22,6 +22,7 @@ import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidTableException;
+import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.TableAlreadyExistException;
@@ -51,6 +52,10 @@ public class CatalogExceptionUtils {
 
     public static boolean isTableAlreadyExist(Throwable throwable) {
         return throwable instanceof TableAlreadyExistException;
+    }
+
+    public static boolean isLakeTableAlreadyExist(Throwable throwable) {
+        return throwable instanceof LakeTableAlreadyExistException;
     }
 
     public static boolean isTableInvalid(Throwable throwable) {

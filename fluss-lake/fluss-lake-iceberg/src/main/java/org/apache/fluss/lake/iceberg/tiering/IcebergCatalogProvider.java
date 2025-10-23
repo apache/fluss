@@ -18,15 +18,11 @@
 package org.apache.fluss.lake.iceberg.tiering;
 
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.lake.iceberg.conf.IcebergConfiguration;
+import org.apache.fluss.lake.iceberg.utils.IcebergCatalogUtils;
 
 import org.apache.iceberg.catalog.Catalog;
 
 import java.io.Serializable;
-import java.util.Map;
-
-import static org.apache.fluss.lake.iceberg.IcebergLakeCatalog.ICEBERG_CATALOG_DEFAULT_NAME;
-import static org.apache.iceberg.CatalogUtil.buildIcebergCatalog;
 
 /** A provider for Iceberg catalog. */
 public class IcebergCatalogProvider implements Serializable {
@@ -39,10 +35,6 @@ public class IcebergCatalogProvider implements Serializable {
     }
 
     public Catalog get() {
-        Map<String, String> icebergProps = icebergConfig.toMap();
-        String catalogName = icebergProps.getOrDefault("name", ICEBERG_CATALOG_DEFAULT_NAME);
-
-        return buildIcebergCatalog(
-                catalogName, icebergProps, IcebergConfiguration.from(icebergConfig).get());
+        return IcebergCatalogUtils.createIcebergCatalog(icebergConfig);
     }
 }

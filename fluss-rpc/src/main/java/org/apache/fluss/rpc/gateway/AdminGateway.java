@@ -17,6 +17,10 @@
 
 package org.apache.fluss.rpc.gateway;
 
+import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.AlterClusterConfigsResponse;
+import org.apache.fluss.rpc.messages.AlterTableRequest;
+import org.apache.fluss.rpc.messages.AlterTableResponse;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateAclsResponse;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
@@ -65,6 +69,14 @@ public interface AdminGateway extends AdminReadOnlyGateway {
     CompletableFuture<CreateTableResponse> createTable(CreateTableRequest request);
 
     /**
+     * Alter a table.
+     *
+     * @param request the request to alter a table.
+     */
+    @RPC(api = ApiKeys.ALTER_TABLE)
+    CompletableFuture<AlterTableResponse> alterTable(AlterTableRequest request);
+
+    /**
      * Drop a table.
      *
      * @param request Drop table request
@@ -73,7 +85,7 @@ public interface AdminGateway extends AdminReadOnlyGateway {
     CompletableFuture<DropTableResponse> dropTable(DropTableRequest request);
 
     /**
-     * create a new partition for a partitioned table.
+     * Create a new partition for a partitioned table.
      *
      * @param request Create partition request
      */
@@ -103,6 +115,10 @@ public interface AdminGateway extends AdminReadOnlyGateway {
      */
     @RPC(api = ApiKeys.DROP_ACLS)
     CompletableFuture<DropAclsResponse> dropAcls(DropAclsRequest request);
+
+    @RPC(api = ApiKeys.ALTER_CLUSTER_CONFIGS)
+    CompletableFuture<AlterClusterConfigsResponse> alterClusterConfigs(
+            AlterClusterConfigsRequest request);
 
     // todo: rename table & alter table
 

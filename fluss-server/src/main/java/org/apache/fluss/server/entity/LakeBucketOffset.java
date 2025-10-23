@@ -25,11 +25,14 @@ public class LakeBucketOffset {
 
     private final Long logStartOffset;
     private final Long logEndOffset;
+    private final Long maxTimestamp;
 
-    public LakeBucketOffset(long snapshotId, Long logStartOffset, Long logEndOffset) {
+    public LakeBucketOffset(
+            long snapshotId, Long logStartOffset, Long logEndOffset, Long maxTimestamp) {
         this.snapshotId = snapshotId;
         this.logStartOffset = logStartOffset;
         this.logEndOffset = logEndOffset;
+        this.maxTimestamp = maxTimestamp;
     }
 
     public long getSnapshotId() {
@@ -42,5 +45,9 @@ public class LakeBucketOffset {
 
     public Optional<Long> getLogEndOffset() {
         return Optional.ofNullable(logEndOffset);
+    }
+
+    public Optional<Long> getMaxTimestamp() {
+        return Optional.ofNullable(maxTimestamp);
     }
 }

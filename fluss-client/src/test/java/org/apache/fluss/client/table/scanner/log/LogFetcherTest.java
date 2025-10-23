@@ -39,6 +39,10 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.record.TestData.DATA1;
 import static org.apache.fluss.record.TestData.DATA1_TABLE_DESCRIPTOR;
@@ -55,6 +59,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
     private long tableId;
     private final int bucketId0 = 0;
     private final int bucketId1 = 1;
+    private LogScannerStatus logScannerStatus;
 
     // TODO covert this test to UT as kafka.
 
@@ -74,9 +79,8 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         // add bucket 0 and bucket 1 to log scanner status.
         scanBuckets.put(new TableBucket(tableId, bucketId0), 0L);
         scanBuckets.put(new TableBucket(tableId, bucketId1), 0L);
-        LogScannerStatus logScannerStatus = new LogScannerStatus();
+        logScannerStatus = new LogScannerStatus();
         logScannerStatus.assignScanBuckets(scanBuckets);
-        TestingScannerMetricGroup scannerMetricGroup = TestingScannerMetricGroup.newInstance();
         logFetcher =
                 new LogFetcher(
                         DATA1_TABLE_INFO,
@@ -84,7 +88,7 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
                         logScannerStatus,
                         clientConf,
                         metadataUpdater,
-                        scannerMetricGroup,
+                        TestingScannerMetricGroup.newInstance(),
                         new RemoteFileDownloader(1));
     }
 
@@ -181,6 +185,39 @@ public class LogFetcherTest extends ClientToServerITCaseBase {
         Map<TableBucket, List<ScanRecord>> records = logFetcher.collectFetch();
         assertThat(records.size()).isEqualTo(1);
         assertThat(records.get(tb0).size()).isEqualTo(10);
+    }
+
+    @Test
+    void testFetchWithInvalidTableOrPartitions() throws Exception {
+        MetadataUpdater metadataUpdater1 =
+                new MetadataUpdater(clientConf, FLUSS_CLUSTER_EXTENSION.getRpcClient());
+        logFetcher =
+                new LogFetcher(
+                        DATA1_TABLE_INFO,
+                        null,
+                        logScannerStatus,
+                        clientConf,
+                        metadataUpdater1,
+                        TestingScannerMetricGroup.newInstance(),
+                        new RemoteFileDownloader(1));
+
+        ExecutorService executor = Executors.newSingleThreadExecutor();
+        Future<?> future =
+                executor.submit(
+                        () -> {
+                            // If this test blocked, please checking whether it was blocked with
+                            // the same reason as https://github.com/apache/fluss/pull/1666
+                            for (int i = 0; i < 1000; i++) {
+                                logFetcher.sendFetches();
+                                logFetcher.invalidTableOrPartitions(
+                                        new LogFetcher.TableOrPartitions(
+                                                Collections.singleton(tableId), null));
+                            }
+                        });
+
+        future.get(30, TimeUnit.SECONDS);
+        assertThat(future.isDone()).isTrue();
+        executor.shutdownNow();
     }
 
     private void addRecordsToBucket(

@@ -19,8 +19,10 @@ package org.apache.fluss.lake.lakestorage;
 
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.TableAlreadyExistException;
+import org.apache.fluss.exception.TableNotExistException;
 import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.writer.LakeTieringFactory;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.plugin.PluginManager;
@@ -30,6 +32,7 @@ import org.junit.jupiter.api.Test;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -145,5 +148,9 @@ class LakeStorageTest {
         @Override
         public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
                 throws TableAlreadyExistException {}
+
+        @Override
+        public void alterTable(TablePath tablePath, List<TableChange> tableChanges)
+                throws TableNotExistException {}
     }
 }

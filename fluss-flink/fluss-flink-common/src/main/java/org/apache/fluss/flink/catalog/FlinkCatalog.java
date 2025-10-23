@@ -22,16 +22,15 @@ import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidTableException;
-import org.apache.fluss.flink.lake.LakeCatalog;
+import org.apache.fluss.flink.lake.LakeFlinkCatalog;
 import org.apache.fluss.flink.procedure.ProcedureManager;
 import org.apache.fluss.flink.utils.CatalogExceptionUtils;
-import org.apache.fluss.flink.utils.DataLakeUtils;
 import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PartitionSpec;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -44,11 +43,14 @@ import org.apache.flink.table.catalog.CatalogBaseTable;
 import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogDatabaseImpl;
 import org.apache.flink.table.catalog.CatalogFunction;
+import org.apache.flink.table.catalog.CatalogMaterializedTable;
 import org.apache.flink.table.catalog.CatalogPartition;
 import org.apache.flink.table.catalog.CatalogPartitionSpec;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.CatalogView;
 import org.apache.flink.table.catalog.ObjectPath;
+import org.apache.flink.table.catalog.ResolvedCatalogBaseTable;
+import org.apache.flink.table.catalog.ResolvedCatalogMaterializedTable;
 import org.apache.flink.table.catalog.ResolvedCatalogTable;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
 import org.apache.flink.table.catalog.exceptions.DatabaseAlreadyExistException;
@@ -70,18 +72,19 @@ import org.apache.flink.table.expressions.Expression;
 import org.apache.flink.table.factories.Factory;
 import org.apache.flink.table.procedures.Procedure;
 
-import javax.annotation.Nullable;
-
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
+import java.util.stream.Collectors;
 
 import static org.apache.flink.util.Preconditions.checkArgument;
 import static org.apache.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
+import static org.apache.fluss.flink.FlinkConnectorOptions.ALTER_DISALLOW_OPTIONS;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionAlreadyExists;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionInvalid;
 import static org.apache.fluss.flink.utils.CatalogExceptionUtils.isPartitionNotExist;
@@ -108,16 +111,16 @@ public class FlinkCatalog extends AbstractCatalog {
     protected final ClassLoader classLoader;
 
     protected final String catalogName;
-    protected final @Nullable String defaultDatabase;
+    protected final String defaultDatabase;
     protected final String bootstrapServers;
-    private final Map<String, String> securityConfigs;
+    protected final Map<String, String> securityConfigs;
+    protected final LakeFlinkCatalog lakeFlinkCatalog;
     protected Connection connection;
     protected Admin admin;
-    private volatile @Nullable LakeCatalog lakeCatalog;
 
     public FlinkCatalog(
             String name,
-            @Nullable String defaultDatabase,
+            String defaultDatabase,
             String bootstrapServers,
             ClassLoader classLoader,
             Map<String, String> securityConfigs) {
@@ -127,11 +130,12 @@ public class FlinkCatalog extends AbstractCatalog {
         this.bootstrapServers = bootstrapServers;
         this.classLoader = classLoader;
         this.securityConfigs = securityConfigs;
+        this.lakeFlinkCatalog = new LakeFlinkCatalog(catalogName, classLoader);
     }
 
     @Override
     public Optional<Factory> getFactory() {
-        return Optional.of(new FlinkTableFactory());
+        return Optional.of(new FlinkTableFactory(lakeFlinkCatalog));
     }
 
     @Override
@@ -142,6 +146,12 @@ public class FlinkCatalog extends AbstractCatalog {
 
         connection = ConnectionFactory.createConnection(Configuration.fromMap(flussConfigs));
         admin = connection.getAdmin();
+        if (!databaseExists(defaultDatabase)) {
+            throw new CatalogException(
+                    String.format(
+                            "The configured default-database '%s' does not exist in the Fluss cluster.",
+                            defaultDatabase));
+        }
     }
 
     @Override
@@ -291,12 +301,22 @@ public class FlinkCatalog extends AbstractCatalog {
             }
 
             // should be as a fluss table
-            CatalogTable catalogTable = FlinkConversions.toFlinkTable(tableInfo);
+            CatalogBaseTable catalogBaseTable = FlinkConversions.toFlinkTable(tableInfo);
             // add bootstrap servers option
-            Map<String, String> newOptions = new HashMap<>(catalogTable.getOptions());
+            Map<String, String> newOptions = new HashMap<>(catalogBaseTable.getOptions());
             newOptions.put(BOOTSTRAP_SERVERS.key(), bootstrapServers);
             newOptions.putAll(securityConfigs);
-            return catalogTable.copy(newOptions);
+            if (CatalogBaseTable.TableKind.TABLE == catalogBaseTable.getTableKind()) {
+                return ((CatalogTable) catalogBaseTable).copy(newOptions);
+            } else if (CatalogBaseTable.TableKind.MATERIALIZED_TABLE
+                    == catalogBaseTable.getTableKind()) {
+                return ((CatalogMaterializedTable) catalogBaseTable).copy(newOptions);
+            } else {
+                throw new CatalogException(
+                        String.format(
+                                "Failed to get table %s in %s, only CatalogTable and CatalogMaterializedTable are supported.",
+                                objectPath, getName()));
+            }
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (isTableNotExist(t)) {
@@ -311,16 +331,18 @@ public class FlinkCatalog extends AbstractCatalog {
     protected CatalogBaseTable getLakeTable(
             String databaseName, String tableName, Configuration properties)
             throws TableNotExistException, CatalogException {
-        mayInitLakeCatalogCatalog(properties);
         String[] tableComponents = tableName.split("\\" + LAKE_TABLE_SPLITTER);
         if (tableComponents.length == 1) {
             // should be pattern like table_name$lake
             tableName = tableComponents[0];
         } else {
-            // be some thing like table_name$lake$snapshot
+            // pattern is table_name$lake$snapshots
+            // Need to reconstruct: table_name + $snapshots
             tableName = String.join("", tableComponents);
         }
-        return lakeCatalog.getTable(new ObjectPath(databaseName, tableName));
+        return lakeFlinkCatalog
+                .getLakeCatalog(properties)
+                .getTable(new ObjectPath(databaseName, tableName));
     }
 
     @Override
@@ -367,11 +389,14 @@ public class FlinkCatalog extends AbstractCatalog {
                     "CREATE [TEMPORARY] VIEW is not supported for Fluss catalog");
         }
 
-        checkArgument(table instanceof ResolvedCatalogTable, "table should be resolved");
+        checkArgument(
+                table instanceof ResolvedCatalogTable
+                        || table instanceof ResolvedCatalogMaterializedTable,
+                "table should be resolved");
 
         TablePath tablePath = toTablePath(objectPath);
         TableDescriptor tableDescriptor =
-                FlinkConversions.toFlussTable((ResolvedCatalogTable) table);
+                FlinkConversions.toFlussTable((ResolvedCatalogBaseTable<?>) table);
         try {
             admin.createTable(tablePath, tableDescriptor, ignoreIfExist).get();
         } catch (Exception e) {
@@ -380,6 +405,8 @@ public class FlinkCatalog extends AbstractCatalog {
                 throw new DatabaseNotExistException(getName(), objectPath.getDatabaseName());
             } else if (CatalogExceptionUtils.isTableAlreadyExist(t)) {
                 throw new TableAlreadyExistException(getName(), objectPath);
+            } else if (CatalogExceptionUtils.isLakeTableAlreadyExist(t)) {
+                throw new CatalogException(t.getMessage());
             } else if (isTableInvalid(t)) {
                 throw new InvalidTableException(t.getMessage());
             } else {
@@ -390,9 +417,55 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     @Override
-    public void alterTable(ObjectPath objectPath, CatalogBaseTable catalogBaseTable, boolean b)
+    public void alterTable(
+            ObjectPath objectPath,
+            CatalogBaseTable newTable,
+            List<org.apache.flink.table.catalog.TableChange> tableChanges,
+            boolean ignoreIfNotExists)
             throws TableNotExistException, CatalogException {
-        throw new UnsupportedOperationException();
+        TablePath tablePath = toTablePath(objectPath);
+
+        List<TableChange> flussTableChanges =
+                tableChanges.stream()
+                        .filter(Objects::nonNull)
+                        .flatMap(change -> FlinkConversions.toFlussTableChanges(change).stream())
+                        .collect(Collectors.toList());
+
+        // some connector options are table storage related, not allowed to alter
+        for (TableChange change : flussTableChanges) {
+            String key = null;
+            if (change instanceof TableChange.SetOption) {
+                key = ((TableChange.SetOption) change).getKey();
+            } else if (change instanceof TableChange.ResetOption) {
+                key = ((TableChange.ResetOption) change).getKey();
+            }
+            if (key != null && ALTER_DISALLOW_OPTIONS.contains(key)) {
+                throw new CatalogException(
+                        "The option '" + key + "' is not supported to alter yet.");
+            }
+        }
+
+        try {
+            admin.alterTable(tablePath, flussTableChanges, ignoreIfNotExists).get();
+        } catch (Exception e) {
+            Throwable t = ExceptionUtils.stripExecutionException(e);
+            if (CatalogExceptionUtils.isTableNotExist(t)) {
+                throw new TableNotExistException(getName(), objectPath);
+            } else if (isTableInvalid(t)) {
+                throw new InvalidTableException(t.getMessage());
+            } else {
+                throw new CatalogException(
+                        String.format("Failed to alter table %s in %s", objectPath, getName()), t);
+            }
+        }
+    }
+
+    @Override
+    public void alterTable(
+            ObjectPath objectPath, CatalogBaseTable newTable, boolean ignoreIfNotExist)
+            throws TableNotExistException, CatalogException {
+        throw new UnsupportedOperationException(
+                "alterTable(objectPath, newTable, ignoreIfNotExist) method is not supported, please upgrade your Flink to 1.18+. ");
     }
 
     @SuppressWarnings("checkstyle:WhitespaceAround")
@@ -674,26 +747,6 @@ public class FlinkCatalog extends AbstractCatalog {
             return procedure.get();
         } else {
             throw new ProcedureNotExistException(catalogName, procedurePath);
-        }
-    }
-
-    private void mayInitLakeCatalogCatalog(Configuration tableOptions) {
-        // TODO: Currently, a Fluss cluster only supports a single DataLake storage. However, in the
-        //  future, it may support multiple DataLakes. The following code assumes that a single
-        //  lakeCatalog is shared across multiple tables, which will no longer be valid in such
-        //  cases and should be updated accordingly.
-        if (lakeCatalog == null) {
-            synchronized (this) {
-                if (lakeCatalog == null) {
-                    try {
-                        Map<String, String> catalogProperties =
-                                DataLakeUtils.extractLakeCatalogProperties(tableOptions);
-                        lakeCatalog = new LakeCatalog(catalogName, catalogProperties, classLoader);
-                    } catch (Exception e) {
-                        throw new FlussRuntimeException("Failed to init paimon catalog.", e);
-                    }
-                }
-            }
         }
     }
 

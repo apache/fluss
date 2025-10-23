@@ -23,9 +23,12 @@ import org.apache.fluss.client.metadata.KvSnapshots;
 import org.apache.fluss.client.metadata.LakeSnapshot;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.cluster.AlterConfig;
+import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
 import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
+import org.apache.fluss.exception.InvalidAlterTableException;
 import org.apache.fluss.exception.InvalidDatabaseException;
 import org.apache.fluss.exception.InvalidPartitionException;
 import org.apache.fluss.exception.InvalidReplicationFactorException;
@@ -48,6 +51,7 @@ import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.SchemaInfo;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -234,6 +238,27 @@ public interface Admin extends AutoCloseable {
      * @param databaseName The name of the database.
      */
     CompletableFuture<List<String>> listTables(String databaseName);
+
+    /**
+     * Alter a table with the given {@code tableChanges}.
+     *
+     * <p>The following exceptions can be anticipated when calling {@code get()} on returned future.
+     *
+     * <ul>
+     *   <li>{@link DatabaseNotExistException} when the database does not exist.
+     *   <li>{@link TableNotExistException} when the table does not exist, and ignoreIfNotExists is
+     *       false.
+     *   <li>{@link InvalidAlterTableException} if the alter operation is invalid, such as alter set
+     *       a table option which is not supported to modify currently.
+     * </ul>
+     *
+     * @param tablePath The table path of the table.
+     * @param tableChanges The table changes.
+     * @param ignoreIfNotExists if it is true, do nothing if table does not exist. If false, throw a
+     *     TableNotExistException.
+     */
+    CompletableFuture<Void> alterTable(
+            TablePath tablePath, List<TableChange> tableChanges, boolean ignoreIfNotExists);
 
     /**
      * List all partitions in the given table in fluss cluster asynchronously.
@@ -452,4 +477,19 @@ public interface Admin extends AutoCloseable {
      * @return A CompletableFuture indicating completion of the operation.
      */
     DropAclsResult dropAcls(Collection<AclBindingFilter> filters);
+
+    /**
+     * Describe the configs of the cluster.
+     *
+     * @return A CompletableFuture containing the configs of the cluster.
+     */
+    CompletableFuture<Collection<ConfigEntry>> describeClusterConfigs();
+
+    /**
+     * Alter the configs of the cluster.
+     *
+     * @param configs List of configs to alter.
+     * @return A CompletableFuture indicating completion of the operation.
+     */
+    CompletableFuture<Void> alterClusterConfigs(Collection<AlterConfig> configs);
 }

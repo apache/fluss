@@ -23,6 +23,9 @@ import org.apache.fluss.lake.paimon.PaimonLakeStorage;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.utils.CloseableIterator;
 
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.table.api.EnvironmentSettings;
+import org.apache.flink.table.api.bridge.java.StreamTableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
@@ -60,10 +63,27 @@ class PaimonSourceTestBase {
         Configuration configuration = new Configuration();
         configuration.setString("type", "paimon");
         configuration.setString("warehouse", tempWarehouseDir.toString());
+        configuration.setString("user", "root");
+        configuration.setString("password", "root-password");
         lakeStorage = new PaimonLakeStorage(configuration);
         paimonCatalog =
                 CatalogFactory.createCatalog(
                         CatalogContext.create(Options.fromMap(configuration.toMap())));
+        initPaimonPrivilege();
+    }
+
+    // Test for paimon privilege table
+    public static void initPaimonPrivilege() {
+        StreamTableEnvironment streamTEnv =
+                StreamTableEnvironment.create(
+                        StreamExecutionEnvironment.getExecutionEnvironment(),
+                        EnvironmentSettings.inStreamingMode());
+        streamTEnv.executeSql(
+                String.format(
+                        "create catalog %s with ('type'='paimon', 'warehouse' = '%s')",
+                        "paimon_catalog", tempWarehouseDir));
+        streamTEnv.executeSql(
+                "CALL paimon_catalog.sys.init_file_based_privilege('root-password');");
     }
 
     public void createTable(TablePath tablePath, Schema schema) throws Exception {

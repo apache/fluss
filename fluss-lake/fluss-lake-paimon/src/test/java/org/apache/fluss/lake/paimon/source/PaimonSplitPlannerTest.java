@@ -27,6 +27,7 @@ import org.apache.paimon.CoreOptions;
 import org.apache.paimon.Snapshot;
 import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.GenericRow;
+import org.apache.paimon.data.InternalRow;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.table.FileStoreTable;
 import org.apache.paimon.table.Table;
@@ -77,5 +78,36 @@ class PaimonSplitPlannerTest extends PaimonSourceTestBase {
                         paimonSplits.stream()
                                 .map(PaimonSplit::dataSplit)
                                 .collect(Collectors.toList()));
+    }
+
+    @Test
+    void testPlannerCreatesCorrectSplitsForLogTableWithoutBucketKey() throws Exception {
+        // test log table without bucket key
+        String tableName = "planner_log_table_without_bucket_key";
+        TablePath tablePath = TablePath.of(DEFAULT_DB, tableName);
+
+        Schema.Builder builder =
+                Schema.newBuilder()
+                        .column("id", DataTypes.INT())
+                        .column("message", DataTypes.STRING());
+        createTable(tablePath, builder.build());
+        Table table = getTable(tablePath);
+
+        List<InternalRow> records =
+                Arrays.asList(
+                        GenericRow.of(1, BinaryString.fromString("msg1")),
+                        GenericRow.of(2, BinaryString.fromString("msg2")));
+        writeRecord(tablePath, records);
+
+        Snapshot snapshot = table.latestSnapshot().get();
+
+        LakeSource<PaimonSplit> lakeSource = lakeStorage.createLakeSource(tablePath);
+        List<PaimonSplit> paimonSplits = lakeSource.createPlanner(snapshot::id).plan();
+
+        assertThat(paimonSplits).isNotEmpty();
+        for (PaimonSplit split : paimonSplits) {
+            assertThat(split.isBucketUnAware()).isTrue();
+            assertThat(split.bucket()).isEqualTo(-1);
+        }
     }
 }

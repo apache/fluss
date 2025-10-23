@@ -88,7 +88,12 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             Long partitionId = partitionBucket.f0;
             if (partitionId == null) {
                 tableBucket = new TableBucket(tableId, partitionBucket.f1);
-                flussTableLakeSnapshot.addBucketOffset(tableBucket, entry.getValue());
+                // we use -1 since we don't store timestamp in lake snapshot property for
+                // simplicity, it may cause the timestamp to be -1 during constructing lake
+                // snapshot to commit to Fluss.
+                // But it should happen rarely and should be a normal value after next tiering.
+                flussTableLakeSnapshot.addBucketOffsetAndTimestamp(
+                        tableBucket, entry.getValue(), -1);
             } else {
                 tableBucket = new TableBucket(tableId, partitionId, partitionBucket.f1);
                 // the partition name is qualified partition name in format:
@@ -98,8 +103,11 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
                         committedLakeSnapshot.getQualifiedPartitionNameById().get(partitionId);
                 ResolvedPartitionSpec resolvedPartitionSpec =
                         ResolvedPartitionSpec.fromPartitionQualifiedName(qualifiedPartitionName);
-                flussTableLakeSnapshot.addPartitionBucketOffset(
-                        tableBucket, resolvedPartitionSpec.getPartitionName(), entry.getValue());
+                flussTableLakeSnapshot.addPartitionBucketOffsetAndTimestamp(
+                        tableBucket,
+                        resolvedPartitionSpec.getPartitionName(),
+                        entry.getValue(),
+                        -1);
             }
         }
         commit(flussTableLakeSnapshot);
@@ -114,13 +122,14 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
 
         pbLakeTableSnapshotInfo.setTableId(flussTableLakeSnapshot.tableId());
         pbLakeTableSnapshotInfo.setSnapshotId(flussTableLakeSnapshot.lakeSnapshotId());
-        for (Map.Entry<Tuple2<TableBucket, String>, Long> bucketEndOffsetEntry :
-                flussTableLakeSnapshot.logEndOffsets().entrySet()) {
+        for (Tuple2<TableBucket, String> bucketPartition :
+                flussTableLakeSnapshot.tablePartitionBuckets()) {
             PbLakeTableOffsetForBucket pbLakeTableOffsetForBucket =
                     pbLakeTableSnapshotInfo.addBucketsReq();
-            TableBucket tableBucket = bucketEndOffsetEntry.getKey().f0;
-            String partitionName = bucketEndOffsetEntry.getKey().f1;
-            long endOffset = bucketEndOffsetEntry.getValue();
+            TableBucket tableBucket = bucketPartition.f0;
+            String partitionName = bucketPartition.f1;
+            long endOffset = flussTableLakeSnapshot.getLogEndOffset(bucketPartition);
+            long maxTimestamp = flussTableLakeSnapshot.getMaxTimestamp(bucketPartition);
             if (tableBucket.getPartitionId() != null) {
                 pbLakeTableOffsetForBucket.setPartitionId(tableBucket.getPartitionId());
             }
@@ -129,6 +138,7 @@ public class FlussTableLakeSnapshotCommitter implements AutoCloseable {
             }
             pbLakeTableOffsetForBucket.setBucketId(tableBucket.getBucket());
             pbLakeTableOffsetForBucket.setLogEndOffset(endOffset);
+            pbLakeTableOffsetForBucket.setMaxTimestamp(maxTimestamp);
         }
         return commitLakeTableSnapshotRequest;
     }

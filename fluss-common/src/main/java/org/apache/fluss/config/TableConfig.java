@@ -20,6 +20,7 @@ package org.apache.fluss.config;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.compression.ArrowCompressionInfo;
 import org.apache.fluss.metadata.DataLakeFormat;
+import org.apache.fluss.metadata.DeleteBehavior;
 import org.apache.fluss.metadata.KvFormat;
 import org.apache.fluss.metadata.LogFormat;
 import org.apache.fluss.metadata.MergeEngineType;
@@ -109,6 +110,11 @@ public class TableConfig {
      */
     public Optional<String> getMergeEngineVersionColumn() {
         return config.getOptional(ConfigOptions.TABLE_MERGE_ENGINE_VERSION_COLUMN);
+    }
+
+    /** Gets the delete behavior of the table. */
+    public Optional<DeleteBehavior> getDeleteBehavior() {
+        return config.getOptional(ConfigOptions.TABLE_DELETE_BEHAVIOR);
     }
 
     /** Gets the Arrow compression type and compression level of the table. */

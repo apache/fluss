@@ -21,8 +21,12 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.types.Row;
 import org.apache.flink.util.CloseableIterator;
 
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -50,6 +54,17 @@ public class FlinkRowAssertionsUtils {
                 .containsExactlyInAnyOrderElementsOf(expected);
     }
 
+    public static void assertResultsExactOrder(
+            CloseableIterator<Row> iterator, List<Row> expected, boolean closeIterator) {
+        List<String> actual = collectRowsWithTimeout(iterator, expected.size(), closeIterator);
+        assertThat(actual)
+                .as(
+                        "Expected %d records but got %d after waiting. Actual results: %s",
+                        expected.size(), actual.size(), actual)
+                .containsExactlyElementsOf(
+                        expected.stream().map(Row::toString).collect(Collectors.toList()));
+    }
+
     public static void assertQueryResultExactOrder(
             TableEnvironment env, String query, List<String> expected) throws Exception {
         try (CloseableIterator<Row> rowIter = env.executeSql(query).collect()) {
@@ -62,29 +77,44 @@ public class FlinkRowAssertionsUtils {
         }
     }
 
-    private static List<String> collectRowsWithTimeout(
-            CloseableIterator<Row> iterator, int expectedCount, boolean closeIterator) {
-        List<String> actual = new ArrayList<>();
-        long startTime = System.currentTimeMillis();
-        int maxWaitTime = 60000; // 60 seconds
+    public static List<String> collectRowsWithTimeout(
+            CloseableIterator<Row> iterator, int expectedCount) {
+        return collectRowsWithTimeout(iterator, expectedCount, true);
+    }
 
+    public static List<String> collectRowsWithTimeout(
+            CloseableIterator<Row> iterator, int expectedCount, boolean closeIterator) {
+        if (expectedCount < 0) {
+            throw new IllegalArgumentException(
+                    "Expected count must be non-negative: " + expectedCount);
+        }
+        if (iterator == null) {
+            throw new IllegalArgumentException("Iterator cannot be null");
+        }
+        return collectRowsWithTimeout(
+                iterator,
+                expectedCount,
+                closeIterator,
+                // max wait 1 minute
+                Duration.ofMinutes(1));
+    }
+
+    protected static List<String> collectRowsWithTimeout(
+            CloseableIterator<Row> iterator,
+            int expectedCount,
+            boolean closeIterator,
+            Duration maxWaitTime) {
+        List<String> actual = new ArrayList<>();
+        long startTimeMs = System.currentTimeMillis();
+        long deadlineTimeMs = startTimeMs + maxWaitTime.toMillis();
         try {
             for (int i = 0; i < expectedCount; i++) {
                 // Wait for next record with timeout
-                while (!iterator.hasNext()) {
-                    long elapsedTime = System.currentTimeMillis() - startTime;
-                    if (elapsedTime > maxWaitTime) {
-                        // Timeout reached - provide detailed failure info
-                        throw new AssertionError(
-                                String.format(
-                                        "Timeout after waiting %d ms for Flink job results. "
-                                                + "Expected %d records but only received %d. "
-                                                + "This might indicate a job hang or insufficient data generation.",
-                                        elapsedTime, expectedCount, actual.size()));
-                    }
-                    Thread.sleep(10);
+                if (!waitForNextWithTimeout(
+                        iterator, Math.max(deadlineTimeMs - System.currentTimeMillis(), 1_000))) {
+                    throw timeoutError(
+                            System.currentTimeMillis() - startTimeMs, expectedCount, actual.size());
                 }
-
                 if (iterator.hasNext()) {
                     actual.add(iterator.next().toString());
                 } else {
@@ -92,12 +122,7 @@ public class FlinkRowAssertionsUtils {
                     break;
                 }
             }
-
             return actual;
-
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new RuntimeException("Test interrupted while waiting for Flink job results", e);
         } catch (AssertionError e) {
             // Re-throw our timeout assertion errors
             throw e;
@@ -107,7 +132,7 @@ public class FlinkRowAssertionsUtils {
                 // Job completed normally - return what we have
                 return actual;
             } else {
-                long elapsedTime = System.currentTimeMillis() - startTime;
+                long elapsedTime = System.currentTimeMillis() - startTimeMs;
                 throw new RuntimeException(
                         String.format(
                                 "Unexpected error after waiting %d ms for Flink job results. "
@@ -123,6 +148,29 @@ public class FlinkRowAssertionsUtils {
                     System.err.println("Error closing iterator: " + e.getMessage());
                 }
             }
+        }
+    }
+
+    private static AssertionError timeoutError(
+            long elapsedTime, int expectedCount, int actualCount) {
+        return new AssertionError(
+                String.format(
+                        "Timeout after waiting %d ms for Flink job results. "
+                                + "Expected %d records but only received %d. "
+                                + "This might indicate a job hang or insufficient data generation.",
+                        elapsedTime, expectedCount, actualCount));
+    }
+
+    private static boolean waitForNextWithTimeout(
+            CloseableIterator<Row> iterator, long maxWaitTime) {
+        CompletableFuture<Boolean> future = CompletableFuture.supplyAsync(iterator::hasNext);
+        try {
+            return future.get(maxWaitTime, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException e) {
+            future.cancel(true);
+            return false;
+        } catch (Exception e) {
+            throw new RuntimeException("Error checking iterator.hasNext()", e);
         }
     }
 

@@ -155,4 +155,10 @@ public class DefaultSnapshotContext implements SnapshotContext {
     public int maxFetchLogSizeInRecoverKv() {
         return maxFetchLogSizeInRecoverKv;
     }
+
+    @Override
+    public void handleSnapshotBroken(CompletedSnapshot snapshot) throws Exception {
+        completedSnapshotHandleStore.remove(snapshot.getTableBucket(), snapshot.getSnapshotID());
+        snapshot.discardAsync(asyncOperationsThreadPool);
+    }
 }

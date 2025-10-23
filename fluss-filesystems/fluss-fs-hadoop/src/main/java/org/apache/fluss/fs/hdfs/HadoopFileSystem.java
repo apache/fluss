@@ -20,13 +20,11 @@ package org.apache.fluss.fs.hdfs;
 import org.apache.fluss.fs.FileStatus;
 import org.apache.fluss.fs.FileSystem;
 import org.apache.fluss.fs.FsPath;
-import org.apache.fluss.fs.token.ObtainedSecurityToken;
 
 import org.apache.hadoop.fs.Path;
 
 import java.io.IOException;
 import java.net.URI;
-import java.util.Collections;
 
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
@@ -35,13 +33,10 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
  * additional information regarding copyright ownership. */
 
 /**
- * A {@link FileSystem} that wraps an {@link org.apache.hadoop.fs.FileSystem Hadoop File System}.
+ * An abstract {@link FileSystem} implementation that wraps a {@link org.apache.hadoop.fs.FileSystem
+ * Hadoop File System}.
  */
-public class HadoopFileSystem extends FileSystem {
-
-    private static final ObtainedSecurityToken TOKEN =
-            new ObtainedSecurityToken(
-                    HadoopFsPlugin.SCHEME, new byte[0], null, Collections.emptyMap());
+public abstract class HadoopFileSystem extends FileSystem {
 
     /** The wrapped Hadoop File System. */
     private final org.apache.hadoop.fs.FileSystem fs;
@@ -59,11 +54,6 @@ public class HadoopFileSystem extends FileSystem {
     // ------------------------------------------------------------------------
     //  file system methods
     // ------------------------------------------------------------------------
-
-    @Override
-    public ObtainedSecurityToken obtainSecurityToken() throws IOException {
-        return TOKEN;
-    }
 
     @Override
     public URI getUri() {

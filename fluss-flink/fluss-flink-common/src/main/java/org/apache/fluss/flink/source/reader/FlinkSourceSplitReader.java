@@ -27,6 +27,7 @@ import org.apache.fluss.client.table.scanner.log.ScanRecords;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.flink.lake.LakeSplitReaderGenerator;
+import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.metrics.FlinkMetricRegistry;
 import org.apache.fluss.flink.source.metrics.FlinkSourceReaderMetrics;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplit;
@@ -208,6 +209,17 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
                 subscribeLog(sourceSplitBase, sourceSplitBase.asLogSplit().getStartingOffset());
             } else if (sourceSplitBase.isLakeSplit()) {
                 getLakeSplitReader().addSplit(sourceSplitBase, boundedSplits);
+                if (sourceSplitBase instanceof LakeSnapshotAndFlussLogSplit) {
+                    LakeSnapshotAndFlussLogSplit lakeSnapshotAndFlussLogSplit =
+                            (LakeSnapshotAndFlussLogSplit) sourceSplitBase;
+                    if (lakeSnapshotAndFlussLogSplit.isStreaming()) {
+                        // is streaming split which has no stopping offset, we need also subscribe
+                        // change log
+                        subscribeLog(
+                                lakeSnapshotAndFlussLogSplit,
+                                lakeSnapshotAndFlussLogSplit.getStartingOffset());
+                    }
+                }
             } else {
                 throw new UnsupportedOperationException(
                         String.format(
@@ -503,7 +515,11 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     private FlinkRecordsWithSplitIds finishCurrentBoundedSplit() throws IOException {
         Set<String> finishedSplits =
                 currentBoundedSplit instanceof HybridSnapshotLogSplit
-                        // is hybrid split, not to finish this split
+                                || (currentBoundedSplit instanceof LakeSnapshotAndFlussLogSplit
+                                        && ((LakeSnapshotAndFlussLogSplit) currentBoundedSplit)
+                                                .isStreaming())
+                        // is hybrid split, or is lakeAndFlussLog split in streaming mode,
+                        // not to finish this split
                         // since it remains log to read
                         ? Collections.emptySet()
                         : Collections.singleton(currentBoundedSplit.splitId());

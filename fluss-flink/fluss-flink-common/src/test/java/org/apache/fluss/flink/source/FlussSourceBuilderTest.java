@@ -192,7 +192,7 @@ public class FlussSourceBuilderTest extends FlinkTestBase {
                         .build();
 
         // Then
-        assertThat(source.scanPartitionDiscoveryIntervalMs).isEqualTo(10000L);
+        assertThat(source.scanPartitionDiscoveryIntervalMs).isEqualTo(60000L);
     }
 
     @Test

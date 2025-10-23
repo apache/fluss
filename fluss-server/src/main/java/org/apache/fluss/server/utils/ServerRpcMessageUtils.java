@@ -21,12 +21,15 @@ import org.apache.fluss.cluster.Endpoint;
 import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.cluster.ServerType;
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.cluster.AlterConfigOpType;
+import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
@@ -80,8 +83,10 @@ import org.apache.fluss.rpc.messages.PbAdjustIsrReqForBucket;
 import org.apache.fluss.rpc.messages.PbAdjustIsrReqForTable;
 import org.apache.fluss.rpc.messages.PbAdjustIsrRespForBucket;
 import org.apache.fluss.rpc.messages.PbAdjustIsrRespForTable;
+import org.apache.fluss.rpc.messages.PbAlterConfig;
 import org.apache.fluss.rpc.messages.PbBucketMetadata;
 import org.apache.fluss.rpc.messages.PbCreateAclRespInfo;
+import org.apache.fluss.rpc.messages.PbDescribeConfig;
 import org.apache.fluss.rpc.messages.PbDropAclsFilterResult;
 import org.apache.fluss.rpc.messages.PbDropAclsMatchingAcl;
 import org.apache.fluss.rpc.messages.PbFetchLogReqForBucket;
@@ -167,6 +172,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.OptionalInt;
 import java.util.Set;
@@ -218,6 +224,17 @@ public class ServerRpcMessageUtils {
                 protoTableBucket.getBucketId());
     }
 
+    public static PbTableBucket fromTableBucket(TableBucket tableBucket) {
+        PbTableBucket pbTableBucket =
+                new PbTableBucket()
+                        .setTableId(tableBucket.getTableId())
+                        .setBucketId(tableBucket.getBucket());
+        if (tableBucket.getPartitionId() != null) {
+            pbTableBucket.setPartitionId(tableBucket.getPartitionId());
+        }
+        return pbTableBucket;
+    }
+
     public static ServerNode toServerNode(PbServerNode pbServerNode, ServerType serverType) {
         return new ServerNode(
                 pbServerNode.getNodeId(),
@@ -225,6 +242,29 @@ public class ServerRpcMessageUtils {
                 pbServerNode.getPort(),
                 serverType,
                 pbServerNode.hasRack() ? pbServerNode.getRack() : null);
+    }
+
+    public static TableChange toTableChange(PbAlterConfig pbAlterConfig) {
+        AlterConfigOpType opType = AlterConfigOpType.from(pbAlterConfig.getOpType());
+        switch (opType) {
+            case SET: // SET_OPTION
+                return TableChange.set(
+                        pbAlterConfig.getConfigKey(), pbAlterConfig.getConfigValue());
+            case DELETE: // RESET_OPTION
+                return TableChange.reset(pbAlterConfig.getConfigKey());
+            case APPEND:
+            case SUBTRACT:
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported alter configs op type " + pbAlterConfig.getOpType());
+        }
+    }
+
+    public static List<TableChange> toTableChanges(List<PbAlterConfig> alterConfigs) {
+        return alterConfigs.stream()
+                .filter(Objects::nonNull)
+                .map(ServerRpcMessageUtils::toTableChange)
+                .collect(Collectors.toList());
     }
 
     public static MetadataResponse buildMetadataResponse(
@@ -1428,6 +1468,7 @@ public class ServerRpcMessageUtils {
             long snapshotId = pdLakeTableSnapshotInfo.getSnapshotId();
             Map<TableBucket, Long> bucketLogStartOffset = new HashMap<>();
             Map<TableBucket, Long> bucketLogEndOffset = new HashMap<>();
+            Map<TableBucket, Long> bucketMaxTimestamp = new HashMap<>();
             Map<Long, String> partitionNameByPartitionId = new HashMap<>();
 
             for (PbLakeTableOffsetForBucket lakeTableOffsetForBucket :
@@ -1447,8 +1488,13 @@ public class ServerRpcMessageUtils {
                         lakeTableOffsetForBucket.hasLogEndOffset()
                                 ? lakeTableOffsetForBucket.getLogEndOffset()
                                 : null;
+                Long logMaxTimestamp =
+                        lakeTableOffsetForBucket.hasMaxTimestamp()
+                                ? lakeTableOffsetForBucket.getMaxTimestamp()
+                                : null;
                 bucketLogStartOffset.put(tableBucket, logStartOffset);
                 bucketLogEndOffset.put(tableBucket, logEndOffset);
+                bucketMaxTimestamp.put(tableBucket, logMaxTimestamp);
 
                 if (lakeTableOffsetForBucket.hasPartitionName()) {
                     partitionNameByPartitionId.put(
@@ -1462,6 +1508,7 @@ public class ServerRpcMessageUtils {
                             tableId,
                             bucketLogStartOffset,
                             bucketLogEndOffset,
+                            bucketMaxTimestamp,
                             partitionNameByPartitionId));
         }
         return new CommitLakeTableSnapshotData(lakeTableInfoByTableId);
@@ -1483,6 +1530,8 @@ public class ServerRpcMessageUtils {
 
         lakeTableSnapshot.getLogEndOffset(tableBucket).ifPresent(reqForBucket::setLogEndOffset);
 
+        lakeTableSnapshot.getMaxTimestamp(tableBucket).ifPresent(reqForBucket::setMaxTimestamp);
+
         return reqForBucket;
     }
 
@@ -1502,8 +1551,11 @@ public class ServerRpcMessageUtils {
                     reqForBucket.hasLogStartOffset() ? reqForBucket.getLogStartOffset() : null;
             Long logEndOffset =
                     reqForBucket.hasLogEndOffset() ? reqForBucket.getLogEndOffset() : null;
+            Long maxTimestamp =
+                    reqForBucket.hasMaxTimestamp() ? reqForBucket.getMaxTimestamp() : null;
             lakeBucketOffsetMap.put(
-                    tableBucket, new LakeBucketOffset(snapshotId, logStartOffset, logEndOffset));
+                    tableBucket,
+                    new LakeBucketOffset(snapshotId, logStartOffset, logEndOffset, maxTimestamp));
         }
 
         return new NotifyLakeTableOffsetData(
@@ -1622,6 +1674,22 @@ public class ServerRpcMessageUtils {
     public static LakeTieringHeartbeatResponse makeLakeTieringHeartbeatResponse(
             int coordinatorEpoch) {
         return new LakeTieringHeartbeatResponse().setCoordinatorEpoch(coordinatorEpoch);
+    }
+
+    public static List<PbDescribeConfig> toPbConfigEntries(List<ConfigEntry> describeConfigs) {
+        return describeConfigs.stream()
+                .map(
+                        configEntry -> {
+                            PbDescribeConfig pbDescribeConfig =
+                                    new PbDescribeConfig()
+                                            .setConfigKey(configEntry.key())
+                                            .setConfigSource(configEntry.source().name());
+                            if (configEntry.value() != null) {
+                                pbDescribeConfig.setConfigValue(configEntry.value());
+                            }
+                            return pbDescribeConfig;
+                        })
+                .collect(Collectors.toList());
     }
 
     private static <T> Map<TableBucket, T> mergeResponse(

@@ -58,7 +58,9 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
+import static org.apache.fluss.security.acl.OperationType.ALTER;
 import static org.apache.fluss.security.acl.OperationType.CREATE;
+import static org.apache.fluss.security.acl.OperationType.DESCRIBE;
 import static org.apache.fluss.security.acl.OperationType.DROP;
 import static org.apache.fluss.security.acl.OperationType.READ;
 import static org.apache.fluss.security.acl.OperationType.WRITE;
@@ -278,40 +280,24 @@ public class DefaultAuthorizerTest {
         testOperationTypeImplicationsOfAllow(
                 Resource.cluster(),
                 OperationType.ALL,
-                Arrays.asList(
-                        READ,
-                        WRITE,
-                        OperationType.CREATE,
-                        OperationType.DROP,
-                        OperationType.ALTER,
-                        OperationType.DESCRIBE));
+                Arrays.asList(READ, WRITE, CREATE, DROP, ALTER, DESCRIBE));
         testOperationTypeImplicationsOfAllow(
-                Resource.cluster(),
-                OperationType.CREATE,
-                Collections.singleton(OperationType.DESCRIBE));
+                Resource.cluster(), OperationType.CREATE, Collections.singleton(DESCRIBE));
         testOperationTypeImplicationsOfAllow(
-                Resource.cluster(),
-                OperationType.DROP,
-                Collections.singleton(OperationType.DESCRIBE));
+                Resource.cluster(), OperationType.DROP, Collections.singleton(DESCRIBE));
         testOperationTypeImplicationsOfAllow(
-                Resource.cluster(),
-                OperationType.ALTER,
-                Collections.singleton(OperationType.DESCRIBE));
+                Resource.cluster(), ALTER, Collections.singleton(DESCRIBE));
 
-        // when we allow READ on any resource, we also allow DESCRIBE and FILESYSTEM_TOKEN on
+        // when we allow READ on any resource, we also allow to DESCRIBE and FILESYSTEM_TOKEN on
         // cluster.
         testOperationTypeImplicationsOfAllow(
-                Resource.cluster(), READ, Collections.singletonList(OperationType.DESCRIBE));
+                Resource.cluster(), READ, Collections.singletonList(DESCRIBE));
         testOperationTypeImplicationsOfAllow(
-                Resource.cluster(), WRITE, Collections.singletonList(OperationType.DESCRIBE));
+                Resource.cluster(), WRITE, Collections.singletonList(DESCRIBE));
         testOperationTypeImplicationsOfAllow(
-                Resource.database("database1"),
-                READ,
-                Collections.singletonList(OperationType.DESCRIBE));
+                Resource.database("database1"), READ, Collections.singletonList(DESCRIBE));
         testOperationTypeImplicationsOfAllow(
-                Resource.table("database2", "table1"),
-                WRITE,
-                Collections.singletonList(OperationType.DESCRIBE));
+                Resource.table("database2", "table1"), WRITE, Collections.singletonList(DESCRIBE));
     }
 
     private void testOperationTypeImplicationsOfAllow(

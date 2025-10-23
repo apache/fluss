@@ -49,7 +49,7 @@ class IOUtilsTest {
         ByteArrayOutputStream copyOut = new ByteArrayOutputStream();
         // copy bytes to a output stream
         IOUtils.copyBytes(in, copyOut);
-        // then, read bytes from the out out stream
+        // then, read bytes from the output stream
         byte[] buf = new byte[5];
         IOUtils.readFully(new ByteArrayInputStream(out.toByteArray()), buf, 0, 5);
 

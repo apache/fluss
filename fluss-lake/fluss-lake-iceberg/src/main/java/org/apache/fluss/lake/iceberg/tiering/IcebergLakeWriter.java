@@ -56,12 +56,9 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
 
     protected static final Logger LOG = LoggerFactory.getLogger(IcebergLakeWriter.class);
 
-    private static final String AUTO_MAINTENANCE_KEY = "table.datalake.auto-maintenance";
-
     private final Catalog icebergCatalog;
     private final Table icebergTable;
     private final RecordWriter recordWriter;
-    private final boolean autoMaintenanceEnabled;
 
     @Nullable private final ExecutorService compactionExecutor;
     @Nullable private CompletableFuture<RewriteDataFileResult> compactionFuture;
@@ -72,15 +69,10 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
         this.icebergCatalog = icebergCatalogProvider.get();
         this.icebergTable = getTable(writerInitContext.tablePath());
 
-        // Check auto-maintenance from table properties
-        this.autoMaintenanceEnabled =
-                Boolean.parseBoolean(
-                        icebergTable.properties().getOrDefault(AUTO_MAINTENANCE_KEY, "false"));
-
         // Create a record writer
         this.recordWriter = createRecordWriter(writerInitContext);
 
-        if (autoMaintenanceEnabled) {
+        if (writerInitContext.tableInfo().getTableConfig().isDataLakeAutoCompaction()) {
             this.compactionExecutor =
                     Executors.newSingleThreadExecutor(
                             new ExecutorThreadFactory(
@@ -137,9 +129,11 @@ public class IcebergLakeWriter implements LakeWriter<IcebergWriteResult> {
                 compactionFuture.cancel(true);
             }
 
-            if (compactionExecutor != null
-                    && !compactionExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
-                LOG.warn("Fail to close compactionExecutor.");
+            if (compactionExecutor != null) {
+                compactionExecutor.shutdown();
+                if (!compactionExecutor.awaitTermination(30, TimeUnit.SECONDS)) {
+                    LOG.warn("Fail to close compactionExecutor.");
+                }
             }
 
             if (recordWriter != null) {

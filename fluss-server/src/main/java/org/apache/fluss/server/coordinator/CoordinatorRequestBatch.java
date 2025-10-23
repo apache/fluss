@@ -211,7 +211,7 @@ public class CoordinatorRequestBatch {
             List<Integer> bucketReplicas,
             LeaderAndIsr leaderAndIsr) {
         tabletServers.stream()
-                .filter(s -> s >= 0)
+                .filter(s -> s >= 0 && !coordinatorContext.shuttingDownTabletServers().contains(s))
                 .forEach(
                         id -> {
                             Map<TableBucket, PbNotifyLeaderAndIsrReqForBucket>
