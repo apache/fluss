@@ -114,19 +114,20 @@ public class RebalanceManager {
 
     public void registerRebalance(Map<TableBucket, RebalancePlanForBucket> rebalancePlan) {
         checkNotClosed();
+
+        registerTime = System.currentTimeMillis();
+        // Register to zookeeper first.
+        try {
+            zkClient.registerRebalancePlan(new RebalancePlan(rebalancePlan));
+        } catch (Exception e) {
+            LOG.error("Error when register rebalance plan to zookeeper.", e);
+            throw new RebalanceFailureException(
+                    "Error when register rebalance plan to zookeeper.", e);
+        }
+
         inLock(
                 lock,
                 () -> {
-                    registerTime = System.currentTimeMillis();
-                    // Register to zookeeper first.
-                    try {
-                        zkClient.registerRebalancePlan(new RebalancePlan(rebalancePlan));
-                    } catch (Exception e) {
-                        LOG.error("Error when register rebalance plan to zookeeper.", e);
-                        throw new RebalanceFailureException(
-                                "Error when register rebalance plan to zookeeper.", e);
-                    }
-
                     // Then, register to ongoingRebalanceTasks.
                     rebalancePlan.forEach(
                             ((tableBucket, rebalancePlanForBucket) -> {
@@ -198,25 +199,20 @@ public class RebalanceManager {
 
     public RebalancePlan generateRebalancePlan(List<Goal> goalsByPriority) throws Exception {
         checkNotClosed();
-        return inLock(
-                lock,
-                () -> {
-                    List<RebalancePlanForBucket> rebalancePlanForBuckets;
-                    try {
-                        // Generate the latest cluster model.
-                        ClusterModel clusterModel = getClusterModel();
+        List<RebalancePlanForBucket> rebalancePlanForBuckets;
+        try {
+            // Generate the latest cluster model.
+            ClusterModel clusterModel = getClusterModel();
 
-                        // do optimize.
-                        rebalancePlanForBuckets =
-                                goalOptimizer.doOptimizeOnce(clusterModel, goalsByPriority);
-                    } catch (Exception e) {
-                        LOG.error("Failed to generate rebalance plan.", e);
-                        throw e;
-                    }
+            // do optimize.
+            rebalancePlanForBuckets = goalOptimizer.doOptimizeOnce(clusterModel, goalsByPriority);
+        } catch (Exception e) {
+            LOG.error("Failed to generate rebalance plan.", e);
+            throw e;
+        }
 
-                    // group by tableId and partitionId to generate rebalance plan.
-                    return buildRebalancePlan(rebalancePlanForBuckets);
-                });
+        // group by tableId and partitionId to generate rebalance plan.
+        return buildRebalancePlan(rebalancePlanForBuckets);
     }
 
     public @Nullable RebalancePlanForBucket getRebalancePlanForBucket(TableBucket tableBucket) {
