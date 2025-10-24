@@ -93,6 +93,10 @@ public class LeaderAndIsr {
         return new LeaderAndIsr(leader, leaderEpoch, newIsr, coordinatorEpoch, bucketEpoch + 1);
     }
 
+    public LeaderAndIsr newLeaderAndIsrWithNewLeaderEpoch() {
+        return new LeaderAndIsr(leader, leaderEpoch + 1, isr, coordinatorEpoch, bucketEpoch);
+    }
+
     public int leader() {
         return leader;
     }
