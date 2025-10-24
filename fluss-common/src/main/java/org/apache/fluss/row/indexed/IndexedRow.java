@@ -36,8 +36,6 @@ import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.StringType;
 import org.apache.fluss.utils.MurmurHashUtils;
 
-import java.util.Arrays;
-
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 
 /**
@@ -252,11 +250,11 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
             case DATE:
             case TIME_WITHOUT_TIME_ZONE:
             case CHAR:
-            case BINARY:
             case TIMESTAMP_WITHOUT_TIME_ZONE:
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
                 return true;
             case STRING:
+            case BINARY:
             case BYTES:
                 return false;
             case DECIMAL:
@@ -414,17 +412,7 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
 
     @Override
     public byte[] getBinary(int pos, int length) {
-        byte[] bytes = new byte[length];
-        segment.get(getFieldOffset(pos), bytes, 0, length);
-
-        int newLen = 0;
-        for (int i = length - 1; i >= 0; i--) {
-            if (bytes[i] != (byte) 0) {
-                newLen = i + 1;
-                break;
-            }
-        }
-        return Arrays.copyOfRange(bytes, 0, newLen);
+        return getBytes(pos);
     }
 
     @Override

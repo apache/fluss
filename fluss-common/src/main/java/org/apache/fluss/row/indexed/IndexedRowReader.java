@@ -27,7 +27,6 @@ import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
 
 import java.io.Serializable;
-import java.util.Arrays;
 
 import static org.apache.fluss.types.DataTypeChecks.getLength;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
@@ -157,8 +156,8 @@ public class IndexedRowReader {
         return TimestampNtz.fromMillis(milliseconds, nanosOfMillisecond);
     }
 
-    public byte[] readBinary(int length) {
-        return readBytesInternal(length);
+    public byte[] readBinary() {
+        return readBytes();
     }
 
     public byte[] readBytes() {
@@ -186,17 +185,8 @@ public class IndexedRowReader {
     private byte[] readBytesInternal(int length) {
         byte[] bytes = new byte[length];
         segment.get(position, bytes, 0, length);
-
-        int newLen = 0;
-        for (int i = length - 1; i >= 0; i--) {
-            if (bytes[i] != (byte) 0) {
-                newLen = i + 1;
-                break;
-            }
-        }
-
         position += length;
-        return Arrays.copyOfRange(bytes, 0, newLen);
+        return bytes;
     }
 
     /**
@@ -204,7 +194,7 @@ public class IndexedRowReader {
      *
      * @param fieldType the element type of the row
      */
-    static FieldReader createFieldReader(DataType fieldType) {
+    public static FieldReader createFieldReader(DataType fieldType) {
         final FieldReader fieldReader;
         // ordered by type root definition
         switch (fieldType.getTypeRoot()) {
@@ -219,8 +209,7 @@ public class IndexedRowReader {
                 fieldReader = (reader, pos) -> reader.readBoolean();
                 break;
             case BINARY:
-                final int binaryLength = getLength(fieldType);
-                fieldReader = (reader, pos) -> reader.readBinary(binaryLength);
+                fieldReader = (reader, pos) -> reader.readBinary();
                 break;
             case BYTES:
                 fieldReader = (reader, pos) -> reader.readBytes();
@@ -277,7 +266,7 @@ public class IndexedRowReader {
      *
      * @see #createFieldReader(DataType)
      */
-    interface FieldReader extends Serializable {
+    public interface FieldReader extends Serializable {
         Object readField(IndexedRowReader reader, int pos);
     }
 }
