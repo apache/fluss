@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.lake.paimon;
+package org.apache.fluss.lake.paimon.utils;
 
 import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.BigIntType;

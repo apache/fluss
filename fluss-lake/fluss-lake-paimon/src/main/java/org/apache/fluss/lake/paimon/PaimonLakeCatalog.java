@@ -34,6 +34,8 @@ import org.apache.paimon.catalog.Identifier;
 import org.apache.paimon.options.Options;
 import org.apache.paimon.schema.Schema;
 import org.apache.paimon.schema.SchemaChange;
+import org.apache.paimon.table.FileStoreTable;
+import org.apache.paimon.table.Table;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.DataTypes;
 
@@ -43,6 +45,7 @@ import java.util.List;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimon;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchema;
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.toPaimonSchemaChanges;
+import static org.apache.fluss.lake.paimon.utils.PaimonSchemaValidation.validatePaimonSchemaCapability;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.TIMESTAMP_COLUMN_NAME;
@@ -120,7 +123,13 @@ public class PaimonLakeCatalog implements LakeCatalog {
             // not ignore if table exists
             paimonCatalog.createTable(tablePath, schema, false);
         } catch (Catalog.TableAlreadyExistException e) {
-            throw new TableAlreadyExistException("Table " + tablePath + " already exists.");
+            try {
+                Table table = paimonCatalog.getTable(tablePath);
+                FileStoreTable fileStoreTable = (FileStoreTable) table;
+                validatePaimonSchemaCapability(fileStoreTable.schema().toSchema(), schema);
+            } catch (Catalog.TableNotExistException tableNotExistException) {
+                throw new RuntimeException("Table " + tablePath + " not exists.");
+            }
         }
     }
 

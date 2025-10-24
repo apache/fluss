@@ -77,7 +77,10 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
                 throws TableAlreadyExistException {
             if (tableByPath.containsKey(tablePath)) {
-                throw new TableAlreadyExistException("Table " + tablePath + " already exists");
+                TableDescriptor existingTable = tableByPath.get(tablePath);
+                if (!existingTable.equals(tableDescriptor)) {
+                    throw new TableAlreadyExistException("Table " + tablePath + " already exists.");
+                }
             }
             tableByPath.put(tablePath, tableDescriptor);
         }
