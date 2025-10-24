@@ -242,16 +242,43 @@ public class LookupNormalizer implements Serializable {
             boolean supportPrefixLookup = ArrayUtils.isPrefix(encodedPrimaryKeys, bucketKeys);
             if (supportPrefixLookup) {
                 // try to create prefix lookup normalizer
-                // TODO: support prefix lookup with arbitrary part of prefix of primary key
-                int[] expectedLookupKeys =
-                        ArrayUtils.intersection(
-                                primaryKeys, ArrayUtils.concat(bucketKeys, partitionKeys));
-                return createLookupNormalizer(
-                        lookupKeyNames,
-                        fieldNames(expectedLookupKeys, schema),
-                        lookupKeys,
-                        schema,
-                        LookupType.PREFIX_LOOKUP);
+                List<String> bucketKeyNames = fieldNames(bucketKeys, schema);
+
+                // Check if lookup keys contain all bucket keys for prefix lookup support
+                if (new HashSet<>(lookupKeyNames).containsAll(bucketKeyNames)) {
+                    // Support prefix lookup with available bucket keys and any available partition
+                    // keys
+                    // The underlying fluss-client will handle cross-partition lookup if needed
+                    List<String> availablePartitionKeys = new ArrayList<>();
+                    if (partitionKeys.length > 0) {
+                        List<String> partitionKeyNames = fieldNames(partitionKeys, schema);
+                        // Include partition keys that are available in lookup keys
+                        for (String partitionKey : partitionKeyNames) {
+                            if (lookupKeyNames.contains(partitionKey)) {
+                                availablePartitionKeys.add(partitionKey);
+                            }
+                        }
+                    }
+
+                    // Expected lookup keys are bucket keys plus any available partition keys
+                    List<String> expectedLookupKeyNames = new ArrayList<>(bucketKeyNames);
+                    expectedLookupKeyNames.addAll(availablePartitionKeys);
+
+                    return createLookupNormalizer(
+                            lookupKeyNames,
+                            expectedLookupKeyNames,
+                            lookupKeys,
+                            schema,
+                            LookupType.PREFIX_LOOKUP);
+                } else {
+                    // Lookup keys don't contain all bucket keys, can't support prefix lookup
+                    throw new TableException(
+                            "The Fluss lookup function supports prefix lookup where the lookup keys include all bucket keys."
+                                    + " Required bucket keys are "
+                                    + bucketKeyNames
+                                    + ", but the lookup keys are "
+                                    + lookupKeyNames);
+                }
             } else {
                 // throw exception for tables that doesn't support prefix lookup
                 throw new TableException(
