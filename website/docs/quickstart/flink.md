@@ -57,8 +57,8 @@ services:
       HDFS-SITE.XML_dfs.permissions.enabled: false
       HDFS-SITE.XML_dfs.datanode.address: datanode:9866
     healthcheck:
-      test: ["CMD", "hdfs dfs -ls /"]
-      interval: 10s
+      test: ["CMD", "hdfs dfs -test -d / && exit 0 || exit 1"]
+      interval: 15s
       timeout: 10s
       retries: 20
 
@@ -84,8 +84,6 @@ services:
         condition: service_healthy
       zookeeper:
         condition: service_started
-      datanode:
-        condition: service_started
     environment:
       - |
         FLUSS_PROPERTIES=
@@ -95,9 +93,7 @@ services:
         datalake.format: paimon
         datalake.paimon.metastore: filesystem
         datalake.paimon.warehouse: hdfs://namenode:8020/fluss-lake
-    volumes:
-      - ./lib:/tmp/lib
-    entrypoint: [ "sh", "-c", "cp -v /tmp/lib/*.jar /opt/fluss/plugins/iceberg/ && exec /docker-entrypoint.sh coordinatorServer" ]
+    command: coordinatorServer
   tablet-server:
     image: fluss/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
@@ -375,7 +371,7 @@ The following SQL query should return an empty result.
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
 
-## Fluss Remote Storage
+## Remote Storage
 
 Finally, you can use the following command to view the fluss kv snapshot stored in fluss remote storage:
 ```shell
@@ -529,7 +525,7 @@ The result looks like:
 ```
 You can execute the real-time analytics query multiple times, and the results will vary with each run as new data is continuously written to Fluss in real-time.
 
-### Storage
+### Lake Storage
 
 Finally, you can use the following command to view the files stored in Paimon Hadoop warehouse:
 ```shell

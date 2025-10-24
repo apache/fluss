@@ -97,7 +97,6 @@ services:
     depends_on:
       - zookeeper
       - namenode
-      - datanode
     environment:
       - |
         FLUSS_PROPERTIES=
@@ -123,7 +122,7 @@ services:
         bind.listeners: FLUSS://tablet-server:9123
         data.dir: /tmp/fluss/data
         remote.data.dir: hdfs://namenode:8020/fluss-data
-        kv.snapshot.interval: 10s
+        kv.snapshot.interval: 30s
         datalake.format: iceberg
         datalake.iceberg.type: hadoop
         datalake.iceberg.warehouse: hdfs://namenode:8020/fluss-lake
@@ -386,7 +385,7 @@ The following SQL query should return an empty result.
 SELECT * FROM fluss_customer WHERE `cust_key` = 1;
 ```
 
-## Fluss Remote Storage
+## Remote Storage
 
 Finally, you can use the following command to view the fluss kv snapshot stored in fluss remote storage:
 ```shell
@@ -547,7 +546,7 @@ SELECT sum(total_price) as sum_price FROM datalake_enriched_orders;
 
 You can execute the real-time analytics query multiple times, and the results will vary with each run as new data is continuously written to Fluss in real-time.
 
-### Storage
+### Lake Storage
 
 Finally, you can use the following command to view the files stored in Iceberg Hadoop warehouse:
 ```shell
