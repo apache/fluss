@@ -80,6 +80,7 @@ public class FlinkUnionReadLogTableITCase extends FlinkUnionReadTestBase {
         TablePath t1 = TablePath.of(DEFAULT_DB, tableName);
         List<Row> writtenRows = new ArrayList<>();
         long tableId = prepareLogTable(t1, DEFAULT_BUCKET_NUM, isPartitioned, writtenRows);
+        checkCatalogProperties(t1);
         // wait until records has been synced
         waitUntilBucketSynced(t1, tableId, DEFAULT_BUCKET_NUM, isPartitioned);
 

@@ -28,6 +28,7 @@ import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.flink.tiering.LakeTieringJobBuilder;
+import org.apache.fluss.flink.utils.DataLakeUtils;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableBucket;
@@ -120,6 +121,10 @@ public class FlinkIcebergTieringTestBase {
             throw new FlussRuntimeException("Failed to create Iceberg warehouse path", e);
         }
         conf.setString("datalake.iceberg.warehouse", warehousePath);
+
+        // these properties do not take effect because iceberg.type is not jdbc
+        conf.setString("datalake.iceberg.jdbc.user", "admin");
+        conf.setString("datalake.iceberg.jdbc.password", "pass");
         return conf;
     }
 
@@ -217,6 +222,14 @@ public class FlinkIcebergTieringTestBase {
             throws Exception {
         admin.createTable(tablePath, tableDescriptor, true).get();
         return admin.getTableInfo(tablePath).get().getTableId();
+    }
+
+    protected void checkCatalogProperties(TablePath tablePath) throws Exception {
+        Map<String, String> catalogProperties =
+                DataLakeUtils.extractLakeCatalogProperties(
+                        admin.getTableInfo(tablePath).get().getProperties());
+        assertThat(catalogProperties.containsKey("jdbc.user")).isTrue();
+        assertThat(catalogProperties.containsKey("jdbc.password")).isFalse();
     }
 
     protected void assertReplicaStatus(
