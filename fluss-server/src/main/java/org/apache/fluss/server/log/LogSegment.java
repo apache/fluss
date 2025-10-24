@@ -23,15 +23,22 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.CorruptRecordException;
 import org.apache.fluss.exception.InvalidColumnProjectionException;
 import org.apache.fluss.exception.InvalidRecordException;
+import org.apache.fluss.exception.LogOffsetOutOfRangeException;
 import org.apache.fluss.exception.LogSegmentOffsetOverflowException;
 import org.apache.fluss.metadata.LogFormat;
+import org.apache.fluss.record.BytesViewLogRecords;
 import org.apache.fluss.record.FileChannelChunk;
+import org.apache.fluss.record.FileLogInputStream.FileChannelLogRecordBatch;
 import org.apache.fluss.record.FileLogProjection;
 import org.apache.fluss.record.FileLogRecords;
+import org.apache.fluss.record.Filter;
 import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.record.LogRecordBatchIterator;
 import org.apache.fluss.record.LogRecords;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.record.TimestampAndOffset;
+import org.apache.fluss.record.bytesview.BytesView;
+import org.apache.fluss.record.bytesview.MultiBytesView;
 import org.apache.fluss.shaded.guava32.com.google.common.collect.Iterables;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
@@ -387,7 +394,10 @@ public final class LogSegment {
                         offsetIndex().lastOffset(),
                         fileLogRecords.sizeInBytes(),
                         fileLogRecords.sizeInBytes(),
-                        false);
+                        false,
+                        null,
+                        null,
+                        null);
         if (fetchData == null) {
             return baseOffset;
         } else {
@@ -457,7 +467,7 @@ public final class LogSegment {
     public FetchDataInfo read(
             long startOffset, int maxSize, long maxPosition, boolean minOneMessage)
             throws IOException {
-        return read(startOffset, maxSize, maxPosition, minOneMessage, null);
+        return read(startOffset, maxSize, maxPosition, minOneMessage, null, null, null);
     }
 
     /**
@@ -471,21 +481,67 @@ public final class LogSegment {
      * @param minOneMessage If this is true, the first message will be returned even if it exceeds
      *     `maxSize` (if one exists)
      * @param projection The column projection to apply to the log records
-     * @return The fetched data and the offset metadata of the first message whose offset is >=
-     *     startOffset, or null if the startOffset is larger than the largest offset in this log
+     * @param recordBatchFilter The filter to apply to the log records (must be null if readContext
+     *     is null)
+     * @param readContext The read context for batch filtering (must be null if recordBatchFilter is
+     *     null)
+     * @throws LogOffsetOutOfRangeException If startOffset is beyond the log start and end offset
+     * @return The fetch data information including fetch starting offset metadata and messages
+     *     read.
      */
-    @Nullable
     public FetchDataInfo read(
+            long startOffset,
+            int maxSize,
+            long maxPosition,
+            boolean minOneMessage,
+            @Nullable FileLogProjection projection,
+            @Nullable Filter recordBatchFilter,
+            @Nullable LogRecordBatch.ReadContext readContext)
+            throws IOException {
+        // Validate that recordBatchFilter and readContext are either both null or both non-null
+        if ((recordBatchFilter == null) != (readContext == null)) {
+            throw new IllegalArgumentException(
+                    "recordBatchFilter and readContext must be either both null or both non-null");
+        }
+
+        if (recordBatchFilter != null) {
+            return readWithFilter(
+                    startOffset,
+                    maxSize,
+                    maxPosition,
+                    minOneMessage,
+                    projection,
+                    recordBatchFilter,
+                    readContext);
+        } else {
+            return readWithoutFilter(startOffset, maxSize, maxPosition, minOneMessage, projection);
+        }
+    }
+
+    public void changeFileSuffixes(String oldSuffix, String newSuffix) throws IOException {
+        fileLogRecords.renameTo(
+                new File(
+                        FileUtils.replaceSuffix(
+                                fileLogRecords.file().getPath(), oldSuffix, newSuffix)));
+        lazyOffsetIndex.renameTo(
+                new File(
+                        FileUtils.replaceSuffix(
+                                lazyOffsetIndex.file().getPath(), oldSuffix, newSuffix)));
+        lazyTimeIndex.renameTo(
+                new File(
+                        FileUtils.replaceSuffix(
+                                lazyTimeIndex.file().getPath(), oldSuffix, newSuffix)));
+    }
+
+    @Nullable
+    private FetchDataInfo readWithoutFilter(
             long startOffset,
             int maxSize,
             long maxPosition,
             boolean minOneMessage,
             @Nullable FileLogProjection projection)
             throws IOException {
-        if (maxSize < 0) {
-            throw new IllegalArgumentException(
-                    "Invalid max size " + maxSize + " for log read from segment " + fileLogRecords);
-        }
+
         FileLogRecords.LogOffsetPosition startOffsetAndSize = translateOffset(startOffset, 0);
         if (startOffsetAndSize == null) {
             return null;
@@ -521,19 +577,103 @@ public final class LogSegment {
         }
     }
 
-    public void changeFileSuffixes(String oldSuffix, String newSuffix) throws IOException {
-        fileLogRecords.renameTo(
-                new File(
-                        FileUtils.replaceSuffix(
-                                fileLogRecords.file().getPath(), oldSuffix, newSuffix)));
-        lazyOffsetIndex.renameTo(
-                new File(
-                        FileUtils.replaceSuffix(
-                                lazyOffsetIndex.file().getPath(), oldSuffix, newSuffix)));
-        lazyTimeIndex.renameTo(
-                new File(
-                        FileUtils.replaceSuffix(
-                                lazyTimeIndex.file().getPath(), oldSuffix, newSuffix)));
+    @Nullable
+    private FetchDataInfo readWithFilter(
+            long startOffset,
+            int maxSize,
+            long maxPosition,
+            boolean minOneMessage,
+            @Nullable FileLogProjection projection,
+            Filter recordBatchFilter,
+            @Nullable LogRecordBatch.ReadContext readContext)
+            throws IOException {
+
+        // Use translateOffset to precisely locate the starting position, same as readWithoutFilter
+        FileLogRecords.LogOffsetPosition startOffsetAndSize = translateOffset(startOffset, 0);
+        if (startOffsetAndSize == null) {
+            return null;
+        }
+        int startPosition = startOffsetAndSize.getPosition();
+
+        // Use the translated position instead of starting from position 0
+        LogRecordBatchIterator<FileChannelLogRecordBatch> iter =
+                fileLogRecords
+                        .batchIterator(startOffset, startPosition)
+                        .filter(recordBatchFilter, readContext);
+
+        // If no batches found after filtering, fallback to unfiltered iterator to avoid infinite
+        // loop
+        if (!iter.hasNext()) {
+            return null;
+        }
+
+        // Get the first batch to determine adjustedMaxSize for minOneMessage case
+        FileChannelLogRecordBatch firstBatch = iter.next();
+
+        // Calculate adjustedMaxSize similar to readWithoutFilter
+        int adjustedMaxSize = minOneMessage ? Math.max(maxSize, firstBatch.sizeInBytes()) : maxSize;
+
+        MultiBytesView.Builder builder = MultiBytesView.builder();
+        int accumulatedSize = 0;
+
+        // Add the first batch
+        if (firstBatch.position() <= maxPosition) {
+            if (null == projection) {
+                builder.addBytes(firstBatch.getBytesView(true));
+                accumulatedSize += firstBatch.sizeInBytes();
+            } else {
+                BytesView projectedBytesView = projection.projectRecordBatch(firstBatch);
+                if (projectedBytesView.getBytesLength() > 0) {
+                    builder.addBytes(projectedBytesView);
+                    accumulatedSize += projectedBytesView.getBytesLength();
+                }
+            }
+        }
+
+        // Process remaining batches
+        while (iter.hasNext()) {
+            FileChannelLogRecordBatch batch = iter.next();
+
+            if (batch.position() > maxPosition) {
+                break;
+            }
+
+            // Check if adding this batch would exceed the adjustedMaxSize
+            int batchSize =
+                    null == projection
+                            ? batch.sizeInBytes()
+                            : projection.projectRecordBatch(batch).getBytesLength();
+
+            if (accumulatedSize + batchSize > adjustedMaxSize) {
+                if (!minOneMessage || !builder.isEmpty()) {
+                    break;
+                }
+            }
+
+            if (null == projection) {
+                builder.addBytes(batch.getBytesView());
+                accumulatedSize += batch.sizeInBytes();
+            } else {
+                BytesView projectedBytesView = projection.projectRecordBatch(batch);
+                if (projectedBytesView.getBytesLength() > 0) {
+                    // Projected bytes views are always contains materialized memory bytes views for
+                    // header, leaving no opportunity for file region bytes views merging
+                    // optimization. Thus, appending multi-byte views directly is acceptable.
+                    builder.addBytes(projectedBytesView);
+                    accumulatedSize += projectedBytesView.getBytesLength();
+                }
+            }
+        }
+
+        LogOffsetMetadata offsetMetadata =
+                new LogOffsetMetadata(
+                        firstBatch.baseLogOffset(), this.baseOffset, firstBatch.position());
+
+        if (builder.isEmpty()) {
+            return new FetchDataInfo(offsetMetadata, MemoryLogRecords.EMPTY);
+        }
+
+        return new FetchDataInfo(offsetMetadata, new BytesViewLogRecords(builder.build()));
     }
 
     private void ensureOffsetInRange(long offset) throws IOException {

@@ -32,6 +32,7 @@ import org.apache.fluss.row.TypedSetters;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.LocalZonedTimestampType;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.TimestampType;
 
 import javax.annotation.Nullable;
@@ -448,6 +449,101 @@ public final class AlignedRow extends BinarySection
         return BinarySegmentUtils.hashByWords(segments, offset, sizeInBytes);
     }
 
+    /**
+     * Creates an AlignedRow from an InternalRow using the provided RowType. If the input row is
+     * already an AlignedRow, it returns the original row for efficiency. Otherwise, it converts the
+     * row to AlignedRow format.
+     *
+     * @param rowType The type schema for the row data
+     * @param row The InternalRow to convert, can be null
+     * @return An AlignedRow instance, or null if input row is null
+     */
+    public static AlignedRow from(RowType rowType, @Nullable InternalRow row) {
+        if (row == null) {
+            return null;
+        }
+
+        // If the input is already an AlignedRow, return it directly for efficiency
+        if (row instanceof AlignedRow) {
+            return (AlignedRow) row;
+        }
+
+        // Convert other InternalRow types to AlignedRow
+        int fieldCount = rowType.getFieldCount();
+        AlignedRow alignedRow = new AlignedRow(fieldCount);
+        // Allocate sufficient space for variable-length fields
+        // 64 bytes per field should be sufficient for most cases
+        int initialSize = fieldCount * 64;
+        AlignedRowWriter writer = new AlignedRowWriter(alignedRow, initialSize);
+        writer.reset();
+
+        for (int i = 0; i < fieldCount; i++) {
+            if (row.isNullAt(i)) {
+                writer.setNullAt(i);
+            } else {
+                DataType fieldType = rowType.getTypeAt(i);
+                switch (fieldType.getTypeRoot()) {
+                    case BOOLEAN:
+                        writer.writeBoolean(i, row.getBoolean(i));
+                        break;
+                    case TINYINT:
+                        writer.writeByte(i, row.getByte(i));
+                        break;
+                    case SMALLINT:
+                        writer.writeShort(i, row.getShort(i));
+                        break;
+                    case INTEGER:
+                    case DATE:
+                    case TIME_WITHOUT_TIME_ZONE:
+                        writer.writeInt(i, row.getInt(i));
+                        break;
+                    case BIGINT:
+                        writer.writeLong(i, row.getLong(i));
+                        break;
+                    case FLOAT:
+                        writer.writeFloat(i, row.getFloat(i));
+                        break;
+                    case DOUBLE:
+                        writer.writeDouble(i, row.getDouble(i));
+                        break;
+                    case STRING:
+                        writer.writeString(i, row.getString(i));
+                        break;
+                    case DECIMAL:
+                        DecimalType decimalType = (DecimalType) fieldType;
+                        writer.writeDecimal(
+                                i,
+                                row.getDecimal(
+                                        i, decimalType.getPrecision(), decimalType.getScale()),
+                                decimalType.getPrecision());
+                        break;
+                    case TIMESTAMP_WITHOUT_TIME_ZONE:
+                        TimestampType timestampType = (TimestampType) fieldType;
+                        writer.writeTimestampNtz(
+                                i,
+                                row.getTimestampNtz(i, timestampType.getPrecision()),
+                                timestampType.getPrecision());
+                        break;
+                    case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
+                        LocalZonedTimestampType localZonedTimestampType =
+                                (LocalZonedTimestampType) fieldType;
+                        writer.writeTimestampLtz(
+                                i,
+                                row.getTimestampLtz(i, localZonedTimestampType.getPrecision()),
+                                localZonedTimestampType.getPrecision());
+                        break;
+                    default:
+                        // For unsupported types, write as null
+                        writer.setNullAt(i);
+                        break;
+                }
+            }
+        }
+
+        writer.complete();
+        return alignedRow;
+    }
+
     public static AlignedRow singleColumn(@Nullable Integer i) {
         AlignedRow row = new AlignedRow(1);
         AlignedRowWriter writer = new AlignedRowWriter(row);
@@ -480,7 +576,7 @@ public final class AlignedRow extends BinarySection
     }
 
     /**
-     * If it is a fixed-length field, we can call this BinaryRowData's setXX method for in-place
+     * If it is a fixed-length field, we can call this AlignedRow's setXX method for in-place
      * updates. If it is variable-length field, can't use this method, because the underlying data
      * is stored continuously.
      */
