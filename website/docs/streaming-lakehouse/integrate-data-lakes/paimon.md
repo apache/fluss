@@ -176,7 +176,7 @@ The following table shows the mapping between [Fluss data types](table-design/da
 | BINARY                        | BINARY                        |
 | BYTES                         | BYTES                         |
 
-## 📊 Snapshot Metadata
+## Snapshot Metadata
 
 Fluss adds specific metadata to Paimon snapshots for traceability:
 
