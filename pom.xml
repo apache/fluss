@@ -1054,7 +1054,7 @@
                     <configuration>
                         <quiet>true</quiet>
                         <detectOfflineLinks>false</detectOfflineLinks>
-                        <release>11</release>
+                        <release>8</release>
                         <additionalJOptions>
                             <additionalJOption>-Xdoclint:none</additionalJOption>
                             <additionalJOption>--allow-script-in-comments</additionalJOption>
