@@ -48,7 +48,7 @@ The container manifest below configures Fluss to use Logback and Loki4j. Save it
 ```dockerfile
 ARG FLUSS_VERSION
 
-FROM fluss/fluss:$FLUSS_DOCKER_VERSION$
+FROM apache/fluss:$FLUSS_DOCKER_VERSION$
 
 # remove default logging backend from classpath and add logback to classpath
 RUN rm -rf ${FLUSS_HOME}/lib/log4j-slf4j-impl-*.jar && \
@@ -131,7 +131,7 @@ services:
   #end
   #begin Flink cluster
   jobmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
+    image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     ports:
       - "8083:8081"
     command: jobmanager
@@ -144,7 +144,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/paimon
   taskmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
+    image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     depends_on:
       - jobmanager
     command: taskmanager
