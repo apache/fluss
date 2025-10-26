@@ -62,7 +62,7 @@ services:
     image: zookeeper:3.9.2
 
   coordinator-server:
-    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
+    image: apache/fluss:$FLUSS_DOCKER_VERSION$
     depends_on:
       - zookeeper
     environment:
@@ -80,7 +80,7 @@ services:
     entrypoint: ["sh", "-c", "cp -v /tmp/lib/*.jar /opt/fluss/plugins/iceberg/ && exec /docker-entrypoint.sh coordinatorServer"]
 
   tablet-server:
-    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
+    image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -99,7 +99,7 @@ services:
       - shared-tmpfs:/tmp/iceberg
 
   jobmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
+    image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     ports:
       - "8083:8081"
     command: jobmanager
@@ -111,7 +111,7 @@ services:
       - shared-tmpfs:/tmp/iceberg
 
   taskmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
+    image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     depends_on:
       - jobmanager
     command: taskmanager
@@ -137,7 +137,7 @@ The Docker Compose environment consists of the following containers:
 - **Fluss Cluster:** a Fluss `CoordinatorServer`, a Fluss `TabletServer` and a `ZooKeeper` server.
 - **Flink Cluster**: a Flink `JobManager` and a Flink `TaskManager` container to execute queries.
 
-**Note:** The `fluss/quickstart-flink` image is based on [flink:1.20.1-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256:bf1af6406c4f4ad8faa46efe2b3d0a0bf811d1034849c42c1e3484712bc83505) and
+**Note:** The `apache/fluss-quickstart-flink` image is based on [flink:1.20.1-java17](https://hub.docker.com/layers/library/flink/1.20-java17/images/sha256:bf1af6406c4f4ad8faa46efe2b3d0a0bf811d1034849c42c1e3484712bc83505) and
 includes the [fluss-flink](engine-flink/getting-started.md), [iceberg-flink](https://iceberg.apache.org/docs/latest/flink/) and
 [flink-connector-faker](https://flink-packages.org/packages/flink-faker) to simplify this guide.
 
