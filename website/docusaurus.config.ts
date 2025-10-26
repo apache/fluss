@@ -19,6 +19,8 @@ import {themes as prismThemes} from 'prism-react-renderer';
 import type {Config} from '@docusaurus/types';
 import type * as Preset from '@docusaurus/preset-classic';
 import versionReplace from './src/plugins/remark-version-replace/index';
+import { loadVersionData } from './src/utils/versionData';
+const { versionsMap, latestVersion } = loadVersionData();
 
 const config: Config = {
   title: 'Apache Fluss™ (Incubating)',
@@ -56,10 +58,12 @@ const config: Config = {
       'classic',
       {
         docs: {
-          sidebarPath: './sidebars.ts',
-          editUrl: ({docPath}) =>
-              `https://github.com/apache/fluss/edit/main/website/docs/${docPath}`,
-          remarkPlugins: [versionReplace],
+            sidebarPath: './sidebars.ts',
+            editUrl: ({docPath}) =>
+                `https://github.com/apache/fluss/edit/main/website/docs/${docPath}`,
+            remarkPlugins: [versionReplace],
+            lastVersion: latestVersion,
+            versions: versionsMap
         },
         blog: {
           showReadingTime: false,
