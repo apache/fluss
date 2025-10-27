@@ -1,3 +1,8 @@
+---
+title: Graceful Shutdown
+sidebar_position: 3
+---
+
 # Graceful Shutdown
 
 Apache Fluss provides a **comprehensive graceful shutdown mechanism** to ensure data integrity and proper resource cleanup when stopping servers or services.
