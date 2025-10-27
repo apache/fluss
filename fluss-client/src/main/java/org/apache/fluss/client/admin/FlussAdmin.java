@@ -27,6 +27,7 @@ import org.apache.fluss.cluster.ServerNode;
 import org.apache.fluss.config.cluster.AlterConfig;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.exception.LeaderNotAvailableException;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.PartitionInfo;
@@ -45,6 +46,7 @@ import org.apache.fluss.rpc.gateway.AdminGateway;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.AlterClusterConfigsRequest;
+import org.apache.fluss.rpc.messages.AlterDatabaseRequest;
 import org.apache.fluss.rpc.messages.AlterTableRequest;
 import org.apache.fluss.rpc.messages.CreateAclsRequest;
 import org.apache.fluss.rpc.messages.CreateDatabaseRequest;
@@ -261,6 +263,23 @@ public class FlussAdmin implements Admin {
                 .setDatabaseName(tablePath.getDatabaseName())
                 .setTableName(tablePath.getTableName());
         return gateway.alterTable(request).thenApply(r -> null);
+    }
+
+    @Override
+    public CompletableFuture<Void> alterDatabase(
+            String databaseName, List<DatabaseChange> databaseChanges, boolean ignoreIfNotExists) {
+        TablePath.validateDatabaseName(databaseName);
+        AlterDatabaseRequest request = new AlterDatabaseRequest();
+
+        List<PbAlterConfig> pbDatabaseChanges =
+                databaseChanges.stream()
+                        .map(ClientRpcMessageUtils::toPbAlterConfigsForDatabase)
+                        .collect(Collectors.toList());
+
+        request.addAllConfigChanges(pbDatabaseChanges)
+                .setDatabaseName(databaseName)
+                .setIgnoreIfNotExists(ignoreIfNotExists);
+        return gateway.alterDatabase(request).thenApply(r -> null);
     }
 
     @Override

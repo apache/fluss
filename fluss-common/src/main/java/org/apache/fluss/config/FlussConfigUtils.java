@@ -38,6 +38,11 @@ public class FlussConfigUtils {
 
     public static final List<String> ALTERABLE_TABLE_OPTIONS;
 
+    // ======================= Constants ===============================
+
+    // constants for table and database
+    public static final String COMMENT_PROP = "comment";
+
     static {
         TABLE_OPTIONS = extractConfigOptions("table.");
         CLIENT_OPTIONS = extractConfigOptions("client.");

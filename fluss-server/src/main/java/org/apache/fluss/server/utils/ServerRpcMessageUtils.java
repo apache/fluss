@@ -25,6 +25,7 @@ import org.apache.fluss.config.cluster.AlterConfigOpType;
 import org.apache.fluss.config.cluster.ConfigEntry;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.fs.token.ObtainedSecurityToken;
+import org.apache.fluss.metadata.DatabaseChange;
 import org.apache.fluss.metadata.PartitionSpec;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -179,8 +180,10 @@ import java.util.Set;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
+import static org.apache.fluss.config.FlussConfigUtils.COMMENT_PROP;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toByteBuffer;
 import static org.apache.fluss.rpc.util.CommonRpcMessageUtils.toPbAclInfo;
+import static org.apache.fluss.shaded.netty4.io.netty.handler.codec.memcache.binary.BinaryMemcacheOpcodes.SET;
 import static org.apache.fluss.utils.Preconditions.checkNotNull;
 
 /**
@@ -256,7 +259,7 @@ public class ServerRpcMessageUtils {
             case SUBTRACT:
             default:
                 throw new IllegalArgumentException(
-                        "Unsupported alter configs op type " + pbAlterConfig.getOpType());
+                        "Unsupported alter table configs op type " + pbAlterConfig.getOpType());
         }
     }
 
@@ -264,6 +267,34 @@ public class ServerRpcMessageUtils {
         return alterConfigs.stream()
                 .filter(Objects::nonNull)
                 .map(ServerRpcMessageUtils::toTableChange)
+                .collect(Collectors.toList());
+    }
+
+    public static DatabaseChange toDatabaseChange(PbAlterConfig pbAlterConfig) {
+        AlterConfigOpType opType = AlterConfigOpType.from(pbAlterConfig.getOpType());
+        switch (opType) {
+            case SET: // SET_OPTION or SET_COMMENT
+                String configKey = pbAlterConfig.getConfigKey();
+                if (COMMENT_PROP.equals(configKey)) {
+                    // Special handling for comment changes
+                    return DatabaseChange.setComment(pbAlterConfig.getConfigValue());
+                } else {
+                    return DatabaseChange.set(configKey, pbAlterConfig.getConfigValue());
+                }
+            case DELETE: // RESET_OPTION
+                return DatabaseChange.reset(pbAlterConfig.getConfigKey());
+            case APPEND:
+            case SUBTRACT:
+            default:
+                throw new IllegalArgumentException(
+                        "Unsupported alter database configs op type " + pbAlterConfig.getOpType());
+        }
+    }
+
+    public static List<DatabaseChange> toDatabaseChanges(List<PbAlterConfig> alterConfigs) {
+        return alterConfigs.stream()
+                .filter(Objects::nonNull)
+                .map(ServerRpcMessageUtils::toDatabaseChange)
                 .collect(Collectors.toList());
     }
 
