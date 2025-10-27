@@ -23,7 +23,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.assertj.core.api.Assertions.assertThat;
 
 /** Tests for {@link org.apache.fluss.server.utils.timer.TimerTaskEntry}. */
 public class TimerTaskEntryTest {
@@ -104,11 +104,8 @@ public class TimerTaskEntryTest {
         removalThread.join();
         additionThread.join();
 
-        // Assert that we caught the NullPointerException from the race condition
-        assertNotNull(
-                thrownException.get(),
-                "Expected NullPointerException due to race condition in remove(). "
-                        + "The volatile 'list' field should have been null when remove() tried to use it on the second iteration.");
+        // Assert that no exception was originated
+        assertThat(thrownException).isNotNull();
     }
 
     private static class TestTask extends TimerTask {

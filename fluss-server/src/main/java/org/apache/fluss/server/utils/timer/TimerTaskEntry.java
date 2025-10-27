@@ -57,15 +57,14 @@ public class TimerTaskEntry implements Comparable<TimerTaskEntry> {
     }
 
     void remove() {
-        TimerTaskList currentList = list;
+        TimerTaskList currentList;
         // If remove is called when another thread is moving the entry from a task
         // entry list to another, this may fail to remove the entry due to the change of value
         // of list. Thus, we retry  until the list becomes null.  In a rare case, this thread
         // sees null and exits the loop, but the other thread insert the entry to another list
         // later.
-        while (list != null) {
+        while ((currentList = list) != null) {
             currentList.remove(this);
-            currentList = list;
         }
     }
 
