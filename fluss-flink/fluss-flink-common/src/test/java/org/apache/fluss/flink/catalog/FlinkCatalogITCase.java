@@ -34,6 +34,7 @@ import org.apache.flink.table.api.TableEnvironment;
 import org.apache.flink.table.api.ValidationException;
 import org.apache.flink.table.api.config.TableConfigOptions;
 import org.apache.flink.table.catalog.Catalog;
+import org.apache.flink.table.catalog.CatalogDatabase;
 import org.apache.flink.table.catalog.CatalogTable;
 import org.apache.flink.table.catalog.ObjectPath;
 import org.apache.flink.table.catalog.exceptions.CatalogException;
@@ -617,6 +618,47 @@ abstract class FlinkCatalogITCase {
         tEnv.executeSql("drop database test_db");
         databases = CollectionUtil.iteratorToList(tEnv.executeSql("show databases").collect());
         assertThat(databases.toString()).isEqualTo(String.format("[+I[%s]]", DEFAULT_DB));
+    }
+
+    @Test
+    void testAlterDatabase() throws Exception {
+        String dbName = "test_alter_db";
+        // Create database with initial properties
+        tEnv.executeSql(
+                String.format(
+                        "create database %s with ('key1' = 'value1', 'key2' = 'value2')", dbName));
+
+        // Verify initial state
+        CatalogDatabase currentDb = catalog.getDatabase(dbName);
+        assertThat(currentDb.getProperties()).containsEntry("key1", "value1");
+        assertThat(currentDb.getProperties()).containsEntry("key2", "value2");
+        assertThat(currentDb.getComment()).isNull();
+
+        // Alter database: add new property and update existing property
+        String alterSql1 =
+                "alter database " + dbName + " set ('key3' = 'value3', 'key1' = 'updated_value1')";
+        tEnv.executeSql(alterSql1);
+
+        // Verify first alteration
+        CatalogDatabase alteredDb1 = catalog.getDatabase(dbName);
+        assertThat(alteredDb1.getProperties()).containsEntry("key1", "updated_value1");
+        assertThat(alteredDb1.getProperties()).containsEntry("key2", "value2");
+        assertThat(alteredDb1.getProperties()).containsEntry("key3", "value3");
+        assertThat(alteredDb1.getComment()).isNull();
+
+        // Alter database: add comment
+        String alterSql2 = "alter database " + dbName + " set ('comment' = 'test comment')";
+        tEnv.executeSql(alterSql2);
+
+        // Verify comment change
+        CatalogDatabase alteredDb2 = catalog.getDatabase(dbName);
+        assertThat(alteredDb2.getProperties()).containsEntry("key1", "updated_value1");
+        assertThat(alteredDb2.getProperties()).containsEntry("key2", "value2");
+        assertThat(alteredDb2.getProperties()).containsEntry("key3", "value3");
+        assertThat(alteredDb2.getComment()).isEqualTo("test comment");
+
+        // Drop database for cleanup
+        tEnv.executeSql("drop database " + dbName);
     }
 
     @Test
