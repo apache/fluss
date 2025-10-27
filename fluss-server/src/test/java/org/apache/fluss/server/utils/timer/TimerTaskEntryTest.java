@@ -29,7 +29,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 public class TimerTaskEntryTest {
 
     @Test
-    void testRemoveEnsuresCurrentListIsNeverNull() throws InterruptedException {
+    void testRemoveEnsuresCurrentListNullSafety() throws InterruptedException {
         // Create two lists to reproduce the values that we are working
         // with being added/removed. We will oscillate between adding
         // and removing these elements until we encounter a NPE
@@ -105,7 +105,7 @@ public class TimerTaskEntryTest {
         additionThread.join();
 
         // Assert that no exception was originated
-        assertThat(thrownException).isNotNull();
+        assertThat(thrownException.get()).isNull();
     }
 
     private static class TestTask extends TimerTask {
