@@ -23,6 +23,64 @@ However, we **strongly recommend upgrading to Java 11 or higher** to ensure comp
 🔁 **If you’re using Fluss with Apache Flink**:
 Please also upgrade your Flink deployment to **Java 11 or above**. All Flink versions currently supported by Fluss are fully compatible with Java 11.
 
+## Java client: Package and GroupId Migration
+
+🔧 **Action Required**: All Java client users must update their dependencies and import statements to continue using Fluss.
+
+### What Changed
+
+| Aspect      | Fluss v0.7                   | Fluss v0.8                 |
+|-------------|------------------------------|----------------------------|
+| **GroupId** | `com.alibaba.fluss`          | `org.apache.fluss`         |
+| **Package** | `com.alibaba.fluss`          | `org.apache.fluss`         |
+
+**Note**: This change does not affect the Fluss client API.
+
+### Impact Assessment
+
+**All Java client users** will need to update their dependencies and import statements:
+
+1. **Build Dependencies**: Update your Maven/Gradle dependencies to use the new groupId
+2. **Import Statements**: Update all import statements from `com.alibaba.fluss.*` to `org.apache.fluss.*`
+
+### Migration Steps
+
+1. **Update Maven Dependencies**:
+   ```xml
+   <!-- Old dependency -->
+   <dependency>
+     <groupId>com.alibaba.fluss</groupId>
+     <artifactId>fluss-client</artifactId>
+     <version>0.7.x</version>
+   </dependency>
+   
+   <!-- New dependency -->
+   <dependency>
+     <groupId>org.apache.fluss</groupId>
+     <artifactId>fluss-client</artifactId>
+     <version>0.8.0</version>
+   </dependency>
+   ```
+
+2. **Update Import Statements**:
+   ```java
+   // Old imports
+   import com.alibaba.fluss.client.Connection;
+   import com.alibaba.fluss.client.ConnectionFactory;
+   
+   // New imports
+   import org.apache.fluss.client.Connection;
+   import org.apache.fluss.client.ConnectionFactory;
+   ```
+
+### Why This Change Was Made
+
+This change represents an important milestone in Fluss's journey to becoming an Apache project. The migration to `org.apache.fluss`:
+
+- Aligns with the Apache Software Foundation's naming conventions
+- Establishes a clear, independent identity for the project
+- Ensures long-term stability and governance under the Apache umbrella
+
 ## Metrics Updates
 
 We have updated the report level for some metrics and also removed some metrics, this greatly reduces the metrics amount and improves the performance.
