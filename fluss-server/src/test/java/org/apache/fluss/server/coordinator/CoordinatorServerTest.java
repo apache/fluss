@@ -40,7 +40,7 @@ class CoordinatorServerTest extends ServerTestBase {
     @BeforeEach
     void beforeEach() throws Exception {
         coordinatorServer = startCoordinatorServer(createConfiguration());
-        waitUtilCoordinatorServerElected();
+        waitUntilCoordinatorServerElected();
     }
 
     @AfterEach
@@ -75,7 +75,7 @@ class CoordinatorServerTest extends ServerTestBase {
                 coordinatorServer.getRpcServer().getBindEndpoints());
     }
 
-    public void waitUtilCoordinatorServerElected() {
+    public void waitUntilCoordinatorServerElected() {
         waitUntil(
                 () -> zookeeperClient.getCoordinatorLeaderAddress().isPresent(),
                 Duration.ofSeconds(10),
