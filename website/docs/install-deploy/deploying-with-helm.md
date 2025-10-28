@@ -15,7 +15,7 @@ Before installing the Fluss Helm chart, ensure you have:
 - Helm
 - A running ZooKeeper ensemble (required for coordination)
 - Sufficient cluster resources for the deployment
-- **For Local Development**: Minikube and Docker (see [Local Development with Minikube](#local-development-with-minikube)) 
+- **For Local Development**: Minikube and Docker (see [Local Development with Minikube](#running-fluss-locally-with-minikube)) 
 
 ## Supported Versions
 
@@ -24,7 +24,7 @@ Before installing the Fluss Helm chart, ensure you have:
 | [Kubernetes](https://kubernetes.io) | v1.19+ | v1.25+ |
 | [Helm](https://helm.sh) | v3.8.0+ | v3.18.6+ |
 | [ZooKeeper](https://zookeeper.apache.org) | v3.6+ | v3.8+ |
-| [Apache Fluss](https://fluss.apache.org/docs/) (Container Image) | v0.8-SNAPSHOT | v0.8-SNAPSHOT |
+| [Apache Fluss](https://fluss.apache.org/docs/) (Container Image) | $FLUSS_VERSION$ | $FLUSS_VERSION$ |
 | [Minikube](https://minikube.sigs.k8s.io) (Local Development) | v1.25+ | v1.32+ |
 | [Docker](https://docs.docker.com/) (Local Development) | v20.10+ | v24.0+ |
 
@@ -59,7 +59,7 @@ To build images directly in Minikube you need to configure the Docker CLI to use
 eval $(minikube docker-env)
 ```
 
-To build custom images please refer to [Custom Image Configuration](#custom-image-configuration)
+To build custom images please refer to [Custom Container Images](#custom-container-images).
 
 ### Installing the chart on a cluster
 
@@ -173,7 +173,7 @@ The following table lists the configurable parameters of the Fluss chart and the
 |-----------|-------------|---------|
 | `image.registry` | Container image registry | `""` |
 | `image.repository` | Container image repository | `fluss` |
-| `image.tag` | Container image tag | `0.8-SNAPSHOT` |
+| `image.tag` | Container image tag | `$FLUSS_VERSION$` |
 | `image.pullPolicy` | Container image pull policy | `IfNotPresent` |
 | `image.pullSecrets` | Container image pull secrets | `[]` |
 
