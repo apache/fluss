@@ -30,7 +30,6 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableDescriptor;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
-import org.apache.fluss.server.coordinator.CoordinatorContext;
 import org.apache.fluss.server.entity.RegisterTableBucketLeadAndIsrInfo;
 import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.BucketSnapshot;
@@ -42,6 +41,7 @@ import org.apache.fluss.server.zk.data.ServerTags;
 import org.apache.fluss.server.zk.data.TableAssignment;
 import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.server.zk.data.TabletServerRegistration;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.shaded.curator5.org.apache.curator.CuratorZookeeperClient;
 import org.apache.fluss.shaded.curator5.org.apache.curator.framework.CuratorFramework;
 import org.apache.fluss.shaded.zookeeper3.org.apache.zookeeper.KeeperException;
@@ -193,8 +193,10 @@ class ZooKeeperClientTest {
         LeaderAndIsr leaderAndIsr1 = new LeaderAndIsr(1, 10, Arrays.asList(1, 2, 3), 0, 1000);
         LeaderAndIsr leaderAndIsr2 = new LeaderAndIsr(2, 10, Arrays.asList(4, 5, 6), 0, 1000);
 
-        zookeeperClient.registerLeaderAndIsr(tableBucket1, leaderAndIsr1);
-        zookeeperClient.registerLeaderAndIsr(tableBucket2, leaderAndIsr2);
+        zookeeperClient.registerLeaderAndIsr(
+                tableBucket1, leaderAndIsr1, ZkVersion.MATCH_ANY_VERSION.getVersion());
+        zookeeperClient.registerLeaderAndIsr(
+                tableBucket2, leaderAndIsr2, ZkVersion.MATCH_ANY_VERSION.getVersion());
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).hasValue(leaderAndIsr1);
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket2)).hasValue(leaderAndIsr2);
         assertThat(zookeeperClient.getLeaderAndIsrs(Arrays.asList(tableBucket1, tableBucket2)))
@@ -203,7 +205,7 @@ class ZooKeeperClientTest {
         // test update
         leaderAndIsr1 = new LeaderAndIsr(2, 20, Collections.emptyList(), 0, 2000);
         zookeeperClient.updateLeaderAndIsr(
-                tableBucket1, leaderAndIsr1, CoordinatorContext.INITIAL_COORDINATOR_EPOCH);
+                tableBucket1, leaderAndIsr1, ZkVersion.MATCH_ANY_VERSION.getVersion());
         assertThat(zookeeperClient.getLeaderAndIsr(tableBucket1)).hasValue(leaderAndIsr1);
 
         // test delete
@@ -262,7 +264,7 @@ class ZooKeeperClientTest {
                         });
         // batch update
         zookeeperClient.batchUpdateLeaderAndIsr(
-                updateMap, CoordinatorContext.INITIAL_COORDINATOR_EPOCH);
+                updateMap, ZkVersion.MATCH_ANY_VERSION.getVersion());
         for (int i = 0; i < 100; i++) {
             // each should update successful
             Optional<LeaderAndIsr> optionalLeaderAndIsr =
@@ -283,7 +285,8 @@ class ZooKeeperClientTest {
             LeaderAndIsr leaderAndIsr =
                     new LeaderAndIsr(i, 10, Arrays.asList(i + 1, i + 2, i + 3), 0, 1000);
             leaderAndIsrList.put(tableBucket, leaderAndIsr);
-            zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
+            zookeeperClient.registerLeaderAndIsr(
+                    tableBucket, leaderAndIsr, ZkVersion.MATCH_ANY_VERSION.getVersion());
         }
 
         // try to batch update
@@ -302,7 +305,7 @@ class ZooKeeperClientTest {
                                                     old.bucketEpoch() + 1);
                                         }));
         zookeeperClient.batchUpdateLeaderAndIsr(
-                updateLeaderAndIsrList, CoordinatorContext.INITIAL_COORDINATOR_EPOCH);
+                updateLeaderAndIsrList, ZkVersion.MATCH_ANY_VERSION.getVersion());
         for (Map.Entry<TableBucket, LeaderAndIsr> entry : updateLeaderAndIsrList.entrySet()) {
             TableBucket tableBucket = entry.getKey();
             LeaderAndIsr leaderAndIsr = entry.getValue();
