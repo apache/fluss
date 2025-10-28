@@ -60,7 +60,10 @@ public class PaimonConversions {
     static {
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET.key());
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET_KEY.key());
-        PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.PARTITION_GENERATE_LEGCY_NAME.key());
+        // use literal directly, a future paimon version will rename
+        // the variable PARTITION_GENERATE_LEGCY_NAME to PARTITION_GENERATE_LEGACY_NAME, use literal
+        // can help avoid NoSuchField error
+        PAIMON_UNSETTABLE_OPTIONS.add("partition.legacy-name");
     }
 
     public static RowKind toRowKind(ChangeType changeType) {
