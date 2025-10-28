@@ -225,7 +225,7 @@ This will entirely remove all the data of the table in the Fluss cluster.
 The SET statement allows you to configure one or more [Storage Options](engine-flink/options.md#storage-options) for a specified table. If a particular storage-option is already configured, it will be overridden with the new value.
 
 **Limits**
-1. `bootstrap.servers`,`bucket.num` and `bucket.key` cannot be altered.
+1. `bootstrap.servers`, `bucket.num` and `bucket.key` cannot be altered.
 2. All the table options except `table.datalake.enabled` can be modified.
 3. If lakehouse is already enabled for a table, options with lakehouse format prefixes (e.g., `paimon.*`) cannot be set again.
 ```sql title="Flink SQL"
@@ -236,7 +236,7 @@ ALTER TABLE my_table SET ('table.datalake.enabled' = 'paimon');
 ### RESET 
 Reset one or more [Storage Options](engine-flink/options.md#storage-options) to its default value.
 
-The following examples illustrate the usage of the RESET statements.
+The following example illustrates the usage of the RESET statements.
 ```sql title="Flink SQL"
 ALTER TABLE my_table RESET ('table.datalake.enabled');
 ```

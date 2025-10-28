@@ -37,6 +37,6 @@ Currently, only `datalake.format` and option with prefix `datalake.${datalake.fo
 ## Alter Table Configuration
 
 Storage Options can be altered by [Alter Table](engine-flink/ddl.md#alter-table). The limitations are as follows:
-1. `bootstrap.servers`,`bucket.num` and `bucket.key` cannot be altered.
+1. `bootstrap.servers`, `bucket.num` and `bucket.key` cannot be altered.
 2. All the table options except `table.datalake.enabled` can be modified.
 3. If lakehouse is already enabled for a table, options with lakehouse format prefixes (e.g., `paimon.*`) cannot be set again.

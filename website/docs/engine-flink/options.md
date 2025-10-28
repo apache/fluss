@@ -86,7 +86,7 @@ ALTER TABLE log_table SET ('table.log.ttl' = '7d');
 | table.delete.behavior                   | Enum     | ALLOW                               | Controls the behavior of delete operations on primary key tables. Three modes are supported: `ALLOW` (default) - allows normal delete operations; `IGNORE` - silently ignores delete requests without errors; `DISABLE` - rejects delete requests and throws explicit errors. This configuration provides system-level guarantees for some downstream pipelines (e.g., Flink Delta Join) that must not receive any delete events in the changelog of the table. For tables with `first_row` or `versioned` merge engines, this option is automatically set to `IGNORE` and cannot be overridden. Only applicable to primary key tables.                                                                                                                                                                                                                                                                                                |
 
 Storage Options can be altered by [Alter Table](engine-flink/ddl.md#alter-table). The limitations are as follows:
-1. `bootstrap.servers`,`bucket.num` and `bucket.key` cannot be altered.
+1. `bootstrap.servers`, `bucket.num` and `bucket.key` cannot be altered.
 2. All the table options except `table.datalake.enabled` can be modified.
 3. If lakehouse is already enabled for a table, options with lakehouse format prefixes (e.g., `paimon.*`) cannot be set again.
 
