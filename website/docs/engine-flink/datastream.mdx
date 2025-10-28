@@ -164,6 +164,83 @@ public class OrderDeserializationSchema implements FlussDeserializationSchema<Or
 }
 ```
 
+#### Using POJO Converter
+
+For a more convenient approach when deserializing to POJOs, you can use the `PojoToRowConverter` utility from the `fluss-flink-common` module:
+
+```java
+import org.apache.fluss.flink.utils.PojoToRowConverter;
+
+public class PojoDeserializationSchema implements FlussDeserializationSchema<Order> {
+    private transient PojoToRowConverter<Order> converter;
+
+    @Override
+    public void open(InitializationContext context) throws Exception {
+        // The converter will be initialized when we have the row schema
+    }
+
+    @Override
+    public Order deserialize(LogRecord record) throws Exception {
+        InternalRow row = record.getRow();
+        
+        // If you need to convert InternalRow to your POJO, you'll need to handle it manually
+        // The PojoToRowConverter is designed for POJO -> Row conversion
+        // For Row -> POJO, use manual field extraction as shown in the previous example
+        
+        return new Order(
+            row.getLong(0),
+            row.getLong(1), 
+            row.getInt(2),
+            row.getString(3).toString()
+        );
+    }
+
+    @Override
+    public TypeInformation<Order> getProducedType(RowType rowSchema) {
+        return TypeInformation.of(Order.class);
+    }
+}
+```
+
+**Note:** The `PojoToRowConverter` is primarily designed for converting POJOs to Fluss rows (for writing). For reading (deserializing rows to POJOs), you'll need to manually extract fields from the `InternalRow` as shown in the examples above.
+
+##### Numeric Type Widening for POJO Converters
+
+When using `PojoToRowConverter` for serialization, the converter supports automatic numeric type widening following Java's safe widening rules. This allows you to use smaller numeric types in your POJOs even when the table schema specifies larger types.
+
+**Supported Widenings**:
+- `byte` → `short`, `int`, `long`, `float`, `double`
+- `short` → `int`, `long`, `float`, `double`
+- `int` → `long`, `float`, `double`
+- `long` → `float`, `double`
+- `float` → `double`
+
+**Example**:
+```java
+// POJO with int field
+public class Order {
+    public int orderId;      // Will automatically widen to BIGINT
+    public String customerName;
+}
+
+// Table schema with BIGINT
+RowType rowType = RowType.builder()
+    .field("orderId", DataTypes.BIGINT())
+    .field("customerName", DataTypes.STRING())
+    .build();
+
+// Create converter - int will be automatically widened to long
+PojoToRowConverter<Order> converter = new PojoToRowConverter<>(Order.class, rowType);
+
+Order order = new Order();
+order.orderId = 12345;
+order.customerName = "Alice";
+
+InternalRow row = converter.convert(order); // orderId is automatically converted to long
+```
+
+**Note**: Narrowing conversions (e.g., `long` → `int`) are NOT supported and will fail at converter creation time.
+
 ### Examples
 
 #### Reading from a Primary Key Table
