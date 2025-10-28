@@ -35,7 +35,6 @@ import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.exception.TooManyBucketsException;
 import org.apache.fluss.exception.TooManyPartitionsException;
 import org.apache.fluss.lake.lakestorage.LakeCatalog;
-import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DatabaseInfo;
 import org.apache.fluss.metadata.ResolvedPartitionSpec;
@@ -317,7 +316,6 @@ public class MetadataManager {
             TablePropertyChanges tablePropertyChanges,
             boolean ignoreIfNotExists,
             @Nullable LakeCatalog lakeCatalog,
-            @Nullable DataLakeFormat dataLakeFormat,
             LakeTableTieringManager lakeTableTieringManager) {
         try {
             // it throws TableNotExistException if the table or database not exists
@@ -344,12 +342,7 @@ public class MetadataManager {
                 // pre alter table properties, e.g. create lake table in lake storage if it's to
                 // enable datalake for the table
                 preAlterTableProperties(
-                        tablePath,
-                        tableDescriptor,
-                        newDescriptor,
-                        tableChanges,
-                        lakeCatalog,
-                        dataLakeFormat);
+                        tablePath, tableDescriptor, newDescriptor, tableChanges, lakeCatalog);
                 // update the table to zk
                 TableRegistration updatedTableRegistration =
                         tableReg.newProperties(
@@ -387,8 +380,7 @@ public class MetadataManager {
             TableDescriptor tableDescriptor,
             TableDescriptor newDescriptor,
             List<TableChange> tableChanges,
-            LakeCatalog lakeCatalog,
-            DataLakeFormat dataLakeFormat) {
+            LakeCatalog lakeCatalog) {
         if (isDataLakeEnabled(newDescriptor)) {
             if (lakeCatalog == null) {
                 throw new InvalidAlterTableException(
@@ -406,17 +398,14 @@ public class MetadataManager {
                     // no need to alter lake table if it is newly created
                     isLakeTableNewlyCreated = true;
                 } catch (TableAlreadyExistException e) {
-                    // TODO: should tolerate if the lake exist but matches our schema. This ensures
-                    // eventually consistent by idempotently creating the table multiple times. See
-                    // #846
-                    throw new LakeTableAlreadyExistException(
-                            String.format(
-                                    "The table %s already exists in %s catalog, please "
-                                            + "first drop the table in %s catalog or use a new table name.",
-                                    tablePath, dataLakeFormat, dataLakeFormat));
+                    throw new LakeTableAlreadyExistException(e.getMessage(), e);
                 }
             }
 
+            // TODO: As long as the lake table exists, it needs to be altered, even if the lake
+            // table
+            //  is currently disabled. This prevents schema or property mismatches when enabling
+            //  the lake table again.
             // only need to alter lake table if it is not newly created
             if (!isLakeTableNewlyCreated) {
                 {

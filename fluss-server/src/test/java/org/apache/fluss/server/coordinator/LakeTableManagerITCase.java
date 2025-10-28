@@ -19,7 +19,7 @@ package org.apache.fluss.server.coordinator;
 
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
-import org.apache.fluss.exception.LakeTableAlreadyExistException;
+import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -94,7 +94,7 @@ class LakeTableManagerITCase {
         adminGateway
                 .createTable(newCreateTableRequest(lakeTablePath, lakeTableDescriptor, false))
                 .get();
-        // create again, should throw TableAlreadyExistException thrown by lake
+        // create again, should throw TableAlreadyExistException thrown by Fluss
         assertThatThrownBy(
                         () ->
                                 adminGateway
@@ -103,9 +103,7 @@ class LakeTableManagerITCase {
                                                         lakeTablePath, lakeTableDescriptor, false))
                                         .get())
                 .cause()
-                .isInstanceOf(LakeTableAlreadyExistException.class)
-                .hasMessage(
-                        "The table %s already exists in paimon catalog, please first drop the table in paimon catalog or use a new table name.",
-                        lakeTablePath);
+                .isInstanceOf(TableAlreadyExistException.class)
+                .hasMessage("Table %s already exists.", lakeTablePath);
     }
 }
