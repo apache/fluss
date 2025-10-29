@@ -42,13 +42,13 @@ import java.util.stream.Collectors;
 
 /** Testing class for metadata updater. */
 public class TestingMetadataUpdater extends MetadataUpdater {
-    private static final ServerNode COORDINATOR =
+    public static final ServerNode COORDINATOR =
             new ServerNode(0, "localhost", 90, ServerType.COORDINATOR);
-    private static final ServerNode NODE1 =
+    public static final ServerNode NODE1 =
             new ServerNode(1, "localhost", 90, ServerType.TABLET_SERVER, "rack1");
-    private static final ServerNode NODE2 =
+    public static final ServerNode NODE2 =
             new ServerNode(2, "localhost", 91, ServerType.TABLET_SERVER, "rack2");
-    private static final ServerNode NODE3 =
+    public static final ServerNode NODE3 =
             new ServerNode(3, "localhost", 92, ServerType.TABLET_SERVER, "rack3");
 
     private final TestCoordinatorGateway coordinatorGateway;
@@ -63,7 +63,7 @@ public class TestingMetadataUpdater extends MetadataUpdater {
                 new Configuration());
     }
 
-    private TestingMetadataUpdater(
+    public TestingMetadataUpdater(
             ServerNode coordinatorServer,
             List<ServerNode> tabletServers,
             Map<TablePath, TableInfo> tableInfos,
@@ -135,10 +135,6 @@ public class TestingMetadataUpdater extends MetadataUpdater {
 
     public void updateCluster(Cluster cluster) {
         this.cluster = cluster;
-    }
-
-    public void setResponseLogicId(int serverId, int responseLogicId) {
-        tabletServerGatewayMap.get(serverId).setResponseLogicId(responseLogicId);
     }
 
     @Override

@@ -17,12 +17,9 @@
 
 package org.apache.fluss.server.tablet;
 
-import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
-import org.apache.fluss.rpc.entity.LookupResultForBucket;
-import org.apache.fluss.rpc.entity.PrefixLookupResultForBucket;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
 import org.apache.fluss.rpc.messages.ApiMessage;
 import org.apache.fluss.rpc.messages.ApiVersionsRequest;
@@ -90,7 +87,6 @@ import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
-import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.ApiKeys;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.utils.types.Tuple2;
@@ -109,19 +105,12 @@ import java.util.concurrent.atomic.AtomicLong;
 
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.getFetchLogData;
 import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeFetchLogResponse;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makeLookupResponse;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.makePrefixLookupResponse;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toLookupData;
-import static org.apache.fluss.server.utils.ServerRpcMessageUtils.toPrefixLookupData;
 
 /** A {@link TabletServerGateway} for test purpose. */
 public class TestTabletServerGateway implements TabletServerGateway {
 
     private final boolean alwaysFail;
     private final AtomicLong writerId = new AtomicLong(0);
-
-    /** The id to define the response logic. */
-    private int responseLogicId;
 
     // Use concurrent queue for storing request and related completable future response so that
     // requests may be queried from a different thread.
@@ -131,7 +120,6 @@ public class TestTabletServerGateway implements TabletServerGateway {
 
     public TestTabletServerGateway(boolean alwaysFail, Set<ApiKeys> ignoreApiKeys) {
         this.alwaysFail = alwaysFail;
-        this.responseLogicId = 0;
         this.ignoreApiKeys = ignoreApiKeys;
     }
 
@@ -201,48 +189,12 @@ public class TestTabletServerGateway implements TabletServerGateway {
 
     @Override
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
-        Map<TableBucket, List<byte[]>> lookupData = toLookupData(request);
-        Map<TableBucket, LookupResultForBucket> errorResponseMap = new HashMap<>();
-        if (responseLogicId == 1) {
-            // return with NotLeaderOrFollowerException.
-            lookupData
-                    .keySet()
-                    .forEach(
-                            tb ->
-                                    errorResponseMap.put(
-                                            tb,
-                                            new LookupResultForBucket(
-                                                    tb,
-                                                    ApiError.fromThrowable(
-                                                            new NotLeaderOrFollowerException(
-                                                                    "mock not leader or follower exception.")))));
-            return CompletableFuture.completedFuture(makeLookupResponse(errorResponseMap));
-        } else {
-            return null;
-        }
+        return null;
     }
 
     @Override
     public CompletableFuture<PrefixLookupResponse> prefixLookup(PrefixLookupRequest request) {
-        Map<TableBucket, List<byte[]>> prefixLookupData = toPrefixLookupData(request);
-        Map<TableBucket, PrefixLookupResultForBucket> errorResponseMap = new HashMap<>();
-        if (responseLogicId == 1) {
-            // return with NotLeaderOrFollowerException.
-            prefixLookupData
-                    .keySet()
-                    .forEach(
-                            tb ->
-                                    errorResponseMap.put(
-                                            tb,
-                                            new PrefixLookupResultForBucket(
-                                                    tb,
-                                                    ApiError.fromThrowable(
-                                                            new NotLeaderOrFollowerException(
-                                                                    "mock not leader or follower exception.")))));
-            return CompletableFuture.completedFuture(makePrefixLookupResponse(errorResponseMap));
-        } else {
-            throw new UnsupportedOperationException();
-        }
+        return null;
     }
 
     @Override
@@ -440,10 +392,6 @@ public class TestTabletServerGateway implements TabletServerGateway {
             throw new IllegalStateException(
                     "The future to complete was not found at index " + index);
         }
-    }
-
-    public void setResponseLogicId(int responseLogicId) {
-        this.responseLogicId = responseLogicId;
     }
 
     private StopReplicaResponse mockStopReplicaResponse(

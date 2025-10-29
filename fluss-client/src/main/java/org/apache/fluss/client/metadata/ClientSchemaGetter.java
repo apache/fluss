@@ -42,7 +42,7 @@ public class ClientSchemaGetter implements SchemaGetter {
     private static final Logger LOG = LoggerFactory.getLogger(ClientSchemaGetter.class);
 
     private final TablePath tablePath;
-    private final Map<Integer, Schema> schemasById;
+    protected final Map<Integer, Schema> schemasById;
     private final Admin admin;
     private volatile SchemaInfo latestSchemaInfo;
 
