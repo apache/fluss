@@ -72,6 +72,7 @@ final class ServerConnection {
     // TODO: add max inflight requests limit like Kafka's "max.in.flight.requests.per.connection"
     private final Map<Integer, InflightRequest> inflightRequests = MapUtils.newConcurrentHashMap();
     private final CompletableFuture<Void> closeFuture = new CompletableFuture<>();
+    private final ClientMetricGroup clientMetricGroup;
     private final ConnectionMetricGroup connectionMetricGroup;
     private final ClientAuthenticator authenticator;
     private final ExponentialBackoff backoff;
@@ -108,6 +109,7 @@ final class ServerConnection {
             boolean isInnerClient) {
         this.node = node;
         this.state = ConnectionState.CONNECTING;
+        this.clientMetricGroup = clientMetricGroup;
         this.connectionMetricGroup = clientMetricGroup.createConnectionMetricGroup(node.uid());
         this.authenticator = authenticator;
         this.backoff = new ExponentialBackoff(100L, 2, 5000L, 0.2);
@@ -190,6 +192,7 @@ final class ServerConnection {
                 closeFuture.completeExceptionally(cause);
             }
 
+            clientMetricGroup.removeConnectionMetricGroup(connectionMetricGroup);
             connectionMetricGroup.close();
         }
 
@@ -449,8 +452,10 @@ final class ServerConnection {
     }
 
     private void switchState(ConnectionState targetState) {
-        LOG.debug("switch state form {} to {}", state, targetState);
-        state = targetState;
+        if (state != ConnectionState.DISCONNECTED) {
+            LOG.debug("switch state form {} to {}", state, targetState);
+            state = targetState;
+        }
         if (targetState == ConnectionState.READY) {
             // process pending requests
             PendingRequest pending;

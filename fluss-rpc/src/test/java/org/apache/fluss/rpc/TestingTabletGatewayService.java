@@ -122,7 +122,7 @@ public class TestingTabletGatewayService extends TestingGatewayService
 
     @Override
     public CompletableFuture<LookupResponse> lookup(LookupRequest request) {
-        return null;
+        return CompletableFuture.completedFuture(new LookupResponse());
     }
 
     @Override
