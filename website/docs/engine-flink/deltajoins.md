@@ -1,19 +1,27 @@
 ---
-sidebar_label: DeltaJoins
+sidebar_label: Delta Joins
 title: Flink Delta Joins
 sidebar_position: 6
 ---
 
-# Delta Join
-Begin with Flink 2.1, a new delta join operator was introduced. Compared to traditional streaming join, delta join significantly reduces the required state, effectively alleviating issues associated with large state, such as resource bottlenecks, lengthy checkpoint execution times, and long recovery times during job restarts.
+# The Delta Join
+Beginning with **Apache Flink 2.1**, a new operator called **Delta Join** was introduced.  
+Compared to traditional streaming joins, the delta join operator significantly reduces the amount of state that needs to be maintained during execution. This improvement helps mitigate several common issues associated with large state sizes, including:
 
-Starting from Fluss version 0.8, streaming join jobs running on Flink 2.1 or higher will be automatically optimized to delta join in applicable scenarios.
+- Excessive memory and storage consumption
+- Long checkpointing durations
+- Extended recovery times after failures or restarts
 
-## Examples
+Starting with **Apache Fluss 0.8**, streaming join jobs running on **Flink 2.1 or later** will be automatically optimized into **delta joins** whenever applicable. This optimization happens transparently at query planning time, requiring no manual configuration.
 
-Here is an example of delta join currently supported in Flink 2.1.
+## How Delta Join Works
+Traditional streaming joins in Flink require maintaining both input sides entirely in state to match updates across streams. Delta join, by contrast, uses a **prefix-based lookup mechanism** that only retains *relevant subsets* of one table’s data in state. This drastically reduces memory pressure and improves performance for many streaming analytics and enrichment workloads.
 
-1. Create two source tables and one sink tables
+## Example: Delta Join in Flink 2.1
+
+Below is an example demonstrating a delta join query supported by Flink 2.1.
+
+#### Create Source and Sink Tables
 
 ```sql title="Flink SQL"
 USE CATALOG fluss_catalog;
@@ -27,6 +35,7 @@ CREATE DATABASE my_db;
 USE my_db;
 ```
 
+#### Create Left Source Table
 ```sql title="Flink SQL"
 CREATE TABLE `fluss_catalog`.`my_db`.`left_src` (
   `city_id` INT NOT NULL,
@@ -38,10 +47,10 @@ CREATE TABLE `fluss_catalog`.`my_db`.`left_src` (
     'bucket.key' = 'city_id',
     -- in Flink 2.1, delta join only support append-only source
     'table.merge-engine' = 'first_row'
-    ...)
-;
+);
 ```
 
+#### Create Right Source Table
 ```sql title="Flink SQL"
 CREATE TABLE `fluss_catalog`.`my_db`.`right_src` (
   `city_id` INT NOT NULL,
@@ -50,10 +59,10 @@ CREATE TABLE `fluss_catalog`.`my_db`.`right_src` (
 ) WITH (
     -- in Flink 2.1, delta join only support append-only source
     'table.merge-engine' = 'first_row'
-    ...)
-;
+);
 ```
 
+#### Create Sink Table
 ```sql title="Flink SQL"
 CREATE TABLE `fluss_catalog`.`my_db`.`snk` (
     `city_id` INT NOT NULL,
@@ -61,24 +70,22 @@ CREATE TABLE `fluss_catalog`.`my_db`.`snk` (
     `content` VARCHAR NOT NULL,
     `city_name` VARCHAR NOT NULL,
     PRIMARY KEY (city_id, order_id) NOT ENFORCED
-) WITH (...)
-;
+) WITH (...);
 ```
 
-2. Explain DML about streaming join
-
+#### Explain the Join Query
 ```sql title="Flink SQL"
 EXPLAIN 
 INSERT INTO `fluss_catalog`.`my_db`.`snk`
 SELECT T1.`city_id`, T1.`order_id`, T1.`content`, T2.`city_name` 
 FROM `fluss_catalog`.`my_db`.`left_src` T1
 Join `fluss_catalog`.`my_db`.`right_src` T2
-ON T1.`city_id` = T2.`city_id`
-;
+ON T1.`city_id` = T2.`city_id`;
 ```
 
-If you see the plan that includes DeltaJoin as following, it indicates that the optimization has been effective, and the streaming join has been successfully optimized into a delta join.
+If the physical plan includes `DeltaJoin`, it indicates that the optimizer has successfully transformed the traditional streaming join into a delta join.
 
+### Example Optimized Execution Plan
 ```title="Flink Plan"
 == Abstract Syntax Tree ==
 LogicalSink(table=[fluss_catalog.my_db.snk], fields=[city_id, order_id, content, city_name])
@@ -105,10 +112,29 @@ Sink(table=[fluss_catalog.my_db.snk], fields=[city_id, order_id, content, city_n
       +- Exchange(distribution=[hash[city_id]])
          +- TableSourceScan(table=[[fluss_catalog, my_db, right_src]], fields=[city_id, city_name])
 ```
+This confirms that the delta join optimization is active.
+
+## Understanding Prefix Keys
+A prefix key defines the portion of a table’s primary key that can be used for efficient key-based lookups or index pruning.
+
+In Fluss, the option `'bucket.key' = 'city_id'` specifies that data is organized (or bucketed) by `city_id`. When performing a delta join, this allows Flink to quickly locate and read only the subset of records corresponding to the specific prefix key value, rather than scanning or caching the entire table state.
+
+For example:
+- Full primary key: `(city_id, order_id)`
+- Prefix key: `city_id`
+
+In this setup:
+* The delta join operator uses the prefix key (`city_id`) to retrieve only relevant right-side records matching each left-side event. 
+* This eliminates the need to hold all records for every city in memory, significantly reducing state size.
+
+Prefix keys thus form the foundation for state-efficient lookups in delta joins, enabling Flink to scale join workloads efficiently even under high throughput.
 
 ## Flink Version Support
 
-The work on Delta Join is still ongoing, so the support for more sql patterns that can be optimized into delta join varies across different versions of Flink. More details can be found at [Delta Join](https://issues.apache.org/jira/browse/FLINK-37836).
+The delta join feature is still evolving, and its optimization capabilities vary across Flink versions.
+
+Refer to the [Delta Join](https://issues.apache.org/jira/browse/FLINK-37836) for the most up-to-date information.
+
 
 ### Flink 2.1
 
