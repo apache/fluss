@@ -86,6 +86,8 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.testutils.DataTestUtils.row;
@@ -1107,7 +1109,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 tablePath,
                 TableDescriptor.builder()
                         .schema(DEFAULT_SCHEMA)
-                        .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
+                        .property(TABLE_DATALAKE_ENABLED, true)
                         .build(),
                 true);
 
@@ -1115,8 +1117,12 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
                 () -> {
                     TableInfo tableInfo = admin.getTableInfo(tablePath).get();
                     Map<String, String> tableProperties = tableInfo.getProperties().toMap();
-                    return "test-warehouse"
-                            .equals(tableProperties.get("table.datalake.paimon.warehouse"));
+                    return tableProperties.containsKey(TABLE_DATALAKE_FORMAT.key())
+                            && tableProperties.containsKey("table.datalake.paimon.warehouse")
+                            && PAIMON.toString()
+                                    .equals(tableProperties.get(TABLE_DATALAKE_FORMAT.key()))
+                            && "test-warehouse"
+                                    .equals(tableProperties.get("table.datalake.paimon.warehouse"));
                 },
                 Duration.ofMinutes(1),
                 "Get lakehouse info");
