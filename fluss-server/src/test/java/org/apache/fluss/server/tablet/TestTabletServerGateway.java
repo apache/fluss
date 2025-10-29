@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.tablet;
 
+import org.apache.fluss.exception.NotLeaderOrFollowerException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.record.MemoryLogRecords;
 import org.apache.fluss.rpc.entity.FetchLogResultForBucket;
@@ -87,6 +88,7 @@ import org.apache.fluss.rpc.messages.TableExistsRequest;
 import org.apache.fluss.rpc.messages.TableExistsResponse;
 import org.apache.fluss.rpc.messages.UpdateMetadataRequest;
 import org.apache.fluss.rpc.messages.UpdateMetadataResponse;
+import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.server.entity.FetchReqInfo;
 import org.apache.fluss.utils.types.Tuple2;
 
@@ -116,8 +118,12 @@ public class TestTabletServerGateway implements TabletServerGateway {
     private final Queue<Tuple2<ApiMessage, CompletableFuture<?>>> requests =
             new ConcurrentLinkedDeque<>();
 
+    /** The id to define the response logic. */
+    private int responseLogicId;
+
     public TestTabletServerGateway(boolean alwaysFail) {
         this.alwaysFail = alwaysFail;
+        this.responseLogicId = 0;
     }
 
     @Override
@@ -166,12 +172,28 @@ public class TestTabletServerGateway implements TabletServerGateway {
     public CompletableFuture<FetchLogResponse> fetchLog(FetchLogRequest request) {
         Map<TableBucket, FetchReqInfo> fetchLogData = getFetchLogData(request);
         Map<TableBucket, FetchLogResultForBucket> resultForBucketMap = new HashMap<>();
-        fetchLogData.forEach(
-                (tableBucket, fetchData) -> {
-                    FetchLogResultForBucket fetchLogResultForBucket =
-                            new FetchLogResultForBucket(tableBucket, MemoryLogRecords.EMPTY, 0L);
-                    resultForBucketMap.put(tableBucket, fetchLogResultForBucket);
-                });
+
+        if (responseLogicId == 1) {
+            // return with NotLeaderOrFollowerException.
+            fetchLogData.forEach(
+                    (tableBucket, fetchData) -> {
+                        FetchLogResultForBucket fetchLogResultForBucket =
+                                new FetchLogResultForBucket(
+                                        tableBucket,
+                                        ApiError.fromThrowable(
+                                                new NotLeaderOrFollowerException(
+                                                        "mock fetchLog fail for not leader or follower exception.")));
+                        resultForBucketMap.put(tableBucket, fetchLogResultForBucket);
+                    });
+        } else {
+            fetchLogData.forEach(
+                    (tableBucket, fetchData) -> {
+                        FetchLogResultForBucket fetchLogResultForBucket =
+                                new FetchLogResultForBucket(
+                                        tableBucket, MemoryLogRecords.EMPTY, 0L);
+                        resultForBucketMap.put(tableBucket, fetchLogResultForBucket);
+                    });
+        }
         return CompletableFuture.completedFuture(makeFetchLogResponse(resultForBucketMap));
     }
 
@@ -385,6 +407,10 @@ public class TestTabletServerGateway implements TabletServerGateway {
             throw new IllegalStateException(
                     "The future to complete was not found at index " + index);
         }
+    }
+
+    public void setResponseLogicId(int responseLogicId) {
+        this.responseLogicId = responseLogicId;
     }
 
     private StopReplicaResponse mockStopReplicaResponse(
