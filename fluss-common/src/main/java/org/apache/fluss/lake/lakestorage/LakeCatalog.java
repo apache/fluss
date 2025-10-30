@@ -69,6 +69,8 @@ public interface LakeCatalog extends AutoCloseable {
      * <ul>
      *   <li>Access the fluss principal currently accessing the catalog.
      * </ul>
+     *
+     * @since 0.9
      */
     @PublicEvolving
     interface Context {
