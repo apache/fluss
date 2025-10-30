@@ -36,7 +36,7 @@ public class ChangeTypeVectorWriter {
     }
 
     public void writeChangeType(ChangeType changeType) {
-        if (recordsCount > capacity) {
+        if (recordsCount >= capacity) {
             // TODO: support AbstractPagedOutputView to have extendable capacity
             throw new IllegalStateException("The change type vector is full.");
         }
