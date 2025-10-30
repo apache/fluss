@@ -98,3 +98,12 @@ This change prioritizes **tiering service stability and performance**:
 - **Disable auto-compaction** for tables where tiering speed is more important than storage optimization
 - **Monitor resource usage** when enabling auto-compaction to ensure it doesn't impact tiering performance
 - **Consider manual compaction** for large tables during maintenance windows
+
+## SASL Plain Authorization jaas configuration
+Due to Fluss being donated to the Apache Software Foundation, the package namespace has been changed from `org.alibaba.fluss` to `org.apache.fluss`.
+The `security.sasl.plain.jaas.config` configuration has been updated accordingly:
+* Server side: `security.sasl.plain.jaas.config` is changed from `org.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule` to `org.apache.fluss.security.auth.sasl.plain.PlainLoginModule`.
+* Client side: `client.security.sasl.jaas.config` is changed from `org.alibaba.fluss.security.auth.sasl.plain.PlainLoginModule` to `org.apache.fluss.security.auth.sasl.plain.PlainLoginModule`. If you are using client.security.sasl.username and client.security.sasl.password configurations, no changes are required as these remain compatible.
+
+## Flink Catalog required Default database.
+Fluss catalog used to not need defalut database even though a wrong defalut database won't be checked. From 0.8, it's required to specify a default database.
