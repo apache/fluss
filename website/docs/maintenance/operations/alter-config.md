@@ -1,8 +1,8 @@
 ---
-title: Alter Configuration
-sidebar_position: 4
+title: Alter Configurations
+sidebar_position: 1
 ---
-# Alter Configuration
+# Alter Configurations
 ## Overview
 
 Fluss provides ways to alter the configuration of a cluster or a table. You can change and apply the configuration without restarting Fluss server. In this section, we will show how to alter the configuration of a cluster or a table.
