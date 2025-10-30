@@ -251,7 +251,10 @@ public class CompactedRowWriter {
     }
 
     private void writeTimestampNtz(TimestampNtz value, int precision) {
-        if (TimestampNtz.isCompact(precision)) {
+        if (precision == 0) {
+            // truncate to seconds to keep consistence with ArrowTimestampNtzWriter
+            writeLong(value.getMillisecond() / 1000 * 1000);
+        } else if (TimestampNtz.isCompact(precision)) {
             writeLong(value.getMillisecond());
         } else {
             writeLong(value.getMillisecond());
@@ -260,7 +263,10 @@ public class CompactedRowWriter {
     }
 
     private void writeTimestampLtz(TimestampLtz value, int precision) {
-        if (TimestampLtz.isCompact(precision)) {
+        if (precision == 0) {
+            // truncate to seconds to keep consistence with ArrowTimestampLtzWriter
+            writeLong(value.getEpochMillisecond() / 1000 * 1000);
+        } else if (TimestampLtz.isCompact(precision)) {
             writeLong(value.getEpochMillisecond());
         } else {
             writeLong(value.getEpochMillisecond());
@@ -332,8 +338,19 @@ public class CompactedRowWriter {
                 break;
             case INTEGER:
             case DATE:
-            case TIME_WITHOUT_TIME_ZONE:
                 fieldWriter = (writer, pos, value) -> writer.writeInt((int) value);
+                break;
+            case TIME_WITHOUT_TIME_ZONE:
+                final int timePrecision = getPrecision(fieldType);
+                fieldWriter =
+                        (writer, pos, value) -> {
+                            if (timePrecision == 0) {
+                                // truncate to seconds to keep consistence with ArrowTimeWriter
+                                writer.writeInt((int) value / 1000 * 1000);
+                            } else {
+                                writer.writeInt((int) value);
+                            }
+                        };
                 break;
             case BIGINT:
                 fieldWriter = (writer, pos, value) -> writer.writeLong((long) value);

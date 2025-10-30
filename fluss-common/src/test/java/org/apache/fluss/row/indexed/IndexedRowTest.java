@@ -68,8 +68,8 @@ public class IndexedRowTest {
 
         assertAllTypeEquals(row);
 
-        assertThat(row.getHeaderSizeInBytes()).isEqualTo(15);
-        assertThat(row.getSizeInBytes()).isEqualTo(117);
+        assertThat(row.getHeaderSizeInBytes()).isEqualTo(19);
+        assertThat(row.getSizeInBytes()).isEqualTo(111);
         assertThat(row.getFieldCount()).isEqualTo(19);
         assertThat(row.anyNull()).isTrue();
         assertThat(row.anyNull(new int[] {0, 1})).isFalse();
