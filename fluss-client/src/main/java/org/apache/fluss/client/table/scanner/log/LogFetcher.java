@@ -65,6 +65,7 @@ import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -502,8 +503,9 @@ public class LogFetcher implements Closeable {
     }
 
     private Integer getTableBucketLeader(TableBucket tableBucket) {
-        if (metadataUpdater.getBucketLocation(tableBucket).isPresent()) {
-            BucketLocation bucketLocation = metadataUpdater.getBucketLocation(tableBucket).get();
+        Optional<BucketLocation> bucketLocationOpt = metadataUpdater.getBucketLocation(tableBucket);
+        if (bucketLocationOpt.isPresent()) {
+            BucketLocation bucketLocation = bucketLocationOpt.get();
             if (bucketLocation.getLeader() != null) {
                 return bucketLocation.getLeader();
             }
