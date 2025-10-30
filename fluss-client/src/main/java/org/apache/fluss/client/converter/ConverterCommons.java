@@ -24,7 +24,7 @@ import org.apache.fluss.types.RowType;
 
 import java.math.BigDecimal;
 import java.util.Arrays;
-import java.util.HashMap;
+import java.util.EnumMap;
 import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
@@ -43,7 +43,7 @@ final class ConverterCommons {
     static final Map<DataTypeRoot, Set<Class<?>>> SUPPORTED_TYPES = createSupportedTypes();
 
     private static Map<DataTypeRoot, Set<Class<?>>> createSupportedTypes() {
-        Map<DataTypeRoot, Set<Class<?>>> map = new HashMap<>();
+        Map<DataTypeRoot, Set<Class<?>>> map = new EnumMap<>(DataTypeRoot.class);
         map.put(DataTypeRoot.BOOLEAN, setOf(Boolean.class));
         map.put(DataTypeRoot.TINYINT, setOf(Byte.class));
         map.put(DataTypeRoot.SMALLINT, setOf(Short.class));
