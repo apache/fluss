@@ -85,13 +85,6 @@ final class PojoType<T> {
             if (!publicField) {
                 // When not a public field, require both getter and setter
                 if (getter == null || setter == null) {
-                    if (field.getName().startsWith("this$")) {
-                        final Class type = field.getType();
-                        if ((type.getName() + "$" + pojoClass.getSimpleName())
-                                .equals(pojoClass.getName())) {
-                            continue;
-                        }
-                    }
                     final String capitalizedName = capitalize(name);
                     throw new IllegalArgumentException(
                             String.format(
@@ -150,6 +143,13 @@ final class PojoType<T> {
                 int mod = f.getModifiers();
                 if (Modifier.isStatic(mod) || Modifier.isTransient(mod)) {
                     continue;
+                }
+                // Skip references to enclosing class
+                if (f.getName().startsWith("this$")) {
+                    final Class type = f.getType();
+                    if ((type.getName() + "$" + clazz.getSimpleName()).equals(clazz.getName())) {
+                        continue;
+                    }
                 }
                 f.setAccessible(true);
                 fields.putIfAbsent(f.getName(), f);
