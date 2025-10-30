@@ -18,6 +18,7 @@
 package org.apache.fluss.lake.paimon;
 
 import org.apache.fluss.config.Configuration;
+import org.apache.fluss.lake.lakestorage.TestingLakeCatalogContext;
 import org.apache.fluss.metadata.Schema;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -62,14 +63,20 @@ class PaimonLakeCatalogTest {
         assertThat(table.options().get("key")).isEqualTo(null);
 
         // set the value for key
-        flussPaimonCatalog.alterTable(tablePath, Arrays.asList(TableChange.set("key", "value")));
+        flussPaimonCatalog.alterTable(
+                tablePath,
+                Arrays.asList(TableChange.set("key", "value")),
+                new TestingLakeCatalogContext());
 
         table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
         // we have set the value for key
         assertThat(table.options().get("fluss.key")).isEqualTo("value");
 
         // reset the value for key
-        flussPaimonCatalog.alterTable(tablePath, Arrays.asList(TableChange.reset("key")));
+        flussPaimonCatalog.alterTable(
+                tablePath,
+                Arrays.asList(TableChange.reset("key")),
+                new TestingLakeCatalogContext());
 
         table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
         // we have reset the value for key
@@ -93,6 +100,6 @@ class PaimonLakeCatalogTest {
 
         TablePath tablePath = TablePath.of(database, tableName);
 
-        flussPaimonCatalog.createTable(tablePath, td);
+        flussPaimonCatalog.createTable(tablePath, td, new TestingLakeCatalogContext());
     }
 }

@@ -33,6 +33,7 @@ import org.apache.fluss.exception.SecurityDisabledException;
 import org.apache.fluss.exception.TableAlreadyExistException;
 import org.apache.fluss.exception.TableNotPartitionedException;
 import org.apache.fluss.fs.FileSystem;
+import org.apache.fluss.lake.lakestorage.LakeCatalog;
 import org.apache.fluss.metadata.DataLakeFormat;
 import org.apache.fluss.metadata.DatabaseDescriptor;
 import org.apache.fluss.metadata.DeleteBehavior;
@@ -84,6 +85,7 @@ import org.apache.fluss.rpc.netty.server.Session;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.security.acl.AclBinding;
 import org.apache.fluss.security.acl.AclBindingFilter;
+import org.apache.fluss.security.acl.FlussPrincipal;
 import org.apache.fluss.security.acl.OperationType;
 import org.apache.fluss.security.acl.Resource;
 import org.apache.fluss.server.DynamicConfigManager;
@@ -287,7 +289,10 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
         if (isDataLakeEnabled(tableDescriptor)) {
             try {
                 checkNotNull(lakeCatalogContainer.getLakeCatalog())
-                        .createTable(tablePath, tableDescriptor);
+                        .createTable(
+                                tablePath,
+                                tableDescriptor,
+                                new DefaultLakeCatalogContext(currentSession().getPrincipal()));
             } catch (TableAlreadyExistException e) {
                 throw new LakeTableAlreadyExistException(
                         String.format(
@@ -326,7 +331,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 request.isIgnoreIfNotExists(),
                 lakeCatalogContainer.getLakeCatalog(),
                 lakeCatalogContainer.getDataLakeFormat(),
-                lakeTableTieringManager);
+                lakeTableTieringManager,
+                new DefaultLakeCatalogContext(currentSession().getPrincipal()));
 
         return CompletableFuture.completedFuture(new AlterTableResponse());
     }
@@ -755,6 +761,20 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 throw new InvalidTableException(
                         "Creation of Log Tables is disallowed in the cluster.");
             }
+        }
+    }
+
+    static class DefaultLakeCatalogContext implements LakeCatalog.Context {
+
+        private final FlussPrincipal flussPrincipal;
+
+        public DefaultLakeCatalogContext(FlussPrincipal flussPrincipal) {
+            this.flussPrincipal = flussPrincipal;
+        }
+
+        @Override
+        public FlussPrincipal getFlussPrincipal() {
+            return flussPrincipal;
         }
     }
 }

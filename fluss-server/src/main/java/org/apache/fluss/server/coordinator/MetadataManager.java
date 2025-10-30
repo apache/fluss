@@ -318,7 +318,8 @@ public class MetadataManager {
             boolean ignoreIfNotExists,
             @Nullable LakeCatalog lakeCatalog,
             @Nullable DataLakeFormat dataLakeFormat,
-            LakeTableTieringManager lakeTableTieringManager) {
+            LakeTableTieringManager lakeTableTieringManager,
+            LakeCatalog.Context lakeCatalogContext) {
         try {
             // it throws TableNotExistException if the table or database not exists
             TableRegistration tableReg = getTableRegistration(tablePath);
@@ -349,7 +350,8 @@ public class MetadataManager {
                         newDescriptor,
                         tableChanges,
                         lakeCatalog,
-                        dataLakeFormat);
+                        dataLakeFormat,
+                        lakeCatalogContext);
                 // update the table to zk
                 TableRegistration updatedTableRegistration =
                         tableReg.newProperties(
@@ -388,7 +390,8 @@ public class MetadataManager {
             TableDescriptor newDescriptor,
             List<TableChange> tableChanges,
             LakeCatalog lakeCatalog,
-            DataLakeFormat dataLakeFormat) {
+            DataLakeFormat dataLakeFormat,
+            LakeCatalog.Context lakeCatalogContext) {
         if (isDataLakeEnabled(newDescriptor)) {
             if (lakeCatalog == null) {
                 throw new InvalidAlterTableException(
@@ -402,7 +405,7 @@ public class MetadataManager {
             if (!isDataLakeEnabled(tableDescriptor)) {
                 // before create table in fluss, we may create in lake
                 try {
-                    lakeCatalog.createTable(tablePath, newDescriptor);
+                    lakeCatalog.createTable(tablePath, newDescriptor, lakeCatalogContext);
                     // no need to alter lake table if it is newly created
                     isLakeTableNewlyCreated = true;
                 } catch (TableAlreadyExistException e) {
@@ -421,7 +424,7 @@ public class MetadataManager {
             if (!isLakeTableNewlyCreated) {
                 {
                     try {
-                        lakeCatalog.alterTable(tablePath, tableChanges);
+                        lakeCatalog.alterTable(tablePath, tableChanges, lakeCatalogContext);
                     } catch (TableNotExistException e) {
                         throw new FlussRuntimeException(
                                 "Lake table doesn't exists for lake-enabled table "

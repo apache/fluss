@@ -74,7 +74,8 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         private final Map<TablePath, TableDescriptor> tableByPath = new HashMap<>();
 
         @Override
-        public void createTable(TablePath tablePath, TableDescriptor tableDescriptor)
+        public void createTable(
+                TablePath tablePath, TableDescriptor tableDescriptor, Context context)
                 throws TableAlreadyExistException {
             if (tableByPath.containsKey(tablePath)) {
                 throw new TableAlreadyExistException("Table " + tablePath + " already exists");
@@ -83,7 +84,7 @@ public class TestingPaimonStoragePlugin implements LakeStoragePlugin {
         }
 
         @Override
-        public void alterTable(TablePath tablePath, List<TableChange> tableChanges)
+        public void alterTable(TablePath tablePath, List<TableChange> tableChanges, Context context)
                 throws TableNotExistException {
             // do nothing
         }
