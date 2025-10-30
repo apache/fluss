@@ -86,9 +86,12 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.config.ConfigOptions.DATALAKE_FORMAT;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_ENABLED;
+import static org.apache.fluss.config.ConfigOptions.TABLE_DATALAKE_FORMAT;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
 import static org.apache.fluss.record.TestData.DATA1_SCHEMA;
 import static org.apache.fluss.testutils.DataTestUtils.row;
+import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
@@ -1070,7 +1073,7 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testDynamicConfigs() throws ExecutionException, InterruptedException {
+    void testDynamicConfigs() throws Exception {
         assertThat(
                         FLUSS_CLUSTER_EXTENSION
                                 .getCoordinatorServer()
@@ -1092,20 +1095,37 @@ class FlussAdminITCase extends ClientToServerITCaseBase {
         assertConfigEntry(
                 DATALAKE_FORMAT.key(), null, ConfigEntry.ConfigSource.DYNAMIC_SERVER_CONFIG);
 
-        // Delete dynamic configs to use the initial value(from server.yaml)
         admin.alterClusterConfigs(
-                        Collections.singletonList(
+                        Arrays.asList(
                                 new AlterConfig(
-                                        DATALAKE_FORMAT.key(), null, AlterConfigOpType.DELETE)))
+                                        DATALAKE_FORMAT.key(), "paimon", AlterConfigOpType.SET),
+                                new AlterConfig(
+                                        "datalake.paimon.warehouse",
+                                        "test-warehouse",
+                                        AlterConfigOpType.SET)))
                 .get();
-        assertThat(
-                        FLUSS_CLUSTER_EXTENSION
-                                .getCoordinatorServer()
-                                .getCoordinatorService()
-                                .getDataLakeFormat())
-                .isEqualTo(PAIMON);
-        assertConfigEntry(
-                DATALAKE_FORMAT.key(), "paimon", ConfigEntry.ConfigSource.INITIAL_SERVER_CONFIG);
+        TablePath tablePath = TablePath.of("test_db", "test_table");
+        createTable(
+                tablePath,
+                TableDescriptor.builder()
+                        .schema(DEFAULT_SCHEMA)
+                        .property(TABLE_DATALAKE_ENABLED, true)
+                        .build(),
+                true);
+
+        waitUntil(
+                () -> {
+                    TableInfo tableInfo = admin.getTableInfo(tablePath).get();
+                    Map<String, String> tableProperties = tableInfo.getProperties().toMap();
+                    return tableProperties.containsKey(TABLE_DATALAKE_FORMAT.key())
+                            && tableProperties.containsKey("table.datalake.paimon.warehouse")
+                            && PAIMON.toString()
+                                    .equals(tableProperties.get(TABLE_DATALAKE_FORMAT.key()))
+                            && "test-warehouse"
+                                    .equals(tableProperties.get("table.datalake.paimon.warehouse"));
+                },
+                Duration.ofMinutes(1),
+                "Get lakehouse info");
     }
 
     private void assertConfigEntry(
