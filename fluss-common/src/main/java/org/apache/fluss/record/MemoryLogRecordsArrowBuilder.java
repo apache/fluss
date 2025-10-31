@@ -27,6 +27,9 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.arrow.ArrowWriter;
 import org.apache.fluss.utils.crc.Crc32C;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 import java.io.IOException;
 
 import static org.apache.fluss.record.LogRecordBatch.CURRENT_LOG_MAGIC_VALUE;
@@ -36,6 +39,7 @@ import static org.apache.fluss.record.LogRecordBatchFormat.LOG_MAGIC_VALUE_V1;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_BATCH_SEQUENCE;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_LEADER_EPOCH;
 import static org.apache.fluss.record.LogRecordBatchFormat.NO_WRITER_ID;
+import static org.apache.fluss.record.LogRecordBatchFormat.STATISTICS_FLAG_MASK;
 import static org.apache.fluss.record.LogRecordBatchFormat.arrowChangeTypeOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.crcOffset;
 import static org.apache.fluss.record.LogRecordBatchFormat.recordBatchHeaderSize;
@@ -46,6 +50,7 @@ import static org.apache.fluss.utils.Preconditions.checkNotNull;
 /** Builder for {@link MemoryLogRecords} of log records in {@link LogFormat#ARROW} format. */
 public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     private static final int BUILDER_DEFAULT_OFFSET = 0;
+    private static final Logger LOG = LoggerFactory.getLogger(MemoryLogRecordsArrowBuilder.class);
 
     private final long baseLogOffset;
     private final int schemaId;
@@ -56,6 +61,7 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     private final MemorySegment firstSegment;
     private final AbstractPagedOutputView pagedOutputView;
     private final boolean appendOnly;
+    private final LogRecordBatchStatisticsCollector statisticsCollector;
 
     private volatile MultiBytesView bytesView = null;
 
@@ -67,6 +73,8 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
     private boolean reCalculateSizeInBytes = false;
     private boolean resetBatchHeader = false;
     private boolean aborted = false;
+    // Saved statistics size from build method
+    private int statisticsSize = 0;
 
     private MemoryLogRecordsArrowBuilder(
             long baseLogOffset,
@@ -74,7 +82,8 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
             byte magic,
             ArrowWriter arrowWriter,
             AbstractPagedOutputView pagedOutputView,
-            boolean appendOnly) {
+            boolean appendOnly,
+            LogRecordBatchStatisticsCollector statisticsCollector) {
         this.appendOnly = appendOnly;
         checkArgument(
                 schemaId <= Short.MAX_VALUE,
@@ -100,6 +109,25 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         this.changeTypeWriter = new ChangeTypeVectorWriter(firstSegment, arrowChangeTypeOffset);
         this.estimatedSizeInBytes = recordBatchHeaderSize(magic);
         this.recordCount = 0;
+        this.statisticsCollector = statisticsCollector;
+    }
+
+    @VisibleForTesting
+    public static MemoryLogRecordsArrowBuilder builder(
+            long baseLogOffset,
+            byte magic,
+            int schemaId,
+            ArrowWriter arrowWriter,
+            AbstractPagedOutputView outputView,
+            LogRecordBatchStatisticsCollector statisticsCollector) {
+        return new MemoryLogRecordsArrowBuilder(
+                baseLogOffset,
+                schemaId,
+                magic,
+                arrowWriter,
+                outputView,
+                false,
+                statisticsCollector);
     }
 
     @VisibleForTesting
@@ -110,7 +138,24 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
             ArrowWriter arrowWriter,
             AbstractPagedOutputView outputView) {
         return new MemoryLogRecordsArrowBuilder(
-                baseLogOffset, schemaId, magic, arrowWriter, outputView, false);
+                baseLogOffset, schemaId, magic, arrowWriter, outputView, false, null);
+    }
+
+    /** Builder with limited write size and the memory segment used to serialize records. */
+    public static MemoryLogRecordsArrowBuilder builder(
+            int schemaId,
+            ArrowWriter arrowWriter,
+            AbstractPagedOutputView outputView,
+            boolean appendOnly,
+            LogRecordBatchStatisticsCollector statisticsCollector) {
+        return new MemoryLogRecordsArrowBuilder(
+                BUILDER_DEFAULT_OFFSET,
+                schemaId,
+                CURRENT_LOG_MAGIC_VALUE,
+                arrowWriter,
+                outputView,
+                appendOnly,
+                statisticsCollector);
     }
 
     /** Builder with limited write size and the memory segment used to serialize records. */
@@ -125,7 +170,8 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
                 CURRENT_LOG_MAGIC_VALUE,
                 arrowWriter,
                 outputView,
-                appendOnly);
+                appendOnly,
+                null);
     }
 
     public MultiBytesView build() throws IOException {
@@ -145,6 +191,27 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         arrowWriter.serializeToOutputView(
                 pagedOutputView, arrowChangeTypeOffset(magic) + changeTypeWriter.sizeInBytes());
         recordCount = arrowWriter.getRecordsCount();
+
+        // For V2, append statistics after records if available
+        if (magic >= LogRecordBatchFormat.LOG_MAGIC_VALUE_V2
+                && statisticsCollector != null
+                && recordCount > 0) {
+            try {
+                // Write statistics directly to the current output position
+                // This avoids the cross-segment issue by using OutputView's automatic segment
+                // management
+                statisticsSize = statisticsCollector.writeStatistics(pagedOutputView);
+            } catch (Exception e) {
+                // If serialization fails, continue without statistics
+                LOG.error("Failed to serialize statistics for record batch", e);
+            }
+        }
+
+        // Reset the statistics collector for reuse
+        if (statisticsCollector != null) {
+            statisticsCollector.reset();
+        }
+
         bytesView =
                 MultiBytesView.builder()
                         .addMemorySegmentByteViewList(pagedOutputView.getWrittenSegments())
@@ -152,6 +219,10 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         arrowWriter.recycle(writerEpoch);
 
         writeBatchHeader();
+
+        // Reset the flag after header is written
+        resetBatchHeader = false;
+
         return bytesView;
     }
 
@@ -183,6 +254,10 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         arrowWriter.writeRow(row);
         if (!appendOnly) {
             changeTypeWriter.writeChangeType(changeType);
+        }
+        // Collect statistics for the row if enabled
+        if (statisticsCollector != null) {
+            statisticsCollector.processRow(row);
         }
         reCalculateSizeInBytes = true;
     }
@@ -244,6 +319,11 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
                     arrowChangeTypeOffset(magic)
                             + changeTypeWriter.sizeInBytes()
                             + arrowWriter.estimatedSizeInBytes();
+            // For V2, add estimated statistics size after records
+            if (magic >= LogRecordBatchFormat.LOG_MAGIC_VALUE_V2 && statisticsCollector != null) {
+                // Use the efficient estimatedSizeInBytes method from statisticsCollector
+                estimatedSizeInBytes += statisticsCollector.estimatedSizeInBytes();
+            }
         }
 
         reCalculateSizeInBytes = false;
@@ -273,8 +353,20 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         outputView.writeUnsignedInt(0);
         // write schema id
         outputView.writeShort((short) schemaId);
-        // write attributes (currently only appendOnly flag)
-        outputView.writeBoolean(appendOnly);
+
+        // write attributes (appendOnly flag and statistics flag)
+        byte attributes = 0;
+        if (appendOnly) {
+            attributes |= 0x01; // set appendOnly flag
+        }
+
+        // Set statistics flag if statistics size > 0
+        if (statisticsSize > 0) {
+            attributes |= STATISTICS_FLAG_MASK; // set statistics flag
+        }
+
+        outputView.writeByte(attributes);
+
         // write lastOffsetDelta
         if (recordCount > 0) {
             outputView.writeInt(recordCount - 1);
@@ -286,6 +378,17 @@ public class MemoryLogRecordsArrowBuilder implements AutoCloseable {
         outputView.writeLong(writerId);
         outputView.writeInt(batchSequence);
         outputView.writeInt(recordCount);
+
+        // For V2, write statistics offset (statistics data is appended after records)
+        if (magic >= LogRecordBatchFormat.LOG_MAGIC_VALUE_V2) {
+            if (statisticsSize > 0) {
+                int statisticsOffset = bytesView.getBytesLength() - statisticsSize;
+                outputView.writeInt(statisticsOffset);
+            } else {
+                // No statistics, write 0 as offset
+                outputView.writeInt(0);
+            }
+        }
 
         // Update crc.
         long crc = Crc32C.compute(pagedOutputView.getWrittenSegments(), schemaIdOffset(magic));

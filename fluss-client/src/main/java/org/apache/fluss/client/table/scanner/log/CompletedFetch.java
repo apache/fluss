@@ -27,7 +27,6 @@ import org.apache.fluss.record.LogRecordBatch;
 import org.apache.fluss.record.LogRecordReadContext;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
-import org.apache.fluss.rpc.messages.FetchLogRequest;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.utils.CloseableIterator;
 
@@ -39,6 +38,8 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Iterator;
 import java.util.List;
+
+import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /**
  * {@link CompletedFetch} represents the result that was returned from the tablet server via a
@@ -53,6 +54,7 @@ abstract class CompletedFetch {
     final ApiError error;
     final int sizeInBytes;
     final long highWatermark;
+    private final long fetchOffset;
 
     private final boolean isCheckCrcs;
     private final Iterator<LogRecordBatch> batches;
@@ -79,7 +81,8 @@ abstract class CompletedFetch {
             LogRecordReadContext readContext,
             LogScannerStatus logScannerStatus,
             boolean isCheckCrcs,
-            long fetchOffset) {
+            long fetchOffset,
+            long nextFetchOffset) {
         this.tableBucket = tableBucket;
         this.error = error;
         this.sizeInBytes = sizeInBytes;
@@ -90,6 +93,11 @@ abstract class CompletedFetch {
         this.logScannerStatus = logScannerStatus;
         this.nextFetchOffset = fetchOffset;
         this.selectedFieldGetters = readContext.getSelectedFieldGetters();
+        this.fetchOffset = fetchOffset;
+        checkArgument(
+                nextFetchOffset == -1 || nextFetchOffset >= fetchOffset,
+                "nextFetchOffset must be -1 or greater than fetchOffset.");
+        this.nextFetchOffset = nextFetchOffset > 0 ? nextFetchOffset : fetchOffset;
     }
 
     // TODO: optimize this to avoid deep copying the record.
@@ -111,6 +119,10 @@ abstract class CompletedFetch {
 
     boolean isInitialized() {
         return initialized;
+    }
+
+    long fetchOffset() {
+        return fetchOffset;
     }
 
     long nextFetchOffset() {
@@ -178,6 +190,8 @@ abstract class CompletedFetch {
                 ScanRecord record = toScanRecord(lastRecord);
                 scanRecords.add(record);
                 recordsRead++;
+                // Update nextFetchOffset based on the current record
+                // This will be overridden by batch-level nextLogOffset when batch is complete
                 nextFetchOffset = lastRecord.logOffset() + 1;
                 cachedRecordException = null;
             }
@@ -232,6 +246,10 @@ abstract class CompletedFetch {
         if (isCheckCrcs) {
             if (readContext.isProjectionPushDowned()) {
                 LOG.debug("Skipping CRC check for column projected log record batch.");
+                return;
+            }
+            if (readContext.isFilterPushDowned()) {
+                LOG.debug("Skipping CRC check for filter pushed down log record batch.");
                 return;
             }
             try {
