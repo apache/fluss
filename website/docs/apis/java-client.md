@@ -170,8 +170,9 @@ List<User> users = List.of(
 );
 ```
 
-**Note:** Currently data in Fluss is written in the form of `rows`, so we need to convert our POJO to `GenericRow`, while the Fluss community is working to provide
-a more user-friendly API for writing data.
+**Note:** Data in Fluss is written in the form of `rows`. You can either manually convert your POJO to `GenericRow` or use the `PojoToRowConverter` utility for automatic conversion.
+
+#### Manual Conversion
 ```java
 Table table = connection.getTable(tablePath);
 
@@ -193,6 +194,65 @@ rows.forEach(writer::upsert);
 // call flush() to blocking the thread until all data is written successfully
 writer.flush();
 ```
+
+#### Using POJO Converter
+For a more convenient approach, you can use `PojoToRowConverter` to automatically convert your POJOs to rows:
+
+```java
+import org.apache.fluss.client.converter.PojoToRowConverter;
+
+// Create a converter for your POJO class
+RowType tableType = table.getTableInfo().getSchema().toRowType();
+PojoToRowConverter<User> converter = PojoToRowConverter.of(User.class, tableType, tableType);
+
+// Convert POJOs to rows automatically
+List<GenericRow> rows = users.stream()
+    .map(converter::toRow)
+    .collect(Collectors.toList());
+
+UpsertWriter writer = table.newUpsert().createWriter();
+rows.forEach(writer::upsert);
+writer.flush();
+```
+
+##### Numeric Type Widening
+
+The POJO converter supports automatic numeric type widening following Java's safe widening rules. This means you can use smaller numeric types in your POJOs even when the table schema specifies larger types.
+
+**Supported Widenings**:
+- `byte` → `short`, `int`, `long`, `float`, `double`
+- `short` → `int`, `long`, `float`, `double`
+- `int` → `long`, `float`, `double`
+- `long` → `float`, `double`
+- `float` → `double`
+
+**Example**:
+```java
+// POJO with int field
+public class Order {
+    public int orderId;      // Will automatically widen to BIGINT
+    public String customerName;
+}
+
+// Table schema with BIGINT
+Schema schema = Schema.newBuilder()
+    .column("orderId", DataTypes.BIGINT())
+    .column("customerName", DataTypes.STRING())
+    .primaryKey("orderId")
+    .build();
+
+// This works! int will be automatically widened to long
+RowType tableType = schema.toRowType();
+PojoToRowConverter<Order> converter = PojoToRowConverter.of(Order.class, tableType, tableType);
+
+Order order = new Order();
+order.orderId = 12345;
+order.customerName = "Alice";
+
+GenericRow row = converter.toRow(order); // orderId is automatically converted to long
+```
+
+**Note**: Narrowing conversions (e.g., `long` → `int`) are NOT supported and will fail at converter creation time.
 
 For a Log table you can use the `AppendWriter` API to write data.
 ```java
