@@ -45,7 +45,7 @@ public class ConnectionMetricGroup extends AbstractMetricGroup {
     private final String serverId;
 
     /** Metrics for different request/response metrics with specify {@link ApiKeys}. */
-    private final Map<String, Metrics> metricsByRequestName = MapUtils.newConcurrentHashMap();
+    final Map<String, Metrics> metricsByRequestName = MapUtils.newConcurrentHashMap();
 
     public ConnectionMetricGroup(
             MetricRegistry registry, String serverId, ClientMetricGroup parent) {
@@ -93,7 +93,7 @@ public class ConnectionMetricGroup extends AbstractMetricGroup {
     }
 
     @Nullable
-    private Metrics getOrCreateRequestMetrics(ApiKeys apikey) {
+    Metrics getOrCreateRequestMetrics(ApiKeys apikey) {
         if (!REPORT_API_KEYS.contains(apikey)) {
             return null;
         }
@@ -102,7 +102,7 @@ public class ConnectionMetricGroup extends AbstractMetricGroup {
                 apikey.name(), keyName -> new Metrics(this.addGroup("request", keyName)));
     }
 
-    private static final class Metrics {
+    static final class Metrics {
         final Counter requests;
         final Counter responses;
         final Counter inComingBytes;
@@ -123,6 +123,30 @@ public class ConnectionMetricGroup extends AbstractMetricGroup {
             metricGroup.gauge(MetricNames.CLIENT_REQUEST_LATENCY_MS, () -> requestLatencyMs);
             requestsInFlight = new AtomicInteger(0);
             metricGroup.gauge(MetricNames.CLIENT_REQUESTS_IN_FLIGHT, requestsInFlight::get);
+        }
+
+        long requestRate() {
+            return requests.getCount();
+        }
+
+        long responseRate() {
+            return responses.getCount();
+        }
+
+        long byteInRate() {
+            return inComingBytes.getCount();
+        }
+
+        long byteOutRate() {
+            return outGoingBytes.getCount();
+        }
+
+        long requestLatencyMs() {
+            return requestLatencyMs;
+        }
+
+        long requestsInFlight() {
+            return requestsInFlight.get();
         }
     }
 }
