@@ -31,7 +31,7 @@ import org.apache.fluss.metadata.TablePath;
 /** Paimon implementation of {@link LakeStorage}. */
 public class PaimonLakeStorage implements LakeStorage {
 
-    private final Configuration paimonConfig;
+    protected final Configuration paimonConfig;
 
     public PaimonLakeStorage(Configuration configuration) {
         this.paimonConfig = configuration;
