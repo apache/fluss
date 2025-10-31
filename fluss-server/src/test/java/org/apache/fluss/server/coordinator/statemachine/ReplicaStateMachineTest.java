@@ -37,6 +37,7 @@ import org.apache.fluss.server.zk.NOPErrorHandler;
 import org.apache.fluss.server.zk.ZooKeeperClient;
 import org.apache.fluss.server.zk.ZooKeeperExtension;
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
+import org.apache.fluss.server.zk.data.ZkVersion;
 import org.apache.fluss.testutils.common.AllCallbackWrapper;
 
 import org.junit.jupiter.api.BeforeAll;
@@ -214,7 +215,8 @@ class ReplicaStateMachineTest {
         }
         // put leader and isr
         LeaderAndIsr leaderAndIsr = new LeaderAndIsr(0, 0, Arrays.asList(0, 1, 2), 0, 0);
-        zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
+        zookeeperClient.registerLeaderAndIsr(
+                tableBucket, leaderAndIsr, ZkVersion.MATCH_ANY_VERSION.getVersion());
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
 
@@ -250,7 +252,8 @@ class ReplicaStateMachineTest {
         }
         // put leader and isr
         LeaderAndIsr leaderAndIsr = new LeaderAndIsr(0, 0, Arrays.asList(0, 1, 2), 0, 0);
-        zookeeperClient.registerLeaderAndIsr(tableBucket, leaderAndIsr);
+        zookeeperClient.registerLeaderAndIsr(
+                tableBucket, leaderAndIsr, ZkVersion.MATCH_ANY_VERSION.getVersion());
         coordinatorContext.updateBucketReplicaAssignment(tableBucket, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketLeaderAndIsr(tableBucket, leaderAndIsr);
 
