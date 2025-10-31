@@ -146,7 +146,7 @@ class PrefixKeyLookuper implements Lookuper {
     }
 
     @Override
-    public CompletableFuture<LookupResult> lookup(InternalRow prefixKey) {
+    public synchronized CompletableFuture<LookupResult> lookup(InternalRow prefixKey) {
         byte[] bucketKeyBytes = bucketKeyEncoder.encodeKey(prefixKey);
         int bucketId = bucketingFunction.bucketing(bucketKeyBytes, numBuckets);
 
