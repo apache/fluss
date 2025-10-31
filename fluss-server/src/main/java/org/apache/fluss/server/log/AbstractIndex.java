@@ -82,6 +82,7 @@ public abstract class AbstractIndex implements Closeable {
 
     /** The maximum number of entries this index can hold. */
     private volatile int maxEntries;
+
     /** The number of entries in this index. */
     private volatile int entries;
 

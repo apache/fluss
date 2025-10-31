@@ -45,7 +45,7 @@ public class Lz4ArrowCompressionCodec extends AbstractCompressionCodec {
                 "The uncompressed buffer size exceeds the integer limit");
 
         byte[] inBytes = new byte[(int) uncompressedBuffer.writerIndex()];
-        uncompressedBuffer.getBytes(/*index=*/ 0, inBytes);
+        uncompressedBuffer.getBytes(/* index= */ 0, inBytes);
         ByteArrayOutputStream baos = new ByteArrayOutputStream();
         try (InputStream in = new ByteArrayInputStream(inBytes);
                 OutputStream out = new FlussLZ4BlockOutputStream(baos)) {
@@ -86,7 +86,7 @@ public class Lz4ArrowCompressionCodec extends AbstractCompressionCodec {
 
         byte[] outBytes = out.toByteArray();
         ArrowBuf decompressedBuffer = allocator.buffer(outBytes.length);
-        decompressedBuffer.setBytes(/*index=*/ 0, outBytes);
+        decompressedBuffer.setBytes(/* index= */ 0, outBytes);
         decompressedBuffer.writerIndex(decompressedLength);
         return decompressedBuffer;
     }

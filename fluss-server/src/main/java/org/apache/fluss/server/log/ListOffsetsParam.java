@@ -29,6 +29,7 @@ public class ListOffsetsParam {
      * from follower, it represents listing LocalLogStartOffset.
      */
     public static final int EARLIEST_OFFSET_TYPE = 0;
+
     /**
      * Latest offset type. If the list offsets request come from client, it represents listing
      * HighWatermark. otherwise, the request come from follower, it represents listing
