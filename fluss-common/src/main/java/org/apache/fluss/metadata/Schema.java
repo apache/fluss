@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.annotation.PublicStable;
 import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeRoot;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.EncodingUtils;
 import org.apache.fluss.utils.StringUtils;
@@ -62,8 +63,11 @@ public final class Schema implements Serializable {
     private final @Nullable PrimaryKey primaryKey;
     private final RowType rowType;
 
-    private Schema(List<Column> columns, @Nullable PrimaryKey primaryKey) {
-        this.columns = normalizeColumns(columns, primaryKey);
+    private Schema(
+            List<Column> columns,
+            @Nullable PrimaryKey primaryKey,
+            @Nullable String autoIncrementColumn) {
+        this.columns = normalizeColumns(columns, primaryKey, autoIncrementColumn);
         this.primaryKey = primaryKey;
         // pre-create the row type as it is the most frequently used part of the schema
         this.rowType =
@@ -188,6 +192,7 @@ public final class Schema implements Serializable {
     public static final class Builder {
         private final List<Column> columns;
         private @Nullable PrimaryKey primaryKey;
+        private @Nullable String autoIncrementColumn;
 
         private Builder() {
             columns = new ArrayList<>();
@@ -314,9 +319,26 @@ public final class Schema implements Serializable {
             return this;
         }
 
+        /**
+         * Declares a column to be auto-incremented. With an auto-increment column in the table,
+         * whenever a new row is inserted into the table, the new row will be assigned with the next
+         * available value from the auto-increment sequence. A table can have at most one auto
+         * increment column.
+         *
+         * @param columnName the auto increment column name
+         */
+        public Builder enableAutoIncrement(String columnName) {
+            checkState(
+                    autoIncrementColumn == null,
+                    "Multiple auto increment columns are not supported.");
+            checkArgument(columnName != null, "Auto increment column name must not be null.");
+            autoIncrementColumn = columnName;
+            return this;
+        }
+
         /** Returns an instance of an {@link Schema}. */
         public Schema build() {
-            return new Schema(columns, primaryKey);
+            return new Schema(columns, primaryKey, autoIncrementColumn);
         }
     }
 
@@ -335,19 +357,37 @@ public final class Schema implements Serializable {
         private final String columnName;
         private final DataType dataType;
         private final @Nullable String comment;
+        private final Boolean autoIncrement;
 
         public Column(String columnName, DataType dataType) {
             this(columnName, dataType, null);
         }
 
+        public Column(String columnName, DataType dataType, boolean autoIncrement) {
+            this(columnName, dataType, null, autoIncrement);
+        }
+
         public Column(String columnName, DataType dataType, @Nullable String comment) {
+            this(columnName, dataType, comment, false);
+        }
+
+        public Column(
+                String columnName,
+                DataType dataType,
+                @Nullable String comment,
+                Boolean autoIncrement) {
             this.columnName = columnName;
             this.dataType = dataType;
             this.comment = comment;
+            this.autoIncrement = autoIncrement;
         }
 
         public String getName() {
             return columnName;
+        }
+
+        public Boolean getAutoIncrement() {
+            return autoIncrement;
         }
 
         public Optional<String> getComment() {
@@ -359,13 +399,16 @@ public final class Schema implements Serializable {
         }
 
         public Column withComment(String comment) {
-            return new Column(columnName, dataType, comment);
+            return new Column(columnName, dataType, comment, autoIncrement);
         }
 
         @Override
         public String toString() {
             final StringBuilder sb = new StringBuilder();
             sb.append(columnName).append(" ").append(dataType.toString());
+            if (autoIncrement) {
+                sb.append(" AUTO INCREMENT ");
+            }
             getComment()
                     .ifPresent(
                             c -> {
@@ -387,12 +430,13 @@ public final class Schema implements Serializable {
             Column that = (Column) o;
             return Objects.equals(columnName, that.columnName)
                     && Objects.equals(dataType, that.dataType)
-                    && Objects.equals(comment, that.comment);
+                    && Objects.equals(comment, that.comment)
+                    && Objects.equals(autoIncrement, that.autoIncrement);
         }
 
         @Override
         public int hashCode() {
-            return Objects.hash(columnName, dataType, comment);
+            return Objects.hash(columnName, dataType, comment, autoIncrement);
         }
     }
 
@@ -453,7 +497,9 @@ public final class Schema implements Serializable {
 
     /** Normalize columns and primary key. */
     private static List<Column> normalizeColumns(
-            List<Column> columns, @Nullable PrimaryKey primaryKey) {
+            List<Column> columns,
+            @Nullable PrimaryKey primaryKey,
+            @Nullable String autoIncrementColumn) {
 
         List<String> columnNames =
                 columns.stream().map(Column::getName).collect(Collectors.toList());
@@ -467,6 +513,9 @@ public final class Schema implements Serializable {
         Set<String> allFields = new HashSet<>(columnNames);
 
         if (primaryKey == null) {
+            checkState(
+                    autoIncrementColumn == null,
+                    "Auto increment column can only be used in primary-key table.");
             return Collections.unmodifiableList(columns);
         }
 
@@ -483,8 +532,18 @@ public final class Schema implements Serializable {
                 columnNames,
                 primaryKeyNames);
 
-        // primary key should not nullable
         Set<String> pkSet = new HashSet<>(primaryKeyNames);
+        if (autoIncrementColumn != null) {
+            checkState(
+                    allFields.contains(autoIncrementColumn),
+                    "Auto increment column %s does not exist in table columns %s.",
+                    autoIncrementColumn,
+                    columnNames);
+            checkState(
+                    !pkSet.contains(autoIncrementColumn),
+                    "Auto increment column can not be used as the primary key.");
+        }
+        // primary key should not nullable
         List<Column> newColumns = new ArrayList<>();
         for (Column column : columns) {
             if (pkSet.contains(column.getName()) && column.getDataType().isNullable()) {
@@ -495,6 +554,17 @@ public final class Schema implements Serializable {
                                 column.getComment().isPresent()
                                         ? column.getComment().get()
                                         : null));
+            } else if (Objects.equals(column.getName(), autoIncrementColumn)) {
+                checkState(
+                        column.getDataType().is(DataTypeRoot.INTEGER)
+                                || column.getDataType().is(DataTypeRoot.BIGINT),
+                        "The data type of auto increment column must be INT or BIGINT.");
+                newColumns.add(
+                        new Column(
+                                column.getName(),
+                                column.getDataType().copy(),
+                                column.getComment().isPresent() ? column.getComment().get() : null,
+                                true));
             } else {
                 newColumns.add(column);
             }

@@ -29,10 +29,11 @@ public class ColumnJsonSerdeTest extends JsonSerdeTestBase<Schema.Column> {
 
     @Override
     protected Schema.Column[] createObjects() {
-        Schema.Column[] columns = new Schema.Column[3];
+        Schema.Column[] columns = new Schema.Column[4];
         columns[0] = new Schema.Column("a", DataTypes.STRING());
         columns[1] = new Schema.Column("b", DataTypes.INT(), "hello b");
         columns[2] = new Schema.Column("c", new IntType(false), "hello c");
+        columns[3] = new Schema.Column("d", new IntType(false), "hello d", true);
         return columns;
     }
 
@@ -41,7 +42,8 @@ public class ColumnJsonSerdeTest extends JsonSerdeTestBase<Schema.Column> {
         return new String[] {
             "{\"name\":\"a\",\"data_type\":{\"type\":\"STRING\"}}",
             "{\"name\":\"b\",\"data_type\":{\"type\":\"INTEGER\"},\"comment\":\"hello b\"}",
-            "{\"name\":\"c\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"hello c\"}"
+            "{\"name\":\"c\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"hello c\"}",
+            "{\"name\":\"d\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"auto_increment\":true,\"comment\":\"hello d\"}"
         };
     }
 }
