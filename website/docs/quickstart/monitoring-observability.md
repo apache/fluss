@@ -1,6 +1,6 @@
 ---
 title: Cluster Monitoring and Observability
-sidebar_position: 3
+sidebar_position: 4
 ---
 
 # Cluster Monitoring and Observability
@@ -73,7 +73,7 @@ This section will show you how to monitor your cluster with [Prometheus](https:/
 The container manifest below configures the Fluss image to use Logback and adds the Loki4j Logback appender to the classpath. Save it to a file named `fluss-slf4j-logback.Dockerfile` in your working directory.
 
 ```dockerfile
-FROM fluss/fluss:$FLUSS_DOCKER_VERSION$
+FROM apache/fluss:$FLUSS_DOCKER_VERSION$
 
 # remove default logging backend from classpath and add logback to classpath
 RUN rm -rf ${FLUSS_HOME}/lib/log4j-slf4j-impl-*.jar && \
@@ -151,7 +151,7 @@ services:
   #end
   #begin Flink cluster
   jobmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
+    image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     ports:
       - "8083:8081"
     command: jobmanager
@@ -162,7 +162,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/paimon
   taskmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
+    image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     depends_on:
       - jobmanager
     command: taskmanager
@@ -265,7 +265,7 @@ You can simply copy the manifest below into `docker-compose.yml`.
 services:
   #begin Fluss cluster
   coordinator-server:
-    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
+    image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: coordinatorServer
     depends_on:
       - zookeeper
@@ -291,7 +291,7 @@ services:
       - ./fluss-quickstart-observability/slf4j/log4j-opentelemetry-console.properties:/opt/fluss/conf/log4j-console.properties:ro
       - ./opentelemetry-javaagent.jar:/opt/opentelemetry-javaagent.jar:ro
   tablet-server:
-    image: fluss/fluss:$FLUSS_DOCKER_VERSION$
+    image: apache/fluss:$FLUSS_DOCKER_VERSION$
     command: tabletServer
     depends_on:
       - coordinator-server
@@ -324,7 +324,7 @@ services:
   #end
   #begin Flink cluster
   jobmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
+    image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     ports:
       - "8083:8081"
     command: jobmanager
@@ -335,7 +335,7 @@ services:
     volumes:
       - shared-tmpfs:/tmp/paimon
   taskmanager:
-    image: fluss/quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
+    image: apache/fluss-quickstart-flink:1.20-$FLUSS_DOCKER_VERSION$
     depends_on:
       - jobmanager
     command: taskmanager
