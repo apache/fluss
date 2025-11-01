@@ -12,7 +12,7 @@ reporters will be instantiated on each CoordinatorServer and TabletServers when 
 Example reporter configuration that specifies multiple reporters:
 
 ```yaml
-metrics.reporters: jmx,prometheus
+metrics.reporters: jmx,opentelemetry
 ```
 
 ## Push vs. Pull
@@ -57,6 +57,39 @@ An example for such a list would be `cluster_id=fluss1,host=localhost,server_id=
 
 The domain thus identifies a metric class, while the key-property list identifies one (or multiple) instances of that metric.
 
+### OpenTelemetry
+
+Type: push
+
+
+:::info
+
+The OpenTelemetry metric reporter currently supports OTLP/gRPC only.
+
+:::
+
+Parameters:
+
+- `metrics.reporter.opentelemetry.endpoint` - Target to which the OpenTelemetry metric reporter is going to send metrics to.
+- `metrics.reporter.opentelemetry.export-interval` - (optional) Frequency of metric export by the OpenTelemetry metric reporter to the endpoint. Default: 10s.
+- `metrics.reporter.opentelemetry.export-timeout` - (optional) Maximum time the OpenTelemetry metric reporter will wait for each metric export. Default: 10s.
+
+Example configuration:
+
+```yaml
+metrics.reporters: opentelemetry
+metrics.reporter.opentelemetry.endpoint: http://opentelemetry-collector:4317
+```
+
+Fluss metric types are mapped to OpenTelemetry metric types as follows:
+
+| Fluss     | OpenTelemetry           | Note                                                          |
+|-----------|-------------------------|---------------------------------------------------------------|
+| Counter   | LONG_SUM                |                                                               |
+| Gauge     | LONG_GAUGE/DOUBLE_GAUGE | Automatically determined by the type of the Gauge.            |
+| Histogram | SUMMARY                 | Quantiles .5, .75, .95, .99                                   |
+| Meter     | LONG_SUM, DOUBLE_GAUGE  | Exports the meter's count (LONG_SUM) and rate (DOUBLE_GAUGE). |
+
 ### Prometheus
 
 Type: pull
@@ -74,9 +107,9 @@ metrics.reporter.prometheus.port: 9250
 
 Fluss metric types are mapped to Prometheus metric types as follows:
 
-| Fluss     | Prometheus | Note                                     |
-| --------- |------------|------------------------------------------|
-| Counter   | Gauge      |Prometheus counters cannot be decremented.|
-| Gauge     | Gauge      |Only numbers and booleans are supported.  |
-| Histogram | Summary    |Quantiles .5, .75, .95, .98, .99 and .999 |
-| Meter     | Gauge      |The gauge exports the meter's rate.       |
+| Fluss     | Prometheus | Note                                       |
+|-----------|------------|--------------------------------------------|
+| Counter   | Gauge      | Prometheus counters cannot be decremented. |
+| Gauge     | Gauge      | Only numbers and booleans are supported.   |
+| Histogram | Summary    | Quantiles .5, .75, .95, .98, .99 and .999  |
+| Meter     | Gauge      | The gauge exports the meter's rate.        |
