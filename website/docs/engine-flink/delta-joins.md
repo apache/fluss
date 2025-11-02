@@ -5,17 +5,21 @@ sidebar_position: 6
 ---
 
 # The Delta Join
-Beginning with **Apache Flink 2.1**, a new operator called **Delta Join** was introduced.  
+Beginning with **Apache Flink 2.1**, a new operator called [Delta Join](https://cwiki.apache.org/confluence/display/FLINK/FLIP-486%3A+Introduce+A+New+DeltaJoin) was introduced.
 Compared to traditional streaming joins, the delta join operator significantly reduces the amount of state that needs to be maintained during execution. This improvement helps mitigate several common issues associated with large state sizes, including:
 
 - Excessive computing resource and storage consumption
 - Long checkpointing durations
 - Extended recovery times after failures or restarts
+- Heavy state bootstrap overhead after changing job logic
 
 Starting with **Apache Fluss 0.8**, streaming join jobs running on **Flink 2.1 or later** will be automatically optimized into **delta joins** whenever applicable. This optimization happens transparently at query planning time, requiring no manual configuration.
 
 ## How Delta Join Works
-Traditional streaming joins in Flink require maintaining both input sides entirely in state to match records across streams. Delta join, by contrast, uses a **prefix-based lookup mechanism** to transform the behavior of querying data from the state into querying data from the Fluss source table, thereby avoiding redundant storage of the same data in both the Fluss source table and the state. This drastically reduces state size and improves performance for many streaming analytics and enrichment workloads.
+
+Traditional streaming joins in Flink require maintaining both input sides entirely in state to match records across streams. Delta join, by contrast, uses a **index-key lookup mechanism** to transform the behavior of querying data from the state into querying data from the Fluss source table, thereby avoiding redundant storage of the same data in both the Fluss source table and the state. This drastically reduces state size and improves performance for many streaming analytics and enrichment workloads.
+
+![](../assets/delta_join.jpg)
 
 ## Example: Delta Join in Flink 2.1
 
@@ -70,7 +74,7 @@ CREATE TABLE `fluss_catalog`.`my_db`.`snk` (
     `content` VARCHAR NOT NULL,
     `city_name` VARCHAR NOT NULL,
     PRIMARY KEY (city_id, order_id) NOT ENFORCED
-) WITH (...);
+);
 ```
 
 #### Explain the Join Query
@@ -112,14 +116,21 @@ Sink(table=[fluss_catalog.my_db.snk], fields=[city_id, order_id, content, city_n
          +- TableSourceScan(table=[[fluss_catalog, my_db, right_src]], fields=[city_id, city_name])
 ```
 
-## Understanding Prefix Keys
+## Understanding Index Keys
+
+Delta Join relies on performing lookups by the join key (e.g., the `city_id` in the above example) on the Fluss source tables. This requires that the Fluss source tables are defined with appropriate index on the join key to enable efficient lookups.
+
+Currently, Fluss only supports to defines a single index key per table, which is also referred to as the **prefix key**. The general secondary index which allows define multiple indexes with arbitrary fields is planned to be supported in the near future releases.
+
 A prefix key defines the portion of a table’s primary key that can be used for efficient key-based lookups or index pruning.
 
 In Fluss, the option `'bucket.key' = 'city_id'` specifies that data is organized (or bucketed) by `city_id`. When performing a delta join, this allows Flink to quickly locate and read only the subset of records corresponding to the specific prefix key value, rather than scanning or caching the entire table state.
 
 For example:
 - Full primary key: `(city_id, order_id)`
-- Prefix key: `city_id`
+- Bucket key: `city_id`
+
+This yields an **index** on the prefix key `city_id`, so that you can perform [Prefix Key Lookup](/docs/engine-flink/lookups/#prefix-lookup) by the `city_id`.
 
 In this setup:
 * The delta join operator uses the prefix key (`city_id`) to retrieve only relevant right-side records matching each left-side event. 
@@ -129,9 +140,9 @@ Prefix keys thus form the foundation for efficient lookups in delta joins, enabl
 
 ## Flink Version Support
 
-The delta join feature is still evolving, and its optimization capabilities vary across Flink versions.
+The delta join feature is introduced since Flink 2.1 and still evolving, and its optimization capabilities vary across Flink versions.
 
-Refer to the [Delta Join](https://issues.apache.org/jira/browse/FLINK-37836) for the most up-to-date information.
+Refer to the [Delta Join Issue](https://issues.apache.org/jira/browse/FLINK-37836) for the most up-to-date information.
 
 
 ### Flink 2.1
@@ -148,3 +159,11 @@ Refer to the [Delta Join](https://issues.apache.org/jira/browse/FLINK-37836) for
 - All join inputs should be INSERT-ONLY streams.
   - This is why the option `'table.merge-engine' = 'first_row'` is added to the source table DDL.
 - All upstream nodes of the join should be `TableSourceScan` or `Exchange`.
+
+## Future Plan
+
+The Fluss and Flink community are actively working together on enhancing delta join. Planned improvements include:
+- Support for additional join types, such as LEFT JOIN and FULL OUTER JOIN.
+- Support for multi-way joins involving more than two streams. This also requires Fluss to support defining multiple secondary index keys on a single table.
+- Support for more complex query patterns, including Calc and LookupJoin nodes.
+- Relaxation of restrictions on input stream types, allowing for changelog streams.
