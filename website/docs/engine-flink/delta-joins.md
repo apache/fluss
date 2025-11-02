@@ -149,7 +149,7 @@ Refer to the [Delta Join Issue](https://issues.apache.org/jira/browse/FLINK-3783
 
 #### Supported Features
 
-- Support for optimizing a dual-stream join in the straightforward pattern of "insert only source -> join -> upsert sink" into a delta join.
+- Support for optimizing a dual-stream join in the straightforward pattern of `insert only source -> join -> upsert sink` into a delta join.
 
 #### Limitations
 
@@ -160,10 +160,27 @@ Refer to the [Delta Join Issue](https://issues.apache.org/jira/browse/FLINK-3783
   - This is why the option `'table.merge-engine' = 'first_row'` is added to the source table DDL.
 - All upstream nodes of the join should be `TableSourceScan` or `Exchange`.
 
+### Flink 2.2 (upcoming)
+
+#### Supported Features
+
+- Support for optimizing a dual-stream join from CDC sources that do not include delete messages into a delta join.
+  - Disable delete on the source table to guarantee there is no delete message in the table, by adding the option `'table.delete.behavior' = 'IGNORE'` or `'DISABLE'` on the table.
+  - The source table is no more required to be a `first_row` merge engine table since this version.
+- Support `Project` and `Filter` between source and delta join.
+- Support cache in delta join.
+
+#### Limitations
+
+- The primary key or the prefix lookup key of the tables must be included as part of the equivalence conditions in the join.
+- The join must be a INNER join.
+- The downstream nodes of the join can accept duplicate changes, such as a sink that provides UPSERT mode.
+- When consuming a CDC stream, the join key used in the delta join must be part of the primary key.
+- All filters must be applied on the upsert key, and neither filters nor projections should contain non-deterministic functions.
+
 ## Future Plan
 
 The Fluss and Flink community are actively working together on enhancing delta join. Planned improvements include:
 - Support for additional join types, such as LEFT JOIN and FULL OUTER JOIN.
 - Support for multi-way joins involving more than two streams. This also requires Fluss to support defining multiple secondary index keys on a single table.
-- Support for more complex query patterns, including Calc and LookupJoin nodes.
-- Relaxation of restrictions on input stream types, allowing for changelog streams.
+- Support for more complex query patterns to optimize a wider range of join scenarios.
