@@ -221,22 +221,29 @@ DROP TABLE my_table;
 This will entirely remove all the data of the table in the Fluss cluster.
 
 ## Alter Table
-### SET
-The SET statement allows you to configure one or more [Storage Options](engine-flink/options.md#storage-options) for a specified table. If a particular storage-option is already configured, it will be overridden with the new value.
+### SET properties
+The SET statement allows users to configure one or more connector options including the [Storage Options](engine-flink/options.md#storage-options) for a specified table. If a particular option is already configured on the table, it will be overridden with the new value.
 
-**Limits**
-1. `bootstrap.servers`, `bucket.num` and `bucket.key` cannot be altered.
-2. All the table options except `table.datalake.enabled` can be modified.
-3. If lakehouse is already enabled for a table, options with lakehouse format prefixes (e.g., `paimon.*`) cannot be set again.
+When using SET to modify [Storage Options](engine-flink/options.md#storage-options), the Fluss cluster will dynamically apply the changes to the table. This can be useful for modifying table behavior without needing to recreate the table.
+
+**Supported Options to modify**
+- All [Read Options](engine-flink/options.md#read-options), [Write Options](engine-flink/options.md#write-options), [Lookup Options](engine-flink/options.md#lookup-options) and [Other Options](engine-flink/options.md#other-options) except `bootstrap.servers`.
+- The following [Storage Options](engine-flink/options.md#storage-options):
+  - `table.datalake.enabled`: Enable or disable lakehouse storage for the table.
+
 ```sql title="Flink SQL"
-ALTER TABLE my_table SET ('table.datalake.enabled' = 'paimon');
+ALTER TABLE my_table SET ('table.datalake.enabled' = 'true');
 ```
 
+**Limits**
+- If lakehouse storage (`table.datalake.enabled`) is already enabled for a table, options with lakehouse format prefixes (e.g., `paimon.*`) cannot be modified again.
 
-### RESET 
-Reset one or more [Storage Options](engine-flink/options.md#storage-options) to its default value.
 
-The following example illustrates the usage of the RESET statements.
+### RESET properties
+Reset one or more connector option including the [Storage Options](engine-flink/options.md#storage-options) to its default value.
+
+The following example illustrates reset the `table.datalake.enabled` option to its default value `false` on the table.
+
 ```sql title="Flink SQL"
 ALTER TABLE my_table RESET ('table.datalake.enabled');
 ```
