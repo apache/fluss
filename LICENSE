@@ -401,3 +401,7 @@ LightProto
 ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufMessage.java
 ./fluss-protogen/fluss-protogen-generator/src/main/java/org/apache/fluss/protogen/generator/generator/ProtobufNumberField.java
 ./fluss-protogen/fluss-protogen-maven-plugin/src/main/java/org/apache/fluss/protogen/maven/plugin/ProtoGenMojo.java
+
+Apache Maven Wrapper
+./mvnw
+./mvnw.cmd
