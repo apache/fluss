@@ -1,3 +1,8 @@
+---
+title: Graceful Shutdown
+sidebar_position: 3
+---
+
 # Graceful Shutdown
 
 Apache Fluss provides a **comprehensive graceful shutdown mechanism** to ensure data integrity and proper resource cleanup when stopping servers or services.
@@ -78,10 +83,8 @@ The controlled shutdown process can be configured using the following options:
 
 ```yaml
 # server.yaml
-tablet-server:
-  controlled-shutdown:
-    max-retries: 5
-    retry-interval: 2000ms
+tablet-server.controlled-shutdown.max-retries: 5
+tablet-server.controlled-shutdown.retry-interval: 2000ms
 ```
 
 ## Monitoring Shutdown

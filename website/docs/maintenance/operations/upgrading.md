@@ -1,6 +1,6 @@
 ---
 title: Upgrading and Compatibility
-sidebar_position: 1
+sidebar_position: 3
 ---
 
 As an online storage service, Fluss is typically designed to operate over extended periods, often spanning several years.

@@ -49,14 +49,15 @@ INSERT INTO pk_table2 /*+ OPTIONS('sink.ignore-delete'='true') */ select * from 
 ```
 
 
-### Configure options by altering table
+### Reconfigure options by altering table
 
-This is not supported yet, but is planned in the near future.
-For example, the following SQL statement alters the Fluss table with the `table.log.ttl` set to 7 days:
+Using `ALTER TABLE ... SET` statement to modify the table options. For example, to enable lakehouse storage for an existing table, you can run the following SQL command:
 
 ```sql
-ALTER TABLE log_table SET ('table.log.ttl' = '7d');
+ALTER TABLE log_table SET ('table.datalake.enable' = 'true');
 ```
+
+See more details about [ALTER TABLE ... SET](engine-flink/ddl.md#set-properties) and [ALTER TABLE ... RESET](engine-flink/ddl.md#reset-properties) documentation.
 
 ## Storage Options
 
@@ -84,6 +85,7 @@ ALTER TABLE log_table SET ('table.log.ttl' = '7d');
 | table.merge-engine                      | Enum     | (None)                              | Defines the merge engine for the primary key table. By default, primary key table uses the [default merge engine(last_row)](table-design/table-types/pk-table/merge-engines/default.md). It also supports two merge engines are `first_row` and `versioned`. The [first_row merge engine](table-design/table-types/pk-table/merge-engines/first-row.md) will keep the first row of the same primary key. The [versioned merge engine](table-design/table-types/pk-table/merge-engines/versioned.md) will keep the row with the largest version of the same primary key.                                                                                                                                                                                                                                                                                                                                                                |
 | table.merge-engine.versioned.ver-column | String   | (None)                              | The column name of the version column for the `versioned` merge engine. If the merge engine is set to `versioned`, the version column must be set.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                     |
 | table.delete.behavior                   | Enum     | ALLOW                               | Controls the behavior of delete operations on primary key tables. Three modes are supported: `ALLOW` (default) - allows normal delete operations; `IGNORE` - silently ignores delete requests without errors; `DISABLE` - rejects delete requests and throws explicit errors. This configuration provides system-level guarantees for some downstream pipelines (e.g., Flink Delta Join) that must not receive any delete events in the changelog of the table. For tables with `first_row` or `versioned` merge engines, this option is automatically set to `IGNORE` and cannot be overridden. Only applicable to primary key tables.                                                                                                                                                                                                                                                                                                |
+
 
 ## Read Options
 
