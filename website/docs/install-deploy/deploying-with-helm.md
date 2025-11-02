@@ -13,9 +13,13 @@ Before installing the Fluss Helm chart, ensure you have:
 
 - Kubernetes
 - Helm
-- A running ZooKeeper ensemble (required for coordination)
-- Sufficient cluster resources for the deployment
-- **For Local Development**: Minikube and Docker (see [Local Development with Minikube](#running-fluss-locally-with-minikube)) 
+- **For Local Development**: Minikube and Docker (see [Local Development with Minikube](#running-fluss-locally-with-minikube))
+
+:::note
+A Fluss cluster deployment requires a running ZooKeeper ensemble. To provide flexibility in deployment and enable reuse of existing infrastructure,
+the Fluss Helm chart does not include a bundled ZooKeeper cluster. If you don’t already have a ZooKeeper running,
+the installation documentation provides instructions for deploying one using Bitnami’s Helm chart.
+:::
 
 ## Supported Versions
 
@@ -82,8 +86,7 @@ helm install zk bitnami/zookeeper
 #### Install from Helm repo
 
 ```bash
-# TODO: Add chart to Helm repo.
-helm repo add fluss https://charts.fluss.apache.org
+helm repo add fluss https://downloads.apache.org/incubator/fluss/helm-chart
 helm repo update
 helm install helm-repo/fluss
 ```
@@ -91,7 +94,7 @@ helm install helm-repo/fluss
 #### Install from Local Chart
 
 ```bash
-helm install fluss ./docker/helm
+helm install fluss ./helm
 ```
 
 #### Install with Custom Values
@@ -99,13 +102,13 @@ helm install fluss ./docker/helm
 You can customize the installation by providing your own `values.yaml` file or setting individual parameters via the `--set` flag. Using a custom values file:
 
 ```bash
-helm install fluss ./docker/helm -f my-values.yaml
+helm install fluss ./helm -f my-values.yaml
 ```
 
 Or for example to change the ZooKeeper address via the `--set` flag:
 
 ```bash
-helm install fluss ./docker/helm \
+helm install fluss ./helm \
   --set configurationOverrides.zookeeper.address=<my-zk-cluster>:2181
 ```
 
@@ -135,7 +138,7 @@ The Fluss Helm chart deploys the following Kubernetes resources:
 ### Core Components
 - **CoordinatorServer**: 1x StatefulSet with Headless Service for cluster coordination
 - **TabletServer**: 3x StatefulSet with Headless Service for data storage and processing
-- **ConfigMap**: Configuration management for server.yaml settings
+- **ConfigMap**: Configuration management for `server.yaml` settings
 - **Services**: Headless services providing stable pod DNS names
 
 ### Optional Components
@@ -265,10 +268,10 @@ configurationOverrides:
 
 ```bash
 # Upgrade to a newer chart version
-helm upgrade fluss ./docker/helm
+helm upgrade fluss ./helm
 
 # Upgrade with new configuration
-helm upgrade fluss ./docker/helm -f values-new.yaml
+helm upgrade fluss ./helm -f values-new.yaml
 ```
 
 ### Rolling Updates
@@ -289,7 +292,7 @@ mvn clean package -DskipTests
 2. Build the Docker image:
 ```bash
 # Copy build artifacts
-cp -r build-target/* docker/build-target/
+cp -r build-target/* docker/fluss/build-target
 
 # Build image
 cd docker
