@@ -73,6 +73,13 @@ public class FlussSplit implements ConnectorSplit {
     }
 
     @Override
+    public List<HostAddress> getPreferredHosts() {
+        // Return the addresses as preferred hosts for locality-aware scheduling
+        // If addresses are empty, return empty list to let Trino scheduler decide
+        return addresses;
+    }
+
+    @Override
     public boolean isRemotelyAccessible() {
         // Fluss splits can be accessed from any worker
         return true;
