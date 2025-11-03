@@ -198,6 +198,27 @@ public class FlussColumnPruning {
         Map<String, ColumnMetadata> columnMetadataMap = new HashMap<>();
         
         try {
+            // In a production implementation, this would:
+            // 1. Connect to Fluss admin client
+            // 2. Query actual column metadata from metadata service
+            // 3. Return comprehensive column information
+            
+            // Example of what a real implementation might look like:
+            // Admin admin = clientManager.getAdmin();
+            // TableInfo tableInfo = admin.getTableInfo(tableHandle.getTablePath()).get();
+            // Schema schema = tableInfo.getSchema();
+            // 
+            // for (DataField field : schema.toRowType().getFields()) {
+            //     // Get actual column metadata from Fluss
+            //     ColumnMetadata metadata = ColumnMetadata.builder()
+            //             .setName(field.getName())
+            //             .setType(FlussTypeUtils.toTrinoType(field.getType(), typeManager))
+            //             .setNullable(field.getType().isNullable())
+            //             .setComment(field.getDescription())
+            //             .build();
+            //     columnMetadataMap.put(field.getName(), metadata);
+            // }
+            
             // This would typically come from metadata service
             // For now, we'll create a simplified version
             List<DataField> fields = tableHandle.getTableInfo().getSchema().toRowType().getFields();
@@ -451,8 +472,31 @@ public class FlussColumnPruning {
      * from a performance monitoring system.
      */
     private ColumnPruningHistory getColumnPruningHistory(String tableName) {
-        // This is a simplified implementation that would be replaced with
-        // actual historical data retrieval in production
+        // In a production implementation, this would:
+        // 1. Connect to a metrics database or monitoring system
+        // 2. Query historical column pruning data for this table
+        // 3. Return aggregated statistics
+        
+        // Example of what a real implementation might look like:
+        // MetricsDatabase metricsDb = MetricsDatabase.getInstance();
+        // Query query = new Query("SELECT COUNT(*) as queryCount, " +
+        //                        "AVG(columns_pruned) as avgColumnsPruned, " +
+        //                        "AVG(total_columns) as avgTotalColumns " +
+        //                        "FROM column_pruning_metrics " +
+        //                        "WHERE table_name = ? AND timestamp > ?");
+        // query.setParameter(1, tableName);
+        // query.setParameter(2, System.currentTimeMillis() - 30 * 24 * 60 * 60 * 1000L); // Last 30 days
+        // ResultSet results = metricsDb.execute(query);
+        // 
+        // if (results.next()) {
+        //     long queryCount = results.getLong("queryCount");
+        //     double avgColumnsPruned = results.getDouble("avgColumnsPruned");
+        //     double avgTotalColumns = results.getDouble("avgTotalColumns");
+        //     return new ColumnPruningHistory(queryCount, avgColumnsPruned, avgTotalColumns);
+        // }
+        
+        // For now, we'll return default values
+        // A real implementation would retrieve actual historical data
         return new ColumnPruningHistory(0, 0, 0);
     }
     

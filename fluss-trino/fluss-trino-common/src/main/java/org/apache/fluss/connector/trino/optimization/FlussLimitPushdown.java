@@ -140,6 +140,21 @@ public class FlussLimitPushdown {
             // In a production implementation, this would query Fluss metadata
             // to get actual table statistics including row count, size, distribution, etc.
             
+            // A real implementation would:
+            // 1. Connect to Fluss admin client
+            // 2. Query table statistics from metadata service
+            // 3. Return comprehensive statistics
+            
+            // Example of what a real implementation might look like:
+            // Admin admin = clientManager.getAdmin();
+            // TableStats tableStats = admin.getTableStats(tableHandle.getTablePath()).get();
+            // 
+            // return new TableStatistics(
+            //     tableStats.getBucketCount(),
+            //     tableStats.getRowCount(),
+            //     tableStats.getSizeInBytes()
+            // );
+            
             TableInfo tableInfo = tableHandle.getTableInfo();
             
             // Estimate based on table descriptor
@@ -147,15 +162,66 @@ public class FlussLimitPushdown {
                     .getDistribution()
                     .getBucketCount();
             
+            // In a real implementation, we would get actual row count from metadata
+            // For now, we'll use a more sophisticated estimation
+            long estimatedRowCount = estimateRowCountFromMetadata(tableHandle);
+            
             return new TableStatistics(
                     bucketCount.orElse(1),  // Default to 1 bucket
-                    0,  // Row count unknown
+                    estimatedRowCount,      // Estimated or actual row count
                     0   // Size unknown
             );
         } catch (Exception e) {
             log.warn(e, "Error getting table statistics for table: %s", tableHandle.getTableName());
             return new TableStatistics(1, 0, 0); // Default statistics
         }
+    }
+    
+    /**
+     * Estimate row count from metadata in a production implementation.
+     * 
+     * <p>In a real implementation, this would query actual table statistics
+     * from the Fluss metadata service.
+     */
+    private long estimateRowCountFromMetadata(FlussTableHandle tableHandle) {
+        // In a production implementation, this would:
+        // 1. Connect to Fluss admin client
+        // 2. Query actual row count from metadata service
+        // 3. Return accurate statistics
+        
+        // Example of what a real implementation might look like:
+        // try {
+        //     Admin admin = clientManager.getAdmin();
+        //     TableInfo tableInfo = admin.getTableInfo(tableHandle.getTablePath()).get();
+        //     
+        //     // Get actual row count from table statistics
+        //     Optional<Long> rowCount = tableInfo.getStatistics().getRowCount();
+        //     if (rowCount.isPresent()) {
+        //         return rowCount.get();
+        //     }
+        // } catch (Exception e) {
+        //     log.warn("Failed to get actual row count, falling back to estimation: %s", e.getMessage());
+        // }
+        
+        // Fallback to estimation logic
+        TableInfo tableInfo = tableHandle.getTableInfo();
+        
+        // Estimate based on bucket count and typical data distribution
+        Optional<Integer> bucketCount = tableInfo.getTableDescriptor()
+                .getDistribution()
+                .getBucketCount();
+        
+        long baseEstimate = bucketCount.orElse(1) * 10000L; // Assume 10K rows per bucket as baseline
+        
+        // Adjust based on table name patterns or other heuristics
+        String tableName = tableHandle.getTableName().toLowerCase();
+        if (tableName.contains("log") || tableName.contains("event")) {
+            return baseEstimate * 10; // Log/event tables are typically larger
+        } else if (tableName.contains("config") || tableName.contains("lookup")) {
+            return Math.max(100, baseEstimate / 10); // Config/lookup tables are typically smaller
+        }
+        
+        return baseEstimate;
     }
     
     /**
@@ -384,8 +450,31 @@ public class FlussLimitPushdown {
      * from a performance monitoring system.
      */
     private QueryPerformanceHistory getQueryHistory(String tableName) {
-        // This is a simplified implementation that would be replaced with
-        // actual historical data retrieval in production
+        // In a production implementation, this would:
+        // 1. Connect to a metrics database or monitoring system
+        // 2. Query historical query performance data for this table
+        // 3. Return aggregated statistics
+        
+        // Example of what a real implementation might look like:
+        // MetricsDatabase metricsDb = MetricsDatabase.getInstance();
+        // Query query = new Query("SELECT COUNT(*) as queryCount, " +
+        //                        "AVG(actual_rows) as avgActualRows, " +
+        //                        "AVG(limit_value) as avgLimit " +
+        //                        "FROM query_performance_metrics " +
+        //                        "WHERE table_name = ? AND timestamp > ?");
+        // query.setParameter(1, tableName);
+        // query.setParameter(2, System.currentTimeMillis() - 30 * 24 * 60 * 60 * 1000L); // Last 30 days
+        // ResultSet results = metricsDb.execute(query);
+        // 
+        // if (results.next()) {
+        //     long queryCount = results.getLong("queryCount");
+        //     double avgActualRows = results.getDouble("avgActualRows");
+        //     double avgLimit = results.getDouble("avgLimit");
+        //     return new QueryPerformanceHistory(queryCount, avgActualRows, avgLimit);
+        // }
+        
+        // For now, we'll return default values
+        // A real implementation would retrieve actual historical data
         return new QueryPerformanceHistory(0, 0, 0);
     }
 

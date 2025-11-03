@@ -282,32 +282,62 @@ public class FlussSplitManager implements ConnectorSplitManager {
      */
     private List<HostAddress> getHostsFromMetadata(TableBucket tableBucket) {
         try {
-            // In a production implementation, this would use the Fluss client
-            // to query metadata about tablet locations
-            
             // Get admin client from client manager
             org.apache.fluss.client.Admin admin = clientManager.getAdmin();
             
-            // Query tablet locations for this bucket
-            // This is a simplified implementation - in production, we would have specific APIs
-            // for getting tablet server locations
+            // In a production implementation, we would use the metadata updater to get
+            // bucket locations directly from the cluster metadata
+            org.apache.fluss.client.metadata.MetadataUpdater metadataUpdater = 
+                ((org.apache.fluss.client.admin.FlussAdmin) admin).getMetadataUpdater();
             
-            // For demonstration purposes, we'll simulate getting host addresses
-            // In a real implementation, this would be replaced with actual Fluss API calls
+            // Get the cluster metadata
+            org.apache.fluss.cluster.Cluster cluster = metadataUpdater.getCluster();
             
-            // Example of what a real implementation might look like:
-            // CompletableFuture<TabletLocations> locationsFuture = admin.getTabletLocations(tableBucket);
-            // TabletLocations locations = locationsFuture.get(5, TimeUnit.SECONDS);
-            // 
-            // List<HostAddress> hosts = locations.getReplicas().stream()
-            //     .map(replica -> HostAddress.fromUri(replica.getAddress()))
-            //     .collect(Collectors.toList());
-            // 
-            // Apply health checks and load balancing
-            // return filterHealthyHosts(applyLoadBalancing(hosts));
+            // Get bucket location from cluster metadata
+            Optional<org.apache.fluss.cluster.BucketLocation> bucketLocationOpt = 
+                cluster.getBucketLocation(tableBucket);
             
-            // For now, we'll return an empty list since we don't have access to actual Fluss client
-            log.debug("Simulating metadata query for bucket: %s", tableBucket);
+            if (bucketLocationOpt.isPresent()) {
+                org.apache.fluss.cluster.BucketLocation bucketLocation = bucketLocationOpt.get();
+                
+                // Get the leader server node
+                Integer leaderId = bucketLocation.getLeader();
+                if (leaderId != null) {
+                    Optional<org.apache.fluss.cluster.ServerNode> leaderNodeOpt = 
+                        cluster.getAliveTabletServerById(leaderId);
+                    
+                    if (leaderNodeOpt.isPresent()) {
+                        org.apache.fluss.cluster.ServerNode leaderNode = leaderNodeOpt.get();
+                        HostAddress leaderAddress = HostAddress.fromParts(
+                            leaderNode.host(), leaderNode.port());
+                        
+                        // Also get replica nodes for fallback
+                        List<HostAddress> replicaAddresses = new ArrayList<>();
+                        for (int replicaId : bucketLocation.getReplicas()) {
+                            if (replicaId != leaderId) { // Skip leader as we already added it
+                                Optional<org.apache.fluss.cluster.ServerNode> replicaNodeOpt = 
+                                    cluster.getAliveTabletServerById(replicaId);
+                                if (replicaNodeOpt.isPresent()) {
+                                    org.apache.fluss.cluster.ServerNode replicaNode = replicaNodeOpt.get();
+                                    replicaAddresses.add(HostAddress.fromParts(
+                                        replicaNode.host(), replicaNode.port()));
+                                }
+                            }
+                        }
+                        
+                        // Combine leader and replicas, with leader first for preference
+                        List<HostAddress> hosts = new ArrayList<>();
+                        hosts.add(leaderAddress);
+                        hosts.addAll(replicaAddresses);
+                        
+                        log.debug("Found %d hosts for bucket: %s (leader: %s)", 
+                                hosts.size(), tableBucket, leaderAddress);
+                        return hosts;
+                    }
+                }
+            }
+            
+            log.debug("No specific hosts found from metadata for bucket: %s", tableBucket);
             return List.of();
         } catch (Exception e) {
             log.debug("Unable to get hosts from metadata for bucket: %s, reason: %s", 
@@ -324,24 +354,37 @@ public class FlussSplitManager implements ConnectorSplitManager {
      */
     private List<HostAddress> getHostsFromConfiguration() {
         try {
-            // In a production implementation, this would read from connector configuration
-            // For example, from properties like "fluss.bootstrap.servers"
-            
             // Get bootstrap servers from client manager's configuration
-            // This is a simplified implementation - in production, we would have access to the config
+            org.apache.fluss.config.Configuration flussConfig = clientManager.getConfiguration();
             
-            // Example of what a real implementation might look like:
-            // String bootstrapServers = flussConfig.get(BOOTSTRAP_SERVERS.key());
-            // if (bootstrapServers != null && !bootstrapServers.isEmpty()) {
-            //     return Arrays.stream(bootstrapServers.split(","))
-            //         .map(String::trim)
-            //         .filter(s -> !s.isEmpty())
-            //         .map(HostAddress::fromString)
-            //         .collect(Collectors.toList());
-            // }
+            // Get bootstrap servers from configuration
+            List<String> bootstrapServers = flussConfig.get(org.apache.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS);
             
-            // For now, we'll return an empty list since we don't have access to actual config
-            log.debug("Simulating configuration-based host discovery");
+            if (bootstrapServers != null && !bootstrapServers.isEmpty()) {
+                List<HostAddress> hosts = new ArrayList<>();
+                for (String server : bootstrapServers) {
+                    // Parse host:port format
+                    String[] parts = server.split(":");
+                    if (parts.length == 2) {
+                        try {
+                            String host = parts[0].trim();
+                            int port = Integer.parseInt(parts[1].trim());
+                            hosts.add(HostAddress.fromParts(host, port));
+                        } catch (NumberFormatException e) {
+                            log.warn("Invalid port in bootstrap server: %s", server);
+                        }
+                    } else {
+                        log.warn("Invalid bootstrap server format: %s", server);
+                    }
+                }
+                
+                if (!hosts.isEmpty()) {
+                    log.debug("Found %d hosts from configuration", hosts.size());
+                    return hosts;
+                }
+            }
+            
+            log.debug("No hosts found from configuration");
             return List.of();
         } catch (Exception e) {
             log.debug("Unable to get hosts from configuration, reason: %s", e.getMessage());
@@ -399,5 +442,53 @@ public class FlussSplitManager implements ConnectorSplitManager {
         hostCache.keySet().removeIf(bucket -> !cacheTimestamps.containsKey(bucket));
         
         log.debug("Cleaned up expired cache entries, remaining: %d", hostCache.size());
+    }
+    
+    /**
+     * Filter out unhealthy hosts from the list.
+     * 
+     * <p>In a production implementation, this would:
+     * <ul>
+     *   <li>Perform health checks on each host</li>
+     *   <li>Remove hosts that are unreachable or overloaded</li>
+     *   <li>Consider historical performance data</li>
+     * </ul>
+     * 
+     * @param hosts the list of hosts to filter
+     * @return list of healthy hosts
+     */
+    private List<HostAddress> filterHealthyHosts(List<HostAddress> hosts) {
+        if (hosts == null || hosts.isEmpty()) {
+            return List.of();
+        }
+        
+        // In a production implementation, we would perform actual health checks
+        // For now, we'll assume all hosts are healthy
+        log.debug("Filtering %d hosts for health, assuming all healthy", hosts.size());
+        return new ArrayList<>(hosts);
+    }
+    
+    /**
+     * Apply load balancing to distribute requests evenly across hosts.
+     * 
+     * <p>In a production implementation, this would:
+     * <ul>
+     *   <li>Consider current load on each host</li>
+     *   <li>Apply load balancing algorithms (round-robin, least connections, etc.)</li>
+     *   <li>Take into account historical performance</li>
+     * </ul>
+     * 
+     * @param hosts the list of hosts to balance
+     * @return list of hosts in optimal order
+     */
+    private List<HostAddress> applyLoadBalancing(List<HostAddress> hosts) {
+        if (hosts == null || hosts.isEmpty()) {
+            return List.of();
+        }
+        
+        // In a production implementation, we would apply actual load balancing
+        // For now, we'll return the hosts as-is
+        log.debug("Applying load balancing to %d hosts, returning as-is", hosts.size());
+        return new ArrayList<>(hosts);
     }
 }

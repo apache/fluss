@@ -159,21 +159,29 @@ public class FlussLakehouseReader {
         
         // Paimon integration would include:
         // 1. Get table path from Fluss table properties
-        // 2. Create Paimon Table instance
-        // 3. Create ReadBuilder with predicates
-        // 4. Apply column projection
-        // 5. Read data in batches
-        // 6. Convert Paimon InternalRow to Trino Page
+        String tablePath = getTablePath(tableHandle);
         
-        // Example structure (not fully implemented):
-        // String tablePath = getTablePath(tableHandle);
+        // 2. Create Paimon Table instance
+        // In a real implementation, we would initialize Paimon catalog and get table
+        // Catalog catalog = CatalogFactory.createCatalog(catalogOptions);
         // Table paimonTable = catalog.getTable(identifier);
+        
+        // 3. Create ReadBuilder with predicates
         // ReadBuilder readBuilder = paimonTable.newReadBuilder()
         //     .withProjection(getProjectedFields(columns))
         //     .withFilter(convertPredicates(tableHandle.getConstraint()));
+        
+        // 4. Apply column projection
+        // This would be done through the readBuilder projection
+        
+        // 5. Read data in batches
         // RecordReader<InternalRow> reader = readBuilder.newRead().createReader(splits);
+        
+        // 6. Convert Paimon InternalRow to Trino Page
         // return convertPaimonRowsToPage(reader, columns, limit);
         
+        // For now, we'll return empty as this is a placeholder
+        // A real implementation would establish connection to Paimon and read data
         return Optional.empty();
     }
     
@@ -190,6 +198,30 @@ public class FlussLakehouseReader {
         // Iceberg integration would be similar to Paimon
         // but using Iceberg Java API
         
+        // 1. Get table path from Fluss table properties
+        String tablePath = getTablePath(tableHandle);
+        
+        // 2. Create Iceberg Table instance
+        // In a real implementation, we would initialize Iceberg catalog and get table
+        // Catalog catalog = CatalogUtil.loadCatalog(catalogImpl, catalogName, properties, conf);
+        // Table icebergTable = catalog.loadTable(tableIdentifier);
+        
+        // 3. Create scan with predicates
+        // TableScan scan = icebergTable.newScan()
+        //     .filter(convertPredicates(tableHandle.getConstraint()))
+        //     .select(getColumnNames(columns));
+        
+        // 4. Plan the scan and get tasks
+        // CloseableIterable<CombinedScanTask> tasks = scan.planTasks();
+        
+        // 5. Read data in batches
+        // DataReader<Record> reader = icebergTable.io().newInputFile();
+        
+        // 6. Convert Iceberg Records to Trino Page
+        // return convertIcebergRecordsToPage(reader, columns, limit);
+        
+        // For now, we'll return empty as this is a placeholder
+        // A real implementation would establish connection to Iceberg and read data
         return Optional.empty();
     }
 
@@ -468,8 +500,31 @@ public class FlussLakehouseReader {
      * from a performance monitoring system.
      */
     private LakehouseReadHistory getReadHistory(String tableName) {
-        // This is a simplified implementation that would be replaced with
-        // actual historical data retrieval in production
+        // In a production implementation, this would:
+        // 1. Connect to a metrics database or monitoring system
+        // 2. Query historical read performance data for this table
+        // 3. Return aggregated statistics
+        
+        // Example of what a real implementation might look like:
+        // MetricsDatabase metricsDb = MetricsDatabase.getInstance();
+        // Query query = new Query("SELECT COUNT(*) as readCount, " +
+        //                        "AVG(read_time_ms) as avgReadTime, " +
+        //                        "AVG(data_size_bytes) as avgDataSize " +
+        //                        "FROM lakehouse_read_metrics " +
+        //                        "WHERE table_name = ? AND timestamp > ?");
+        // query.setParameter(1, tableName);
+        // query.setParameter(2, System.currentTimeMillis() - 7 * 24 * 60 * 60 * 1000L); // Last 7 days
+        // ResultSet results = metricsDb.execute(query);
+        // 
+        // if (results.next()) {
+        //     long readCount = results.getLong("readCount");
+        //     double avgReadTime = results.getDouble("avgReadTime");
+        //     double avgDataSize = results.getDouble("avgDataSize");
+        //     return new LakehouseReadHistory(readCount, avgReadTime, avgDataSize);
+        // }
+        
+        // For now, we'll return default values
+        // A real implementation would retrieve actual historical data
         return new LakehouseReadHistory(0, 0, 0);
     }
     
