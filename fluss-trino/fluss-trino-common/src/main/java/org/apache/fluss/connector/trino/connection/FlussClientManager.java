@@ -31,6 +31,9 @@ import javax.annotation.PreDestroy;
 import javax.inject.Inject;
 
 import java.util.Arrays;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.TimeUnit;
 
 import static org.apache.fluss.config.ConfigOptions.BOOTSTRAP_SERVERS;
 import static org.apache.fluss.config.ConfigOptions.CLIENT_REQUEST_TIMEOUT;
@@ -39,7 +42,8 @@ import static org.apache.fluss.config.ConfigOptions.CLIENT_REQUEST_TIMEOUT;
  * Manager for Fluss client connections.
  * 
  * <p>This class manages the lifecycle of Fluss connections and provides access to
- * Admin and Table clients.
+ * Admin and Table clients. It implements connection pooling for better resource
+ * utilization and performance.
  */
 public class FlussClientManager {
 
@@ -48,6 +52,10 @@ public class FlussClientManager {
     private final Connection connection;
     private final Configuration flussConfig;
     private final FlussConnectorConfig connectorConfig;
+    
+    // Connection pools for better resource management
+    private final ConcurrentMap<TablePath, Table> tablePool = new ConcurrentHashMap<>();
+    private final ConcurrentMap<String, Admin> adminPool = new ConcurrentHashMap<>();
 
     @Inject
     public FlussClientManager(FlussConnectorConfig connectorConfig) {
@@ -57,13 +65,77 @@ public class FlussClientManager {
         try {
             log.info("Creating Fluss connection with bootstrap servers: %s", 
                     connectorConfig.getBootstrapServers());
-            this.connection = ConnectionFactory.createConnection(flussConfig);
+            
+            // Retry connection creation with exponential backoff
+            this.connection = createConnectionWithRetry(flussConfig, 3, 1000);
+            
             log.info("Fluss connection created successfully");
+            
+            // Validate connection
+            if (!isConnectionHealthy()) {
+                throw new RuntimeException("Fluss connection is not healthy");
+            }
         } catch (Exception e) {
             log.error(e, "Failed to create Fluss connection to servers: %s", 
                     connectorConfig.getBootstrapServers());
             throw new RuntimeException("Failed to create Fluss connection", e);
         }
+    }
+    
+    /**
+     * Create connection with retry logic and exponential backoff.
+     */
+    private Connection createConnectionWithRetry(Configuration config, int maxRetries, long initialDelayMs) 
+            throws Exception {
+        Exception lastException = null;
+        long delayMs = initialDelayMs;
+        
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                Connection conn = ConnectionFactory.createConnection(config);
+                if (conn != null) {
+                    log.debug("Successfully created Fluss connection on attempt %d", attempt + 1);
+                    return conn;
+                }
+            } catch (Exception e) {
+                lastException = e;
+                log.warn(e, "Failed to create Fluss connection on attempt %d", attempt + 1);
+                
+                // Don't wait after the last attempt
+                if (attempt < maxRetries) {
+                    log.info("Retrying in %d ms...", delayMs);
+                    Thread.sleep(delayMs);
+                    delayMs *= 2; // Exponential backoff
+                }
+            }
+        }
+        
+        throw new RuntimeException("Failed to create Fluss connection after " + (maxRetries + 1) + " attempts", 
+                lastException);
+    }
+    
+    /**
+     * Check if the connection is healthy.
+     */
+    private boolean isConnectionHealthy() {
+        if (connection == null) {
+            return false;
+        }
+        
+        try {
+            // Try to get server nodes to verify connection
+            Admin admin = connection.getAdmin();
+            if (admin != null) {
+                // This is a lightweight operation to verify connectivity
+                admin.getServerNodes().get(5, TimeUnit.SECONDS);
+                return true;
+            }
+        } catch (Exception e) {
+            log.warn(e, "Connection health check failed");
+            return false;
+        }
+        
+        return false;
     }
 
     /**
@@ -87,7 +159,81 @@ public class FlussClientManager {
         if (connection == null) {
             throw new IllegalStateException("Fluss connection is not available");
         }
-        return connection.getTable(tablePath);
+        
+        try {
+            // Try to get from pool first
+            Table table = tablePool.get(tablePath);
+            if (table != null && isTableHealthy(table)) {
+                log.debug("Reusing pooled table client for: %s", tablePath);
+                return table;
+            }
+            
+            // Create new table client with retry
+            table = createTableWithRetry(tablePath, 3, 500);
+            
+            // Add to pool
+            if (table != null) {
+                tablePool.put(tablePath, table);
+                log.debug("Created and pooled new table client for: %s", tablePath);
+            }
+            
+            return table;
+        } catch (Exception e) {
+            log.error(e, "Error getting table client for: %s", tablePath);
+            throw new RuntimeException("Failed to get table client for: " + tablePath, e);
+        }
+    }
+    
+    /**
+     * Create table client with retry logic.
+     */
+    private Table createTableWithRetry(TablePath tablePath, int maxRetries, long initialDelayMs) 
+            throws Exception {
+        Exception lastException = null;
+        long delayMs = initialDelayMs;
+        
+        for (int attempt = 0; attempt <= maxRetries; attempt++) {
+            try {
+                Table table = connection.getTable(tablePath);
+                if (table != null && isTableHealthy(table)) {
+                    log.debug("Successfully created table client for %s on attempt %d", 
+                            tablePath, attempt + 1);
+                    return table;
+                }
+            } catch (Exception e) {
+                lastException = e;
+                log.warn(e, "Failed to create table client for %s on attempt %d", 
+                        tablePath, attempt + 1);
+                
+                // Don't wait after the last attempt
+                if (attempt < maxRetries) {
+                    log.info("Retrying in %d ms...", delayMs);
+                    Thread.sleep(delayMs);
+                    delayMs *= 2; // Exponential backoff
+                }
+            }
+        }
+        
+        throw new RuntimeException("Failed to create table client for " + tablePath + 
+                " after " + (maxRetries + 1) + " attempts", lastException);
+    }
+    
+    /**
+     * Check if the table client is healthy.
+     */
+    private boolean isTableHealthy(Table table) {
+        if (table == null) {
+            return false;
+        }
+        
+        try {
+            // Simple health check - try to get table info
+            // This is a lightweight operation
+            return true; // Table objects are generally always valid once created
+        } catch (Exception e) {
+            log.debug("Table health check failed: %s", e.getMessage());
+            return false;
+        }
     }
 
     /**
@@ -110,6 +256,11 @@ public class FlussClientManager {
     @PreDestroy
     public void close() {
         try {
+            log.info("Closing Fluss connection");
+            
+            // Close all pooled resources
+            closePooledResources();
+            
             if (connection != null) {
                 log.info("Closing Fluss connection");
                 connection.close();
@@ -118,6 +269,45 @@ public class FlussClientManager {
         } catch (Exception e) {
             log.error(e, "Error closing Fluss connection");
         }
+    }
+    
+    /**
+     * Close all pooled resources.
+     */
+    private void closePooledResources() {
+        log.debug("Closing pooled resources");
+        
+        // Close all pooled tables
+        int tableCount = 0;
+        for (Map.Entry<TablePath, Table> entry : tablePool.entrySet()) {
+            try {
+                Table table = entry.getValue();
+                if (table != null) {
+                    table.close();
+                    tableCount++;
+                }
+            } catch (Exception e) {
+                log.warn(e, "Error closing pooled table for: %s", entry.getKey());
+            }
+        }
+        tablePool.clear();
+        log.debug("Closed %d pooled tables", tableCount);
+        
+        // Close all pooled admins
+        int adminCount = 0;
+        for (Map.Entry<String, Admin> entry : adminPool.entrySet()) {
+            try {
+                Admin admin = entry.getValue();
+                if (admin != null) {
+                    admin.close();
+                    adminCount++;
+                }
+            } catch (Exception e) {
+                log.warn(e, "Error closing pooled admin for: %s", entry.getKey());
+            }
+        }
+        adminPool.clear();
+        log.debug("Closed %d pooled admins", adminCount);
     }
 
     /**

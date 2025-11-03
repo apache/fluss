@@ -34,6 +34,7 @@ import io.trino.spi.connector.DynamicFilter;
 
 import javax.inject.Inject;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -65,17 +66,24 @@ public class FlussPageSourceProvider implements ConnectorPageSourceProvider {
             DynamicFilter dynamicFilter) {
         
         try {
+            if (!(split instanceof FlussSplit)) {
+                throw new IllegalArgumentException("Expected FlussSplit, got: " + split.getClass());
+            }
+            
+            if (!(table instanceof FlussTableHandle)) {
+                throw new IllegalArgumentException("Expected FlussTableHandle, got: " + table.getClass());
+            }
+            
             FlussSplit flussSplit = (FlussSplit) split;
             FlussTableHandle flussTable = (FlussTableHandle) table;
             
-            List<FlussColumnHandle> flussColumns = columns.stream()
-                    .map(col -> {
-                        if (!(col instanceof FlussColumnHandle)) {
-                            throw new IllegalArgumentException("Expected FlussColumnHandle, got: " + col.getClass());
-                        }
-                        return (FlussColumnHandle) col;
-                    })
-                    .collect(Collectors.toList());
+            List<FlussColumnHandle> flussColumns = new ArrayList<>();
+            for (ColumnHandle col : columns) {
+                if (!(col instanceof FlussColumnHandle)) {
+                    throw new IllegalArgumentException("Expected FlussColumnHandle, got: " + col.getClass());
+                }
+                flussColumns.add((FlussColumnHandle) col);
+            }
             
             log.debug("Creating page source for table: %s, bucket: %s, columns: %d",
                     flussSplit.getTablePath(),
@@ -88,6 +96,9 @@ public class FlussPageSourceProvider implements ConnectorPageSourceProvider {
                 // In a full implementation, we would apply dynamic filters to the scanner
             }
             
+            // Validate inputs
+            validateInputs(flussSplit, flussTable, flussColumns);
+            
             return new FlussPageSource(
                     clientManager,
                     flussTable,
@@ -95,7 +106,36 @@ public class FlussPageSourceProvider implements ConnectorPageSourceProvider {
                     flussColumns);
         } catch (Exception e) {
             log.error(e, "Error creating page source for split: %s", split);
-            throw new RuntimeException("Failed to create page source", e);
+            throw new RuntimeException("Failed to create page source: " + e.getMessage(), e);
         }
+    }
+    
+    /**
+     * Validate inputs for page source creation.
+     */
+    private void validateInputs(FlussSplit split, FlussTableHandle table, 
+                               List<FlussColumnHandle> columns) {
+        if (split == null) {
+            throw new IllegalArgumentException("Split cannot be null");
+        }
+        
+        if (table == null) {
+            throw new IllegalArgumentException("Table handle cannot be null");
+        }
+        
+        if (columns == null) {
+            throw new IllegalArgumentException("Columns cannot be null");
+        }
+        
+        if (split.getTablePath() == null) {
+            throw new IllegalArgumentException("Split table path cannot be null");
+        }
+        
+        if (split.getTableBucket() == null) {
+            throw new IllegalArgumentException("Split table bucket cannot be null");
+        }
+        
+        log.debug("Input validation passed for table: %s, bucket: %s", 
+                split.getTablePath(), split.getTableBucket());
     }
 }

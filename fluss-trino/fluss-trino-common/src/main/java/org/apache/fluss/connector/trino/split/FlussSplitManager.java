@@ -92,20 +92,25 @@ public class FlussSplitManager implements ConnectorSplitManager {
             log.debug("Table %s has %d buckets", tablePath, numBuckets);
             
             // Apply performance tuning based on configuration
-            int maxSplits = Math.min(numBuckets, getMaxSplitsPerRequest(session));
+            int maxSplits = getMaxSplitsPerRequest(session, flussTable);
             
-            // Create a split for each bucket
-            for (int bucketId = 0; bucketId < numBuckets; bucketId++) {
-                TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), bucketId);
-                List<HostAddress> addresses = getPreferredHosts(tableBucket);
-                FlussSplit split = new FlussSplit(tablePath, tableBucket, addresses);
-                splits.add(split);
-                
-                // Apply rate limiting
-                if ((bucketId + 1) % maxSplits == 0 && bucketId < numBuckets - 1) {
-                    // In a production implementation, we might want to batch splits
-                    // for better performance control
-                    log.debug("Generated %d splits so far for table: %s", bucketId + 1, tablePath);
+            // Apply partition pruning if filters are available
+            List<Integer> prunedBuckets = applyPartitionPruning(tableInfo, constraint);
+            
+            // Create splits for active buckets
+            int createdSplits = 0;
+            for (int bucketId : prunedBuckets) {
+                if (bucketId >= 0 && bucketId < numBuckets) {
+                    TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), bucketId);
+                    List<HostAddress> addresses = getPreferredHosts(tableBucket);
+                    FlussSplit split = new FlussSplit(tablePath, tableBucket, addresses);
+                    splits.add(split);
+                    createdSplits++;
+                    
+                    // Apply rate limiting
+                    if (createdSplits % maxSplits == 0 && createdSplits < prunedBuckets.size()) {
+                        log.debug("Generated %d splits so far for table: %s", createdSplits, tablePath);
+                    }
                 }
             }
         } else {
@@ -126,10 +131,54 @@ public class FlussSplitManager implements ConnectorSplitManager {
     /**
      * Get the maximum number of splits per request based on session and configuration.
      */
-    private int getMaxSplitsPerRequest(ConnectorSession session) {
-        // In a full implementation, we could get this from session properties
-        // For now, we use a default value
+    private int getMaxSplitsPerRequest(ConnectorSession session, FlussTableHandle tableHandle) {
+        // Check table handle for specific configuration
+        if (tableHandle.getLimit().isPresent()) {
+            long limit = tableHandle.getLimit().get();
+            // For small limits, create fewer splits
+            if (limit > 0 && limit < 1000) {
+                return Math.max(1, (int) (limit / 10));
+            }
+        }
+        
+        // Default value from configuration
         return 100;
+    }
+    
+    /**
+     * Apply partition pruning based on constraints.
+     */
+    private List<Integer> applyPartitionPruning(TableInfo tableInfo, Constraint constraint) {
+        List<Integer> activeBuckets = new ArrayList<>();
+        
+        // Get total bucket count
+        Optional<Integer> bucketCount = tableInfo.getTableDescriptor()
+                .getDistribution()
+                .getBucketCount();
+        
+        if (bucketCount.isPresent()) {
+            int totalBuckets = bucketCount.get();
+            
+            // If no constraints, all buckets are active
+            if (constraint.getSummary().isAll()) {
+                for (int i = 0; i < totalBuckets; i++) {
+                    activeBuckets.add(i);
+                }
+                return activeBuckets;
+            }
+            
+            // In a full implementation, we would analyze constraints to determine
+            // which buckets contain matching data
+            // For now, return all buckets to be safe
+            for (int i = 0; i < totalBuckets; i++) {
+                activeBuckets.add(i);
+            }
+        } else {
+            // Single bucket if no distribution
+            activeBuckets.add(0);
+        }
+        
+        return activeBuckets;
     }
     
     /**

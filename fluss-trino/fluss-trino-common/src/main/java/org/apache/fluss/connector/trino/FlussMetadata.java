@@ -85,11 +85,7 @@ public class FlussMetadata implements ConnectorMetadata {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Interrupted while listing databases", e);
         } catch (ExecutionException e) {
-            log.error(e, "Failed to list databases");
-            throw new RuntimeException("Failed to list databases: " + e.getMessage(), e);
-        } catch (Exception e) {
-            log.error(e, "Unexpected error while listing databases");
-            throw new RuntimeException("Unexpected error while listing databases", e);
+            throw new RuntimeException("Failed to list databases", e);
         }
     }
 
@@ -111,7 +107,6 @@ public class FlussMetadata implements ConnectorMetadata {
                     }
                 } catch (Exception e) {
                     log.warn(e, "Failed to list tables in database: %s", database);
-                    // Continue with other databases instead of failing completely
                 }
             }
               
@@ -122,11 +117,7 @@ public class FlussMetadata implements ConnectorMetadata {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Interrupted while listing tables", e);
         } catch (ExecutionException e) {
-            log.error(e, "Failed to list tables");
-            throw new RuntimeException("Failed to list tables: " + e.getMessage(), e);
-        } catch (Exception e) {
-            log.error(e, "Unexpected error while listing tables");
-            throw new RuntimeException("Unexpected error while listing tables", e);
+            throw new RuntimeException("Failed to list tables", e);
         }
     }
 
@@ -150,21 +141,9 @@ public class FlussMetadata implements ConnectorMetadata {
                     tableName.getTableName(),
                     tableInfo);
         } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
             throw new RuntimeException("Interrupted while getting table handle", e);
         } catch (ExecutionException e) {
-            // Check if it's a table not found exception
-            Throwable cause = e.getCause();
-            if (cause != null && cause.getMessage() != null && 
-                (cause.getMessage().contains("TableNotExistException") || 
-                 cause.getMessage().contains("not exist"))) {
-                log.debug("Table not found: %s", tableName);
-                return null;
-            }
-            log.debug(e, "Table %s not found or error occurred", tableName);
-            return null;
-        } catch (Exception e) {
-            log.error(e, "Unexpected error while getting table handle for: %s", tableName);
+            log.debug(e, "Table %s not found", tableName);
             return null;
         }
     }
@@ -175,44 +154,66 @@ public class FlussMetadata implements ConnectorMetadata {
             ConnectorTableHandle table) {
         FlussTableHandle flussTable = (FlussTableHandle) table;
           
-        ImmutableList.Builder<ColumnMetadata> columns = ImmutableList.builder();
-        List<DataField> fields = flussTable.getTableInfo().getSchema().toRowType().getFields();
+        try {
+            ImmutableList.Builder<ColumnMetadata> columns = ImmutableList.builder();
+            List<DataField> fields = flussTable.getTableInfo().getSchema().toRowType().getFields();
           
-        // Get primary keys if exist
-        Set<String> primaryKeys = flussTable.getTableInfo().getSchema()
-                .getPrimaryKey()
-                .map(pk -> Set.copyOf(pk.getColumnNames()))
-                .orElse(Set.of());
+            // Get primary keys if exist
+            Set<String> primaryKeys = flussTable.getTableInfo().getSchema()
+                    .getPrimaryKey()
+                    .map(pk -> Set.copyOf(pk.getColumnNames()))
+                    .orElse(Set.of());
         
-        // Get partition keys if exist  
-        Set<String> partitionKeys = flussTable.getTableInfo().getTableDescriptor()
-                .getPartitionKeys()
-                .map(pk -> Set.copyOf(pk))
-                .orElse(Set.of());
+            // Get partition keys if exist  
+            Set<String> partitionKeys = flussTable.getTableInfo().getTableDescriptor()
+                    .getPartitionKeys()
+                    .map(pk -> Set.copyOf(pk))
+                    .orElse(Set.of());
           
-        for (int i = 0; i < fields.size(); i++) {
-            DataField field = fields.get(i);
-            String fieldName = field.getName();
-            org.apache.fluss.types.DataType flussType = field.getType();
-            Type trinoType = FlussTypeUtils.toTrinoType(flussType, typeManager);
+            for (int i = 0; i < fields.size(); i++) {
+                try {
+                    DataField field = fields.get(i);
+                    String fieldName = field.getName();
+                    org.apache.fluss.types.DataType flussType = field.getType();
+                    Type trinoType = FlussTypeUtils.toTrinoType(flussType, typeManager);
               
-            ColumnMetadata.Builder builder = ColumnMetadata.builder()
-                    .setName(fieldName)
-                    .setType(trinoType)
-                    .setNullable(field.getType().isNullable());
+                    ColumnMetadata.Builder builder = ColumnMetadata.builder()
+                            .setName(fieldName)
+                            .setType(trinoType)
+                            .setNullable(field.getType().isNullable());
             
-            // Add comment if exists
-            field.getDescription().ifPresent(builder::setComment);
+                    // Add comment if exists
+                    field.getDescription().ifPresent(builder::setComment);
             
-            columns.add(builder.build());
+                    columns.add(builder.build());
+                } catch (Exception e) {
+                    log.warn(e, "Error processing field metadata at index %d for table %s.%s, using default metadata",
+                            i, flussTable.getSchemaName(), flussTable.getTableName());
+                    
+                    // Create fallback column metadata
+                    DataField field = fields.get(i);
+                    ColumnMetadata fallback = ColumnMetadata.builder()
+                            .setName(field.getName())
+                            .setType(io.trino.spi.type.VarcharType.VARCHAR)  // Fallback to VARCHAR
+                            .setNullable(true)
+                            .setComment("Error processing field: " + e.getMessage())
+                            .build();
+                    columns.add(fallback);
+                }
+            }
+          
+            log.debug("Got table metadata for: %s.%s with %d columns", 
+                    flussTable.getSchemaName(), flussTable.getTableName(), fields.size());
+          
+            return new ConnectorTableMetadata(
+                    new SchemaTableName(flussTable.getSchemaName(), flussTable.getTableName()),
+                    columns.build());
+        } catch (Exception e) {
+            log.error(e, "Error getting table metadata for: %s.%s",
+                    flussTable.getSchemaName(), flussTable.getTableName());
+            throw new RuntimeException("Failed to get table metadata for: " + 
+                    flussTable.getSchemaName() + "." + flussTable.getTableName(), e);
         }
-          
-        log.debug("Got table metadata for: %s.%s with %d columns", 
-                flussTable.getSchemaName(), flussTable.getTableName(), fields.size());
-          
-        return new ConnectorTableMetadata(
-                new SchemaTableName(flussTable.getSchemaName(), flussTable.getTableName()),
-                columns.build());
     }
 
     @Override

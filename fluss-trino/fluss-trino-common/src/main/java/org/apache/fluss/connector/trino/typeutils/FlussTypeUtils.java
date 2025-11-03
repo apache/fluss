@@ -151,6 +151,9 @@ public class FlussTypeUtils {
 
     /**
      * Convert Trino Type to Fluss DataType.
+     * 
+     * <p>This method handles the conversion from Trino types to Fluss data types.
+     * It supports all basic types as well as complex types like arrays, maps, and rows.
      */
     public static Optional<DataType> toFlussType(Type trinoType) {
         // String representation of the type
@@ -193,9 +196,42 @@ public class FlussTypeUtils {
         } else if (trinoType instanceof TimestampWithTimeZoneType) {
             TimestampWithTimeZoneType timestampTzType = (TimestampWithTimeZoneType) trinoType;
             return Optional.of(new LocalZonedTimestampType(timestampTzType.getPrecision()));
-        } else {
-            log.warn("Unsupported Trino type conversion: %s", trinoType);
-            return Optional.empty();
+        } else if (trinoType instanceof io.trino.spi.type.ArrayType) {
+            io.trino.spi.type.ArrayType arrayType = (io.trino.spi.type.ArrayType) trinoType;
+            Optional<DataType> elementType = toFlussType(arrayType.getElementType());
+            if (elementType.isPresent()) {
+                return Optional.of(new ArrayType(elementType.get()));
+            }
+        } else if (trinoType instanceof io.trino.spi.type.MapType) {
+            io.trino.spi.type.MapType mapType = (io.trino.spi.type.MapType) trinoType;
+            Optional<DataType> keyType = toFlussType(mapType.getKeyType());
+            Optional<DataType> valueType = toFlussType(mapType.getValueType());
+            if (keyType.isPresent() && valueType.isPresent()) {
+                return Optional.of(new MapType(keyType.get(), valueType.get()));
+            }
+        } else if (trinoType instanceof io.trino.spi.type.RowType) {
+            io.trino.spi.type.RowType rowType = (io.trino.spi.type.RowType) trinoType;
+            List<DataType> fieldTypes = new ArrayList<>();
+            List<String> fieldNames = new ArrayList<>();
+            boolean allFieldsSupported = true;
+            
+            for (io.trino.spi.type.RowType.Field field : rowType.getFields()) {
+                Optional<DataType> fieldType = toFlussType(field.getType());
+                if (fieldType.isPresent()) {
+                    fieldTypes.add(fieldType.get());
+                    fieldNames.add(field.getName().orElse("field" + fieldNames.size()));
+                } else {
+                    allFieldsSupported = false;
+                    break;
+                }
+            }
+            
+            if (allFieldsSupported) {
+                return Optional.of(new RowType(fieldNames, fieldTypes));
+            }
         }
+        
+        log.warn("Unsupported Trino type conversion: %s", trinoType);
+        return Optional.empty();
     }
 }
