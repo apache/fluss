@@ -751,8 +751,31 @@ public class FlussUnionReadManager {
      * from a performance monitoring system.
      */
     private UnionReadHistory getUnionReadHistory(String tableName) {
-        // This is a simplified implementation that would be replaced with
-        // actual historical data retrieval in production
+        // In a production implementation, this would:
+        // 1. Connect to a metrics database or monitoring system
+        // 2. Query historical Union Read performance data for this table
+        // 3. Return aggregated statistics
+        
+        // Example of what a real implementation might look like:
+        // MetricsDatabase metricsDb = MetricsDatabase.getInstance();
+        // Query query = new Query("SELECT COUNT(*) as queryCount, " +
+        //                        "AVG(real_time_performance) as avgRealTimePerformance, " +
+        //                        "AVG(historical_performance) as avgHistoricalPerformance " +
+        //                        "FROM union_read_metrics " +
+        //                        "WHERE table_name = ? AND timestamp > ?");
+        // query.setParameter(1, tableName);
+        // query.setParameter(2, System.currentTimeMillis() - 30 * 24 * 60 * 60 * 1000L); // Last 30 days
+        // ResultSet results = metricsDb.execute(query);
+        // 
+        // if (results.next()) {
+        //     long queryCount = results.getLong("queryCount");
+        //     double avgRealTimePerformance = results.getDouble("avgRealTimePerformance");
+        //     double avgHistoricalPerformance = results.getDouble("avgHistoricalPerformance");
+        //     return new UnionReadHistory(queryCount, avgRealTimePerformance, avgHistoricalPerformance);
+        // }
+        
+        // For now, we'll return default values
+        // A real implementation would retrieve actual historical data
         return new UnionReadHistory(0, 0, 0);
     }
     

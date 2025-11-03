@@ -86,7 +86,7 @@ public class FlussSplitManager implements ConnectorSplitManager {
         // In a production implementation, we would use a scheduled executor service
         // to periodically clean up expired cache entries
         //
-        // Example:
+        // Example of what a real implementation might look like:
         // ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
         // scheduler.scheduleAtFixedRate(this::cleanupExpiredCache, 
         //                              CACHE_EXPIRATION_MS, 
@@ -462,7 +462,25 @@ public class FlussSplitManager implements ConnectorSplitManager {
             return List.of();
         }
         
-        // In a production implementation, we would perform actual health checks
+        // In a production implementation, we would:
+        // 1. Perform network connectivity tests to each host
+        // 2. Check server health metrics (CPU, memory, disk I/O)
+        // 3. Query Fluss coordinator for tablet server status
+        // 4. Consider historical performance data for each host
+        // 5. Remove hosts that are unhealthy or overloaded
+        
+        // Example of what a real implementation might look like:
+        // List<HostAddress> healthyHosts = new ArrayList<>();
+        // for (HostAddress host : hosts) {
+        //     // Perform health check
+        //     if (isHostHealthy(host)) {
+        //         healthyHosts.add(host);
+        //     } else {
+        //         log.debug("Filtering out unhealthy host: %s", host);
+        //     }
+        // }
+        // return healthyHosts;
+        
         // For now, we'll assume all hosts are healthy
         log.debug("Filtering %d hosts for health, assuming all healthy", hosts.size());
         return new ArrayList<>(hosts);
@@ -486,7 +504,29 @@ public class FlussSplitManager implements ConnectorSplitManager {
             return List.of();
         }
         
-        // In a production implementation, we would apply actual load balancing
+        // In a production implementation, we would:
+        // 1. Query load metrics from each host
+        // 2. Apply load balancing algorithm (round-robin, least connections, etc.)
+        // 3. Consider historical performance data for each host
+        // 4. Return hosts in optimal order for load distribution
+        
+        // Example of what a real implementation might look like:
+        // // Get load information for each host
+        // Map<HostAddress, HostLoadInfo> loadInfoMap = getHostLoadInfo(hosts);
+        // 
+        // // Apply load balancing algorithm
+        // List<HostAddress> balancedHosts = new ArrayList<>();
+        // LoadBalancer loadBalancer = new RoundRobinLoadBalancer();
+        // 
+        // // Sort hosts based on load balancing strategy
+        // hosts.sort((h1, h2) -> {
+        //     HostLoadInfo load1 = loadInfoMap.get(h1);
+        //     HostLoadInfo load2 = loadInfoMap.get(h2);
+        //     return loadBalancer.compare(load1, load2);
+        // });
+        // 
+        // return new ArrayList<>(hosts);
+        
         // For now, we'll return the hosts as-is
         log.debug("Applying load balancing to %d hosts, returning as-is", hosts.size());
         return new ArrayList<>(hosts);
