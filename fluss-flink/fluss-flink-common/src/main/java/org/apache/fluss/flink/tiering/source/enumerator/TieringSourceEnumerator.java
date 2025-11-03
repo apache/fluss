@@ -239,7 +239,10 @@ public class TieringSourceEnumerator
     private void generateAndAssignSplits(
             @Nullable Tuple3<Long, Long, TablePath> tieringTable, Throwable throwable) {
         if (throwable != null) {
-            LOG.warn("Failed to request tiering table, will retry later.", throwable);
+            LOG.warn(
+                    "Failed to request tiering table {}, will retry later.",
+                    tieringTable != null ? tieringTable.f2 : null,
+                    throwable);
         }
         if (tieringTable != null) {
             generateTieringSplits(tieringTable);
@@ -259,6 +262,11 @@ public class TieringSourceEnumerator
                     }
                     if (!pendingSplits.isEmpty()) {
                         TieringSplit tieringSplit = pendingSplits.remove(0);
+                        LOG.info(
+                                "Assigning split {} of table {} to reader {}",
+                                tieringSplit.splitId(),
+                                tieringSplit.getTablePath(),
+                                nextAwaitingReader);
                         context.assignSplit(tieringSplit, nextAwaitingReader);
                         readersAwaitingSplit.remove(nextAwaitingReader);
                     }
