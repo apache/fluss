@@ -58,7 +58,12 @@ public class FlussConnectorFactory implements ConnectorFactory {
         requireNonNull(context, "context is null");
 
         try {
-            log.info("Creating Fluss connector for catalog: %s", catalogName);
+            log.info("Creating Fluss connector for catalog: %s with %d configuration properties",
+                    catalogName, config.size());
+            
+            // Log key configuration properties (without sensitive data)
+            log.debug("Bootstrap servers: %s", config.get("bootstrap.servers"));
+            log.debug("Request timeout: %s", config.get("client.request.timeout"));
             
             // Validate required configuration
             validateConfiguration(config);
@@ -83,8 +88,10 @@ public class FlussConnectorFactory implements ConnectorFactory {
             
             return connector;
         } catch (Exception e) {
-            log.error(e, "Failed to create Fluss connector for catalog: %s", catalogName);
-            throw new RuntimeException("Failed to create Fluss connector", e);
+            log.error(e, "Failed to create Fluss connector for catalog: %s with config: %s",
+                    catalogName, config.keySet());
+            throw new RuntimeException("Failed to create Fluss connector for catalog: " + 
+                    catalogName + ". Error: " + e.getMessage(), e);
         }
     }
 
@@ -92,10 +99,40 @@ public class FlussConnectorFactory implements ConnectorFactory {
      * Validate required configuration properties.
      */
     private void validateConfiguration(Map<String, String> config) {
+        // Validate bootstrap servers
         String bootstrapServers = config.get("bootstrap.servers");
         if (bootstrapServers == null || bootstrapServers.trim().isEmpty()) {
             throw new IllegalArgumentException(
                     "Required configuration 'bootstrap.servers' is missing or empty");
         }
+        
+        // Validate server addresses format
+        String[] servers = bootstrapServers.split(",");
+        for (String server : servers) {
+            if (server.trim().isEmpty()) {
+                throw new IllegalArgumentException(
+                        "Invalid bootstrap server address: empty string");
+            }
+            
+            // Basic format validation (host:port)
+            String[] parts = server.trim().split(":");
+            if (parts.length != 2) {
+                throw new IllegalArgumentException(
+                        "Invalid bootstrap server format: " + server + " (expected host:port)");
+            }
+            
+            try {
+                int port = Integer.parseInt(parts[1]);
+                if (port <= 0 || port > 65535) {
+                    throw new IllegalArgumentException(
+                            "Invalid port number: " + port + " (must be 1-65535)");
+                }
+            } catch (NumberFormatException e) {
+                throw new IllegalArgumentException(
+                        "Invalid port number in server address: " + server);
+            }
+        }
+        
+        log.debug("Configuration validation passed for %d bootstrap servers", servers.length);
     }
 }

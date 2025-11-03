@@ -90,7 +90,50 @@ public class FlussConnector implements Connector {
     public void shutdown() {
         try {
             log.info("Shutting down Fluss connector");
+            
+            // Close page source provider resources
+            if (pageSourceProvider instanceof AutoCloseable) {
+                try {
+                    ((AutoCloseable) pageSourceProvider).close();
+                    log.debug("Page source provider closed");
+                } catch (Exception e) {
+                    log.warn(e, "Error closing page source provider");
+                }
+            }
+            
+            // Close split manager resources
+            if (splitManager instanceof AutoCloseable) {
+                try {
+                    ((AutoCloseable) splitManager).close();
+                    log.debug("Split manager closed");
+                } catch (Exception e) {
+                    log.warn(e, "Error closing split manager");
+                }
+            }
+            
+            // Close metadata resources
+            if (metadata instanceof AutoCloseable) {
+                try {
+                    ((AutoCloseable) metadata).close();
+                    log.debug("Metadata provider closed");
+                } catch (Exception e) {
+                    log.warn(e, "Error closing metadata provider");
+                }
+            }
+            
+            // Close client manager
+            if (clientManager instanceof AutoCloseable) {
+                try {
+                    ((AutoCloseable) clientManager).close();
+                    log.debug("Client manager closed");
+                } catch (Exception e) {
+                    log.warn(e, "Error closing client manager");
+                }
+            }
+            
+            // Stop lifecycle manager
             lifeCycleManager.stop();
+            log.info("Fluss connector shutdown completed");
         } catch (Exception e) {
             log.error(e, "Error shutting down Fluss connector");
         }
