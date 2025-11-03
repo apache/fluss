@@ -65,7 +65,7 @@ make_binary_release() {
   dir_name="fluss-$RELEASE_VERSION-bin"
 
   # enable release profile here (to check for the maven version)
-  # $MVN clean package -Prelease -am -Dgpg.skip -Dcheckstyle.skip=true -DskipTests
+  $MVN clean package -Prelease -am -Dgpg.skip -Dcheckstyle.skip=true -DskipTests
 
   cd fluss-dist/target/fluss-${RELEASE_VERSION}-bin
   cp ${FLUSS_DIR}/LICENSE ./fluss-${RELEASE_VERSION}/LICENSE
