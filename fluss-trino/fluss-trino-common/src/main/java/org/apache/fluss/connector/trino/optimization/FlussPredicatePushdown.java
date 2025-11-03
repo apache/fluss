@@ -80,14 +80,59 @@ public class FlussPredicatePushdown {
         log.debug("Applying predicate pushdown for table: %s with constraint: %s",
                 tableHandle.getTableName(), constraint);
 
+        // Analyze constraint to determine pushdown potential
+        TupleDomain<ColumnHandle> pushdownConstraint = analyzeConstraintForPushdown(constraint);
+        
         // Apply the constraint to the table handle
-        return tableHandle.withConstraint(constraint);
+        return tableHandle.withConstraint(pushdownConstraint);
+    }
+    
+    /**
+     * Analyze constraint to determine which parts can be pushed down.
+     */
+    private TupleDomain<ColumnHandle> analyzeConstraintForPushdown(TupleDomain<ColumnHandle> constraint) {
+        if (!constraint.getDomains().isPresent()) {
+            return constraint;
+        }
+        
+        Map<ColumnHandle, Domain> domains = constraint.getDomains().get();
+        ImmutableMap.Builder<ColumnHandle, Domain> pushdownDomains = ImmutableMap.builder();
+        
+        for (Map.Entry<ColumnHandle, Domain> entry : domains.entrySet()) {
+            ColumnHandle columnHandle = entry.getKey();
+            Domain domain = entry.getValue();
+            
+            if (columnHandle instanceof FlussColumnHandle) {
+                FlussColumnHandle flussColumn = (FlussColumnHandle) columnHandle;
+                
+                // Check if this predicate can be pushed down
+                if (canPushdownPredicate(flussColumn)) {
+                    pushdownDomains.put(columnHandle, domain);
+                    String filter = convertDomainToFilter(flussColumn, domain);
+                    log.debug("Pushing down predicate for column %s: %s", 
+                            flussColumn.getName(), filter);
+                } else {
+                    log.debug("Skipping predicate pushdown for column %s", flussColumn.getName());
+                }
+            }
+        }
+        
+        Map<ColumnHandle, Domain> pushdownMap = pushdownDomains.build();
+        if (pushdownMap.isEmpty()) {
+            return TupleDomain.all();
+        }
+        
+        return TupleDomain.withColumnDomains(pushdownMap);
     }
 
     /**
      * Check if a predicate can be pushed down for the given column.
      */
     public boolean canPushdownPredicate(FlussColumnHandle columnHandle) {
+        if (columnHandle == null) {
+            return false;
+        }
+        
         // Primary key columns are best for predicate pushdown
         if (columnHandle.isPrimaryKey()) {
             return true;
@@ -95,6 +140,32 @@ public class FlussPredicatePushdown {
         
         // Partition key columns support partition pruning
         if (columnHandle.isPartitionKey()) {
+            return true;
+        }
+        
+        // Check configuration
+        if (!config.isPredicatePushdownEnabled()) {
+            log.debug("Predicate pushdown is disabled globally");
+            return false;
+        }
+        
+        // For other columns, consider the data type and selectivity
+        String typeName = columnHandle.getType().getDisplayName().toLowerCase();
+        
+        // Push down equality and range predicates on common types
+        if (typeName.equals("boolean") || 
+            typeName.equals("tinyint") || 
+            typeName.equals("smallint") || 
+            typeName.equals("integer") || 
+            typeName.equals("bigint") || 
+            typeName.equals("real") || 
+            typeName.equals("double") || 
+            typeName.startsWith("decimal") ||
+            typeName.startsWith("varchar") ||
+            typeName.startsWith("char") ||
+            typeName.equals("date") ||
+            typeName.startsWith("time") ||
+            typeName.startsWith("timestamp")) {
             return true;
         }
         

@@ -84,33 +84,58 @@ public class FlussLakehouseReader {
             List<FlussColumnHandle> columns,
             long limit) {
         
-        log.debug("Reading historical data for table: %s", tableHandle.getTableName());
-        
-        // Get lakehouse format
-        Optional<String> format = getLakehouseFormat(tableHandle);
-        if (format.isEmpty()) {
-            log.debug("No lakehouse format configured for table: %s", tableHandle.getTableName());
-            return Optional.empty();
-        }
-        
-        // In a production implementation, this would:
-        // 1. Determine the lakehouse storage path from table properties
-        // 2. Initialize the appropriate reader (e.g., PaimonReader, IcebergReader)
-        // 3. Apply predicates and projections from the table handle
-        // 4. Read data in batches and convert to Trino Pages
-        // 5. Handle schema evolution and partition pruning
-        
-        String lakehouseFormat = format.get();
-        log.debug("Lakehouse format: %s for table: %s", lakehouseFormat, tableHandle.getTableName());
-        
-        switch (lakehouseFormat.toLowerCase()) {
-            case "paimon":
-                return readFromPaimon(tableHandle, columns, limit);
-            case "iceberg":
-                return readFromIceberg(tableHandle, columns, limit);
-            default:
-                log.warn("Unsupported lakehouse format: %s", lakehouseFormat);
+        try {
+            log.debug("Reading historical data for table: %s", tableHandle.getTableName());
+            
+            // Get lakehouse format
+            Optional<String> format = getLakehouseFormat(tableHandle);
+            if (format.isEmpty()) {
+                log.debug("No lakehouse format configured for table: %s", tableHandle.getTableName());
                 return Optional.empty();
+            }
+            
+            // Validate inputs
+            if (columns == null || columns.isEmpty()) {
+                log.warn("No columns specified for lakehouse read for table: %s", tableHandle.getTableName());
+                return Optional.empty();
+            }
+            
+            // In a production implementation, this would:
+            // 1. Determine the lakehouse storage path from table properties
+            // 2. Initialize the appropriate reader (e.g., PaimonReader, IcebergReader)
+            // 3. Apply predicates and projections from the table handle
+            // 4. Read data in batches and convert to Trino Pages
+            // 5. Handle schema evolution and partition pruning
+            
+            String lakehouseFormat = format.get();
+            log.debug("Lakehouse format: %s for table: %s", lakehouseFormat, tableHandle.getTableName());
+            
+            Optional<Page> result;
+            switch (lakehouseFormat.toLowerCase()) {
+                case "paimon":
+                    result = readFromPaimon(tableHandle, columns, limit);
+                    break;
+                case "iceberg":
+                    result = readFromIceberg(tableHandle, columns, limit);
+                    break;
+                default:
+                    log.warn("Unsupported lakehouse format: %s", lakehouseFormat);
+                    result = Optional.empty();
+                    break;
+            }
+            
+            if (result.isPresent()) {
+                Page page = result.get();
+                log.debug("Successfully read historical data page with %d rows, %d bytes for table: %s",
+                        page.getPositionCount(), page.getSizeInBytes(), tableHandle.getTableName());
+            } else {
+                log.debug("No historical data found for table: %s", tableHandle.getTableName());
+            }
+            
+            return result;
+        } catch (Exception e) {
+            log.error(e, "Error reading historical data for table: %s", tableHandle.getTableName());
+            return Optional.empty();
         }
     }
     

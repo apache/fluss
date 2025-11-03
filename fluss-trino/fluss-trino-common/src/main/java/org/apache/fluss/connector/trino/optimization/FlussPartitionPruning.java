@@ -48,11 +48,19 @@ public class FlussPartitionPruning {
 
     /**
      * Apply partition pruning to the table handle.
+     * 
+     * <p>This method analyzes the constraint to extract partition filters
+     * that can be used to reduce the number of scanned partitions.
      */
     public FlussTableHandle applyPartitionPruning(
             FlussTableHandle tableHandle,
             TupleDomain<ColumnHandle> constraint) {
         
+        if (!config.isPartitionPruningEnabled()) {
+            log.debug("Partition pruning is disabled");
+            return tableHandle;
+        }
+
         if (constraint.isAll()) {
             log.debug("No partition filters to apply for table: %s", tableHandle.getTableName());
             return tableHandle;
@@ -69,7 +77,27 @@ public class FlussPartitionPruning {
         log.debug("Applying partition pruning for table: %s with %d filters",
                 tableHandle.getTableName(), partitionFilters.size());
 
-        return tableHandle.withPartitionFilters(partitionFilters);
+        // Analyze filters to determine pruning effectiveness
+        List<String> optimizedFilters = analyzeFiltersForPruning(tableHandle, partitionFilters);
+        
+        return tableHandle.withPartitionFilters(optimizedFilters);
+    }
+    
+    /**
+     * Analyze partition filters to optimize pruning.
+     */
+    private List<String> analyzeFiltersForPruning(FlussTableHandle tableHandle, List<String> filters) {
+        // In a full implementation, we would:
+        // 1. Analyze filter selectivity
+        // 2. Combine overlapping filters
+        // 3. Optimize filter expressions
+        // 4. Estimate partition reduction
+        
+        // For now, return filters as-is but log analysis
+        log.debug("Analyzing %d partition filters for table: %s", 
+                filters.size(), tableHandle.getTableName());
+        
+        return filters;
     }
 
     /**

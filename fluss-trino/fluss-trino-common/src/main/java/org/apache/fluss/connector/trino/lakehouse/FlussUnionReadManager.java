@@ -112,8 +112,40 @@ public class FlussUnionReadManager {
             return UnionReadStrategy.REAL_TIME_ONLY;
         }
         
+        // Analyze query complexity and data distribution
+        UnionReadStrategy strategy = analyzeQueryForOptimalStrategy(tableHandle);
+        
+        log.debug("Using %s strategy for table: %s", strategy, tableHandle.getTableName());
+        return strategy;
+    }
+    
+    /**
+     * Analyze query characteristics to determine optimal strategy.
+     */
+    private UnionReadStrategy analyzeQueryForOptimalStrategy(FlussTableHandle tableHandle) {
+        // Check configuration
+        if (!config.isUnionReadEnabled()) {
+            log.debug("Union Read is disabled, using REAL_TIME_ONLY");
+            return UnionReadStrategy.REAL_TIME_ONLY;
+        }
+        
+        // For small result sets, real-time only might be faster
+        if (tableHandle.getLimit().isPresent()) {
+            long limit = tableHandle.getLimit().get();
+            if (limit > 0 && limit <= 1000) {
+                log.debug("Small limit (%d), preferring REAL_TIME_ONLY", limit);
+                return UnionReadStrategy.REAL_TIME_ONLY;
+            }
+        }
+        
+        // For queries with strong time-based predicates, choose appropriate source
+        Optional<Long> timeBoundary = getTimeBoundary(tableHandle);
+        if (timeBoundary.isPresent()) {
+            // Would analyze predicates to determine optimal source
+            log.debug("Time boundary found, using UNION strategy for comprehensive coverage");
+        }
+        
         // Default to union read for best coverage
-        log.debug("Using UNION strategy for table: %s", tableHandle.getTableName());
         return UnionReadStrategy.UNION;
     }
     

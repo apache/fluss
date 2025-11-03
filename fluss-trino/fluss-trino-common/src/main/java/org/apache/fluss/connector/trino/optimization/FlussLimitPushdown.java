@@ -45,6 +45,9 @@ public class FlussLimitPushdown {
 
     /**
      * Apply limit pushdown to the table handle.
+     * 
+     * <p>This method applies the limit constraint to reduce the amount of data
+     * read from storage.
      */
     public FlussTableHandle applyLimitPushdown(
             FlussTableHandle tableHandle,
@@ -63,7 +66,26 @@ public class FlussLimitPushdown {
         log.debug("Applying limit pushdown for table: %s with limit: %d",
                 tableHandle.getTableName(), limit);
 
-        return tableHandle.withLimit(limit);
+        // Analyze limit to determine pushdown effectiveness
+        long optimizedLimit = analyzeLimitForPushdown(tableHandle, limit);
+        
+        return tableHandle.withLimit(optimizedLimit);
+    }
+    
+    /**
+     * Analyze limit to optimize pushdown.
+     */
+    private long analyzeLimitForPushdown(FlussTableHandle tableHandle, long limit) {
+        // In a full implementation, we would:
+        // 1. Estimate total row count
+        // 2. Check if limit is beneficial
+        // 3. Adjust limit based on distribution
+        // 4. Consider other optimizations
+        
+        // For now, return limit as-is but log analysis
+        log.debug("Analyzing limit %d for table: %s", limit, tableHandle.getTableName());
+        
+        return limit;
     }
 
     /**

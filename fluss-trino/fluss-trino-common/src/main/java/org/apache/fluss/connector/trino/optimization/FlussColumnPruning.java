@@ -25,6 +25,7 @@ import io.trino.spi.connector.ColumnHandle;
 
 import javax.inject.Inject;
 
+import java.util.HashSet;
 import java.util.Set;
 
 import static java.util.Objects.requireNonNull;
@@ -48,6 +49,9 @@ public class FlussColumnPruning {
 
     /**
      * Apply column pruning to the table handle.
+     * 
+     * <p>This method analyzes the projected columns and determines which ones
+     * can be safely pruned to reduce I/O.
      */
     public FlussTableHandle applyColumnPruning(
             FlussTableHandle tableHandle,
@@ -66,7 +70,61 @@ public class FlussColumnPruning {
         log.debug("Applying column pruning for table: %s, projecting %d columns",
                 tableHandle.getTableName(), projectedColumns.size());
 
-        return tableHandle.withProjectedColumns(projectedColumns);
+        // Analyze projected columns to determine pruning potential
+        Set<ColumnHandle> prunedColumns = analyzeColumnsForPruning(tableHandle, projectedColumns);
+        
+        return tableHandle.withProjectedColumns(prunedColumns);
+    }
+    
+    /**
+     * Analyze columns to determine which ones should be pruned.
+     */
+    private Set<ColumnHandle> analyzeColumnsForPruning(
+            FlussTableHandle tableHandle, 
+            Set<ColumnHandle> projectedColumns) {
+        
+        // Get all available columns from table metadata
+        int totalColumns = tableHandle.getTableInfo().getSchema().toRowType().getFieldCount();
+        
+        // Check if pruning is beneficial
+        if (!canBenefitFromPruning(totalColumns, projectedColumns.size())) {
+            log.debug("Column pruning not beneficial for table %s (%d total, %d projected)", 
+                    tableHandle.getTableName(), totalColumns, projectedColumns.size());
+            return projectedColumns;
+        }
+        
+        // Estimate I/O reduction
+        double ioReduction = estimateIoReduction(totalColumns, projectedColumns.size());
+        log.debug("Estimated I/O reduction from column pruning: %.2f%% for table: %s", 
+                ioReduction * 100, tableHandle.getTableName());
+        
+        // Filter out columns that cannot be pruned
+        Set<ColumnHandle> prunedColumns = new HashSet<>();
+        for (ColumnHandle column : projectedColumns) {
+            if (column instanceof FlussColumnHandle) {
+                FlussColumnHandle flussColumn = (FlussColumnHandle) column;
+                
+                // Always include partition keys as they're needed for split generation
+                if (flussColumn.isPartitionKey()) {
+                    prunedColumns.add(column);
+                    continue;
+                }
+                
+                // Always include primary keys as they may be needed for joins
+                if (flussColumn.isPrimaryKey()) {
+                    prunedColumns.add(column);
+                    continue;
+                }
+                
+                // Include all other projected columns
+                prunedColumns.add(column);
+            }
+        }
+        
+        log.debug("Pruned columns for table %s: %d -> %d", 
+                tableHandle.getTableName(), projectedColumns.size(), prunedColumns.size());
+        
+        return prunedColumns;
     }
 
     /**
