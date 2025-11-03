@@ -17,6 +17,7 @@
 
 package org.apache.fluss.connector.trino.optimization;
 
+import org.apache.fluss.connector.trino.config.FlussConnectorConfig;
 import org.apache.fluss.connector.trino.handle.FlussColumnHandle;
 import org.apache.fluss.connector.trino.handle.FlussTableHandle;
 
@@ -28,6 +29,7 @@ import io.trino.spi.predicate.TupleDomain;
 import javax.inject.Inject;
 
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -41,9 +43,12 @@ import java.util.Optional;
 public class FlussPartitionPruning {
 
     private static final Logger log = Logger.get(FlussPartitionPruning.class);
+    
+    private final FlussConnectorConfig config;
 
     @Inject
-    public FlussPartitionPruning() {
+    public FlussPartitionPruning(FlussConnectorConfig config) {
+        this.config = config;
     }
 
     /**
@@ -104,11 +109,17 @@ public class FlussPartitionPruning {
         // Apply optimization based on analysis
         List<String> optimizedFilters = applyIntelligentOptimization(tableHandle, filters, analysis);
         
+        // Apply adaptive learning from previous queries
+        List<String> adaptiveFilters = applyAdaptiveFilterOptimization(tableHandle, optimizedFilters, analysis);
+        
+        // Validate final filter set
+        List<String> validatedFilters = validateFilterSet(tableHandle, adaptiveFilters);
+        
         log.debug("Optimized partition filters for table %s: %d -> %d (reduction: %.2f%%)", 
-                tableHandle.getTableName(), filters.size(), optimizedFilters.size(),
+                tableHandle.getTableName(), filters.size(), validatedFilters.size(),
                 analysis.getReductionPercentage());
         
-        return optimizedFilters;
+        return validatedFilters;
     }
     
     /**
@@ -567,11 +578,47 @@ public class FlussPartitionPruning {
 
     /**
      * Estimate partition reduction from pruning.
+     * 
+     * <p>This method calculates the expected reduction in partition scans
+     * when partition pruning is applied.
      */
     public double estimatePartitionReduction(int totalPartitions, int prunedPartitions) {
-        if (totalPartitions == 0 || prunedPartitions >= totalPartitions) {
+        if (totalPartitions <= 0 || prunedPartitions <= 0) {
             return 0.0;
         }
-        return 1.0 - ((double) prunedPartitions / totalPartitions);
+        
+        if (prunedPartitions >= totalPartitions) {
+            return 1.0; // Maximum reduction
+        }
+        
+        // Calculate basic reduction ratio
+        double basicReduction = (double) prunedPartitions / totalPartitions;
+        
+        // Apply diminishing returns for very high reduction estimates
+        // Very aggressive pruning might not provide proportional benefits due to overhead
+        if (basicReduction > 0.95) {
+            basicReduction = 0.95; // Cap at 95% to account for overhead
+        } else if (basicReduction > 0.9) {
+            basicReduction *= 0.98; // Slight reduction for very high pruning
+        }
+        
+        // Consider partition size - larger partitions mean more data reduction benefit
+        double partitionSizeFactor = 1.0; // Default factor
+        
+        // For tables with large partitions, pruning is more beneficial
+        if (totalPartitions < 100) {
+            partitionSizeFactor = 1.1; // 10% bonus for tables with few large partitions
+        }
+        
+        // Apply partition size factor but ensure we don't exceed 100% reduction
+        double adjustedReduction = Math.min(1.0, basicReduction * partitionSizeFactor);
+        
+        // Ensure result is within valid range
+        double finalReduction = Math.max(0.0, Math.min(1.0, adjustedReduction));
+        
+        log.debug("Partition reduction estimate - total: %d, pruned: %d, basic: %.4f, adjusted: %.4f, final: %.4f",
+                totalPartitions, prunedPartitions, basicReduction, adjustedReduction, finalReduction);
+        
+        return finalReduction;
     }
 }

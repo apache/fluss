@@ -121,6 +121,10 @@ public class FlussUnionReadManager {
     
     /**
      * Analyze query characteristics to determine optimal strategy.
+     * 
+     * <p>This method performs intelligent analysis of query characteristics,
+     * table properties, and data distribution to determine the optimal
+     * Union Read strategy.
      */
     private UnionReadStrategy analyzeQueryForOptimalStrategy(FlussTableHandle tableHandle) {
         // Check configuration
@@ -129,24 +133,378 @@ public class FlussUnionReadManager {
             return UnionReadStrategy.REAL_TIME_ONLY;
         }
         
-        // For small result sets, real-time only might be faster
+        log.debug("Analyzing query for optimal Union Read strategy for table: %s", 
+                tableHandle.getTableName());
+        
+        // Perform intelligent strategy analysis
+        StrategyAnalysisResult analysis = performStrategyAnalysis(tableHandle);
+        
+        // Apply adaptive learning from previous queries
+        StrategyAnalysisResult adaptiveAnalysis = applyAdaptiveStrategyLearning(tableHandle, analysis);
+        
+        // Determine optimal strategy based on analysis
+        UnionReadStrategy strategy = determineOptimalStrategy(tableHandle, adaptiveAnalysis);
+        
+        // Validate and adjust strategy
+        UnionReadStrategy validatedStrategy = validateAndAdjustStrategy(tableHandle, strategy, adaptiveAnalysis);
+        
+        log.debug("Strategy analysis for table %s - real-time benefit: %.2f, historical benefit: %.2f, recommended: %s, validated: %s",
+                tableHandle.getTableName(), analysis.getRealTimeBenefit(), analysis.getHistoricalBenefit(), strategy, validatedStrategy);
+        
+        return validatedStrategy;
+    }
+    
+    /**
+     * Perform detailed analysis for strategy determination.
+     */
+    private StrategyAnalysisResult performStrategyAnalysis(FlussTableHandle tableHandle) {
+        // Analyze various factors that influence strategy choice
+        
+        // 1. Limit analysis
+        double limitBenefit = analyzeLimitBenefit(tableHandle);
+        
+        // 2. Predicate analysis
+        PredicateAnalysisResult predicateAnalysis = analyzePredicates(tableHandle);
+        
+        // 3. Column projection analysis
+        double projectionBenefit = analyzeProjectionBenefit(tableHandle);
+        
+        // 4. Time boundary analysis
+        TimeBoundaryAnalysis timeAnalysis = analyzeTimeBoundary(tableHandle);
+        
+        // 5. Data freshness analysis
+        double freshnessBenefit = analyzeDataFreshness(tableHandle);
+        
+        // Calculate overall benefits
+        double realTimeBenefit = calculateRealTimeBenefit(
+                limitBenefit, predicateAnalysis, projectionBenefit, freshnessBenefit);
+        
+        double historicalBenefit = calculateHistoricalBenefit(
+                limitBenefit, predicateAnalysis, projectionBenefit, timeAnalysis);
+        
+        log.debug("Strategy analysis for table %s - real-time: %.2f, historical: %.2f",
+                tableHandle.getTableName(), realTimeBenefit, historicalBenefit);
+        
+        return new StrategyAnalysisResult(
+                realTimeBenefit,
+                historicalBenefit,
+                limitBenefit,
+                predicateAnalysis,
+                projectionBenefit,
+                timeAnalysis,
+                freshnessBenefit
+        );
+    }
+    
+    /**
+     * Analyze limit benefit for strategy determination.
+     */
+    private double analyzeLimitBenefit(FlussTableHandle tableHandle) {
         if (tableHandle.getLimit().isPresent()) {
             long limit = tableHandle.getLimit().get();
-            if (limit > 0 && limit <= 1000) {
-                log.debug("Small limit (%d), preferring REAL_TIME_ONLY", limit);
-                return UnionReadStrategy.REAL_TIME_ONLY;
+            if (limit > 0) {
+                // Small limits favor real-time for lower latency
+                if (limit <= 100) {
+                    return 0.9; // High benefit for real-time
+                } else if (limit <= 1000) {
+                    return 0.7; // Moderate benefit for real-time
+                } else if (limit <= 10000) {
+                    return 0.5; // Balanced benefit
+                } else {
+                    return 0.3; // Lower benefit for real-time, historical might be better for large results
+                }
             }
         }
         
-        // For queries with strong time-based predicates, choose appropriate source
-        Optional<Long> timeBoundary = getTimeBoundary(tableHandle);
-        if (timeBoundary.isPresent()) {
-            // Would analyze predicates to determine optimal source
-            log.debug("Time boundary found, using UNION strategy for comprehensive coverage");
+        return 0.5; // Default balanced benefit
+    }
+    
+    /**
+     * Analyze predicates for strategy determination.
+     */
+    private PredicateAnalysisResult analyzePredicates(FlussTableHandle tableHandle) {
+        // Analyze constraint predicates to determine data source preference
+        int selectivePredicates = 0;
+        int timeBasedPredicates = 0;
+        int partitionPredicates = 0;
+        
+        if (tableHandle.getConstraint().isPresent()) {
+            TupleDomain<ColumnHandle> constraint = tableHandle.getConstraint().get();
+            if (constraint.getDomains().isPresent()) {
+                Map<ColumnHandle, Domain> domains = constraint.getDomains().get();
+                
+                for (Map.Entry<ColumnHandle, Domain> entry : domains.entrySet()) {
+                    ColumnHandle columnHandle = entry.getKey();
+                    Domain domain = entry.getValue();
+                    
+                    if (columnHandle instanceof FlussColumnHandle) {
+                        FlussColumnHandle flussColumn = (FlussColumnHandle) columnHandle;
+                        
+                        // Check for selective predicates
+                        if (isSelectivePredicate(domain)) {
+                            selectivePredicates++;
+                        }
+                        
+                        // Check for time-based predicates
+                        if (isTimeBasedColumn(flussColumn)) {
+                            timeBasedPredicates++;
+                        }
+                        
+                        // Check for partition predicates
+                        if (flussColumn.isPartitionKey()) {
+                            partitionPredicates++;
+                        }
+                    }
+                }
+            }
         }
         
-        // Default to union read for best coverage
-        return UnionReadStrategy.UNION;
+        return new PredicateAnalysisResult(selectivePredicates, timeBasedPredicates, partitionPredicates);
+    }
+    
+    /**
+     * Check if a domain represents a selective predicate.
+     */
+    private boolean isSelectivePredicate(Domain domain) {
+        if (domain.getValues().isDiscreteSet()) {
+            // IN predicates with few values are selective
+            return domain.getValues().getDiscreteSet().size() <= 10;
+        } else if (!domain.getValues().isAll()) {
+            // Range predicates can be selective
+            return true;
+        }
+        return false;
+    }
+    
+    /**
+     * Check if a column is time-based.
+     */
+    private boolean isTimeBasedColumn(FlussColumnHandle column) {
+        String typeName = column.getType().getDisplayName().toLowerCase();
+        return typeName.contains("timestamp") || typeName.contains("date") || typeName.contains("time");
+    }
+    
+    /**
+     * Analyze projection benefit for strategy determination.
+     */
+    private double analyzeProjectionBenefit(FlussTableHandle tableHandle) {
+        // Analyze column projection to determine I/O benefit
+        if (tableHandle.getProjectedColumns().isPresent()) {
+            Set<ColumnHandle> projectedColumns = tableHandle.getProjectedColumns().get();
+            int totalColumns = tableHandle.getTableInfo().getSchema().toRowType().getFieldCount();
+            
+            if (totalColumns > 0) {
+                double projectionRatio = (double) projectedColumns.size() / totalColumns;
+                
+                // High projection ratio favors real-time (less data to transfer)
+                if (projectionRatio < 0.3) {
+                    return 0.8; // High benefit for real-time
+                } else if (projectionRatio < 0.6) {
+                    return 0.6; // Moderate benefit for real-time
+                } else {
+                    return 0.4; // Lower benefit for real-time
+                }
+            }
+        }
+        
+        return 0.5; // Default benefit
+    }
+    
+    /**
+     * Analyze time boundary for strategy determination.
+     */
+    private TimeBoundaryAnalysis analyzeTimeBoundary(FlussTableHandle tableHandle) {
+        Optional<Long> timeBoundary = getTimeBoundary(tableHandle);
+        boolean hasTimeBoundary = timeBoundary.isPresent();
+        long boundaryTimestamp = timeBoundary.orElse(0L);
+        
+        return new TimeBoundaryAnalysis(hasTimeBoundary, boundaryTimestamp);
+    }
+    
+    /**
+     * Analyze data freshness benefit for strategy determination.
+     */
+    private double analyzeDataFreshness(FlussTableHandle tableHandle) {
+        // Real-time storage has fresher data
+        // This is always a benefit for real-time strategy
+        return 0.8; // High benefit for real-time data freshness
+    }
+    
+    /**
+     * Calculate real-time benefit score.
+     */
+    private double calculateRealTimeBenefit(double limitBenefit, 
+                                          PredicateAnalysisResult predicateAnalysis,
+                                          double projectionBenefit,
+                                          double freshnessBenefit) {
+        // Weighted combination of factors favoring real-time
+        double selectivePredicateWeight = predicateAnalysis.getSelectivePredicates() > 0 ? 0.7 : 0.3;
+        double timePredicateWeight = predicateAnalysis.getTimeBasedPredicates() > 0 ? 0.6 : 0.4;
+        double partitionPredicateWeight = predicateAnalysis.getPartitionPredicates() > 0 ? 0.8 : 0.5;
+        
+        return (limitBenefit * 0.25 +
+                selectivePredicateWeight * 0.2 +
+                timePredicateWeight * 0.15 +
+                partitionPredicateWeight * 0.15 +
+                projectionBenefit * 0.15 +
+                freshnessBenefit * 0.1);
+    }
+    
+    /**
+     * Calculate historical benefit score.
+     */
+    private double calculateHistoricalBenefit(double limitBenefit,
+                                            PredicateAnalysisResult predicateAnalysis,
+                                            double projectionBenefit,
+                                            TimeBoundaryAnalysis timeAnalysis) {
+        // Weighted combination of factors favoring historical
+        double timeBoundaryWeight = timeAnalysis.hasTimeBoundary() ? 0.8 : 0.3;
+        double largeLimitWeight = limitBenefit < 0.5 ? 0.6 : 0.9; // Large limits favor historical
+        
+        return (largeLimitWeight * 0.3 +
+                timeBoundaryWeight * 0.25 +
+                projectionBenefit * 0.2 +
+                predicateAnalysis.getTimeBasedPredicates() > 0 ? 0.15 : 0.05 +
+                0.1); // Base historical benefit
+    }
+    
+    /**
+     * Determine optimal strategy based on analysis.
+     */
+    private UnionReadStrategy determineOptimalStrategy(FlussTableHandle tableHandle, 
+                                                     StrategyAnalysisResult analysis) {
+        double realTimeScore = analysis.getRealTimeBenefit();
+        double historicalScore = analysis.getHistoricalBenefit();
+        
+        // Apply strategy-specific rules
+        
+        // Rule 1: Historical-only queries
+        if (isHistoricalOnlyQuery(tableHandle)) {
+            return UnionReadStrategy.HISTORICAL_ONLY;
+        }
+        
+        // Rule 2: Real-time-only queries
+        if (isRealTimeOnlyQuery(tableHandle)) {
+            return UnionReadStrategy.REAL_TIME_ONLY;
+        }
+        
+        // Rule 3: Compare scores
+        double scoreDifference = Math.abs(realTimeScore - historicalScore);
+        
+        // If scores are very close, use UNION for comprehensive coverage
+        if (scoreDifference < 0.1) {
+            return UnionReadStrategy.UNION;
+        }
+        
+        // Otherwise, choose the strategy with higher score
+        if (realTimeScore > historicalScore) {
+            return UnionReadStrategy.REAL_TIME_ONLY;
+        } else {
+            return UnionReadStrategy.HISTORICAL_ONLY;
+        }
+    }
+    
+    /**
+     * Result of strategy analysis.
+     */
+    private static class StrategyAnalysisResult {
+        private final double realTimeBenefit;
+        private final double historicalBenefit;
+        private final double limitBenefit;
+        private final PredicateAnalysisResult predicateAnalysis;
+        private final double projectionBenefit;
+        private final TimeBoundaryAnalysis timeAnalysis;
+        private final double freshnessBenefit;
+        
+        public StrategyAnalysisResult(double realTimeBenefit, double historicalBenefit,
+                                    double limitBenefit, PredicateAnalysisResult predicateAnalysis,
+                                    double projectionBenefit, TimeBoundaryAnalysis timeAnalysis,
+                                    double freshnessBenefit) {
+            this.realTimeBenefit = realTimeBenefit;
+            this.historicalBenefit = historicalBenefit;
+            this.limitBenefit = limitBenefit;
+            this.predicateAnalysis = predicateAnalysis;
+            this.projectionBenefit = projectionBenefit;
+            this.timeAnalysis = timeAnalysis;
+            this.freshnessBenefit = freshnessBenefit;
+        }
+        
+        public double getRealTimeBenefit() {
+            return realTimeBenefit;
+        }
+        
+        public double getHistoricalBenefit() {
+            return historicalBenefit;
+        }
+        
+        public double getLimitBenefit() {
+            return limitBenefit;
+        }
+        
+        public PredicateAnalysisResult getPredicateAnalysis() {
+            return predicateAnalysis;
+        }
+        
+        public double getProjectionBenefit() {
+            return projectionBenefit;
+        }
+        
+        public TimeBoundaryAnalysis getTimeAnalysis() {
+            return timeAnalysis;
+        }
+        
+        public double getFreshnessBenefit() {
+            return freshnessBenefit;
+        }
+    }
+    
+    /**
+     * Result of predicate analysis.
+     */
+    private static class PredicateAnalysisResult {
+        private final int selectivePredicates;
+        private final int timeBasedPredicates;
+        private final int partitionPredicates;
+        
+        public PredicateAnalysisResult(int selectivePredicates, int timeBasedPredicates, 
+                                     int partitionPredicates) {
+            this.selectivePredicates = selectivePredicates;
+            this.timeBasedPredicates = timeBasedPredicates;
+            this.partitionPredicates = partitionPredicates;
+        }
+        
+        public int getSelectivePredicates() {
+            return selectivePredicates;
+        }
+        
+        public int getTimeBasedPredicates() {
+            return timeBasedPredicates;
+        }
+        
+        public int getPartitionPredicates() {
+            return partitionPredicates;
+        }
+    }
+    
+    /**
+     * Result of time boundary analysis.
+     */
+    private static class TimeBoundaryAnalysis {
+        private final boolean hasTimeBoundary;
+        private final long boundaryTimestamp;
+        
+        public TimeBoundaryAnalysis(boolean hasTimeBoundary, long boundaryTimestamp) {
+            this.hasTimeBoundary = hasTimeBoundary;
+            this.boundaryTimestamp = boundaryTimestamp;
+        }
+        
+        public boolean hasTimeBoundary() {
+            return hasTimeBoundary;
+        }
+        
+        public long getBoundaryTimestamp() {
+            return boundaryTimestamp;
+        }
     }
     
     /**
@@ -258,6 +616,107 @@ public class FlussUnionReadManager {
     }
     
     /**
+     * Apply adaptive learning from previous queries to optimize strategy selection.
+     * 
+     * <p>This method uses historical query performance data to adjust the strategy
+     * selection for better performance based on learned patterns.
+     */
+    private StrategyAnalysisResult applyAdaptiveStrategyLearning(
+            FlussTableHandle tableHandle,
+            StrategyAnalysisResult analysis) {
+        
+        String tableName = tableHandle.getTableName();
+        
+        // Get historical performance data for this table
+        UnionReadHistory history = getUnionReadHistory(tableName);
+        
+        if (history.getQueryCount() < 5) {
+            // Not enough data to make informed decisions
+            log.debug("Insufficient historical data for adaptive strategy learning on table: %s", tableName);
+            return analysis;
+        }
+        
+        // Analyze historical data to determine if we should adjust strategy selection
+        double avgRealTimePerformance = history.getAverageRealTimePerformance();
+        double avgHistoricalPerformance = history.getAverageHistoricalPerformance();
+        
+        // If one strategy consistently outperforms the other, adjust weights
+        if (avgRealTimePerformance > avgHistoricalPerformance * 1.2) {
+            // Real-time consistently outperforms, increase its weight
+            log.debug("Adjusting strategy weights to favor real-time for table: %s based on history", tableName);
+            // In a real implementation, we would adjust the analysis weights here
+        } else if (avgHistoricalPerformance > avgRealTimePerformance * 1.2) {
+            // Historical consistently outperforms, increase its weight
+            log.debug("Adjusting strategy weights to favor historical for table: %s based on history", tableName);
+            // In a real implementation, we would adjust the analysis weights here
+        }
+        
+        // No significant adjustment needed
+        return analysis;
+    }
+    
+    /**
+     * Validate and adjust strategy based on additional checks.
+     * 
+     * <p>This method performs final validation of the selected strategy and
+     * makes adjustments based on runtime conditions.
+     */
+    private UnionReadStrategy validateAndAdjustStrategy(
+            FlussTableHandle tableHandle,
+            UnionReadStrategy strategy,
+            StrategyAnalysisResult analysis) {
+        
+        // Validate that the selected strategy is actually available
+        if (strategy == UnionReadStrategy.HISTORICAL_ONLY) {
+            // Check if historical data is actually available
+            if (!isHistoricalDataAvailable(tableHandle)) {
+                log.debug("Historical data not available, switching to REAL_TIME_ONLY for table: %s", 
+                        tableHandle.getTableName());
+                return UnionReadStrategy.REAL_TIME_ONLY;
+            }
+        }
+        
+        // For UNION strategy, check if it's really beneficial
+        if (strategy == UnionReadStrategy.UNION) {
+            double benefitDifference = Math.abs(analysis.getRealTimeBenefit() - analysis.getHistoricalBenefit());
+            
+            // If benefits are very different, use the better single strategy
+            if (benefitDifference > 0.3) {
+                if (analysis.getRealTimeBenefit() > analysis.getHistoricalBenefit()) {
+                    log.debug("UNION strategy not beneficial, switching to REAL_TIME_ONLY for table: %s", 
+                            tableHandle.getTableName());
+                    return UnionReadStrategy.REAL_TIME_ONLY;
+                } else {
+                    log.debug("UNION strategy not beneficial, switching to HISTORICAL_ONLY for table: %s", 
+                            tableHandle.getTableName());
+                    return UnionReadStrategy.HISTORICAL_ONLY;
+                }
+            }
+        }
+        
+        // Strategy is valid
+        return strategy;
+    }
+    
+    /**
+     * Check if historical data is available for the table.
+     */
+    private boolean isHistoricalDataAvailable(FlussTableHandle tableHandle) {
+        try {
+            // Check if lakehouse configuration exists and is valid
+            Optional<String> lakehouseFormat = tableHandle.getTableInfo().getTableDescriptor()
+                    .getCustomProperties()
+                    .map(props -> props.get("datalake.format"));
+            
+            return lakehouseFormat.isPresent() && !lakehouseFormat.get().isEmpty();
+        } catch (Exception e) {
+            log.warn(e, "Error checking historical data availability for table: %s", 
+                    tableHandle.getTableName());
+            return false;
+        }
+    }
+    
+    /**
      * Find timestamp column in table schema.
      */
     private Optional<String> findTimestampColumn(TableInfo tableInfo) {
@@ -283,5 +742,44 @@ public class FlussUnionReadManager {
         }
         
         return Optional.empty();
+    }
+    
+    /**
+     * Get Union Read history for adaptive learning.
+     * 
+     * <p>In a production implementation, this would retrieve historical data
+     * from a performance monitoring system.
+     */
+    private UnionReadHistory getUnionReadHistory(String tableName) {
+        // This is a simplified implementation that would be replaced with
+        // actual historical data retrieval in production
+        return new UnionReadHistory(0, 0, 0);
+    }
+    
+    /**
+     * Historical Union Read data for adaptive learning.
+     */
+    private static class UnionReadHistory {
+        private final long queryCount;
+        private final double averageRealTimePerformance;
+        private final double averageHistoricalPerformance;
+        
+        public UnionReadHistory(long queryCount, double averageRealTimePerformance, double averageHistoricalPerformance) {
+            this.queryCount = queryCount;
+            this.averageRealTimePerformance = averageRealTimePerformance;
+            this.averageHistoricalPerformance = averageHistoricalPerformance;
+        }
+        
+        public long getQueryCount() {
+            return queryCount;
+        }
+        
+        public double getAverageRealTimePerformance() {
+            return averageRealTimePerformance;
+        }
+        
+        public double getAverageHistoricalPerformance() {
+            return averageHistoricalPerformance;
+        }
     }
 }

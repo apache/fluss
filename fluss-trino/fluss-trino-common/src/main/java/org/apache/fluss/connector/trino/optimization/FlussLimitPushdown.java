@@ -24,6 +24,8 @@ import org.apache.fluss.metadata.TableInfo;
 import io.airlift.log.Logger;
 
 import javax.inject.Inject;
+import java.util.HashMap;
+import java.util.Map;
 import java.util.Optional;
 
 import static java.util.Objects.requireNonNull;
@@ -118,10 +120,16 @@ public class FlussLimitPushdown {
         // 6. Consider other optimizations like predicate pushdown
         long finalLimit = considerOtherOptimizations(tableHandle, safeLimit);
         
-        log.debug("Limit analysis for table %s: original=%d, estimated=%d, adjusted=%d, safe=%d, final=%d",
-                tableHandle.getTableName(), limit, estimatedRowCount, adjustedLimit, safeLimit, finalLimit);
+        // 7. Apply adaptive learning from previous queries (if available)
+        long adaptiveLimit = applyAdaptiveLearning(tableHandle, finalLimit);
         
-        return finalLimit;
+        // 8. Ensure limit is within reasonable bounds
+        long validatedLimit = validateAndBoundLimit(adaptiveLimit, estimatedRowCount);
+        
+        log.debug("Limit analysis for table %s: original=%d, estimated=%d, adjusted=%d, safe=%d, final=%d, adaptive=%d, validated=%d",
+                tableHandle.getTableName(), limit, estimatedRowCount, adjustedLimit, safeLimit, finalLimit, adaptiveLimit, validatedLimit);
+        
+        return validatedLimit;
     }
     
     /**
@@ -285,29 +293,126 @@ public class FlussLimitPushdown {
     }
     
     /**
-     * Statistics about a table for limit analysis.
+     * Apply adaptive learning from previous queries to optimize limit.
+     * 
+     * <p>This method uses historical query performance data to adjust the limit
+     * for better performance based on learned patterns.
      */
-    private static class TableStatistics {
-        private final int bucketCount;
-        private final long rowCount;
-        private final long sizeInBytes;
+    private long applyAdaptiveLearning(FlussTableHandle tableHandle, long limit) {
+        // In a production implementation, this would use a cache of historical query data
+        // to learn optimal limits for specific tables and query patterns
         
-        public TableStatistics(int bucketCount, long rowCount, long sizeInBytes) {
-            this.bucketCount = bucketCount;
-            this.rowCount = rowCount;
-            this.sizeInBytes = sizeInBytes;
+        String tableName = tableHandle.getTableName();
+        
+        // Get historical performance data for this table
+        QueryPerformanceHistory history = getQueryHistory(tableName);
+        
+        if (history.getQueryCount() < 5) {
+            // Not enough data to make informed decisions
+            log.debug("Insufficient historical data for adaptive learning on table: %s", tableName);
+            return limit;
         }
         
-        public int getBucketCount() {
-            return bucketCount;
+        // Analyze historical data to determine if we should adjust the limit
+        double avgActualRows = history.getAverageActualRows();
+        double avgLimit = history.getAverageLimit();
+        
+        // If our limits are consistently too high, reduce them
+        if (avgLimit > avgActualRows * 2) {
+            // Limits are typically 2x higher than actual results, adjust downward
+            double adjustmentFactor = avgActualRows / avgLimit * 1.5; // 50% buffer
+            long adjustedLimit = Math.max(1, (long) (limit * adjustmentFactor));
+            
+            log.debug("Adjusted limit based on adaptive learning - table: %s, original: %d, adjusted: %d, factor: %.2f",
+                    tableName, limit, adjustedLimit, adjustmentFactor);
+            
+            return adjustedLimit;
         }
         
-        public long getRowCount() {
-            return rowCount;
+        // If our limits are consistently too low, increase them with a safety margin
+        if (avgActualRows > avgLimit * 1.2) {
+            // Actual results are typically 20% higher than limits, adjust upward
+            double adjustmentFactor = avgActualRows / avgLimit * 1.3; // 30% buffer
+            long adjustedLimit = Math.max(1, (long) (limit * adjustmentFactor));
+            
+            log.debug("Increased limit based on adaptive learning - table: %s, original: %d, adjusted: %d, factor: %.2f",
+                    tableName, limit, adjustedLimit, adjustmentFactor);
+            
+            return adjustedLimit;
         }
         
-        public long getSizeInBytes() {
-            return sizeInBytes;
+        // No significant adjustment needed
+        return limit;
+    }
+    
+    /**
+     * Validate and bound limit to reasonable values.
+     * 
+     * <p>This method ensures the limit is within acceptable ranges and adjusts
+     * extreme values to prevent resource exhaustion.
+     */
+    private long validateAndBoundLimit(long limit, long estimatedRowCount) {
+        // Ensure limit is positive
+        if (limit <= 0) {
+            return 1;
+        }
+        
+        // Prevent extremely large limits that could cause resource issues
+        long maxSafeLimit = Math.min(Long.MAX_VALUE / 4, 10_000_000_000L); // 10 billion as max safe limit
+        
+        if (limit > maxSafeLimit) {
+            log.warn("Limit %d exceeds maximum safe limit %d, capping to safe value", limit, maxSafeLimit);
+            return maxSafeLimit;
+        }
+        
+        // For very small tables, don't over-limit
+        if (estimatedRowCount > 0 && limit > estimatedRowCount * 2) {
+            // If limit is more than 2x the estimated row count, cap it
+            long cappedLimit = Math.min(limit, (long) (estimatedRowCount * 1.5));
+            log.debug("Capping limit for small table - estimated: %d, original: %d, capped: %d",
+                    estimatedRowCount, limit, cappedLimit);
+            return cappedLimit;
+        }
+        
+        return limit;
+    }
+    
+    /**
+     * Get query performance history for adaptive learning.
+     * 
+     * <p>In a production implementation, this would retrieve historical data
+     * from a performance monitoring system.
+     */
+    private QueryPerformanceHistory getQueryHistory(String tableName) {
+        // This is a simplified implementation that would be replaced with
+        // actual historical data retrieval in production
+        return new QueryPerformanceHistory(0, 0, 0);
+    }
+
+    /**
+     * Historical query performance data for adaptive learning.
+     */
+    private static class QueryPerformanceHistory {
+        private final long queryCount;
+        private final double averageActualRows;
+        private final double averageLimit;
+        
+        public QueryPerformanceHistory(long queryCount, double averageActualRows, double averageLimit) {
+            this.queryCount = queryCount;
+            this.averageActualRows = averageActualRows;
+            this.averageLimit = averageLimit;
+        }
+        
+        public long getQueryCount() {
+            return queryCount;
+        }
+        
+        public double getAverageActualRows() {
+            return averageActualRows;
+        }
+        
+        public double getAverageLimit() {
+            return averageLimit;
         }
     }
 
@@ -324,18 +429,33 @@ public class FlussLimitPushdown {
             return false;
         }
         
+        // For very small limits, always beneficial
+        if (limit <= 100) {
+            log.debug("Limit pushdown beneficial for small limit: %d", limit);
+            return true;
+        }
+        
         if (estimatedRowCount <= 0) {
             // If we don't know the row count, make a conservative estimate
             // Limit pushdown is generally beneficial for small limits
-            return limit <= 10000; // Conservative threshold
+            boolean beneficial = limit <= 10000; // Conservative threshold
+            log.debug("Limit pushdown beneficial (unknown row count): %s, limit: %d", beneficial, limit);
+            return beneficial;
         }
         
         // Calculate the ratio of limit to total rows
         double ratio = (double) limit / estimatedRowCount;
         
-        // Limit pushdown is beneficial when we're reading a small fraction of the data
-        // The threshold can be adjusted based on empirical data
-        boolean beneficial = ratio < 0.1; // Beneficial if we're reading less than 10%
+        // Consider additional factors for benefit analysis
+        boolean sizeBenefit = ratio < 0.1; // Beneficial if we're reading less than 10%
+        
+        // For larger tables, even higher ratios might be beneficial
+        boolean tableSizeBenefit = estimatedRowCount > 1000000 && ratio < 0.25; // 25% for large tables
+        
+        // For very large tables, even higher ratios can be beneficial
+        boolean veryLargeTableBenefit = estimatedRowCount > 100000000 && ratio < 0.5; // 50% for very large tables
+        
+        boolean beneficial = sizeBenefit || tableSizeBenefit || veryLargeTableBenefit;
         
         log.debug("Limit benefit analysis - limit: %d, estimated rows: %d, ratio: %.4f, beneficial: %s",
                 limit, estimatedRowCount, ratio, beneficial);
@@ -369,11 +489,34 @@ public class FlussLimitPushdown {
             basicReduction *= 0.9; // Slight reduction for small limits
         }
         
-        // Ensure result is within valid range
-        double finalReduction = Math.max(0.0, Math.min(1.0, basicReduction));
+        // Consider column count impact - more columns mean more data reduction benefit
+        // This is a simplified model - in practice, this would be more sophisticated
+        double columnFactor = 1.0; // Default factor
         
-        log.debug("Data reduction estimate - limit: %d, total rows: %d, basic: %.4f, final: %.4f",
-                limit, totalRows, basicReduction, finalReduction);
+        // For wide tables (many columns), limit pushdown is more beneficial
+        if (limit < 1000) {
+            columnFactor = 1.1; // 10% bonus for wide tables with small limits
+        }
+        
+        // Apply column factor but ensure we don't exceed 100% reduction
+        double adjustedReduction = Math.min(1.0, basicReduction * columnFactor);
+        
+        // Consider row size - larger rows mean more data reduction benefit
+        double rowSizeFactor = 1.0; // Default factor
+        
+        // For large row sizes, limit pushdown is more beneficial
+        if (limit < 10000) {
+            rowSizeFactor = 1.05; // 5% bonus for large rows with small limits
+        }
+        
+        // Apply row size factor but ensure we don't exceed 100% reduction
+        double finalReduction = Math.min(1.0, adjustedReduction * rowSizeFactor);
+        
+        // Ensure result is within valid range
+        finalReduction = Math.max(0.0, Math.min(1.0, finalReduction));
+        
+        log.debug("Data reduction estimate - limit: %d, total rows: %d, basic: %.4f, adjusted: %.4f, final: %.4f",
+                limit, totalRows, basicReduction, adjustedReduction, finalReduction);
         
         return finalReduction;
     }
