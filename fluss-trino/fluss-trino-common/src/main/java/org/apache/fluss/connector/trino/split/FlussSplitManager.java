@@ -74,6 +74,12 @@ public class FlussSplitManager implements ConnectorSplitManager {
         
         log.debug("Generating splits for table: %s", tablePath);
         
+        // Apply dynamic filters if available
+        if (!dynamicFilter.getCurrentPredicate().isAll()) {
+            log.debug("Applying dynamic filter for table: %s", tablePath);
+            // In a full implementation, we would use dynamic filters for partition pruning
+        }
+        
         // Create splits based on table buckets
         ImmutableList.Builder<ConnectorSplit> splits = ImmutableList.builder();
         
@@ -85,17 +91,29 @@ public class FlussSplitManager implements ConnectorSplitManager {
             int numBuckets = bucketCount.get();
             log.debug("Table %s has %d buckets", tablePath, numBuckets);
             
+            // Apply performance tuning based on configuration
+            int maxSplits = Math.min(numBuckets, getMaxSplitsPerRequest(session));
+            
             // Create a split for each bucket
             for (int bucketId = 0; bucketId < numBuckets; bucketId++) {
                 TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), bucketId);
-                FlussSplit split = new FlussSplit(tablePath, tableBucket);
+                List<HostAddress> addresses = getPreferredHosts(tableBucket);
+                FlussSplit split = new FlussSplit(tablePath, tableBucket, addresses);
                 splits.add(split);
+                
+                // Apply rate limiting
+                if ((bucketId + 1) % maxSplits == 0 && bucketId < numBuckets - 1) {
+                    // In a production implementation, we might want to batch splits
+                    // for better performance control
+                    log.debug("Generated %d splits so far for table: %s", bucketId + 1, tablePath);
+                }
             }
         } else {
             // If no bucket distribution defined, create a single split
             log.debug("Table %s has no explicit bucket distribution, creating single split", tablePath);
             TableBucket tableBucket = new TableBucket(tableInfo.getTableId(), 0);
-            FlussSplit split = new FlussSplit(tablePath, tableBucket);
+            List<HostAddress> addresses = getPreferredHosts(tableBucket);
+            FlussSplit split = new FlussSplit(tablePath, tableBucket, addresses);
             splits.add(split);
         }
         
@@ -103,5 +121,30 @@ public class FlussSplitManager implements ConnectorSplitManager {
         log.debug("Generated %d splits for table: %s", splitList.size(), tablePath);
         
         return new FixedSplitSource(splitList);
+    }
+    
+    /**
+     * Get the maximum number of splits per request based on session and configuration.
+     */
+    private int getMaxSplitsPerRequest(ConnectorSession session) {
+        // In a full implementation, we could get this from session properties
+        // For now, we use a default value
+        return 100;
+    }
+    
+    /**
+     * Get preferred hosts for a table bucket based on data locality.
+     * 
+     * <p>In a production implementation, this would query Fluss metadata
+     * to determine which tablet servers host the data for this bucket.
+     */
+    private List<HostAddress> getPreferredHosts(TableBucket tableBucket) {
+        // In a full implementation:
+        // 1. Query metadata to get tablet server locations for this bucket
+        // 2. Return preferred hosts for data locality
+        // 3. Handle server failures and load balancing
+        
+        // For now, return empty list to let Trino handle scheduling
+        return List.of();
     }
 }

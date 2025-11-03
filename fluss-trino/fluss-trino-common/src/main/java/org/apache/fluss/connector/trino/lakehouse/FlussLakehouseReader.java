@@ -75,9 +75,9 @@ public class FlussLakehouseReader {
     /**
      * Read a page of historical data from lakehouse.
      * 
-     * <p>This is a placeholder for the actual lakehouse reading implementation.
-     * In a full implementation, this would integrate with Paimon or other
-     * lakehouse formats to read historical data.
+     * <p>This method provides the framework for reading historical data from
+     * Lakehouse storage formats like Apache Paimon. The actual implementation
+     * would integrate with the specific lakehouse library.
      */
     public Optional<Page> readHistoricalData(
             FlussTableHandle tableHandle,
@@ -86,13 +86,80 @@ public class FlussLakehouseReader {
         
         log.debug("Reading historical data for table: %s", tableHandle.getTableName());
         
-        // In a full implementation, this would:
-        // 1. Connect to the lakehouse storage (e.g., Paimon)
-        // 2. Read data based on predicates and projections
-        // 3. Convert to Trino Page format
-        // 4. Return the data
+        // Get lakehouse format
+        Optional<String> format = getLakehouseFormat(tableHandle);
+        if (format.isEmpty()) {
+            log.debug("No lakehouse format configured for table: %s", tableHandle.getTableName());
+            return Optional.empty();
+        }
         
-        // For now, return empty as this requires integration with lakehouse libraries
+        // In a production implementation, this would:
+        // 1. Determine the lakehouse storage path from table properties
+        // 2. Initialize the appropriate reader (e.g., PaimonReader, IcebergReader)
+        // 3. Apply predicates and projections from the table handle
+        // 4. Read data in batches and convert to Trino Pages
+        // 5. Handle schema evolution and partition pruning
+        
+        String lakehouseFormat = format.get();
+        log.debug("Lakehouse format: %s for table: %s", lakehouseFormat, tableHandle.getTableName());
+        
+        switch (lakehouseFormat.toLowerCase()) {
+            case "paimon":
+                return readFromPaimon(tableHandle, columns, limit);
+            case "iceberg":
+                return readFromIceberg(tableHandle, columns, limit);
+            default:
+                log.warn("Unsupported lakehouse format: %s", lakehouseFormat);
+                return Optional.empty();
+        }
+    }
+    
+    /**
+     * Read data from Apache Paimon format.
+     * 
+     * <p>This is a placeholder that shows the structure of how Paimon integration
+     * would work. A full implementation would use the Paimon Java API.
+     */
+    private Optional<Page> readFromPaimon(
+            FlussTableHandle tableHandle,
+            List<FlussColumnHandle> columns,
+            long limit) {
+        
+        log.debug("Reading from Paimon for table: %s", tableHandle.getTableName());
+        
+        // Paimon integration would include:
+        // 1. Get table path from Fluss table properties
+        // 2. Create Paimon Table instance
+        // 3. Create ReadBuilder with predicates
+        // 4. Apply column projection
+        // 5. Read data in batches
+        // 6. Convert Paimon InternalRow to Trino Page
+        
+        // Example structure (not fully implemented):
+        // String tablePath = getTablePath(tableHandle);
+        // Table paimonTable = catalog.getTable(identifier);
+        // ReadBuilder readBuilder = paimonTable.newReadBuilder()
+        //     .withProjection(getProjectedFields(columns))
+        //     .withFilter(convertPredicates(tableHandle.getConstraint()));
+        // RecordReader<InternalRow> reader = readBuilder.newRead().createReader(splits);
+        // return convertPaimonRowsToPage(reader, columns, limit);
+        
+        return Optional.empty();
+    }
+    
+    /**
+     * Read data from Apache Iceberg format.
+     */
+    private Optional<Page> readFromIceberg(
+            FlussTableHandle tableHandle,
+            List<FlussColumnHandle> columns,
+            long limit) {
+        
+        log.debug("Reading from Iceberg for table: %s", tableHandle.getTableName());
+        
+        // Iceberg integration would be similar to Paimon
+        // but using Iceberg Java API
+        
         return Optional.empty();
     }
 

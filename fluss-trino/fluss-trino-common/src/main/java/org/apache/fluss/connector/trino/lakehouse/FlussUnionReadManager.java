@@ -89,16 +89,77 @@ public class FlussUnionReadManager {
 
     /**
      * Determine the data split strategy for Union Read.
+     * 
+     * <p>This method analyzes the query characteristics and table properties
+     * to determine the optimal read strategy.
      */
     public UnionReadStrategy determineStrategy(FlussTableHandle tableHandle) {
         if (!isUnionReadApplicable(tableHandle)) {
             return UnionReadStrategy.REAL_TIME_ONLY;
         }
 
-        // In a full implementation, we would analyze query predicates,
-        // time ranges, and data distribution to determine the optimal strategy
+        // Check if predicates indicate a historical-only query
+        if (isHistoricalOnlyQuery(tableHandle)) {
+            log.debug("Using HISTORICAL_ONLY strategy for table: %s", 
+                    tableHandle.getTableName());
+            return UnionReadStrategy.HISTORICAL_ONLY;
+        }
         
+        // Check if predicates indicate a real-time-only query
+        if (isRealTimeOnlyQuery(tableHandle)) {
+            log.debug("Using REAL_TIME_ONLY strategy for table: %s", 
+                    tableHandle.getTableName());
+            return UnionReadStrategy.REAL_TIME_ONLY;
+        }
+        
+        // Default to union read for best coverage
+        log.debug("Using UNION strategy for table: %s", tableHandle.getTableName());
         return UnionReadStrategy.UNION;
+    }
+    
+    /**
+     * Check if the query should only read historical data.
+     */
+    private boolean isHistoricalOnlyQuery(FlussTableHandle tableHandle) {
+        // Analyze time-based predicates to determine if query is historical
+        // For example, if there's a predicate like "date < '2024-01-01'" and
+        // current lakehouse boundary is '2024-01-01', then it's historical only
+        
+        Optional<Long> timeBoundary = getTimeBoundary(tableHandle);
+        if (timeBoundary.isEmpty()) {
+            return false;
+        }
+        
+        // Check if all predicates indicate data before the boundary
+        // This would require analyzing the constraint domains
+        // For now, return false to be safe
+        return false;
+    }
+    
+    /**
+     * Check if the query should only read real-time data.
+     */
+    private boolean isRealTimeOnlyQuery(FlussTableHandle tableHandle) {
+        // If there's a small limit and no complex predicates,
+        // reading from real-time storage might be more efficient
+        
+        if (tableHandle.getLimit().isPresent()) {
+            long limit = tableHandle.getLimit().get();
+            // For very small limits, real-time only might be faster
+            if (limit <= 100) {
+                log.debug("Small limit (%d), preferring real-time read", limit);
+                return true;
+            }
+        }
+        
+        // If predicates indicate recent data, use real-time only
+        Optional<Long> timeBoundary = getTimeBoundary(tableHandle);
+        if (timeBoundary.isPresent()) {
+            // Check if predicates filter for data after boundary
+            // Implementation would analyze constraint domains
+        }
+        
+        return false;
     }
 
     /**
@@ -117,10 +178,78 @@ public class FlussUnionReadManager {
 
     /**
      * Get the time boundary between real-time and historical data.
+     * 
+     * <p>This boundary represents the cutoff point where data older than this
+     * timestamp is stored in the lakehouse, and newer data is in real-time storage.
      */
     public Optional<Long> getTimeBoundary(FlussTableHandle tableHandle) {
-        // In a full implementation, this would query Fluss metadata
-        // to get the earliest timestamp of real-time data
+        try {
+            // In a production implementation, this would:
+            // 1. Query Fluss metadata to get the lakehouse sync timestamp
+            // 2. Get the earliest timestamp in real-time LogStore
+            // 3. Return the boundary timestamp
+            
+            TableInfo tableInfo = tableHandle.getTableInfo();
+            
+            // Check if table has time-based partition or timestamp column
+            // that can be used to determine the boundary
+            Optional<String> timestampColumn = findTimestampColumn(tableInfo);
+            
+            if (timestampColumn.isEmpty()) {
+                log.debug("No timestamp column found for table: %s", 
+                        tableHandle.getTableName());
+                return Optional.empty();
+            }
+            
+            // Get the lakehouse sync configuration
+            Optional<String> syncTimestamp = tableInfo.getTableDescriptor()
+                    .getCustomProperties()
+                    .flatMap(props -> Optional.ofNullable(props.get("lakehouse.sync.timestamp")));
+            
+            if (syncTimestamp.isPresent()) {
+                try {
+                    long boundary = Long.parseLong(syncTimestamp.get());
+                    log.debug("Time boundary for table %s: %d", 
+                            tableHandle.getTableName(), boundary);
+                    return Optional.of(boundary);
+                } catch (NumberFormatException e) {
+                    log.warn(e, "Invalid lakehouse sync timestamp: %s", syncTimestamp.get());
+                }
+            }
+            
+            return Optional.empty();
+        } catch (Exception e) {
+            log.warn(e, "Error getting time boundary for table: %s", 
+                    tableHandle.getTableName());
+            return Optional.empty();
+        }
+    }
+    
+    /**
+     * Find timestamp column in table schema.
+     */
+    private Optional<String> findTimestampColumn(TableInfo tableInfo) {
+        List<org.apache.fluss.types.DataField> fields = 
+                tableInfo.getSchema().toRowType().getFields();
+        
+        for (org.apache.fluss.types.DataField field : fields) {
+            org.apache.fluss.types.DataType type = field.getType();
+            // Check if it's a timestamp type
+            if (type.is(org.apache.fluss.types.DataTypeRoot.TIMESTAMP_WITHOUT_TIME_ZONE) ||
+                type.is(org.apache.fluss.types.DataTypeRoot.TIMESTAMP_WITH_LOCAL_TIME_ZONE)) {
+                return Optional.of(field.getName());
+            }
+        }
+        
+        // Also check for common timestamp column names
+        for (org.apache.fluss.types.DataField field : fields) {
+            String name = field.getName().toLowerCase();
+            if (name.contains("time") || name.contains("date") || 
+                name.equals("ts") || name.equals("timestamp")) {
+                return Optional.of(field.getName());
+            }
+        }
+        
         return Optional.empty();
     }
 }

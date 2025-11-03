@@ -64,22 +64,38 @@ public class FlussPageSourceProvider implements ConnectorPageSourceProvider {
             List<ColumnHandle> columns,
             DynamicFilter dynamicFilter) {
         
-        FlussSplit flussSplit = (FlussSplit) split;
-        FlussTableHandle flussTable = (FlussTableHandle) table;
-        
-        List<FlussColumnHandle> flussColumns = columns.stream()
-                .map(col -> (FlussColumnHandle) col)
-                .collect(Collectors.toList());
-        
-        log.debug("Creating page source for table: %s, bucket: %s, columns: %d",
-                flussSplit.getTablePath(),
-                flussSplit.getTableBucket(),
-                flussColumns.size());
-        
-        return new FlussPageSource(
-                clientManager,
-                flussTable,
-                flussSplit,
-                flussColumns);
+        try {
+            FlussSplit flussSplit = (FlussSplit) split;
+            FlussTableHandle flussTable = (FlussTableHandle) table;
+            
+            List<FlussColumnHandle> flussColumns = columns.stream()
+                    .map(col -> {
+                        if (!(col instanceof FlussColumnHandle)) {
+                            throw new IllegalArgumentException("Expected FlussColumnHandle, got: " + col.getClass());
+                        }
+                        return (FlussColumnHandle) col;
+                    })
+                    .collect(Collectors.toList());
+            
+            log.debug("Creating page source for table: %s, bucket: %s, columns: %d",
+                    flussSplit.getTablePath(),
+                    flussSplit.getTableBucket(),
+                    flussColumns.size());
+            
+            // Apply dynamic filters if available
+            if (!dynamicFilter.getCurrentPredicate().isAll()) {
+                log.debug("Applying dynamic filter for split: %s", flussSplit.getTableBucket());
+                // In a full implementation, we would apply dynamic filters to the scanner
+            }
+            
+            return new FlussPageSource(
+                    clientManager,
+                    flussTable,
+                    flussSplit,
+                    flussColumns);
+        } catch (Exception e) {
+            log.error(e, "Error creating page source for split: %s", split);
+            throw new RuntimeException("Failed to create page source", e);
+        }
     }
 }

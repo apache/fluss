@@ -210,16 +210,87 @@ public class FlussPageSource implements ConnectorPageSource {
                 type.writeLong(blockBuilder, Float.floatToIntBits(row.getFloat(fieldIndex)));
             } else if (typeName.equals("double")) {
                 type.writeDouble(blockBuilder, row.getDouble(fieldIndex));
+            } else if (typeName.startsWith("decimal")) {
+                // Decimal types need special handling
+                org.apache.fluss.row.Decimal decimal = row.getDecimal(fieldIndex, 
+                    ((io.trino.spi.type.DecimalType) type).getPrecision(),
+                    ((io.trino.spi.type.DecimalType) type).getScale());
+                if (((io.trino.spi.type.DecimalType) type).isShort()) {
+                    type.writeLong(blockBuilder, decimal.toUnscaledLong());
+                } else {
+                    type.writeObject(blockBuilder, decimal.toBigDecimal().unscaledValue());
+                }
+            } else if (typeName.startsWith("char")) {
+                String value = row.getString(fieldIndex).toString();
+                Slice slice = Slices.utf8Slice(value);
+                type.writeSlice(blockBuilder, slice);
             } else if (typeName.startsWith("varchar")) {
                 String value = row.getString(fieldIndex).toString();
                 Slice slice = Slices.utf8Slice(value);
                 type.writeSlice(blockBuilder, slice);
-            } else if (typeName.startsWith("varbinary")) {
+            } else if (typeName.startsWith("varbinary") || typeName.equals("binary")) {
                 byte[] bytes = row.getBytes(fieldIndex);
                 Slice slice = Slices.wrappedBuffer(bytes);
                 type.writeSlice(blockBuilder, slice);
+            } else if (typeName.equals("date")) {
+                // Date is stored as days since epoch in both Fluss and Trino
+                int days = row.getInt(fieldIndex);
+                type.writeLong(blockBuilder, days);
+            } else if (typeName.startsWith("time")) {
+                // Time is stored as milliseconds/microseconds since midnight
+                long timeValue = row.getLong(fieldIndex);
+                type.writeLong(blockBuilder, timeValue);
+            } else if (typeName.startsWith("timestamp")) {
+                // Timestamp handling
+                org.apache.fluss.row.TimestampNtz timestamp = row.getTimestampNtz(fieldIndex, 
+                    ((io.trino.spi.type.TimestampType) type).getPrecision());
+                long epochMicros = timestamp.getMillisecond() * 1000 + timestamp.getNanoOfMillisecond() / 1000;
+                type.writeLong(blockBuilder, epochMicros);
+            } else if (typeName.startsWith("array")) {
+                // Array type handling
+                io.trino.spi.type.ArrayType arrayType = (io.trino.spi.type.ArrayType) type;
+                org.apache.fluss.row.InternalArray array = row.getArray(fieldIndex);
+                BlockBuilder arrayBlockBuilder = blockBuilder.beginBlockEntry();
+                for (int j = 0; j < array.size(); j++) {
+                    if (array.isNullAt(j)) {
+                        arrayBlockBuilder.appendNull();
+                    } else {
+                        writeArrayElement(arrayBlockBuilder, arrayType.getElementType(), array, j);
+                    }
+                }
+                blockBuilder.closeEntry();
+            } else if (typeName.startsWith("map")) {
+                // Map type handling
+                io.trino.spi.type.MapType mapType = (io.trino.spi.type.MapType) type;
+                org.apache.fluss.row.InternalMap map = row.getMap(fieldIndex);
+                BlockBuilder mapBlockBuilder = blockBuilder.beginBlockEntry();
+                org.apache.fluss.row.InternalArray keyArray = map.keyArray();
+                org.apache.fluss.row.InternalArray valueArray = map.valueArray();
+                for (int j = 0; j < map.size(); j++) {
+                    writeArrayElement(mapBlockBuilder, mapType.getKeyType(), keyArray, j);
+                    if (valueArray.isNullAt(j)) {
+                        mapBlockBuilder.appendNull();
+                    } else {
+                        writeArrayElement(mapBlockBuilder, mapType.getValueType(), valueArray, j);
+                    }
+                }
+                blockBuilder.closeEntry();
+            } else if (typeName.startsWith("row")) {
+                // Row type handling
+                io.trino.spi.type.RowType rowType = (io.trino.spi.type.RowType) type;
+                org.apache.fluss.row.InternalRow nestedRow = row.getRow(fieldIndex, rowType.getFields().size());
+                BlockBuilder rowBlockBuilder = blockBuilder.beginBlockEntry();
+                for (int j = 0; j < rowType.getFields().size(); j++) {
+                    if (nestedRow.isNullAt(j)) {
+                        rowBlockBuilder.appendNull();
+                    } else {
+                        writeValue(rowBlockBuilder, rowType.getFields().get(j).getType(), nestedRow, j);
+                    }
+                }
+                blockBuilder.closeEntry();
             } else {
                 // Fallback to string representation
+                log.warn("Unsupported type: %s, using string fallback", typeName);
                 String value = row.getString(fieldIndex).toString();
                 Slice slice = Slices.utf8Slice(value);
                 type.writeSlice(blockBuilder, slice);
@@ -227,6 +298,41 @@ public class FlussPageSource implements ConnectorPageSource {
         } catch (Exception e) {
             log.warn(e, "Error writing value for column at index %d, type %s", fieldIndex, typeName);
             blockBuilder.appendNull();
+        }
+    }
+
+    private void writeArrayElement(BlockBuilder blockBuilder, Type elementType, 
+                                   org.apache.fluss.row.InternalArray array, int index) {
+        String typeName = elementType.getDisplayName().toLowerCase();
+        
+        if (typeName.equals("boolean")) {
+            elementType.writeBoolean(blockBuilder, array.getBoolean(index));
+        } else if (typeName.equals("tinyint")) {
+            elementType.writeLong(blockBuilder, array.getByte(index));
+        } else if (typeName.equals("smallint")) {
+            elementType.writeLong(blockBuilder, array.getShort(index));
+        } else if (typeName.equals("integer")) {
+            elementType.writeLong(blockBuilder, array.getInt(index));
+        } else if (typeName.equals("bigint")) {
+            elementType.writeLong(blockBuilder, array.getLong(index));
+        } else if (typeName.equals("real")) {
+            elementType.writeLong(blockBuilder, Float.floatToIntBits(array.getFloat(index)));
+        } else if (typeName.equals("double")) {
+            elementType.writeDouble(blockBuilder, array.getDouble(index));
+        } else if (typeName.startsWith("varchar")) {
+            String value = array.getString(index).toString();
+            Slice slice = Slices.utf8Slice(value);
+            elementType.writeSlice(blockBuilder, slice);
+        } else if (typeName.startsWith("varbinary")) {
+            byte[] bytes = array.getBinary(index);
+            Slice slice = Slices.wrappedBuffer(bytes);
+            elementType.writeSlice(blockBuilder, slice);
+        } else {
+            // For complex nested types, recursively handle
+            log.warn("Complex array element type: %s", typeName);
+            String value = String.valueOf(array.getString(index));
+            Slice slice = Slices.utf8Slice(value);
+            elementType.writeSlice(blockBuilder, slice);
         }
     }
 

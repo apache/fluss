@@ -112,9 +112,68 @@ public class FlussPartitionPruning {
             return null;
         }
         
-        // In a full implementation, we would convert the domain to a Fluss-compatible filter
-        // For now, we just create a simple string representation
-        return column.getName() + " IN " + domain.toString();
+        StringBuilder filter = new StringBuilder();
+        filter.append(column.getName());
+        
+        if (domain.getValues().isNone()) {
+            return column.getName() + " IS NULL";
+        }
+        
+        if (domain.getValues().isAll()) {
+            return column.getName() + " IS NOT NULL";
+        }
+        
+        io.trino.spi.predicate.ValueSet values = domain.getValues();
+        
+        if (values.isDiscreteSet()) {
+            // Discrete values - create IN filter
+            List<Object> discreteValues = new ArrayList<>();
+            values.getDiscreteSet().forEach(discreteValues::add);
+            
+            if (discreteValues.size() == 1) {
+                filter.append(" = '").append(discreteValues.get(0)).append("'");
+            } else {
+                filter.append(" IN (");
+                for (int i = 0; i < discreteValues.size(); i++) {
+                    if (i > 0) filter.append(", ");
+                    filter.append("'").append(discreteValues.get(i)).append("'");
+                }
+                filter.append(")");
+            }
+        } else {
+            // Range values - create range filter
+            io.trino.spi.predicate.Ranges ranges = (io.trino.spi.predicate.Ranges) values;
+            List<String> rangeFilters = new ArrayList<>();
+            
+            for (io.trino.spi.predicate.Range range : ranges.getOrderedRanges()) {
+                if (range.isSingleValue()) {
+                    rangeFilters.add(column.getName() + " = '" + range.getSingleValue() + "'");
+                } else {
+                    List<String> conditions = new ArrayList<>();
+                    if (!range.isLowUnbounded()) {
+                        String op = range.isLowInclusive() ? ">=" : ">";
+                        conditions.add(column.getName() + " " + op + " '" + range.getLowBoundedValue() + "'");
+                    }
+                    if (!range.isHighUnbounded()) {
+                        String op = range.isHighInclusive() ? "<=" : "<";
+                        conditions.add(column.getName() + " " + op + " '" + range.getHighBoundedValue() + "'");
+                    }
+                    if (!conditions.isEmpty()) {
+                        rangeFilters.add("(" + String.join(" AND ", conditions) + ")");
+                    }
+                }
+            }
+            
+            if (rangeFilters.isEmpty()) {
+                return null;
+            } else if (rangeFilters.size() == 1) {
+                return rangeFilters.get(0);
+            } else {
+                return "(" + String.join(" OR ", rangeFilters) + ")";
+            }
+        }
+        
+        return filter.toString();
     }
 
     /**

@@ -85,7 +85,11 @@ public class FlussMetadata implements ConnectorMetadata {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Interrupted while listing databases", e);
         } catch (ExecutionException e) {
-            throw new RuntimeException("Failed to list databases", e);
+            log.error(e, "Failed to list databases");
+            throw new RuntimeException("Failed to list databases: " + e.getMessage(), e);
+        } catch (Exception e) {
+            log.error(e, "Unexpected error while listing databases");
+            throw new RuntimeException("Unexpected error while listing databases", e);
         }
     }
 
@@ -107,6 +111,7 @@ public class FlussMetadata implements ConnectorMetadata {
                     }
                 } catch (Exception e) {
                     log.warn(e, "Failed to list tables in database: %s", database);
+                    // Continue with other databases instead of failing completely
                 }
             }
               
@@ -117,7 +122,11 @@ public class FlussMetadata implements ConnectorMetadata {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Interrupted while listing tables", e);
         } catch (ExecutionException e) {
-            throw new RuntimeException("Failed to list tables", e);
+            log.error(e, "Failed to list tables");
+            throw new RuntimeException("Failed to list tables: " + e.getMessage(), e);
+        } catch (Exception e) {
+            log.error(e, "Unexpected error while listing tables");
+            throw new RuntimeException("Unexpected error while listing tables", e);
         }
     }
 
@@ -144,7 +153,18 @@ public class FlussMetadata implements ConnectorMetadata {
             Thread.currentThread().interrupt();
             throw new RuntimeException("Interrupted while getting table handle", e);
         } catch (ExecutionException e) {
-            log.debug(e, "Table %s not found", tableName);
+            // Check if it's a table not found exception
+            Throwable cause = e.getCause();
+            if (cause != null && cause.getMessage() != null && 
+                (cause.getMessage().contains("TableNotExistException") || 
+                 cause.getMessage().contains("not exist"))) {
+                log.debug("Table not found: %s", tableName);
+                return null;
+            }
+            log.debug(e, "Table %s not found or error occurred", tableName);
+            return null;
+        } catch (Exception e) {
+            log.error(e, "Unexpected error while getting table handle for: %s", tableName);
             return null;
         }
     }

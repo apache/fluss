@@ -60,22 +60,33 @@ public class FlussClientManager {
             this.connection = ConnectionFactory.createConnection(flussConfig);
             log.info("Fluss connection created successfully");
         } catch (Exception e) {
-            log.error(e, "Failed to create Fluss connection");
+            log.error(e, "Failed to create Fluss connection to servers: %s", 
+                    connectorConfig.getBootstrapServers());
             throw new RuntimeException("Failed to create Fluss connection", e);
         }
     }
 
     /**
      * Get an Admin client for metadata operations.
+     * 
+     * <p>Note: The caller is responsible for closing the returned Admin client.
      */
     public Admin getAdmin() {
+        if (connection == null) {
+            throw new IllegalStateException("Fluss connection is not available");
+        }
         return connection.getAdmin();
     }
 
     /**
      * Get a Table client for data operations.
+     * 
+     * <p>Note: The caller is responsible for closing the returned Table client.
      */
     public Table getTable(TablePath tablePath) {
+        if (connection == null) {
+            throw new IllegalStateException("Fluss connection is not available");
+        }
         return connection.getTable(tablePath);
     }
 
@@ -150,6 +161,30 @@ public class FlussClientManager {
         flussConfig.setString(
                 "client.column.pruning.enabled",
                 String.valueOf(config.isColumnPruningEnabled()));
+        
+        // Predicate pushdown configuration
+        flussConfig.setString(
+                "client.predicate.pushdown.enabled",
+                String.valueOf(config.isPredicatePushdownEnabled()));
+        
+        // Limit pushdown configuration
+        flussConfig.setString(
+                "client.limit.pushdown.enabled",
+                String.valueOf(config.isLimitPushdownEnabled()));
+        
+        // Aggregate pushdown configuration
+        flussConfig.setString(
+                "client.aggregate.pushdown.enabled",
+                String.valueOf(config.isAggregatePushdownEnabled()));
+        
+        // Performance tuning configurations
+        flussConfig.setString(
+                "client.max.splits.per.second",
+                String.valueOf(config.getMaxSplitsPerSecond()));
+        
+        flussConfig.setString(
+                "client.max.splits.per.request",
+                String.valueOf(config.getMaxSplitsPerRequest()));
         
         return flussConfig;
     }
