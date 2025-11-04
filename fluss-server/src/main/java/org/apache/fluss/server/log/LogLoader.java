@@ -32,6 +32,7 @@ import org.slf4j.LoggerFactory;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -81,7 +82,7 @@ final class LogLoader {
      *
      * @return the offsets of the Log successfully loaded from disk
      */
-    public LoadedLogOffsets load() throws Exception {
+    public LoadedLogOffsets load() throws IOException {
         // load all the log and index files.
         logSegments.close();
         logSegments.clear();
@@ -130,7 +131,7 @@ final class LogLoader {
      * @throws LogSegmentOffsetOverflowException if the segment contains messages that cause index
      *     offset overflow
      */
-    private int recoverSegment(LogSegment segment) throws Exception {
+    private int recoverSegment(LogSegment segment) throws IOException {
         WriterStateManager writerStateManager =
                 new WriterStateManager(
                         logSegments.getTableBucket(),
@@ -264,7 +265,7 @@ final class LogLoader {
     }
 
     /** Loads segments from disk into the provided segments. */
-    private void loadSegmentFiles() throws Exception {
+    private void loadSegmentFiles() throws IOException {
         File[] sortedFiles = logTabletDir.listFiles();
         if (sortedFiles != null) {
             Arrays.sort(sortedFiles, Comparator.comparing(File::getName));
@@ -288,8 +289,8 @@ final class LogLoader {
 
                         try {
                             segment.sanityCheck(timeIndexFileNewlyCreated);
-                        } catch (Exception e) {
-                            if (e instanceof NoSuchFieldException) {
+                        } catch (IOException e) {
+                            if (e instanceof NoSuchFileException) {
                                 if (isCleanShutdown
                                         || segment.getBaseOffset() < recoveryPointCheckpoint) {
                                     LOG.error(
