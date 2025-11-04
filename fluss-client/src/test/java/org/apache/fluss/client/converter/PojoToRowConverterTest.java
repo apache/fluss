@@ -186,7 +186,7 @@ public class PojoToRowConverterTest {
         PojoToRowConverter<TimestampPojo> writer =
                 PojoToRowConverter.of(TimestampPojo.class, table, table);
 
-        // 123.456789 
+        // 123.456789
         LocalDateTime ldt = LocalDateTime.of(2025, 7, 23, 15, 1, 30, 123456789);
         Instant instant = Instant.parse("2025-07-23T15:01:30.123456789Z");
 
@@ -215,7 +215,7 @@ public class PojoToRowConverterTest {
         PojoToRowConverter<TimestampPojo> writer =
                 PojoToRowConverter.of(TimestampPojo.class, table, table);
 
-        // 123.456789 
+        // 123.456789
         LocalDateTime ldt = LocalDateTime.of(2025, 7, 23, 15, 1, 30, 123456789);
         Instant instant = Instant.parse("2025-07-23T15:01:30.123456789Z");
 
@@ -234,7 +234,7 @@ public class PojoToRowConverterTest {
 
     @Test
     public void testTimestampPrecision9() {
-        // Test with precision 9 nanoseconds 
+        // Test with precision 9 nanoseconds
         RowType table =
                 RowType.builder()
                         .field("timestampNtzField", DataTypes.TIMESTAMP(9))
@@ -244,14 +244,12 @@ public class PojoToRowConverterTest {
         PojoToRowConverter<TimestampPojo> writer =
                 PojoToRowConverter.of(TimestampPojo.class, table, table);
 
-        
         LocalDateTime ldt = LocalDateTime.of(2025, 7, 23, 15, 1, 30, 123456789);
         Instant instant = Instant.parse("2025-07-23T15:01:30.123456789Z");
 
         TimestampPojo pojo = new TimestampPojo(ldt, instant);
         GenericRow row = writer.toRow(pojo);
 
-        
         TimestampNtz expectedNtz = TimestampNtz.fromLocalDateTime(ldt);
         TimestampLtz expectedLtz = TimestampLtz.fromInstant(instant);
 
@@ -261,9 +259,9 @@ public class PojoToRowConverterTest {
 
     @Test
     public void testTimestampPrecisionRoundTrip() {
-        testRoundTripWithPrecision(3); 
-        testRoundTripWithPrecision(6); 
-        testRoundTripWithPrecision(9); 
+        testRoundTripWithPrecision(3);
+        testRoundTripWithPrecision(6);
+        testRoundTripWithPrecision(9);
     }
 
     private void testRoundTripWithPrecision(int precision) {
@@ -278,7 +276,6 @@ public class PojoToRowConverterTest {
         RowToPojoConverter<TimestampPojo> reader =
                 RowToPojoConverter.of(TimestampPojo.class, table, table);
 
-        
         LocalDateTime originalLdt = LocalDateTime.of(2025, 7, 23, 15, 1, 30, 123456789);
         Instant originalInstant = Instant.parse("2025-07-23T15:01:30.123456789Z");
 
@@ -288,7 +285,6 @@ public class PojoToRowConverterTest {
         GenericRow row = writer.toRow(originalPojo);
         TimestampPojo resultPojo = reader.fromRow(row);
 
-        
         LocalDateTime expectedLdt = truncateLocalDateTime(originalLdt, precision);
         Instant expectedInstant = truncateInstant(originalInstant, precision);
 
@@ -318,7 +314,7 @@ public class PojoToRowConverterTest {
         return Instant.ofEpochSecond(instant.getEpochSecond(), truncatedNanos);
     }
 
-    
+    /** POJO for testing timestamp precision. */
     public static class TimestampPojo {
         public LocalDateTime timestampNtzField;
         public Instant timestampLtzField;
