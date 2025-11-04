@@ -89,7 +89,7 @@ public class ServerConnectionTest {
     @BeforeEach
     void setUp() throws Exception {
         conf = new Configuration();
-        buildNettyServer(0);
+        buildNettyServer();
 
         eventLoopGroup = newEventLoopGroup(1, "fluss-netty-client-test");
         bootstrap =
@@ -196,21 +196,15 @@ public class ServerConnectionTest {
         connection.close().get();
     }
 
-    private void buildNettyServer(int serverId) throws Exception {
+    private void buildNettyServer() throws Exception {
         try (NetUtils.Port availablePort = getAvailablePort();
                 NetUtils.Port availablePort2 = getAvailablePort()) {
             serverNode =
                     new ServerNode(
-                            serverId,
-                            "localhost",
-                            availablePort.getPort(),
-                            ServerType.TABLET_SERVER);
+                            1, "localhost", availablePort.getPort(), ServerType.TABLET_SERVER);
             serverNode2 =
                     new ServerNode(
-                            serverId,
-                            "localhost",
-                            availablePort2.getPort(),
-                            ServerType.TABLET_SERVER);
+                            2, "localhost", availablePort2.getPort(), ServerType.TABLET_SERVER);
             service = new TestingTabletGatewayService();
             MetricGroup metricGroup = NOPMetricsGroup.newInstance();
             nettyServer =

@@ -21,16 +21,15 @@ import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.MetricNames;
 import org.apache.fluss.metrics.groups.AbstractMetricGroup;
 import org.apache.fluss.metrics.registry.MetricRegistry;
-import org.apache.fluss.metrics.registry.NOPMetricRegistry;
+import org.apache.fluss.utils.MapUtils;
 
-import java.util.HashSet;
 import java.util.Map;
-import java.util.Set;
 import java.util.function.ToLongFunction;
 
 /** The metric group for clients. */
 public class ClientMetricGroup extends AbstractMetricGroup {
-    private final Set<ConnectionMetricGroup> connectionMetricGroups;
+    private final Map<String, ConnectionMetrics> nodeToConnectionMetrics =
+            MapUtils.newConcurrentHashMap();
 
     private static final String NAME = "client";
 
@@ -39,40 +38,39 @@ public class ClientMetricGroup extends AbstractMetricGroup {
     public ClientMetricGroup(MetricRegistry registry, String clientId) {
         super(registry, new String[] {NAME}, null);
         this.clientId = clientId;
-        this.connectionMetricGroups = new HashSet<>();
         this.gauge(
                 MetricNames.CLIENT_REQUESTS_RATE_AVG,
-                () -> getMetricsAvg(ConnectionMetricGroup.Metrics::requestRate));
+                () -> getMetricsAvg(ConnectionMetrics.Metrics::requestRate));
         this.gauge(
                 MetricNames.CLIENT_REQUESTS_RATE_TOTAL,
-                () -> getMetricsSum(ConnectionMetricGroup.Metrics::requestRate));
+                () -> getMetricsSum(ConnectionMetrics.Metrics::requestRate));
         this.gauge(
                 MetricNames.CLIENT_RESPONSES_RATE_AVG,
-                () -> getMetricsAvg(ConnectionMetricGroup.Metrics::responseRate));
+                () -> getMetricsAvg(ConnectionMetrics.Metrics::responseRate));
         this.gauge(
                 MetricNames.CLIENT_RESPONSES_RATE_TOTAL,
-                () -> getMetricsSum(ConnectionMetricGroup.Metrics::responseRate));
+                () -> getMetricsSum(ConnectionMetrics.Metrics::responseRate));
         this.gauge(
                 MetricNames.CLIENT_BYTES_IN_RATE_AVG,
-                () -> getMetricsAvg(ConnectionMetricGroup.Metrics::byteInRate));
+                () -> getMetricsAvg(ConnectionMetrics.Metrics::byteInRate));
         this.gauge(
                 MetricNames.CLIENT_BYTES_IN_RATE_TOTAL,
-                () -> getMetricsSum(ConnectionMetricGroup.Metrics::byteInRate));
+                () -> getMetricsSum(ConnectionMetrics.Metrics::byteInRate));
         this.gauge(
                 MetricNames.CLIENT_BYTES_OUT_RATE_AVG,
-                () -> getMetricsAvg(ConnectionMetricGroup.Metrics::byteOutRate));
+                () -> getMetricsAvg(ConnectionMetrics.Metrics::byteOutRate));
         this.gauge(
                 MetricNames.CLIENT_BYTES_OUT_RATE_TOTAL,
-                () -> getMetricsSum(ConnectionMetricGroup.Metrics::byteOutRate));
+                () -> getMetricsSum(ConnectionMetrics.Metrics::byteOutRate));
         this.gauge(
                 MetricNames.CLIENT_REQUEST_LATENCY_MS_AVG,
-                () -> getMetricsAvg(ConnectionMetricGroup.Metrics::requestLatencyMs));
+                () -> getMetricsAvg(ConnectionMetrics.Metrics::requestLatencyMs));
         this.gauge(
                 MetricNames.CLIENT_REQUEST_LATENCY_MS_MAX,
-                () -> getMetricsMax(ConnectionMetricGroup.Metrics::requestLatencyMs));
+                () -> getMetricsMax(ConnectionMetrics.Metrics::requestLatencyMs));
         this.gauge(
                 MetricNames.CLIENT_REQUESTS_IN_FLIGHT_TOTAL,
-                () -> getMetricsSum(ConnectionMetricGroup.Metrics::requestsInFlight));
+                () -> getMetricsSum(ConnectionMetrics.Metrics::requestsInFlight));
     }
 
     @Override
@@ -89,20 +87,19 @@ public class ClientMetricGroup extends AbstractMetricGroup {
         return registry;
     }
 
-    public ConnectionMetricGroup createConnectionMetricGroup(String serverId) {
+    public ConnectionMetrics createConnectionMetricGroup(String serverId) {
         // Only expose aggregate metrics to reduce the reporter pressure.
-        ConnectionMetricGroup connectionMetricGroup =
-                new ConnectionMetricGroup(NOPMetricRegistry.INSTANCE, serverId, this);
-        connectionMetricGroups.add(connectionMetricGroup);
-        return connectionMetricGroup;
+        ConnectionMetrics connectionMetrics = new ConnectionMetrics(serverId, this);
+        nodeToConnectionMetrics.put(serverId, connectionMetrics);
+        return connectionMetrics;
     }
 
-    public void removeConnectionMetricGroup(ConnectionMetricGroup connectionMetricGroup) {
-        connectionMetricGroups.remove(connectionMetricGroup);
+    public void removeConnectionMetricGroup(String serverId, ConnectionMetrics connectionMetrics) {
+        nodeToConnectionMetrics.remove(serverId, connectionMetrics);
     }
 
-    private double getMetricsAvg(ToLongFunction<ConnectionMetricGroup.Metrics> metricGetter) {
-        return connectionMetricGroups.stream()
+    private double getMetricsAvg(ToLongFunction<ConnectionMetrics.Metrics> metricGetter) {
+        return nodeToConnectionMetrics.values().stream()
                 .flatMap(
                         connectionMetricGroup ->
                                 connectionMetricGroup.metricsByRequestName.values().stream())
@@ -111,8 +108,8 @@ public class ClientMetricGroup extends AbstractMetricGroup {
                 .orElse(0);
     }
 
-    private long getMetricsSum(ToLongFunction<ConnectionMetricGroup.Metrics> metricGetter) {
-        return connectionMetricGroups.stream()
+    private long getMetricsSum(ToLongFunction<ConnectionMetrics.Metrics> metricGetter) {
+        return nodeToConnectionMetrics.values().stream()
                 .flatMap(
                         connectionMetricGroup ->
                                 connectionMetricGroup.metricsByRequestName.values().stream())
@@ -120,8 +117,8 @@ public class ClientMetricGroup extends AbstractMetricGroup {
                 .sum();
     }
 
-    private long getMetricsMax(ToLongFunction<ConnectionMetricGroup.Metrics> metricGetter) {
-        return connectionMetricGroups.stream()
+    private long getMetricsMax(ToLongFunction<ConnectionMetrics.Metrics> metricGetter) {
+        return nodeToConnectionMetrics.values().stream()
                 .flatMap(
                         connectionMetricGroup ->
                                 connectionMetricGroup.metricsByRequestName.values().stream())
