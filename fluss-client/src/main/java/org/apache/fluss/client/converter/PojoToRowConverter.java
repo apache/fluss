@@ -23,6 +23,7 @@ import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.DataTypeChecks;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.RowType;
 
@@ -134,9 +135,15 @@ public final class PojoToRowConverter<T> {
             case TIME_WITHOUT_TIME_ZONE:
                 return (obj) -> convertTimeValue(prop, prop.read(obj));
             case TIMESTAMP_WITHOUT_TIME_ZONE:
-                return (obj) -> convertTimestampNtzValue(prop, prop.read(obj));
+                {
+                    final int precision = DataTypeChecks.getPrecision(fieldType);
+                    return (obj) -> convertTimestampNtzValue(precision, prop, prop.read(obj));
+                }
             case TIMESTAMP_WITH_LOCAL_TIME_ZONE:
-                return (obj) -> convertTimestampLtzValue(prop, prop.read(obj));
+                {
+                    final int precision = DataTypeChecks.getPrecision(fieldType);
+                    return (obj) -> convertTimestampLtzValue(precision, prop, prop.read(obj));
+                }
             default:
                 throw new UnsupportedOperationException(
                         String.format(
@@ -202,9 +209,17 @@ public final class PojoToRowConverter<T> {
         return (int) (t.toNanoOfDay() / 1_000_000);
     }
 
-    /** Converts a LocalDateTime POJO property to Fluss TimestampNtz. */
+    /**
+     * Converts a LocalDateTime POJO property to Fluss TimestampNtz, respecting the specified
+     * precision.
+     *
+     * @param precision the timestamp precision (0-9)
+     * @param prop the POJO property metadata
+     * @param v the value to convert
+     * @return TimestampNtz with precision applied, or null if v is null
+     */
     private static @Nullable TimestampNtz convertTimestampNtzValue(
-            PojoType.Property prop, @Nullable Object v) {
+            int precision, PojoType.Property prop, @Nullable Object v) {
         if (v == null) {
             return null;
         }
@@ -214,24 +229,82 @@ public final class PojoToRowConverter<T> {
                             "Field %s is not a LocalDateTime. Cannot convert to TimestampNtz.",
                             prop.name));
         }
-        return TimestampNtz.fromLocalDateTime((LocalDateTime) v);
+        LocalDateTime ldt = (LocalDateTime) v;
+        LocalDateTime truncated = truncateToTimestampPrecision(ldt, precision);
+        return TimestampNtz.fromLocalDateTime(truncated);
     }
 
-    /** Converts an Instant or OffsetDateTime POJO property to Fluss TimestampLtz (UTC based). */
+    /**
+     * Converts an Instant or OffsetDateTime POJO property to Fluss TimestampLtz (UTC based),
+     * respecting the specified precision.
+     *
+     * @param precision the timestamp precision (0-9)
+     * @param prop the POJO property metadata
+     * @param v the value to convert
+     * @return TimestampLtz with precision applied, or null if v is null
+     */
     private static @Nullable TimestampLtz convertTimestampLtzValue(
-            PojoType.Property prop, @Nullable Object v) {
+            int precision, PojoType.Property prop, @Nullable Object v) {
         if (v == null) {
             return null;
         }
+        Instant instant;
         if (v instanceof Instant) {
-            return TimestampLtz.fromInstant((Instant) v);
+            instant = (Instant) v;
         } else if (v instanceof OffsetDateTime) {
-            return TimestampLtz.fromInstant(((OffsetDateTime) v).toInstant());
+            instant = ((OffsetDateTime) v).toInstant();
+        } else {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Field %s is not an Instant or OffsetDateTime. Cannot convert to TimestampLtz.",
+                            prop.name));
         }
-        throw new IllegalArgumentException(
-                String.format(
-                        "Field %s is not an Instant or OffsetDateTime. Cannot convert to TimestampLtz.",
-                        prop.name));
+        Instant truncated = truncateToTimestampPrecision(instant, precision);
+        return TimestampLtz.fromInstant(truncated);
+    }
+
+    /**
+     * Truncates a LocalDateTime to the specified timestamp precision.
+     *
+     * @param ldt the LocalDateTime to truncate
+     * @param precision the precision (0-9)
+     * @return truncated LocalDateTime
+     */
+    private static LocalDateTime truncateToTimestampPrecision(LocalDateTime ldt, int precision) {
+        if (precision >= 9) {
+            return ldt;
+        }
+        int nanos = ldt.getNano();
+        int truncatedNanos = truncateNanos(nanos, precision);
+        return ldt.withNano(truncatedNanos);
+    }
+
+    /**
+     * Truncates an Instant to the specified timestamp precision.
+     *
+     * @param instant the Instant to truncate
+     * @param precision the precision (0-9)
+     * @return truncated Instant
+     */
+    private static Instant truncateToTimestampPrecision(Instant instant, int precision) {
+        if (precision >= 9) {
+            return instant;
+        }
+        int nanos = instant.getNano();
+        int truncatedNanos = truncateNanos(nanos, precision);
+        return Instant.ofEpochSecond(instant.getEpochSecond(), truncatedNanos);
+    }
+
+    /**
+     * Truncates nanoseconds to the specified precision.
+     *
+     * @param nanos the nanoseconds value (0-999,999,999)
+     * @param precision the precision (0-9)
+     * @return truncated nanoseconds
+     */
+    private static int truncateNanos(int nanos, int precision) {
+        int divisor = (int) Math.pow(10, 9 - precision);
+        return (nanos / divisor) * divisor;
     }
 
     private interface FieldToRow {
