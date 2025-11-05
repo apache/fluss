@@ -25,6 +25,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.FlinkConnectorOptions;
 import org.apache.fluss.flink.lake.split.LakeSnapshotAndFlussLogSplit;
 import org.apache.fluss.flink.lake.split.LakeSnapshotSplit;
+import org.apache.fluss.flink.source.event.BacklogFinishEvent;
 import org.apache.fluss.flink.source.event.PartitionBucketsUnsubscribedEvent;
 import org.apache.fluss.flink.source.event.PartitionsRemovedEvent;
 import org.apache.fluss.flink.source.reader.LeaseContext;
@@ -779,6 +780,52 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
         }
     }
 
+    @Test
+    void testReportBacklogStatus() throws Throwable {
+        long tableId = createTable(DEFAULT_TABLE_PATH, DEFAULT_PK_TABLE_DESCRIPTOR);
+        int numSubtasks = 3;
+
+        try (MockBacklogSplitEnumeratorContext context =
+                new MockBacklogSplitEnumeratorContext(numSubtasks)) {
+            FlinkSourceEnumerator enumerator =
+                    new FlinkSourceEnumerator(
+                            DEFAULT_TABLE_PATH,
+                            flussConf,
+                            true,
+                            false,
+                            context,
+                            OffsetsInitializer.full(),
+                            DEFAULT_SCAN_PARTITION_DISCOVERY_INTERVAL_MS,
+                            streaming,
+                            null,
+                            null);
+            enumerator.start();
+            assertThat(context.isProcessingBacklogCalled()).isTrue();
+
+            // Register readers
+            for (int i = 0; i < numSubtasks; i++) {
+                registerReader(context, enumerator, i);
+            }
+
+            context.runNextOneTimeCallable();
+
+            // Simulate BacklogFinishEvent from reader
+            TableBucket bucket0 = new TableBucket(tableId, 0);
+            TableBucket bucket1 = new TableBucket(tableId, 1);
+            TableBucket bucket2 = new TableBucket(tableId, 2);
+
+            BacklogFinishEvent event0 = new BacklogFinishEvent(bucket0);
+            BacklogFinishEvent event1 = new BacklogFinishEvent(bucket1);
+            BacklogFinishEvent event2 = new BacklogFinishEvent(bucket2);
+
+            enumerator.handleSourceEvent(0, event0);
+            enumerator.handleSourceEvent(1, event1);
+            enumerator.handleSourceEvent(2, event2);
+
+            assertThat(context.isProcessingBacklogCalled()).isFalse();
+        }
+    }
+
     // ---------------------
     private void registerReader(
             MockSplitEnumeratorContext<SourceSplitBase> context,
@@ -981,5 +1028,24 @@ class FlinkSourceEnumeratorTest extends FlinkTestBase {
             upsertWriter.flush();
         }
         return bucketRows;
+    }
+
+    private static class MockBacklogSplitEnumeratorContext
+            extends MockSplitEnumeratorContext<SourceSplitBase> {
+
+        private volatile boolean isProcessingBacklogCalled;
+
+        public MockBacklogSplitEnumeratorContext(int parallelism) {
+            super(parallelism);
+        }
+
+        @Override
+        public void setIsProcessingBacklog(boolean isProcessingBacklog) {
+            this.isProcessingBacklogCalled = isProcessingBacklog;
+        }
+
+        public boolean isProcessingBacklogCalled() {
+            return isProcessingBacklogCalled;
+        }
     }
 }
