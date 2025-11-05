@@ -745,6 +745,41 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
     }
 
     /**
+     * lookup table with one pk, two join condition and one of the join condition is constant value.
+     */
+    @Test
+    void testLookupWithFilterPushDown() throws Exception {
+        String dim =
+                prepareDimTableAndSourceTable(
+                        Caching.DISABLE_CACHE, false, new String[] {"id"}, null, "p_date");
+
+        Map<Long, String> partitionNameById =
+                waitUntilPartitions(
+                        FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(),
+                        TablePath.of(DEFAULT_DB, dim));
+
+        // pick the first partition to do filter
+        String filteredPartition = partitionNameById.values().stream().sorted().iterator().next();
+
+        String dimJoinQuery =
+                String.format(
+                        "SELECT a, h.id, h.name, h.address FROM src "
+                                + " LEFT JOIN %s FOR SYSTEM_TIME AS OF src.proc as h "
+                                + " ON src.a = h.id and src.p_date = h.p_date and h.p_date <> '%s'",
+                        dim, filteredPartition);
+
+        CloseableIterator<Row> collected = tEnv.executeSql(dimJoinQuery).collect();
+        List<String> expected =
+                Arrays.asList(
+                        "+I[1, null, null, null]",
+                        "+I[2, null, null, null]",
+                        "+I[3, null, null, null]",
+                        "+I[10, null, null, null]",
+                        "+I[1, null, null, null]");
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    /**
      * lookup table with one pk, 3 join condition on dim fields, 1st for variable non-pk, 2nd for
      * pk, 3rd for constant value.
      */
