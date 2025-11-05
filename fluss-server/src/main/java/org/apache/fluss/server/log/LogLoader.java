@@ -195,6 +195,8 @@ final class LogLoader {
                                 logSegments.getTableBucket(),
                                 startOffset);
                         truncatedBytes = segment.truncateTo(startOffset);
+                    } else {
+                        throw e;
                     }
                 }
 

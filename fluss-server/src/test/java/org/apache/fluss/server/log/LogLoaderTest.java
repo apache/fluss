@@ -143,8 +143,8 @@ final class LogLoaderTest extends LogTestBase {
         }
         assertThat(numRecords).isEqualTo(logTablet.localLogEndOffset());
         for (int i = 0; i < numRecords; i++) {
-            assertThat(i)
-                    .isEqualTo(logTablet.lookupOffsetForTimestamp(clock.milliseconds() + i * 10));
+            assertThat(logTablet.lookupOffsetForTimestamp(clock.milliseconds() + i * 10))
+                    .isEqualTo(i);
         }
         logTablet.close();
     }
@@ -221,8 +221,8 @@ final class LogLoaderTest extends LogTestBase {
         assertThat(logTablet.logSegments().get(0).offsetIndex().entries() > 0).isTrue();
         assertThat(logTablet.logSegments().get(0).timeIndex().entries() > 0).isTrue();
         for (int i = 0; i < numRecords; i++) {
-            assertThat(i)
-                    .isEqualTo(logTablet.lookupOffsetForTimestamp(clock.milliseconds() + i * 10));
+            assertThat(logTablet.lookupOffsetForTimestamp(clock.milliseconds() + i * 10))
+                    .isEqualTo(i);
         }
         logTablet.close();
     }
