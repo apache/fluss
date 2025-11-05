@@ -302,6 +302,8 @@ final class LogLoader {
                                             segment.getFileLogRecords().file().getAbsoluteFile());
                                 }
                                 recoverSegment(segment);
+                            } else {
+                                throw e;
                             }
                         }
                         logSegments.add(segment);
