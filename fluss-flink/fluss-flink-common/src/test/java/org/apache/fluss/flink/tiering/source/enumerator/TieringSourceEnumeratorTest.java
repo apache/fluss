@@ -97,7 +97,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             context.getSplitsAssignmentSequence()
                     .forEach(a -> a.assignment().values().forEach(actualAssignment::addAll));
 
-            // no spilt assignment for empty buckets
+            // no split assignment for empty buckets
             assertThat(actualAssignment).isEmpty();
 
             // mock finished tiered this round, check second round

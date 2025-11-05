@@ -244,7 +244,7 @@ public class TieringSplitGenerator {
             @Nullable Long lastCommittedBucketOffset,
             long latestBucketOffset) {
         if (latestBucketOffset <= 0) {
-            LOG.info(
+            LOG.debug(
                     "The latestBucketOffset {} is equals or less than 0, skip generating split for bucket {}",
                     latestBucketOffset,
                     tableBucket);
@@ -304,7 +304,7 @@ public class TieringSplitGenerator {
             @Nullable Long lastCommittedBucketOffset,
             long latestBucketOffset) {
         if (latestBucketOffset <= 0) {
-            LOG.info(
+            LOG.debug(
                     "The latestBucketOffset {} is equals or less than 0, skip generating split for bucket {}",
                     latestBucketOffset,
                     tableBucket);
