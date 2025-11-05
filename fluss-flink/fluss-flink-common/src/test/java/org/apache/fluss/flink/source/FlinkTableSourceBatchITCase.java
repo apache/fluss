@@ -91,8 +91,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                 .contains(
                         String.format(
                                 "TableSourceScan(table=[[testcatalog, defaultdb, %s, "
-                                        + "filter=[and(=(id, 1), =(name, _UTF-16LE'name1':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))], "
-                                        + "project=[address]]], fields=[address])",
+                                        + "filter=[and(=(id, 1), =(name, _UTF-16LE'name1':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))]]], "
+                                        + "fields=[id, address, name])",
                                 tableName));
         CloseableIterator<Row> collected = tEnv.executeSql(query).collect();
         List<String> expected = Collections.singletonList("+I[1, address1, name1]");
@@ -108,8 +108,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                 .contains(
                         String.format(
                                 "TableSourceScan(table=[[testcatalog, defaultdb, %s, "
-                                        + "filter=[and(=(id, 1), =(name, _UTF-16LE'name1':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))], "
-                                        + "project=[address]]], fields=[address])",
+                                        + "filter=[and(=(id, 1), =(name, _UTF-16LE'name1':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))]]], "
+                                        + "fields=[id, address, name])",
                                 tableName));
         CloseableIterator<Row> collected = tEnv.executeSql(query).collect();
         List<String> expected = Collections.singletonList("+I[1, address1, name1]");
@@ -126,7 +126,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                         String.format(
                                 "TableSourceScan(table=[[testcatalog, defaultdb, %s, "
                                         + "filter=[=(id, 1)], "
-                                        + "project=[name]]], fields=[name])",
+                                        + "project=[id, name]]], fields=[id, name])",
                                 tableName));
         CloseableIterator<Row> collected = tEnv.executeSql(query).collect();
         List<String> expected = Collections.singletonList("+I[1, name1]");
@@ -149,8 +149,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                 .contains(
                         String.format(
                                 "TableSourceScan(table=[[testcatalog, defaultdb, %s, "
-                                        + "filter=[and(=(id, 1), =(dt, _UTF-16LE'%s':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))], "
-                                        + "project=[address, name]]], fields=[address, name])\n",
+                                        + "filter=[and(=(id, 1), =(dt, _UTF-16LE'%s':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))]]], "
+                                        + "fields=[id, address, name, dt])\n",
                                 tableName, partition1));
 
         CloseableIterator<Row> collected = tEnv.executeSql(query).collect();

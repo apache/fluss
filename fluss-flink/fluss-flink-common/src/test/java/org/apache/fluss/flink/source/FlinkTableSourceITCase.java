@@ -994,8 +994,8 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         assertThat(plan)
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table, "
-                                + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
-                                + "project=[a, b]]], fields=[a, b])");
+                                + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")]]], "
+                                + "fields=[a, b, c])");
 
         org.apache.flink.util.CloseableIterator<Row> rowIter =
                 tEnv.executeSql("select * from partitioned_table where c ='2025'").collect();
@@ -1048,10 +1048,11 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                                 + "=(p_string, _UTF-16LE'hello':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")), "
                                 + "=(p_float, 1.25E1:FLOAT)), =(p_double, 7.88E0:DOUBLE)), =(p_date, 2025-10-12)), "
                                 + "=(p_time, 12:55:00)), =(p_ts_ntz, 2025-10-12 12:55:00.001:TIMESTAMP(6))), "
-                                + "=(p_ts_ltz, 1970-01-01 00:00:04.001:TIMESTAMP_WITH_LOCAL_TIME_ZONE(6))), NOT(p_bool))], "
-                                + "project=[id, p_bool, p_int]]], fields=[id, p_bool, p_int])")
-                // all filter conditions should be pushed down
-                .doesNotContain("where=");
+                                + "=(p_ts_ltz, 1970-01-01 00:00:04.001:TIMESTAMP_WITH_LOCAL_TIME_ZONE(6))), NOT(p_bool))]]], "
+                                + "fields=[id, p_bool, p_int, p_bigint, p_bytes, p_string, p_float, p_double, p_date, p_time, p_ts_ntz, p_ts_ltz])")
+                // although all filter conditions are pushed down into source, they are still
+                // retained in the plan
+                .contains("where=");
 
         List<String> expectedRowValues =
                 Collections.singletonList(
@@ -1085,8 +1086,8 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         assertThat(plan)
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, multi_partitioned_table, "
-                                + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
-                                + "project=[a, b, d]]], fields=[a, b, d])");
+                                + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")]]], "
+                                + "fields=[a, b, c, d])");
 
         // test partition key prefix match
         // This test requires dynamically discovering newly created partitions, so
@@ -1115,8 +1116,8 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, multi_partitioned_table, "
                                 + "filter=[and(=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"), "
-                                + "=(d, _UTF-16LE'3':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))], "
-                                + "project=[a, b]]], fields=[a, b])");
+                                + "=(d, _UTF-16LE'3':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))]]], "
+                                + "fields=[a, b, c, d])");
 
         // test all partition key match
         rowIter =
@@ -1163,7 +1164,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table, "
                                 + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
-                                + "project=[a, d]]], fields=[a, d])");
+                                + "project=[a, c, d]]], fields=[a, c, d])");
 
         // test column filter、partition filter and flink runtime filter
         org.apache.flink.util.CloseableIterator<Row> rowIter =
@@ -1180,7 +1181,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
                 .contains(
                         "TableSourceScan(table=[[testcatalog, defaultdb, combined_filters_table, "
                                 + "filter=[=(c, _UTF-16LE'2025':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\")], "
-                                + "project=[a, d]]], fields=[a, d])");
+                                + "project=[a, c, d]]], fields=[a, c, d])");
 
         // test column filter、partition filter and flink runtime filter
         rowIter =
@@ -1401,7 +1402,7 @@ abstract class FlinkTableSourceITCase extends AbstractTestBase {
         String plan = tEnv.explainSql(query);
         assertThat(plan)
                 .contains(
-                        "Calc(select=[3 AS a, b, c, d], where=[((a = 3) AND LIKE(b, '%v3%'))])\n"
+                        "Calc(select=[3 AS a, b, c, d], where=[((a = 3) AND ((c = '2026') OR LIKE(d, '%1%')) AND LIKE(b, '%v3%'))])\n"
                                 + "+- TableSourceScan(table=[[testcatalog, defaultdb, partitioned_table_complex, filter=[OR(=(c, _UTF-16LE'2026'), LIKE(d, _UTF-16LE'%1%'))]]], fields=[a, b, c, d])");
 
         org.apache.flink.util.CloseableIterator<Row> rowIter = tEnv.executeSql(query).collect();
