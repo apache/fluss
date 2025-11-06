@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.coordinator;
 
+import org.apache.fluss.cluster.TabletServerInfo;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.DatabaseAlreadyExistException;
@@ -24,7 +25,9 @@ import org.apache.fluss.exception.DatabaseNotEmptyException;
 import org.apache.fluss.exception.DatabaseNotExistException;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.InvalidAlterTableException;
+import org.apache.fluss.exception.InvalidBucketsException;
 import org.apache.fluss.exception.InvalidPartitionException;
+import org.apache.fluss.exception.InvalidTableException;
 import org.apache.fluss.exception.LakeTableAlreadyExistException;
 import org.apache.fluss.exception.PartitionAlreadyExistsException;
 import org.apache.fluss.exception.PartitionNotExistException;
@@ -46,7 +49,9 @@ import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePartition;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.entity.TablePropertyChanges;
+import org.apache.fluss.server.metadata.CoordinatorMetadataCache;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.data.BucketAssignment;
 import org.apache.fluss.server.zk.data.DatabaseRegistration;
 import org.apache.fluss.server.zk.data.PartitionAssignment;
 import org.apache.fluss.server.zk.data.TableAssignment;
@@ -69,7 +74,9 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.Callable;
+import java.util.stream.IntStream;
 
+import static org.apache.fluss.server.utils.TableAssignmentUtils.generateAssignment;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateAlterTableProperties;
 import static org.apache.fluss.server.utils.TableDescriptorValidation.validateTableDescriptor;
 
@@ -329,6 +336,7 @@ public class MetadataManager {
             @Nullable LakeCatalog lakeCatalog,
             @Nullable DataLakeFormat dataLakeFormat,
             LakeTableTieringManager lakeTableTieringManager,
+            CoordinatorMetadataCache metadataCache,
             LakeCatalog.Context lakeCatalogContext) {
         try {
             // it throws TableNotExistException if the table or database not exists
@@ -339,10 +347,7 @@ public class MetadataManager {
             TableInfo tableInfo = tableReg.toTableInfo(tablePath, schemaInfo);
 
             // validate the changes
-            validateAlterTableProperties(
-                    tableInfo,
-                    tablePropertyChanges.tableKeysToChange(),
-                    tablePropertyChanges.customKeysToChange());
+            validateAlterTableProperties(tableInfo, tablePropertyChanges);
 
             TableDescriptor tableDescriptor = tableInfo.toTableDescriptor();
             TableDescriptor newDescriptor =
@@ -356,16 +361,24 @@ public class MetadataManager {
                 // enable datalake for the table
                 preAlterTableProperties(
                         tablePath,
+                        tableInfo,
                         tableDescriptor,
                         newDescriptor,
                         tableChanges,
                         lakeCatalog,
                         dataLakeFormat,
+                        metadataCache,
                         lakeCatalogContext);
+
                 // update the table to zk
                 TableRegistration updatedTableRegistration =
-                        tableReg.newProperties(
-                                newDescriptor.getProperties(), newDescriptor.getCustomProperties());
+                        tableReg.newBucketCountAndProperties(
+                                newDescriptor
+                                        .getTableDistribution()
+                                        .flatMap(TableDescriptor.TableDistribution::getBucketCount)
+                                        .orElse(null),
+                                newDescriptor.getProperties(),
+                                newDescriptor.getCustomProperties());
                 zookeeperClient.updateTable(tablePath, updatedTableRegistration);
 
                 // post alter table properties, e.g. add the table to lake table tiering manager if
@@ -396,11 +409,13 @@ public class MetadataManager {
 
     private void preAlterTableProperties(
             TablePath tablePath,
+            TableInfo tableInfo,
             TableDescriptor tableDescriptor,
             TableDescriptor newDescriptor,
             List<TableChange> tableChanges,
             LakeCatalog lakeCatalog,
             DataLakeFormat dataLakeFormat,
+            CoordinatorMetadataCache metadataCache,
             LakeCatalog.Context lakeCatalogContext) {
         if (isDataLakeEnabled(newDescriptor)) {
             if (lakeCatalog == null) {
@@ -445,6 +460,108 @@ public class MetadataManager {
                 }
             }
         }
+
+        // alter table bucket
+        if (isTableBucketChange(tableDescriptor, newDescriptor)) {
+            alterTableBucket(
+                    tableInfo,
+                    newDescriptor
+                            .getTableDistribution()
+                            .flatMap(TableDescriptor.TableDistribution::getBucketCount)
+                            .orElse(0),
+                    metadataCache);
+        }
+    }
+
+    private void alterTableBucket(
+            TableInfo table, int newNumBuckets, CoordinatorMetadataCache metadataCache) {
+        if (newNumBuckets <= 0) {
+            return;
+        }
+
+        if (!table.getBucketKeys().isEmpty() || !table.getPrimaryKeys().isEmpty()) {
+            throw new InvalidTableException(
+                    "Alter table bucket is not supported for Log table with bucket keys or PrimaryKey Table now.");
+        }
+
+        if (table.isPartitioned()) {
+            // Currently, for partitioned table we only support alter bucket number for all
+            // partition together.
+            // We may support alter bucket number for each partition separately in the future.
+
+            Collection<Long> partitionIds = listPartitions(table.getTablePath()).values();
+            for (Long partitionId : partitionIds) {
+                PartitionAssignment existingAssignment = getPartitionAssignment(partitionId);
+                Optional<TableAssignment> newBucketsAssignmentOp =
+                        generateNewTableAssignment(
+                                table, newNumBuckets, existingAssignment, metadataCache);
+                newBucketsAssignmentOp.ifPresent(
+                        tableAssignment ->
+                                alterPartitionAssignment(
+                                        table.getTableId(),
+                                        partitionId,
+                                        existingAssignment,
+                                        tableAssignment));
+            }
+        } else {
+            TableAssignment existingAssignment = getTableAssignment(table.getTableId());
+            Optional<TableAssignment> newBucketsAssignmentOp =
+                    generateNewTableAssignment(
+                            table, newNumBuckets, existingAssignment, metadataCache);
+            newBucketsAssignmentOp.ifPresent(
+                    tableAssignment ->
+                            alterTableAssignment(
+                                    table.getTableId(), existingAssignment, tableAssignment));
+        }
+    }
+
+    private Optional<TableAssignment> generateNewTableAssignment(
+            TableInfo table,
+            int newNumBuckets,
+            TableAssignment existingAssignment,
+            CoordinatorMetadataCache metadataCache) {
+        int oldNumBuckets = table.getNumBuckets();
+        int numBucketsIncrement = newNumBuckets - oldNumBuckets;
+
+        // Only support bucket expansion
+        if (numBucketsIncrement > 0) {
+            int replicaFactor = table.getTableConfig().getReplicationFactor();
+            TabletServerInfo[] servers = metadataCache.getLiveServers();
+
+            BucketAssignment existingAssignmentBucket0 = existingAssignment.getBucketAssignment(0);
+            if (existingAssignmentBucket0 == null) {
+                throw new InvalidTableException(
+                        "Unexpected existing bucket assignment for table "
+                                + table.getTablePath()
+                                + ", bucket id 0 is missing. Assignment: "
+                                + existingAssignment);
+            }
+
+            int startIndex = getStartIndex(servers, existingAssignmentBucket0);
+            TableAssignment newBucketsAssignment =
+                    generateAssignment(
+                            numBucketsIncrement, replicaFactor, servers, startIndex, oldNumBuckets);
+            return Optional.of(newBucketsAssignment);
+        } else if (numBucketsIncrement < 0) {
+            throw new InvalidBucketsException(
+                    String.format(
+                            "Table currently has %d buckets, which is higher than the requested %d.",
+                            oldNumBuckets, newNumBuckets));
+        }
+        // Do nothing if bucket number not change
+
+        return Optional.empty();
+    }
+
+    private int getStartIndex(
+            TabletServerInfo[] servers, BucketAssignment existingAssignmentBucket0) {
+        int headId = existingAssignmentBucket0.getReplicas().get(0);
+        int index =
+                IntStream.range(0, servers.length)
+                        .filter(i -> servers[i].getId() >= headId)
+                        .findFirst()
+                        .orElse(-1);
+        return Math.max(0, index);
     }
 
     private void postAlterTableProperties(
@@ -480,6 +597,9 @@ public class MetadataManager {
      */
     private @Nullable TableDescriptor getUpdatedTableDescriptor(
             TableDescriptor tableDescriptor, TablePropertyChanges tablePropertyChanges) {
+        // new bucket num
+        Integer bucketNum = tablePropertyChanges.getBucketNum();
+
         Map<String, String> newProperties = new HashMap<>(tableDescriptor.getProperties());
         Map<String, String> newCustomProperties =
                 new HashMap<>(tableDescriptor.getCustomProperties());
@@ -498,11 +618,47 @@ public class MetadataManager {
         }
 
         // no properties change happen
-        if (newProperties.equals(tableDescriptor.getProperties())
+        if (bucketNum == null
+                && newProperties.equals(tableDescriptor.getProperties())
                 && newCustomProperties.equals(tableDescriptor.getCustomProperties())) {
             return null;
         } else {
-            return tableDescriptor.withProperties(newProperties, newCustomProperties);
+            return tableDescriptor.withBucketCountAndProperties(
+                    bucketNum, newProperties, newCustomProperties);
+        }
+    }
+
+    public void alterTableAssignment(
+            long tableId, TableAssignment existingAssignment, TableAssignment newAssignment) {
+        try {
+            Map<Integer, BucketAssignment> combinedAssignment = new HashMap<>();
+            combinedAssignment.putAll(existingAssignment.getBucketAssignments());
+            combinedAssignment.putAll(newAssignment.getBucketAssignments());
+            zookeeperClient.updateTableAssignment(tableId, new TableAssignment(combinedAssignment));
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    "Failed to update table assignment for table id " + tableId, e);
+        }
+    }
+
+    public void alterPartitionAssignment(
+            long tableId,
+            long partitionId,
+            TableAssignment existingAssignment,
+            TableAssignment newAssignment) {
+        try {
+            Map<Integer, BucketAssignment> combinedAssignment = new HashMap<>();
+            combinedAssignment.putAll(existingAssignment.getBucketAssignments());
+            combinedAssignment.putAll(newAssignment.getBucketAssignments());
+            zookeeperClient.updatePartitionAssignment(
+                    partitionId, new PartitionAssignment(tableId, combinedAssignment));
+        } catch (Exception e) {
+            throw new FlussRuntimeException(
+                    "Failed to update partition assignment for table id "
+                            + tableId
+                            + " partition id "
+                            + partitionId,
+                    e);
         }
     }
 
@@ -529,6 +685,11 @@ public class MetadataManager {
                 iterator.remove();
             }
         }
+    }
+
+    private boolean isTableBucketChange(
+            TableDescriptor tableDescriptor, TableDescriptor newTableDescriptor) {
+        return !tableDescriptor.getBucketCount().equals(newTableDescriptor.getBucketCount());
     }
 
     public TableInfo getTable(TablePath tablePath) throws TableNotExistException {
@@ -597,6 +758,32 @@ public class MetadataManager {
             throw new TableNotExistException("Table '" + tablePath + "' does not exist.");
         }
         return optionalTable.get();
+    }
+
+    public TableAssignment getTableAssignment(long tableId) {
+        Optional<TableAssignment> optionalTableAssignment;
+        try {
+            optionalTableAssignment = zookeeperClient.getTableAssignment(tableId);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        if (!optionalTableAssignment.isPresent()) {
+            throw new TableNotExistException("Table '" + tableId + "' does not exist.");
+        }
+        return optionalTableAssignment.get();
+    }
+
+    public PartitionAssignment getPartitionAssignment(long partitionId) {
+        Optional<PartitionAssignment> optionalPartitionAssignment;
+        try {
+            optionalPartitionAssignment = zookeeperClient.getPartitionAssignment(partitionId);
+        } catch (Exception e) {
+            throw new RuntimeException(e);
+        }
+        if (!optionalPartitionAssignment.isPresent()) {
+            throw new PartitionNotExistException("Partition '" + partitionId + "' does not exist.");
+        }
+        return optionalPartitionAssignment.get();
     }
 
     public SchemaInfo getLatestSchema(TablePath tablePath) throws SchemaNotExistException {

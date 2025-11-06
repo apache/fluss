@@ -356,7 +356,13 @@ public class ClientRpcMessageUtils {
 
     public static PbAlterConfig toPbAlterConfigs(TableChange tableChange) {
         PbAlterConfig info = new PbAlterConfig();
-        if (tableChange instanceof TableChange.SetOption) {
+        if (tableChange instanceof TableChange.BucketNumOption) {
+            TableChange.BucketNumOption bucketNumOption = (TableChange.BucketNumOption) tableChange;
+            // use empty string for BUCKET_NUM
+            info.setConfigKey("");
+            info.setConfigValue(String.valueOf(bucketNumOption.getBucketNum()));
+            info.setOpType(AlterConfigOpType.BUCKET_NUM.value());
+        } else if (tableChange instanceof TableChange.SetOption) {
             TableChange.SetOption setOption = (TableChange.SetOption) tableChange;
             info.setConfigKey(setOption.getKey());
             info.setConfigValue(setOption.getValue());
