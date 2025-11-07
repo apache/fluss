@@ -19,6 +19,7 @@ package org.apache.fluss.server.kv.prewrite;
 
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.memory.MemorySegment;
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.server.kv.KvBatchWriter;
@@ -29,7 +30,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.NotThreadSafe;
 
 import java.io.IOException;
-import java.util.Arrays;
+import java.nio.ByteBuffer;
 import java.util.Base64;
 import java.util.HashMap;
 import java.util.Iterator;
@@ -86,7 +87,9 @@ import static org.apache.fluss.utils.UnsafeUtils.BYTE_ARRAY_BASE_OFFSET;
  */
 @NotThreadSafe
 public class KvPreWriteBuffer implements AutoCloseable {
+    private final TableBucket tb;
     private final KvBatchWriter kvBatchWriter;
+    private final KvPreWriteBufferMemoryPool kvPreWriteBufferMemoryPool;
 
     // a mapping from the key to the kv-entry
     private final Map<Key, KvEntry> kvEntryMap = new HashMap<>();
@@ -104,8 +107,13 @@ public class KvPreWriteBuffer implements AutoCloseable {
     private long maxLogSequenceNumber = -1;
 
     public KvPreWriteBuffer(
-            KvBatchWriter kvBatchWriter, TabletServerMetricGroup serverMetricGroup) {
+            TableBucket tb,
+            KvBatchWriter kvBatchWriter,
+            KvPreWriteBufferMemoryPool kvPreWriteBufferMemoryPool,
+            TabletServerMetricGroup serverMetricGroup) {
+        this.tb = tb;
         this.kvBatchWriter = kvBatchWriter;
+        this.kvPreWriteBufferMemoryPool = kvPreWriteBufferMemoryPool;
 
         flushCount = serverMetricGroup.kvFlushCount();
         flushLatencyHistogram = serverMetricGroup.kvFlushLatencyHistogram();
@@ -128,7 +136,13 @@ public class KvPreWriteBuffer implements AutoCloseable {
      * @param logSequenceNumber the log sequence number for the put operation
      */
     public void put(Key key, @Nullable byte[] value, long logSequenceNumber) {
-        update(key, Value.of(value), logSequenceNumber);
+        if (value == null) {
+            update(key, Value.of(null), logSequenceNumber);
+        } else {
+            // allocate a new byte buffer from memory pool.
+            ByteBuffer newBuffer = kvPreWriteBufferMemoryPool.allocate(tb, value);
+            update(key, Value.of(newBuffer), logSequenceNumber);
+        }
     }
 
     private void update(Key key, Value value, long lsn) {
@@ -189,7 +203,13 @@ public class KvPreWriteBuffer implements AutoCloseable {
                 break;
             }
             descIter.remove();
+
             boolean removed = kvEntryMap.remove(entry.getKey(), entry);
+            Value value = entry.getValue();
+            if (value.value != null) {
+                kvPreWriteBufferMemoryPool.release(tb, value.value);
+            }
+
             // if the latest entry is removed, we need to rollback the previous entry to the map
             if (removed && entry.previousEntry != null) {
                 kvEntryMap.put(entry.getKey(), entry.previousEntry);
@@ -223,7 +243,7 @@ public class KvPreWriteBuffer implements AutoCloseable {
             Value value = entry.getValue();
             if (value.value != null) {
                 flushedCount += 1;
-                kvBatchWriter.put(entry.getKey().key, value.value);
+                kvBatchWriter.put(entry.getKey().key, toByteArray(value.value));
             } else {
                 flushedCount += 1;
                 kvBatchWriter.delete(entry.getKey().key);
@@ -233,6 +253,10 @@ public class KvPreWriteBuffer implements AutoCloseable {
             // can remove it from the map. Although it's not a must to remove from the map,
             // we remove it to reduce the memory usage
             kvEntryMap.remove(entry.getKey(), entry);
+            if (value.value != null) {
+                // release the buffer to buffer pool
+                kvPreWriteBufferMemoryPool.release(tb, value.value);
+            }
         }
         // flush to underlying kv tablet
         if (flushedCount > 0) {
@@ -423,19 +447,19 @@ public class KvPreWriteBuffer implements AutoCloseable {
      * {@link KvEntry} with the value is for key deletion.
      */
     public static class Value {
-        private final @Nullable byte[] value;
+        private final @Nullable ByteBuffer value;
 
-        private Value(@Nullable byte[] value) {
+        private Value(@Nullable ByteBuffer value) {
             this.value = value;
         }
 
-        public static Value of(@Nullable byte[] value) {
+        public static Value of(@Nullable ByteBuffer value) {
             return new Value(value);
         }
 
         /** Return the value. Return null if marked as deleted. */
         @Nullable
-        public byte[] get() {
+        public ByteBuffer get() {
             return value;
         }
 
@@ -448,17 +472,27 @@ public class KvPreWriteBuffer implements AutoCloseable {
                 return false;
             }
             Value value1 = (Value) o;
-            return Arrays.equals(value, value1.value);
+            return Objects.equals(value, value1.value);
         }
 
         @Override
         public int hashCode() {
-            return Arrays.hashCode(value);
+            return Objects.hash(value);
+        }
+    }
+
+    public static byte[] toByteArray(ByteBuffer buffer) {
+        if (buffer == null) {
+            return null;
         }
 
-        @Override
-        public String toString() {
-            return value == null ? "null" : "[" + Base64.getEncoder().encodeToString(value) + "]";
+        int originalPosition = buffer.position();
+        try {
+            byte[] bytes = new byte[buffer.remaining()];
+            buffer.get(bytes);
+            return bytes;
+        } finally {
+            buffer.position(originalPosition);
         }
     }
 
