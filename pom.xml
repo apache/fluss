@@ -1006,6 +1006,8 @@
                             </importOrder>
 
                             <removeUnusedImports/>
+
+                            <toggleOffOn />
                         </java>
                     </configuration>
                     <executions>
