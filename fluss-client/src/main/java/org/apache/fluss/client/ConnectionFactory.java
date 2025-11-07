@@ -22,13 +22,16 @@ import org.apache.fluss.client.admin.Admin;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.metrics.registry.MetricRegistry;
 
+// spotless:off
 /**
  * A non-instantiable class that manages creation of {@link Connection}s. Managing the lifecycle of
- * the {@link Connection}s to the cluster is the responsibility of the caller. From a {@link
- * Connection}, {@link Admin} implementations are retrieved with {@link Connection#getAdmin()}.
+ * the {@link Connection}s to the cluster is the responsibility of the caller.
+ * From a {@link Connection}, {@link Admin} implementations are retrieved with
+ * {@link Connection#getAdmin()}.
  *
  * @since 0.1
  */
+// spotless:on
 @PublicEvolving
 public class ConnectionFactory {
 
