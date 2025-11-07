@@ -47,6 +47,7 @@ import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.KvEntry;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Value;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBufferMemoryPool;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.LogAppendInfo;
@@ -70,6 +71,7 @@ import org.junit.jupiter.params.provider.ValueSource;
 import javax.annotation.Nullable;
 
 import java.io.File;
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
@@ -191,7 +193,8 @@ class KvTabletTest {
                 rowMerger,
                 DEFAULT_COMPRESSION,
                 schemaGetter,
-                tableConf.getChangelogImage());
+                tableConf.getChangelogImage(),
+                new KvPreWriteBufferMemoryPool(10 * 1024 * 1024, 1024 * 1024));
     }
 
     @Test
@@ -1238,6 +1241,6 @@ class KvTabletTest {
     }
 
     private Value valueOf(BinaryRow row) {
-        return Value.of(ValueEncoder.encodeValue(schemaId, row));
+        return Value.of(ByteBuffer.wrap(ValueEncoder.encodeValue(schemaId, row)));
     }
 }

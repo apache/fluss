@@ -47,6 +47,7 @@ import org.apache.fluss.row.arrow.ArrowWriterProvider;
 import org.apache.fluss.row.encode.ValueDecoder;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
+import org.apache.fluss.server.kv.prewrite.KvPreWriteBufferMemoryPool;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKv;
 import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.rocksdb.RocksDBResourceContainer;
@@ -86,6 +87,7 @@ import java.util.concurrent.Executor;
 import java.util.concurrent.locks.ReadWriteLock;
 import java.util.concurrent.locks.ReentrantReadWriteLock;
 
+import static org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.toByteArray;
 import static org.apache.fluss.utils.concurrent.LockUtils.inReadLock;
 import static org.apache.fluss.utils.concurrent.LockUtils.inWriteLock;
 
@@ -113,6 +115,7 @@ public final class KvTablet {
     // defines how to merge rows on the same primary key
     private final RowMerger rowMerger;
     private final ArrowCompressionInfo arrowCompressionInfo;
+    private final KvPreWriteBufferMemoryPool kvPreWriteBufferMemoryPool;
 
     private final SchemaGetter schemaGetter;
 
@@ -143,14 +146,21 @@ public final class KvTablet {
             RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo,
             SchemaGetter schemaGetter,
-            ChangelogImage changelogImage) {
+            ChangelogImage changelogImage,
+            KvPreWriteBufferMemoryPool kvPreWriteBufferMemoryPool) {
         this.physicalPath = physicalPath;
         this.tableBucket = tableBucket;
         this.logTablet = logTablet;
         this.kvTabletDir = kvTabletDir;
         this.rocksDBKv = rocksDBKv;
         this.writeBatchSize = writeBatchSize;
-        this.kvPreWriteBuffer = new KvPreWriteBuffer(createKvBatchWriter(), serverMetricGroup);
+        this.kvPreWriteBufferMemoryPool = kvPreWriteBufferMemoryPool;
+        this.kvPreWriteBuffer =
+                new KvPreWriteBuffer(
+                        tableBucket,
+                        createKvBatchWriter(),
+                        kvPreWriteBufferMemoryPool,
+                        serverMetricGroup);
         this.logFormat = logFormat;
         this.arrowWriterProvider = new ArrowWriterPool(arrowBufferAllocator);
         this.memorySegmentPool = memorySegmentPool;
@@ -172,7 +182,8 @@ public final class KvTablet {
             RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo,
             SchemaGetter schemaGetter,
-            ChangelogImage changelogImage)
+            ChangelogImage changelogImage,
+            KvPreWriteBufferMemoryPool kvPreWriteBufferMemoryPool)
             throws IOException {
         Tuple2<PhysicalTablePath, TableBucket> tablePathAndBucket =
                 FlussPaths.parseTabletDir(kvTabletDir);
@@ -189,7 +200,8 @@ public final class KvTablet {
                 rowMerger,
                 arrowCompressionInfo,
                 schemaGetter,
-                changelogImage);
+                changelogImage,
+                kvPreWriteBufferMemoryPool);
     }
 
     public static KvTablet create(
@@ -205,7 +217,8 @@ public final class KvTablet {
             RowMerger rowMerger,
             ArrowCompressionInfo arrowCompressionInfo,
             SchemaGetter schemaGetter,
-            ChangelogImage changelogImage)
+            ChangelogImage changelogImage,
+            KvPreWriteBufferMemoryPool kvPreWriteBufferMemoryPool)
             throws IOException {
         RocksDBKv kv = buildRocksDBKv(serverConf, kvTabletDir);
         return new KvTablet(
@@ -223,7 +236,8 @@ public final class KvTablet {
                 rowMerger,
                 arrowCompressionInfo,
                 schemaGetter,
-                changelogImage);
+                changelogImage,
+                kvPreWriteBufferMemoryPool);
     }
 
     private static RocksDBKv buildRocksDBKv(Configuration configuration, File kvDir)
@@ -261,6 +275,10 @@ public final class KvTablet {
 
     public long getFlushedLogOffset() {
         return flushedLogOffset;
+    }
+
+    public long getPreWriteBufferMemoryPoolUsage() {
+        return kvPreWriteBufferMemoryPool.getPerBucketUsage(tableBucket);
     }
 
     /**
@@ -610,7 +628,9 @@ public final class KvTablet {
         if (value == null) {
             return rocksDBKv.get(key.get());
         }
-        return value.get();
+
+        // TODO maybe we can use ByteBuffer to avoid copy
+        return toByteArray(value.get());
     }
 
     public List<byte[]> multiGet(List<byte[]> keys) throws IOException {
