@@ -38,6 +38,8 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.server.replica.Replica;
 import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.core.type.TypeReference;
+import org.apache.fluss.shaded.jackson2.com.fasterxml.jackson.databind.ObjectMapper;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.flink.api.common.RuntimeExecutionMode;
@@ -65,8 +67,10 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.apache.fluss.flink.tiering.source.TieringSourceOptions.POLL_TIERING_TABLE_INTERVAL;
+import static org.apache.fluss.lake.committer.BucketOffset.FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY;
 import static org.apache.fluss.testutils.DataTestUtils.row;
 import static org.apache.fluss.testutils.common.CommonTestUtils.retry;
 import static org.apache.fluss.testutils.common.CommonTestUtils.waitUntil;
@@ -107,6 +111,9 @@ public abstract class FlinkPaimonTieringTestBase {
 
     public static void beforeAll(Configuration conf) {
         clientConf = conf;
+        clientConf.set(
+                ConfigOptions.CLIENT_WRITER_BUCKET_NO_KEY_ASSIGNER,
+                ConfigOptions.NoKeyAssigner.ROUND_ROBIN);
         conn = ConnectionFactory.createConnection(clientConf);
         admin = conn.getAdmin();
         paimonCatalog = getPaimonCatalog();
@@ -117,6 +124,14 @@ public abstract class FlinkPaimonTieringTestBase {
         execEnv = StreamExecutionEnvironment.getExecutionEnvironment();
         execEnv.setRuntimeMode(RuntimeExecutionMode.STREAMING);
         execEnv.setParallelism(2);
+    }
+
+    protected static void reconnect() throws Exception {
+        admin.close();
+        conn.close();
+
+        conn = ConnectionFactory.createConnection(clientConf);
+        admin = conn.getAdmin();
     }
 
     protected JobClient buildTieringJob(StreamExecutionEnvironment execEnv) throws Exception {
@@ -257,7 +272,7 @@ public abstract class FlinkPaimonTieringTestBase {
 
     protected long createLogTable(TablePath tablePath, int bucketNum) throws Exception {
         return createLogTable(
-                tablePath, bucketNum, false, Collections.emptyMap(), Collections.emptyMap());
+                tablePath, bucketNum, true, false, Collections.emptyMap(), Collections.emptyMap());
     }
 
     protected long createLogTable(
@@ -267,14 +282,29 @@ public abstract class FlinkPaimonTieringTestBase {
             Map<String, String> properties,
             Map<String, String> customProperties)
             throws Exception {
+        return createLogTable(
+                tablePath, bucketNum, true, isPartitioned, properties, customProperties);
+    }
+
+    protected long createLogTable(
+            TablePath tablePath,
+            int bucketNum,
+            boolean withBucketKey,
+            boolean isPartitioned,
+            Map<String, String> properties,
+            Map<String, String> customProperties)
+            throws Exception {
         Schema.Builder schemaBuilder =
                 Schema.newBuilder().column("a", DataTypes.INT()).column("b", DataTypes.STRING());
 
         TableDescriptor.Builder tableBuilder =
                 TableDescriptor.builder()
-                        .distributedBy(bucketNum, "a")
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true")
                         .property(ConfigOptions.TABLE_DATALAKE_FRESHNESS, Duration.ofMillis(500));
+
+        if (withBucketKey) {
+            tableBuilder.distributedBy(bucketNum, "a");
+        }
 
         if (isPartitioned) {
             schemaBuilder.column("c", DataTypes.STRING());
@@ -421,6 +451,23 @@ public abstract class FlinkPaimonTieringTestBase {
                 });
     }
 
+    protected void assertReplicaStatus(Set<TableBucket> tbSet, long expectedLogEndOffset) {
+        retry(
+                Duration.ofMinutes(1),
+                () -> {
+                    long sumLogEndOffset = 0;
+                    for (TableBucket tb : tbSet) {
+                        Replica replica = getLeaderReplica(tb);
+                        // datalake snapshot id should be updated
+                        assertThat(replica.getLogTablet().getLakeTableSnapshotId())
+                                .isGreaterThanOrEqualTo(0);
+                        assertThat(replica.getLakeLogEndOffset()).isGreaterThan(0);
+                        sumLogEndOffset += replica.getLakeLogEndOffset();
+                    }
+                    assertThat(sumLogEndOffset).isEqualTo(expectedLogEndOffset);
+                });
+    }
+
     protected void waitUntilBucketSynced(
             TablePath tablePath, long tableId, int bucketCount, boolean isPartition) {
         if (isPartition) {
@@ -485,6 +532,29 @@ public abstract class FlinkPaimonTieringTestBase {
                                                 tablePath.getTableName()));
         Snapshot snapshot = table.snapshotManager().latestSnapshot();
         assertThat(snapshot).isNotNull();
-        assertThat(snapshot.properties()).isEqualTo(expectedProperties);
+        // assertThat(snapshot.properties()).isEqualTo(expectedProperties);
+        checkProperties(snapshot.properties(), expectedProperties);
+    }
+
+    private void checkProperties(Map<String, String> actual, Map<String, String> expected)
+            throws Exception {
+        assertThat(actual.size()).isEqualTo(expected.size());
+        for (Map.Entry<String, String> entry : expected.entrySet()) {
+            if (entry.getKey().equals(FLUSS_LAKE_SNAP_BUCKET_OFFSET_PROPERTY)) {
+                ObjectMapper mapper = new ObjectMapper();
+                List<Map<String, String>> actualMapList =
+                        mapper.readValue(
+                                actual.get(entry.getKey()),
+                                new TypeReference<List<Map<String, String>>>() {});
+                List<Map<String, String>> expectedMapList =
+                        mapper.readValue(
+                                entry.getValue(),
+                                new TypeReference<List<Map<String, String>>>() {});
+                assertThat(actualMapList).hasSameSizeAs(expectedMapList);
+                assertThat(actualMapList).containsAll(expectedMapList);
+            } else {
+                assertThat(actual.get(entry.getKey())).isEqualTo(entry.getValue());
+            }
+        }
     }
 }

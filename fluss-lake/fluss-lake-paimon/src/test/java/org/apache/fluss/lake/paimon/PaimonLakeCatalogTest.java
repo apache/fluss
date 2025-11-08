@@ -33,6 +33,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
 import java.util.Arrays;
+import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -51,16 +52,16 @@ class PaimonLakeCatalogTest {
     }
 
     @Test
-    void testAlterTableConfigs() throws Exception {
-        String database = "test_alter_table_configs_db";
-        String tableName = "test_alter_table_configs_table";
+    void testAlterTableProperties() throws Exception {
+        String database = "test_alter_table_properties_db";
+        String tableName = "test_alter_table_properties_table";
         TablePath tablePath = TablePath.of(database, tableName);
         Identifier identifier = Identifier.create(database, tableName);
         createTable(database, tableName);
         Table table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
 
         // value should be null for key
-        assertThat(table.options().get("key")).isEqualTo(null);
+        assertThat(table.options().get("fluss.key")).isEqualTo(null);
 
         // set the value for key
         flussPaimonCatalog.alterTable(
@@ -81,6 +82,15 @@ class PaimonLakeCatalogTest {
         table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
         // we have reset the value for key
         assertThat(table.options().get("fluss.key")).isEqualTo(null);
+
+        // test for bucket.num
+        assertThat(table.options().get("fluss.bucket.num")).isEqualTo(null);
+        flussPaimonCatalog.alterTable(
+                tablePath,
+                Collections.singletonList(TableChange.bucketNum(3)),
+                new TestingLakeCatalogContext());
+        table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
+        assertThat(table.options().get("fluss.bucket.num")).isEqualTo("3");
     }
 
     private void createTable(String database, String tableName) {
