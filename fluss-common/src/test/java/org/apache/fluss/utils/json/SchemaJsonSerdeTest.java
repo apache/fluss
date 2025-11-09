@@ -61,6 +61,18 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
                     .withComment("c is third column")
                     .build();
 
+    static final Schema SCHEMA_4 =
+            Schema.newBuilder()
+                    .column("a", DataTypes.INT())
+                    .withComment("a is first column")
+                    .column("b", DataTypes.INT())
+                    .withComment("b is second column")
+                    .column("c", DataTypes.CHAR(10))
+                    .withComment("c is third column")
+                    .primaryKey("a", "c")
+                    .enableAutoIncrement("b")
+                    .build();
+
     static final String SCHEMA_JSON_0 =
             "{\"version\":1,\"columns\":[{\"name\":\"a\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"a is first column\"},{\"name\":\"b\",\"data_type\":{\"type\":\"STRING\"},\"comment\":\"b is second column\"},{\"name\":\"c\",\"data_type\":{\"type\":\"CHAR\",\"nullable\":false,\"length\":10},\"comment\":\"c is third column\"}],\"primary_key\":[\"a\",\"c\"]}";
 
@@ -71,17 +83,22 @@ public class SchemaJsonSerdeTest extends JsonSerdeTestBase<Schema> {
     static final String SCHEMA_JSON_3 =
             "{\"version\":1,\"columns\":[{\"name\":\"a\",\"data_type\":{\"type\":\"BIGINT\"},\"comment\":\"a is first column\"},{\"name\":\"b\",\"data_type\":{\"type\":\"STRING\"},\"comment\":\"b is second column\"},{\"name\":\"c\",\"data_type\":{\"type\":\"TIMESTAMP_WITHOUT_TIME_ZONE\",\"precision\":6},\"comment\":\"c is third column\"}]}";
 
+    static final String SCHEMA_JSON_4 =
+            "{\"version\":1,\"columns\":[{\"name\":\"a\",\"data_type\":{\"type\":\"INTEGER\",\"nullable\":false},\"comment\":\"a is first column\"},{\"name\":\"b\",\"data_type\":{\"type\":\"INTEGER\"},\"auto_increment\":true,\"comment\":\"b is second column\"},{\"name\":\"c\",\"data_type\":{\"type\":\"CHAR\",\"nullable\":false,\"length\":10},\"comment\":\"c is third column\"}],\"primary_key\":[\"a\",\"c\"]}";
+
     SchemaJsonSerdeTest() {
         super(SchemaJsonSerde.INSTANCE);
     }
 
     @Override
     protected Schema[] createObjects() {
-        return new Schema[] {SCHEMA_0, SCHEMA_1, SCHEMA_2, SCHEMA_3};
+        return new Schema[] {SCHEMA_0, SCHEMA_1, SCHEMA_2, SCHEMA_3, SCHEMA_4};
     }
 
     @Override
     protected String[] expectedJsons() {
-        return new String[] {SCHEMA_JSON_0, SCHEMA_JSON_1, SCHEMA_JSON_1, SCHEMA_JSON_3};
+        return new String[] {
+            SCHEMA_JSON_0, SCHEMA_JSON_1, SCHEMA_JSON_1, SCHEMA_JSON_3, SCHEMA_JSON_4
+        };
     }
 }

@@ -34,6 +34,7 @@ public class ColumnJsonSerde
     static final String NAME = "name";
     static final String DATA_TYPE = "data_type";
     static final String COMMENT = "comment";
+    static final String AUTO_INCREMENT = "auto_increment";
 
     @Override
     public void serialize(Schema.Column column, JsonGenerator generator) throws IOException {
@@ -43,6 +44,10 @@ public class ColumnJsonSerde
         generator.writeStringField(NAME, column.getName());
         generator.writeFieldName(DATA_TYPE);
         DataTypeJsonSerde.INSTANCE.serialize(column.getDataType(), generator);
+
+        if (column.getAutoIncrement()) {
+            generator.writeBooleanField(AUTO_INCREMENT, true);
+        }
         if (column.getComment().isPresent()) {
             generator.writeStringField(COMMENT, column.getComment().get());
         }
@@ -55,7 +60,12 @@ public class ColumnJsonSerde
         String columnName = node.required(NAME).asText();
 
         DataType dataType = DataTypeJsonSerde.INSTANCE.deserialize(node.get(DATA_TYPE));
-        Schema.Column column = new Schema.Column(columnName, dataType);
+        Schema.Column column;
+        if (node.has(AUTO_INCREMENT)) {
+            column = new Schema.Column(columnName, dataType, node.get(AUTO_INCREMENT).asBoolean());
+        } else {
+            column = new Schema.Column(columnName, dataType);
+        }
         if (node.hasNonNull(COMMENT)) {
             column = column.withComment(node.get(COMMENT).asText());
         }
