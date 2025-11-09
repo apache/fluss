@@ -19,6 +19,7 @@
 package org.apache.fluss.lake.iceberg.flink;
 
 import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.flink.catalog.FlinkCatalog;
 import org.apache.fluss.lake.iceberg.testutils.FlinkIcebergTieringTestBase;
 
 import org.apache.flink.configuration.Configuration;
@@ -28,6 +29,8 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 
 import javax.annotation.Nullable;
+
+import java.util.Collections;
 
 import static org.apache.fluss.flink.FlinkConnectorOptions.BOOTSTRAP_SERVERS;
 
@@ -39,6 +42,7 @@ class FlinkUnionReadTestBase extends FlinkIcebergTieringTestBase {
     protected static final int DEFAULT_BUCKET_NUM = 1;
     StreamTableEnvironment batchTEnv;
     StreamTableEnvironment streamTEnv;
+    FlinkCatalog flinkCatalog;
 
     @BeforeAll
     protected static void beforeAll() {
@@ -59,6 +63,7 @@ class FlinkUnionReadTestBase extends FlinkIcebergTieringTestBase {
         batchTEnv.executeSql("use catalog " + CATALOG_NAME);
         batchTEnv.executeSql("use " + DEFAULT_DB);
         buildStreamTEnv(null);
+        buildFlinkCatalog();
     }
 
     protected StreamTableEnvironment buildStreamTEnv(@Nullable String savepointPath) {
@@ -78,5 +83,17 @@ class FlinkUnionReadTestBase extends FlinkIcebergTieringTestBase {
         streamTEnv.executeSql("use catalog " + CATALOG_NAME);
         streamTEnv.executeSql("use " + DEFAULT_DB);
         return streamTEnv;
+    }
+
+    protected void buildFlinkCatalog() {
+        String bootstrapServers = String.join(",", clientConf.get(ConfigOptions.BOOTSTRAP_SERVERS));
+        flinkCatalog =
+                new FlinkCatalog(
+                        CATALOG_NAME,
+                        DEFAULT_DB,
+                        bootstrapServers,
+                        Thread.currentThread().getContextClassLoader(),
+                        Collections.emptyMap());
+        flinkCatalog.open();
     }
 }
