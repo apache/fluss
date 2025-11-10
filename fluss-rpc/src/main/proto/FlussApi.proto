@@ -332,6 +332,8 @@ message NotifyKvSnapshotOffsetRequest {
   required int32 bucket_id = 3;
   required int32 coordinator_epoch = 4;
   required int64 min_retain_offset = 5;
+  optional int64 snapshot_id = 6;
+  optional string metadata_file_path = 7;
 }
 
 message NotifyKvSnapshotOffsetResponse {
@@ -782,6 +784,7 @@ message PbNotifyLeaderAndIsrReqForBucket {
   repeated int32 replicas = 5 [packed = true];
   repeated int32 isr = 6 [packed = true];
   required int32 bucket_epoch = 7;
+  repeated int32 standby_replicas = 8 [packed = true];
 }
 
 message PbNotifyLeaderAndIsrRespForBucket {

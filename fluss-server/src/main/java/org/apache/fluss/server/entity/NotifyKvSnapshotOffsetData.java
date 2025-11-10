@@ -20,17 +20,27 @@ package org.apache.fluss.server.entity;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.rpc.messages.NotifyRemoteLogOffsetsRequest;
 
+import javax.annotation.Nullable;
+
 /** The data for request {@link NotifyRemoteLogOffsetsRequest}. */
 public class NotifyKvSnapshotOffsetData {
     private final TableBucket tableBucket;
     private final long minRetainOffset;
     private final int coordinatorEpoch;
+    private final @Nullable Long snapshotId;
+    private final @Nullable String metadataFilePath;
 
     public NotifyKvSnapshotOffsetData(
-            TableBucket tableBucket, long minRetainOffset, int coordinatorEpoch) {
+            TableBucket tableBucket,
+            long minRetainOffset,
+            int coordinatorEpoch,
+            @Nullable Long snapshotId,
+            @Nullable String metadataFilePath) {
         this.tableBucket = tableBucket;
         this.minRetainOffset = minRetainOffset;
         this.coordinatorEpoch = coordinatorEpoch;
+        this.snapshotId = snapshotId;
+        this.metadataFilePath = metadataFilePath;
     }
 
     public TableBucket getTableBucket() {
@@ -45,6 +55,16 @@ public class NotifyKvSnapshotOffsetData {
         return coordinatorEpoch;
     }
 
+    @Nullable
+    public Long getSnapshotId() {
+        return snapshotId;
+    }
+
+    @Nullable
+    public String getMetadataFilePath() {
+        return metadataFilePath;
+    }
+
     @Override
     public String toString() {
         return "NotifyRemoteLogOffsetsData{"
@@ -54,6 +74,10 @@ public class NotifyKvSnapshotOffsetData {
                 + minRetainOffset
                 + ", coordinatorEpoch="
                 + coordinatorEpoch
+                + ", snapshotId="
+                + snapshotId
+                + ", metadataFilePath="
+                + metadataFilePath
                 + '}';
     }
 }

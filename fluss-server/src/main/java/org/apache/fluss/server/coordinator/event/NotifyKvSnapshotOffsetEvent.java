@@ -19,23 +19,25 @@
 package org.apache.fluss.server.coordinator.event;
 
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 
 /** An event for notify kv snapshot offset to local tablet servers. */
 public class NotifyKvSnapshotOffsetEvent implements CoordinatorEvent {
 
     private final TableBucket tableBucket;
-    private final long logOffset;
+    private final CompletedSnapshotHandle completedSnapshotHandle;
 
-    public NotifyKvSnapshotOffsetEvent(TableBucket tableBucket, long logOffset) {
+    public NotifyKvSnapshotOffsetEvent(
+            TableBucket tableBucket, CompletedSnapshotHandle completedSnapshotHandle) {
         this.tableBucket = tableBucket;
-        this.logOffset = logOffset;
+        this.completedSnapshotHandle = completedSnapshotHandle;
     }
 
     public TableBucket getTableBucket() {
         return tableBucket;
     }
 
-    public long getLogOffset() {
-        return logOffset;
+    public CompletedSnapshotHandle getCompletedSnapshotHandle() {
+        return completedSnapshotHandle;
     }
 }

@@ -21,6 +21,7 @@ import org.apache.fluss.server.coordinator.statemachine.TableBucketStateMachine.
 import org.apache.fluss.server.zk.data.LeaderAndIsr;
 
 import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
@@ -36,23 +37,39 @@ public class ReplicaLeaderElectionAlgorithms {
      * @param assignments the assignments
      * @param aliveReplicas the alive replicas
      * @param coordinatorEpoch the coordinator epoch
+     * @param isPrimaryKeyTable whether this table bucket is primary key table
      * @return the election result
      */
     public static Optional<ElectionResult> initReplicaLeaderElection(
-            List<Integer> assignments, List<Integer> aliveReplicas, int coordinatorEpoch) {
-        // currently, we always use the first replica in assignment, which also in aliveReplicas and
-        // isr as the leader replica.
-        for (int assignment : assignments) {
-            if (aliveReplicas.contains(assignment)) {
-                return Optional.of(
-                        new ElectionResult(
-                                aliveReplicas,
-                                new LeaderAndIsr(
-                                        assignment, 0, aliveReplicas, coordinatorEpoch, 0)));
-            }
+            List<Integer> assignments,
+            List<Integer> aliveReplicas,
+            int coordinatorEpoch,
+            boolean isPrimaryKeyTable) {
+        // First we will filter out the assignment list to only contain the alive replicas.
+        List<Integer> availableReplicas =
+                assignments.stream().filter(aliveReplicas::contains).collect(Collectors.toList());
+
+        // If the assignment list is empty, we return empty.
+        if (availableReplicas.isEmpty()) {
+            return Optional.empty();
         }
 
-        return Optional.empty();
+        //  Then we will use the first replica in assignment as the leader replica.
+        int leader = availableReplicas.get(0);
+
+        // If this table is primaryKey table, we will use the second replica in assignment as the
+        // standby if exists.
+        List<Integer> standbyReplica = new ArrayList<>();
+        if (isPrimaryKeyTable) {
+            if (availableReplicas.size() > 1) {
+                standbyReplica.add(availableReplicas.get(1));
+            }
+        }
+        return Optional.of(
+                new ElectionResult(
+                        aliveReplicas,
+                        new LeaderAndIsr(
+                                leader, 0, aliveReplicas, standbyReplica, coordinatorEpoch, 0)));
     }
 
     /**
@@ -61,22 +78,73 @@ public class ReplicaLeaderElectionAlgorithms {
      * @param assignments the assignments
      * @param aliveReplicas the alive replicas
      * @param leaderAndIsr the original leaderAndIsr
+     * @param isPrimaryKeyTable whether this table bucket is primary key table
      * @return the election result
      */
     public static Optional<ElectionResult> defaultReplicaLeaderElection(
-            List<Integer> assignments, List<Integer> aliveReplicas, LeaderAndIsr leaderAndIsr) {
-        // currently, we always use the first replica in assignment, which also in aliveReplicas and
-        // isr as the leader replica.
+            List<Integer> assignments,
+            List<Integer> aliveReplicas,
+            LeaderAndIsr leaderAndIsr,
+            boolean isPrimaryKeyTable) {
         List<Integer> isr = leaderAndIsr.isr();
-        for (int assignment : assignments) {
-            if (aliveReplicas.contains(assignment) && isr.contains(assignment)) {
-                return Optional.of(
-                        new ElectionResult(
-                                aliveReplicas, leaderAndIsr.newLeaderAndIsr(assignment, isr)));
-            }
+        // First we will filter out the assignment list to only contain the alive replicas and isr.
+        List<Integer> availableReplicas =
+                assignments.stream()
+                        .filter(replica -> aliveReplicas.contains(replica) && isr.contains(replica))
+                        .collect(Collectors.toList());
+
+        // If the assignment list is empty, we return empty.
+        if (availableReplicas.isEmpty()) {
+            return Optional.empty();
         }
 
-        return Optional.empty();
+        // For log table, we will use the first replica in assignment as the leader replica.
+        if (!isPrimaryKeyTable) {
+            int leader = availableReplicas.get(0);
+            return Optional.of(
+                    new ElectionResult(
+                            aliveReplicas,
+                            leaderAndIsr.newLeaderAndIsr(leader, isr, Collections.emptyList())));
+        }
+
+        int currentStandby =
+                leaderAndIsr.standbyReplicas().isEmpty()
+                        ? -1
+                        : leaderAndIsr.standbyReplicas().get(0);
+        int newLeader;
+        int newStandby = -1;
+        if (currentStandby != -1 && availableReplicas.contains(currentStandby)) {
+            // Standby exists and is available: promote it to leader.
+            newLeader = currentStandby;
+            // Find a new standby for the candidate replica (not leader).
+            List<Integer> candidatesForStandby =
+                    availableReplicas.stream()
+                            .filter(replica -> replica != newLeader)
+                            .collect(Collectors.toList());
+            if (!candidatesForStandby.isEmpty()) {
+                newStandby = candidatesForStandby.get(0);
+            }
+        } else {
+            // Standby does not exist or is not available: promote the first replica in assignment
+            // to leader.
+            newLeader = availableReplicas.get(0);
+            // Find a new standby for the candidate replica (not leader).
+            List<Integer> candidatesForStandby =
+                    availableReplicas.stream()
+                            .filter(replica -> replica != newLeader)
+                            .collect(Collectors.toList());
+            if (!candidatesForStandby.isEmpty()) {
+                newStandby = candidatesForStandby.get(0);
+            }
+        }
+        LeaderAndIsr newLeaderAndIsr =
+                leaderAndIsr.newLeaderAndIsr(
+                        newLeader,
+                        isr,
+                        newStandby == -1
+                                ? Collections.emptyList()
+                                : Collections.singletonList(newStandby));
+        return Optional.of(new ElectionResult(aliveReplicas, newLeaderAndIsr));
     }
 
     /**
@@ -92,25 +160,74 @@ public class ReplicaLeaderElectionAlgorithms {
             List<Integer> assignments,
             List<Integer> aliveReplicas,
             LeaderAndIsr leaderAndIsr,
-            Set<Integer> shutdownTabletServers) {
+            Set<Integer> shutdownTabletServers,
+            boolean isPrimaryKeyTable) {
         List<Integer> originIsr = leaderAndIsr.isr();
         Set<Integer> isrSet = new HashSet<>(originIsr);
-        for (Integer id : assignments) {
-            if (aliveReplicas.contains(id)
-                    && isrSet.contains(id)
-                    && !shutdownTabletServers.contains(id)) {
-                Set<Integer> newAliveReplicas = new HashSet<>(aliveReplicas);
-                newAliveReplicas.removeAll(shutdownTabletServers);
-                List<Integer> newIsr =
-                        originIsr.stream()
-                                .filter(replica -> !shutdownTabletServers.contains(replica))
-                                .collect(Collectors.toList());
-                return Optional.of(
-                        new ElectionResult(
-                                new ArrayList<>(newAliveReplicas),
-                                leaderAndIsr.newLeaderAndIsr(id, newIsr)));
+        // First we will filter out the assignment list to only contain the alive replicas, isr, and
+        // not is shutdownTabletServers set.
+        List<Integer> availableReplicas =
+                assignments.stream()
+                        .filter(
+                                replica ->
+                                        aliveReplicas.contains(replica)
+                                                && isrSet.contains(replica)
+                                                && !shutdownTabletServers.contains(replica))
+                        .collect(Collectors.toList());
+        // If the assignment list is empty, we return empty.
+        if (availableReplicas.isEmpty()) {
+            return Optional.empty();
+        }
+
+        int currentStandby =
+                leaderAndIsr.standbyReplicas().isEmpty()
+                        ? -1
+                        : leaderAndIsr.standbyReplicas().get(0);
+        int newLeader;
+        int newStandby = -1;
+        if (!isPrimaryKeyTable) {
+            // For log table, we will use the first replica in availableReplicas as the leader
+            // replica.
+            newLeader = availableReplicas.get(0);
+        } else if (currentStandby != -1 && availableReplicas.contains(currentStandby)) {
+            // For pk table, Standby exists and is available: promote it to leader.
+            newLeader = currentStandby;
+            // Find a new standby for the candidate replica (not leader).
+            List<Integer> candidatesForStandby =
+                    availableReplicas.stream()
+                            .filter(replica -> replica != newLeader)
+                            .collect(Collectors.toList());
+            if (!candidatesForStandby.isEmpty()) {
+                newStandby = candidatesForStandby.get(0);
+            }
+        } else {
+            // Standby does not exist or is not available: promote the first replica in assignment
+            // to leader.
+            newLeader = availableReplicas.get(0);
+            // Find a new standby for the candidate replica (not leader).
+            List<Integer> candidatesForStandby =
+                    availableReplicas.stream()
+                            .filter(replica -> replica != newLeader)
+                            .collect(Collectors.toList());
+            if (!candidatesForStandby.isEmpty()) {
+                newStandby = candidatesForStandby.get(0);
             }
         }
-        return Optional.empty();
+
+        Set<Integer> newAliveReplicas = new HashSet<>(aliveReplicas);
+        newAliveReplicas.removeAll(shutdownTabletServers);
+        List<Integer> newIsr =
+                originIsr.stream()
+                        .filter(replica -> !shutdownTabletServers.contains(replica))
+                        .collect(Collectors.toList());
+        return Optional.of(
+                new ElectionResult(
+                        new ArrayList<>(newAliveReplicas),
+                        leaderAndIsr.newLeaderAndIsr(
+                                newLeader,
+                                newIsr,
+                                newStandby == -1
+                                        ? Collections.emptyList()
+                                        : Collections.singletonList(newStandby))));
     }
 }

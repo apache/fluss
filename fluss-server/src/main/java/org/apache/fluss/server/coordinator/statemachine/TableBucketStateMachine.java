@@ -430,7 +430,12 @@ public class TableBucketStateMachine {
         // servers as inSyncReplica set.
         Optional<ElectionResult> resultOpt =
                 initReplicaLeaderElection(
-                        assignedServers, liveServers, coordinatorContext.getCoordinatorEpoch());
+                        assignedServers,
+                        liveServers,
+                        coordinatorContext.getCoordinatorEpoch(),
+                        coordinatorContext
+                                .getTableInfoById(tableBucket.getTableId())
+                                .hasPrimaryKey());
         if (!resultOpt.isPresent()) {
             LOG.error(
                     "The leader election for table bucket {} is empty.",
@@ -599,13 +604,20 @@ public class TableBucketStateMachine {
         }
 
         Optional<ElectionResult> resultOpt = Optional.empty();
+        boolean isPkTable =
+                coordinatorContext.getTableInfoById(tableBucket.getTableId()).hasPrimaryKey();
         if (electionStrategy == DEFAULT_ELECTION) {
-            resultOpt = defaultReplicaLeaderElection(assignment, liveReplicas, leaderAndIsr);
+            resultOpt =
+                    defaultReplicaLeaderElection(assignment, liveReplicas, leaderAndIsr, isPkTable);
         } else if (electionStrategy == CONTROLLED_SHUTDOWN_ELECTION) {
             Set<Integer> shuttingDownTabletServers = coordinatorContext.shuttingDownTabletServers();
             resultOpt =
                     controlledShutdownReplicaLeaderElection(
-                            assignment, liveReplicas, leaderAndIsr, shuttingDownTabletServers);
+                            assignment,
+                            liveReplicas,
+                            leaderAndIsr,
+                            shuttingDownTabletServers,
+                            isPkTable);
         }
 
         if (!resultOpt.isPresent()) {
