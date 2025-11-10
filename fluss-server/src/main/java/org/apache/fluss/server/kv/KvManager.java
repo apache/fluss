@@ -307,39 +307,50 @@ public final class KvManager extends TabletManagerBase implements ServerReconfig
         return Optional.ofNullable(currentKvs.get(tableBucket));
     }
 
-    public void dropKv(TableBucket tableBucket) {
-        KvTablet dropKvTablet =
+    public void closeOrDropKv(TableBucket tableBucket, boolean needDrop) {
+        KvTablet removeTablet =
                 inLock(tabletCreationOrDeletionLock, () -> currentKvs.remove(tableBucket));
 
-        if (dropKvTablet != null) {
-            TablePath tablePath = dropKvTablet.getTablePath();
+        if (removeTablet != null) {
+            TablePath tablePath = removeTablet.getTablePath();
             try {
-                dropKvTablet.drop();
-                if (dropKvTablet.getPartitionName() == null) {
-                    LOG.info(
-                            "Deleted kv bucket {} for table {} in file path {}.",
-                            tableBucket.getBucket(),
-                            tablePath,
-                            dropKvTablet.getKvTabletDir().getAbsolutePath());
+                if (needDrop) {
+                    removeTablet.drop();
+                    if (removeTablet.getPartitionName() == null) {
+                        LOG.info(
+                                "Deleted kv bucket {} for table {} in file path {}.",
+                                tableBucket.getBucket(),
+                                tablePath,
+                                removeTablet.getKvTabletDir().getAbsolutePath());
+                    } else {
+                        LOG.info(
+                                "Deleted kv bucket {} for the partition {} of table {} in file path {}.",
+                                tableBucket.getBucket(),
+                                removeTablet.getPartitionName(),
+                                tablePath,
+                                removeTablet.getKvTabletDir().getAbsolutePath());
+                    }
                 } else {
+                    removeTablet.close();
                     LOG.info(
-                            "Deleted kv bucket {} for the partition {} of table {} in file path {}.",
-                            tableBucket.getBucket(),
-                            dropKvTablet.getPartitionName(),
-                            tablePath,
-                            dropKvTablet.getKvTabletDir().getAbsolutePath());
+                            "Closed kvTablet and released RocksDB lock for bucket {} without deleting files",
+                            tableBucket);
                 }
             } catch (Exception e) {
                 throw new KvStorageException(
                         String.format(
-                                "Exception while deleting kv for table %s, bucket %s in dir %s.",
+                                "Exception while deleting or closing kv for table %s, bucket %s in dir %s, needDrop: %s.",
                                 tablePath,
                                 tableBucket.getBucket(),
-                                dropKvTablet.getKvTabletDir().getAbsolutePath()),
+                                removeTablet.getKvTabletDir().getAbsolutePath(),
+                                needDrop),
                         e);
             }
         } else {
-            LOG.warn("Fail to delete kv bucket {}.", tableBucket.getBucket());
+            LOG.warn(
+                    "Fail to delete or close kv bucket {}, needDrop: {}.",
+                    tableBucket.getBucket(),
+                    needDrop);
         }
     }
 

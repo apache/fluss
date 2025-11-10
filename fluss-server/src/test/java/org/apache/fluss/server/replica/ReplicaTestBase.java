@@ -667,6 +667,12 @@ public class ReplicaTestBase {
         }
 
         @Override
+        public CompletedSnapshot getCompletedSnapshotProvider(
+                TableBucket tableBucket, long snapshotId) throws Exception {
+            return testKvSnapshotStore.getLatestCompletedSnapshot(tableBucket);
+        }
+
+        @Override
         public int maxFetchLogSizeInRecoverKv() {
             return 1024;
         }
