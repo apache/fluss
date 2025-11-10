@@ -1574,18 +1574,20 @@ public class ServerRpcMessageUtils {
                         request.hasPartitionId() ? request.getPartitionId() : null,
                         request.getBucketId()),
                 request.getMinRetainOffset(),
-                request.getCoordinatorEpoch());
+                request.getCoordinatorEpoch(),
+                request.hasSnapshotId() ? request.getSnapshotId() : null);
     }
 
     public static NotifyKvSnapshotOffsetRequest makeNotifyKvSnapshotOffsetRequest(
-            TableBucket tableBucket, long minRetainOffset) {
+            TableBucket tableBucket, long minRetainOffset, long snapshotId) {
         NotifyKvSnapshotOffsetRequest request = new NotifyKvSnapshotOffsetRequest();
         if (tableBucket.getPartitionId() != null) {
             request.setPartitionId(tableBucket.getPartitionId());
         }
         request.setTableId(tableBucket.getTableId())
                 .setBucketId(tableBucket.getBucket())
-                .setMinRetainOffset(minRetainOffset);
+                .setMinRetainOffset(minRetainOffset)
+                .setSnapshotId(snapshotId);
         return request;
     }
 

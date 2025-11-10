@@ -372,7 +372,10 @@ public class CoordinatorRequestBatch {
     }
 
     public void addNotifyKvSnapshotOffsetRequestForTabletServers(
-            List<Integer> tabletServers, TableBucket tableBucket, long minRetainOffset) {
+            List<Integer> tabletServers,
+            TableBucket tableBucket,
+            long minRetainOffset,
+            long snapshotId) {
         tabletServers.stream()
                 .filter(s -> s >= 0)
                 .forEach(
@@ -380,7 +383,7 @@ public class CoordinatorRequestBatch {
                                 notifyKvSnapshotOffsetRequestMap.put(
                                         id,
                                         makeNotifyKvSnapshotOffsetRequest(
-                                                tableBucket, minRetainOffset)));
+                                                tableBucket, minRetainOffset, snapshotId)));
     }
 
     public void addNotifyLakeTableOffsetRequestForTableServers(

@@ -365,6 +365,7 @@ message NotifyKvSnapshotOffsetRequest {
   required int32 bucket_id = 3;
   required int32 coordinator_epoch = 4;
   required int64 min_retain_offset = 5;
+  optional int64 snapshot_id = 6;
 }
 
 message NotifyKvSnapshotOffsetResponse {
