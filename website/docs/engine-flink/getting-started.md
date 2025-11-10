@@ -86,7 +86,8 @@ You can use the following SQL statement to create a catalog.
 ```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
   'type' = 'fluss',
-  'bootstrap.servers' = 'localhost:9123'
+  'bootstrap.servers' = 'localhost:9123',
+  'default-database' = 'fluss'
 );
 ```
 

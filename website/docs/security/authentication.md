@@ -71,6 +71,7 @@ Here is an example client configuration in Flink SQL with Catalog:
 CREATE CATALOG fluss_catalog WITH (
   'type' = 'fluss',
   'bootstrap.servers' = 'fluss-server-1:9123',
+  'default-database' = 'fluss',
   'client.security.protocol' = 'SASL',
   'client.security.sasl.mechanism' = 'PLAIN',
   'client.security.sasl.username' = '<my-username>',

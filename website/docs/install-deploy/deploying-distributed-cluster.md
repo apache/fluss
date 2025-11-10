@@ -171,7 +171,8 @@ In Flink SQL client, a catalog is created and named by executing the following q
 ```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
   'type' = 'fluss',
-  'bootstrap.servers' = '192.168.10.100:9123'
+  'bootstrap.servers' = '192.168.10.100:9123',
+  'default-database' = 'fluss'
 );
 ```
 

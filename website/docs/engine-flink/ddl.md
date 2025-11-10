@@ -11,7 +11,8 @@ Fluss supports creating and managing tables through the Fluss Catalog.
 ```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
   'type' = 'fluss',
-  'bootstrap.servers' = 'fluss-server-1:9123'
+  'bootstrap.servers' = 'fluss-server-1:9123',
+  'default-database' = 'fluss'
 );
 ```
 

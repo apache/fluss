@@ -170,7 +170,8 @@ Use the following SQL to create a Fluss catalog:
 ```sql title="Flink SQL"
 CREATE CATALOG fluss_catalog WITH (
     'type' = 'fluss',
-    'bootstrap.servers' = 'coordinator-server:9123'
+    'bootstrap.servers' = 'coordinator-server:9123',
+    'default-database' = 'fluss'
 );
 ```
 

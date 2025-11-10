@@ -173,7 +173,8 @@ Create separate catalogs for each user:
 ```sql title="Flink SQL"
 CREATE CATALOG admin_catalog WITH (
     'type' = 'fluss',
-    'bootstrap.servers' = 'coordinator-server:9123',
+    'bootstrap.servers' = 'coordinator-server:9123',,
+    'default-database' = 'fluss',
     'client.security.protocol' = 'SASL',
     'client.security.sasl.mechanism' = 'PLAIN',
     'client.security.sasl.username' = 'admin',
@@ -185,6 +186,7 @@ CREATE CATALOG admin_catalog WITH (
 CREATE CATALOG developer_catalog WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:9123',
+    'default-database' = 'fluss',
     'client.security.protocol' = 'SASL',
     'client.security.sasl.mechanism' = 'PLAIN',
     'client.security.sasl.username' = 'developer',
@@ -197,6 +199,7 @@ CREATE CATALOG developer_catalog WITH (
 CREATE CATALOG consumer_catalog WITH (
     'type' = 'fluss',
     'bootstrap.servers' = 'coordinator-server:9123',
+    'default-database' = 'fluss',
     'client.security.protocol' = 'SASL',
     'client.security.sasl.mechanism' = 'PLAIN',
     'client.security.sasl.username' = 'consumer',
@@ -483,6 +486,7 @@ Create separate catalogs for the `admin`, `marketing`, and `finance` users:
 CREATE CATALOG admin_catalog WITH (
 'type' = 'fluss',
 'bootstrap.servers' = 'coordinator-server:9123',
+'default-database' = 'fluss',
 'client.security.protocol' = 'SASL',
 'client.security.sasl.mechanism' = 'PLAIN',
 'client.security.sasl.username' = 'admin',
@@ -494,6 +498,7 @@ CREATE CATALOG admin_catalog WITH (
 CREATE CATALOG marketing_catalog WITH (
 'type' = 'fluss',
 'bootstrap.servers' = 'coordinator-server:9123',
+'default-database' = 'fluss',
 'client.security.protocol' = 'SASL',
 'client.security.sasl.mechanism' = 'PLAIN',
 'client.security.sasl.username' = 'marketing',
@@ -506,6 +511,7 @@ CREATE CATALOG marketing_catalog WITH (
 CREATE CATALOG finance_catalog WITH (
 'type' = 'fluss',
 'bootstrap.servers' = 'coordinator-server:9123',
+'default-database' = 'fluss',
 'client.security.protocol' = 'SASL',
 'client.security.sasl.mechanism' = 'PLAIN',
 'client.security.sasl.username' = 'finance',
