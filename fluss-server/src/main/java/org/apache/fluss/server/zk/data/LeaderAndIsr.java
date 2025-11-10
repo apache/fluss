@@ -43,6 +43,8 @@ public class LeaderAndIsr {
     /** The latest inSyncReplica collection. */
     private final List<Integer> isr;
 
+    private final List<Integer> standbyReplicas;
+
     /** The coordinator epoch. */
     private final int coordinatorEpoch;
 
@@ -57,15 +59,22 @@ public class LeaderAndIsr {
                 leader,
                 INITIAL_LEADER_EPOCH,
                 new ArrayList<>(),
+                new ArrayList<>(),
                 coordinatorEpoch,
                 INITIAL_BUCKET_EPOCH);
     }
 
     public LeaderAndIsr(
-            int leader, int leaderEpoch, List<Integer> isr, int coordinatorEpoch, int bucketEpoch) {
+            int leader,
+            int leaderEpoch,
+            List<Integer> isr,
+            List<Integer> standbyReplicas,
+            int coordinatorEpoch,
+            int bucketEpoch) {
         this.leader = leader;
         this.leaderEpoch = leaderEpoch;
         this.isr = checkNotNull(isr);
+        this.standbyReplicas = standbyReplicas;
         this.coordinatorEpoch = coordinatorEpoch;
         this.bucketEpoch = bucketEpoch;
     }
@@ -77,9 +86,15 @@ public class LeaderAndIsr {
      * @param newIsr the new isr
      * @return the new LeaderAndIsr
      */
-    public LeaderAndIsr newLeaderAndIsr(int newLeader, List<Integer> newIsr) {
+    public LeaderAndIsr newLeaderAndIsr(
+            int newLeader, List<Integer> newIsr, List<Integer> standbyReplicas) {
         return new LeaderAndIsr(
-                newLeader, leaderEpoch + 1, newIsr, coordinatorEpoch, bucketEpoch + 1);
+                newLeader,
+                leaderEpoch + 1,
+                newIsr,
+                standbyReplicas,
+                coordinatorEpoch,
+                bucketEpoch + 1);
     }
 
     /**
@@ -90,7 +105,8 @@ public class LeaderAndIsr {
      * @return the new LeaderAndIsr
      */
     public LeaderAndIsr newLeaderAndIsr(List<Integer> newIsr) {
-        return new LeaderAndIsr(leader, leaderEpoch, newIsr, coordinatorEpoch, bucketEpoch + 1);
+        return new LeaderAndIsr(
+                leader, leaderEpoch, newIsr, standbyReplicas, coordinatorEpoch, bucketEpoch + 1);
     }
 
     public int leader() {
@@ -109,8 +125,16 @@ public class LeaderAndIsr {
         return isr;
     }
 
+    public List<Integer> standbyReplicas() {
+        return standbyReplicas;
+    }
+
     public int[] isrArray() {
         return isr.stream().mapToInt(Integer::intValue).toArray();
+    }
+
+    public int[] standbyReplicasArray() {
+        return standbyReplicas.stream().mapToInt(Integer::intValue).toArray();
     }
 
     public int bucketEpoch() {
@@ -130,12 +154,14 @@ public class LeaderAndIsr {
                 && leaderEpoch == that.leaderEpoch
                 && coordinatorEpoch == that.coordinatorEpoch
                 && bucketEpoch == that.bucketEpoch
-                && Objects.equals(isr, that.isr);
+                && Objects.equals(isr, that.isr)
+                && Objects.equals(standbyReplicas, that.standbyReplicas);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(leader, leaderEpoch, isr, coordinatorEpoch, bucketEpoch);
+        return Objects.hash(
+                leader, leaderEpoch, isr, standbyReplicas, coordinatorEpoch, bucketEpoch);
     }
 
     @Override
@@ -147,6 +173,8 @@ public class LeaderAndIsr {
                 + leaderEpoch
                 + ", isr="
                 + isr
+                + ", standbyReplicas="
+                + standbyReplicas
                 + ", coordinatorEpoch="
                 + coordinatorEpoch
                 + ", bucketEpoch="
