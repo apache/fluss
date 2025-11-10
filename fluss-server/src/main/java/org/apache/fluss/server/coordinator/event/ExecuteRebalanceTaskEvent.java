@@ -15,10 +15,19 @@
  * limitations under the License.
  */
 
-package org.apache.fluss.server.coordinator.statemachine;
+package org.apache.fluss.server.coordinator.event;
 
-/** The strategies to elect the replica leader. */
-public enum ReplicaLeaderElectionStrategy {
-    DEFAULT_ELECTION,
-    CONTROLLED_SHUTDOWN_ELECTION
+import org.apache.fluss.cluster.rebalance.RebalancePlanForBucket;
+
+/** An event of executing rebalance task. */
+public class ExecuteRebalanceTaskEvent implements CoordinatorEvent {
+    private final RebalancePlanForBucket rebalancePlanForBucket;
+
+    public ExecuteRebalanceTaskEvent(RebalancePlanForBucket rebalancePlanForBucket) {
+        this.rebalancePlanForBucket = rebalancePlanForBucket;
+    }
+
+    public RebalancePlanForBucket getRebalancePlanForBucket() {
+        return rebalancePlanForBucket;
+    }
 }

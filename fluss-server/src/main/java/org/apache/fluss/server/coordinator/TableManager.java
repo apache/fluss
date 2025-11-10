@@ -34,6 +34,7 @@ import org.apache.fluss.server.zk.data.TableAssignment;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
@@ -207,6 +208,7 @@ public class TableManager {
     }
 
     private void resumeTableDeletions() {
+        new ArrayList<>(8);
         Set<Long> tablesToBeDeleted = new HashSet<>(coordinatorContext.getTablesToBeDeleted());
         Set<Long> eligibleTableDeletion = new HashSet<>();
 
