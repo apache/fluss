@@ -77,12 +77,12 @@ class CoordinatorServerElectionTest {
                     });
         }
 
-        // random 1 become leader
+        // random coordinator become leader
         waitUntilCoordinatorServerElected();
 
         CoordinatorAddress firstLeaderAddress = zookeeperClient.getCoordinatorLeaderAddress().get();
 
-        // Find the leader and try to close it.
+        // Find the leader and try to restart it.
         CoordinatorServer elected = null;
         for (CoordinatorServer coordinatorServer : coordinatorServerList) {
             if (coordinatorServer.getServerId() == firstLeaderAddress.getId()) {
@@ -104,14 +104,14 @@ class CoordinatorServerElectionTest {
         assertThat(zookeeperClient.getCurrentEpoch().f0)
                 .isEqualTo(CoordinatorContext.INITIAL_COORDINATOR_EPOCH + 1);
 
-        // kill other 2 coordinator servers
+        // kill other 2 coordinator servers except the first one
         for (CoordinatorServer coordinatorServer : coordinatorServerList) {
             if (coordinatorServer.getServerId() != firstLeaderAddress.getId()) {
                 coordinatorServer.close();
             }
         }
         // the origin coordinator server should become leader again
-        waitUntilCoordinatorServerElected();
+        waitUntilCoordinatorServerReelected(secondLeaderAddress);
         CoordinatorAddress thirdLeaderAddress = zookeeperClient.getCoordinatorLeaderAddress().get();
 
         assertThat(thirdLeaderAddress.getId()).isEqualTo(firstLeaderAddress.getId());
