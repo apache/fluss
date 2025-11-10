@@ -461,7 +461,8 @@ public class ReplicaStateMachine {
                                     .collect(Collectors.toList());
             LeaderAndIsr adjustLeaderAndIsr =
                     newLeader == LeaderAndIsr.NO_LEADER
-                            ? leaderAndIsr.newLeaderAndIsr(newLeader, newIsr)
+                            ? leaderAndIsr.newLeaderAndIsr(
+                                    newLeader, newIsr, leaderAndIsr.standbyReplicas())
                             : leaderAndIsr.newLeaderAndIsr(newIsr);
             adjustedLeaderAndIsr.put(tableBucketReplica, adjustLeaderAndIsr);
             toUpdateLeaderAndIsrList.put(tableBucket, adjustLeaderAndIsr);

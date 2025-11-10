@@ -51,7 +51,7 @@ import org.apache.fluss.server.coordinator.rebalance.RebalanceManager;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
-import org.apache.fluss.server.kv.snapshot.PeriodicSnapshotManager;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotManager;
 import org.apache.fluss.server.metadata.ServerInfo;
 import org.apache.fluss.server.metadata.TabletServerMetadataCache;
 import org.apache.fluss.server.replica.Replica;
@@ -70,6 +70,7 @@ import org.apache.fluss.server.zk.data.TableRegistration;
 import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.clock.Clock;
 import org.apache.fluss.utils.clock.SystemClock;
+import org.apache.fluss.utils.concurrent.Executors;
 
 import org.apache.curator.test.TestingServer;
 import org.junit.jupiter.api.extension.AfterAllCallback;
@@ -744,10 +745,10 @@ public final class FlussClusterExtension
             ReplicaManager.HostedReplica replica = ts.getReplicaManager().getReplica(tableBucket);
             if (replica instanceof ReplicaManager.OnlineReplica) {
                 Replica r = ((ReplicaManager.OnlineReplica) replica).getReplica();
-                PeriodicSnapshotManager kvSnapshotManager = r.getKvSnapshotManager();
+                KvSnapshotManager kvSnapshotManager = r.getKvSnapshotManager();
                 if (r.isLeader() && kvSnapshotManager != null) {
                     snapshotId = kvSnapshotManager.currentSnapshotId();
-                    kvSnapshotManager.triggerSnapshot();
+                    kvSnapshotManager.triggerUploadSnapshot(Executors.directExecutor());
                     nextSnapshotId = kvSnapshotManager.currentSnapshotId();
                     break;
                 }
@@ -900,6 +901,11 @@ public final class FlussClusterExtension
 
     public int waitAndGetLeader(TableBucket tb) {
         return waitLeaderAndIsrReady(tb).leader();
+    }
+
+    public int waitAndGetStandby(TableBucket tb) {
+        List<Integer> standbyReplicas = waitLeaderAndIsrReady(tb).standbyReplicas();
+        return standbyReplicas.get(0);
     }
 
     public LeaderAndIsr waitLeaderAndIsrReady(TableBucket tb) {

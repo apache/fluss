@@ -73,6 +73,7 @@ public class MetricNames {
     public static final String SERVER_LOGICAL_STORAGE_KV_SIZE = "kvSize";
     public static final String SERVER_PHYSICAL_STORAGE_LOCAL_SIZE = "localSize";
     public static final String SERVER_PHYSICAL_STORAGE_REMOTE_LOG_SIZE = "remoteLogSize";
+    public static final String SERVER_PHYSICAL_STORAGE_STANDBY_SIZE = "standbySize";
 
     // --------------------------------------------------------------------------------------------
     // metrics for user

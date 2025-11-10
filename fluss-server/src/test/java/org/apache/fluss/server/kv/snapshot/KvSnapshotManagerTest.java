@@ -17,23 +17,37 @@
 
 package org.apache.fluss.server.kv.snapshot;
 
+import org.apache.fluss.config.ConfigOptions;
+import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.fs.FsPath;
 import org.apache.fluss.metadata.TableBucket;
-import org.apache.fluss.server.metrics.group.TestingMetricGroups;
+import org.apache.fluss.server.kv.KvSnapshotResource;
+import org.apache.fluss.server.zk.NOPErrorHandler;
+import org.apache.fluss.server.zk.ZooKeeperClient;
+import org.apache.fluss.server.zk.ZooKeeperExtension;
+import org.apache.fluss.testutils.common.AllCallbackWrapper;
 import org.apache.fluss.testutils.common.ManuallyTriggeredScheduledExecutorService;
+import org.apache.fluss.utils.clock.ManualClock;
 
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Assertions;
+import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.RegisterExtension;
+import org.junit.jupiter.api.io.TempDir;
 
+import java.io.File;
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.FutureTask;
 import java.util.concurrent.RunnableFuture;
 
@@ -41,47 +55,87 @@ import static java.util.concurrent.TimeUnit.MILLISECONDS;
 import static org.apache.fluss.shaded.guava32.com.google.common.collect.Iterators.getOnlyElement;
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Test for {@link PeriodicSnapshotManager} . */
-class PeriodicSnapshotManagerTest {
+/** Test for {@link KvSnapshotManager} . */
+class KvSnapshotManagerTest {
+    @RegisterExtension
+    public static final AllCallbackWrapper<ZooKeeperExtension> ZOO_KEEPER_EXTENSION_WRAPPER =
+            new AllCallbackWrapper<>(new ZooKeeperExtension());
 
     private static final long periodicMaterializeDelay = 10_000L;
+    private static ZooKeeperClient zkClient;
     private final TableBucket tableBucket = new TableBucket(1, 1);
     private ManuallyTriggeredScheduledExecutorService scheduledExecutorService;
     private ManuallyTriggeredScheduledExecutorService asyncSnapshotExecutorService;
-    private PeriodicSnapshotManager periodicSnapshotManager;
+    private KvSnapshotResource kvSnapshotResource;
+    private KvSnapshotManager kvSnapshotManager;
+    private DefaultSnapshotContext snapshotContext;
+    private Configuration conf;
+    private ManualClock manualClock;
+    private @TempDir File tmpKvDir;
+
+    @BeforeAll
+    static void baseBeforeAll() {
+        zkClient =
+                ZOO_KEEPER_EXTENSION_WRAPPER
+                        .getCustomExtension()
+                        .getZooKeeperClient(NOPErrorHandler.INSTANCE);
+    }
 
     @BeforeEach
     void before() {
+        conf = new Configuration();
+        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofMillis(periodicMaterializeDelay));
         scheduledExecutorService = new ManuallyTriggeredScheduledExecutorService();
         asyncSnapshotExecutorService = new ManuallyTriggeredScheduledExecutorService();
+        ExecutorService dataTransferThreadPool = Executors.newFixedThreadPool(1);
+        kvSnapshotResource =
+                new KvSnapshotResource(
+                        scheduledExecutorService,
+                        new KvSnapshotDataUploader(dataTransferThreadPool),
+                        new KvSnapshotDataDownloader(dataTransferThreadPool),
+                        asyncSnapshotExecutorService);
+        snapshotContext =
+                DefaultSnapshotContext.create(
+                        zkClient,
+                        new TestingCompletedKvSnapshotCommitter(),
+                        kvSnapshotResource,
+                        conf);
+        manualClock = new ManualClock(System.currentTimeMillis());
     }
 
     @AfterEach
     void close() {
-        if (periodicSnapshotManager != null) {
-            periodicSnapshotManager.close();
+        if (kvSnapshotManager != null) {
+            kvSnapshotManager.close();
         }
     }
 
     @Test
     void testInitialDelay() {
-        periodicSnapshotManager = createSnapshotManager(NopSnapshotTarget.INSTANCE);
-        periodicSnapshotManager.start();
+        kvSnapshotManager = createSnapshotManager(true);
+        startPeriodicUploadSnapshot(NopUploadSnapshotTarget.INSTANCE);
         checkOnlyOneScheduledTasks();
     }
 
     @Test
     void testInitWithNonPositiveSnapshotInterval() {
-        periodicSnapshotManager = createSnapshotManager(0, NopSnapshotTarget.INSTANCE);
-        periodicSnapshotManager.start();
+        conf.set(ConfigOptions.KV_SNAPSHOT_INTERVAL, Duration.ofMillis(0));
+        snapshotContext =
+                DefaultSnapshotContext.create(
+                        zkClient,
+                        new TestingCompletedKvSnapshotCommitter(),
+                        kvSnapshotResource,
+                        conf);
+        kvSnapshotManager = createSnapshotManager(snapshotContext);
+        startPeriodicUploadSnapshot(NopUploadSnapshotTarget.INSTANCE);
         // periodic snapshot is disabled when periodicMaterializeDelay is not positive
         Assertions.assertEquals(0, scheduledExecutorService.getAllScheduledTasks().size());
     }
 
     @Test
     void testPeriodicSnapshot() {
-        periodicSnapshotManager = createSnapshotManager(NopSnapshotTarget.INSTANCE);
-        periodicSnapshotManager.start();
+        kvSnapshotManager = createSnapshotManager(true);
+        startPeriodicUploadSnapshot(NopUploadSnapshotTarget.INSTANCE);
         // check only one schedule task
         checkOnlyOneScheduledTasks();
         scheduledExecutorService.triggerNonPeriodicScheduledTasks();
@@ -93,9 +147,9 @@ class PeriodicSnapshotManagerTest {
     void testSnapshot() {
         // use local filesystem to make the FileSystem plugin happy
         String snapshotDir = "file:/test/snapshot1";
-        TestSnapshotTarget target = new TestSnapshotTarget(new FsPath(snapshotDir));
-        periodicSnapshotManager = createSnapshotManager(target);
-        periodicSnapshotManager.start();
+        TestUploadSnapshotTarget target = new TestUploadSnapshotTarget(new FsPath(snapshotDir));
+        kvSnapshotManager = createSnapshotManager(true);
+        startPeriodicUploadSnapshot(target);
         // trigger schedule
         scheduledExecutorService.triggerNonPeriodicScheduledTasks();
         // trigger async snapshot
@@ -111,9 +165,10 @@ class PeriodicSnapshotManagerTest {
         // use local filesystem to make the FileSystem plugin happy
         String remoteDir = "file:/test/snapshot1";
         String exceptionMessage = "Exception while initializing Materialization";
-        TestSnapshotTarget target = new TestSnapshotTarget(new FsPath(remoteDir), exceptionMessage);
-        periodicSnapshotManager = createSnapshotManager(target);
-        periodicSnapshotManager.start();
+        TestUploadSnapshotTarget target =
+                new TestUploadSnapshotTarget(new FsPath(remoteDir), exceptionMessage);
+        kvSnapshotManager = createSnapshotManager(true);
+        startPeriodicUploadSnapshot(target);
         // trigger schedule
         scheduledExecutorService.triggerNonPeriodicScheduledTasks();
 
@@ -138,24 +193,25 @@ class PeriodicSnapshotManagerTest {
                 .isLessThanOrEqualTo(periodicMaterializeDelay);
     }
 
-    private PeriodicSnapshotManager createSnapshotManager(
-            PeriodicSnapshotManager.SnapshotTarget target) {
-        return createSnapshotManager(periodicMaterializeDelay, target);
+    private KvSnapshotManager createSnapshotManager(boolean isLeader) {
+        KvSnapshotManager snapshotManager = createSnapshotManager(snapshotContext);
+        if (isLeader) {
+            snapshotManager.becomeLeader();
+        }
+        return snapshotManager;
     }
 
-    private PeriodicSnapshotManager createSnapshotManager(
-            long periodicMaterializeDelay, PeriodicSnapshotManager.SnapshotTarget target) {
-        return new PeriodicSnapshotManager(
-                tableBucket,
-                target,
-                periodicMaterializeDelay,
-                asyncSnapshotExecutorService,
-                scheduledExecutorService,
-                TestingMetricGroups.BUCKET_METRICS);
+    private KvSnapshotManager createSnapshotManager(SnapshotContext context) {
+        return new KvSnapshotManager(tableBucket, tmpKvDir, context, manualClock);
     }
 
-    private static class NopSnapshotTarget implements PeriodicSnapshotManager.SnapshotTarget {
-        private static final NopSnapshotTarget INSTANCE = new NopSnapshotTarget();
+    private void startPeriodicUploadSnapshot(KvSnapshotManager.UploadSnapshotTarget target) {
+        kvSnapshotManager.startPeriodicUploadSnapshot(
+                org.apache.fluss.utils.concurrent.Executors.directExecutor(), target);
+    }
+
+    private static class NopUploadSnapshotTarget implements KvSnapshotManager.UploadSnapshotTarget {
+        private static final NopUploadSnapshotTarget INSTANCE = new NopUploadSnapshotTarget();
 
         @Override
         public long currentSnapshotId() {
@@ -163,7 +219,7 @@ class PeriodicSnapshotManagerTest {
         }
 
         @Override
-        public Optional<PeriodicSnapshotManager.SnapshotRunnable> initSnapshot() {
+        public Optional<KvSnapshotManager.SnapshotRunnable> initSnapshot() {
             return Optional.empty();
         }
 
@@ -185,7 +241,8 @@ class PeriodicSnapshotManagerTest {
         }
     }
 
-    private static class TestSnapshotTarget implements PeriodicSnapshotManager.SnapshotTarget {
+    private static class TestUploadSnapshotTarget
+            implements KvSnapshotManager.UploadSnapshotTarget {
 
         private final FsPath snapshotPath;
         private final SnapshotLocation snapshotLocation;
@@ -193,11 +250,11 @@ class PeriodicSnapshotManagerTest {
         private final String exceptionMessage;
         private Throwable cause;
 
-        public TestSnapshotTarget(FsPath snapshotPath) {
+        public TestUploadSnapshotTarget(FsPath snapshotPath) {
             this(snapshotPath, null);
         }
 
-        public TestSnapshotTarget(FsPath snapshotPath, String exceptionMessage) {
+        public TestUploadSnapshotTarget(FsPath snapshotPath, String exceptionMessage) {
             this.snapshotPath = snapshotPath;
             this.collectedRemoteDirs = new ArrayList<>();
             this.exceptionMessage = exceptionMessage;
@@ -216,7 +273,7 @@ class PeriodicSnapshotManagerTest {
         }
 
         @Override
-        public Optional<PeriodicSnapshotManager.SnapshotRunnable> initSnapshot() {
+        public Optional<KvSnapshotManager.SnapshotRunnable> initSnapshot() {
             RunnableFuture<SnapshotResult> runnableFuture =
                     new FutureTask<>(
                             () -> {
@@ -231,7 +288,7 @@ class PeriodicSnapshotManagerTest {
             int coordinatorEpoch = 0;
             int leaderEpoch = 0;
             return Optional.of(
-                    new PeriodicSnapshotManager.SnapshotRunnable(
+                    new KvSnapshotManager.SnapshotRunnable(
                             runnableFuture,
                             snapshotId,
                             coordinatorEpoch,

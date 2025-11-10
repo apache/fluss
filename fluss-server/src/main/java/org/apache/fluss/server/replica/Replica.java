@@ -51,14 +51,11 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvRecoverHelper;
 import org.apache.fluss.server.kv.KvTablet;
-import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
-import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
-import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
-import org.apache.fluss.server.kv.snapshot.KvTabletSnapshotTarget;
-import org.apache.fluss.server.kv.snapshot.PeriodicSnapshotManager;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotManager;
+import org.apache.fluss.server.kv.snapshot.KvTabletUploadSnapshotTarget;
 import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
 import org.apache.fluss.server.kv.snapshot.SnapshotContext;
 import org.apache.fluss.server.log.FetchDataInfo;
@@ -101,7 +98,6 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 
 import java.io.Closeable;
-import java.io.File;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.util.ArrayList;
@@ -185,15 +181,17 @@ public final class Replica {
     private final Map<Integer, FollowerReplica> followerReplicasMap =
             MapUtils.newConcurrentHashMap();
 
-    private volatile IsrState isrState = new IsrState.CommittedIsrState(Collections.emptyList());
+    private volatile IsrState isrState =
+            new IsrState.CommittedIsrState(Collections.emptyList(), Collections.emptyList());
     private volatile int leaderEpoch = LeaderAndIsr.INITIAL_LEADER_EPOCH - 1;
     private volatile int bucketEpoch = LeaderAndIsr.INITIAL_BUCKET_EPOCH;
     private volatile int coordinatorEpoch = CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
+    private volatile boolean isStandbyReplica = false;
 
     // null if table without pk or haven't become leader
     private volatile @Nullable KvTablet kvTablet;
     private volatile @Nullable CloseableRegistry closeableRegistryForKv;
-    private @Nullable PeriodicSnapshotManager kvSnapshotManager;
+    private @Nullable KvSnapshotManager kvSnapshotManager;
 
     // ------- metrics
     private Counter isrShrinks;
@@ -246,6 +244,15 @@ public final class Replica {
         this.snapshotContext = snapshotContext;
         // create a closeable registry for the replica
         this.closeableRegistry = new CloseableRegistry();
+
+        if (kvManager != null) {
+            this.kvSnapshotManager =
+                    KvSnapshotManager.create(
+                            tableBucket,
+                            kvManager.getOrCreateTabletDir(physicalPath, tableBucket),
+                            snapshotContext,
+                            clock);
+        }
 
         this.logTablet = createLog(lazyHighWatermarkCheckpoint);
         this.logTablet.updateIsDataLakeEnabled(tableConfig.isDataLakeEnabled());
@@ -392,7 +399,11 @@ public final class Replica {
                             long currentTimeMs = clock.milliseconds();
                             // Updating the assignment and ISR state is safe if the bucket epoch is
                             // larger or equal to the current bucket epoch.
-                            updateAssignmentAndIsr(data.getReplicas(), true, data.getIsr());
+                            updateAssignmentAndIsr(
+                                    data.getReplicas(),
+                                    true,
+                                    data.getIsr(),
+                                    data.getStandbyReplicas());
 
                             int requestLeaderEpoch = data.getLeaderEpoch();
                             if (requestLeaderEpoch > leaderEpoch) {
@@ -443,7 +454,11 @@ public final class Replica {
 
                     coordinatorEpoch = data.getCoordinatorEpoch();
 
-                    updateAssignmentAndIsr(Collections.emptyList(), false, Collections.emptyList());
+                    updateAssignmentAndIsr(
+                            Collections.emptyList(),
+                            false,
+                            Collections.emptyList(),
+                            Collections.emptyList());
 
                     int requestLeaderEpoch = data.getLeaderEpoch();
                     boolean isNewLeaderEpoch = requestLeaderEpoch > leaderEpoch;
@@ -453,7 +468,10 @@ public final class Replica {
                                 tableBucket,
                                 requestLeaderEpoch,
                                 logTablet.localLogEndOffset());
-                        onBecomeNewFollower();
+                        // Currently, we only support one standby replica.
+                        List<Integer> standbyReplicas = data.getStandbyReplicas();
+                        onBecomeNewFollower(
+                                standbyReplicas.isEmpty() ? -1 : standbyReplicas.get(0));
                     } else if (requestLeaderEpoch == leaderEpoch) {
                         LOG.info(
                                 "Skipped the become-follower state change for bucket {} since "
@@ -510,6 +528,13 @@ public final class Replica {
                 });
     }
 
+    public void downloadSnapshot(long snapshotId) throws Exception {
+        if (isStandbyReplica) {
+            checkNotNull(kvSnapshotManager);
+            kvSnapshotManager.downloadSnapshot(snapshotId);
+        }
+    }
+
     // -------------------------------------------------------------------------------------------
 
     private void onBecomeNewLeader() {
@@ -519,12 +544,12 @@ public final class Replica {
             registerLakeTieringMetrics();
         }
 
-        if (isKvTable()) {
-            // if it's become new leader, we must
-            // first destroy the old kv tablet
-            // if exist. Otherwise, it'll use still the old kv tablet which will cause data loss
-            dropKv();
-            // now, we can create a new kv tablet
+        if (!isLeader() && isKvTable()) {
+            // 1. If there is no sst files in local, download the latest kv snapshot and apply log.
+            // 2. If there is already sst files in local, check the diff with the latest snapshot
+            // and download the diff and delete the deleted sst files. And then apply log.
+            checkNotNull(kvSnapshotManager);
+            kvSnapshotManager.becomeLeader();
             createKv();
         }
     }
@@ -545,11 +570,27 @@ public final class Replica {
                                 : logTablet.localMaxTimestamp() - logTablet.getLakeMaxTimestamp());
     }
 
-    private void onBecomeNewFollower() {
+    private void onBecomeNewFollower(int standbyReplica) {
         if (isKvTable()) {
-            // it should be from leader to follower, we need to destroy the kv tablet
-            dropKv();
+            boolean isNowStandby = (standbyReplica == localTabletServerId);
+            boolean wasLeader = isLeader();
+            boolean wasStandby = this.isStandbyReplica;
+            checkNotNull(kvSnapshotManager);
+            if (isNowStandby) {
+                kvSnapshotManager.becomeStandby();
+                becomeStandby();
+            } else {
+                // to be new follower.
+                kvSnapshotManager.becomeFollower();
+                if (wasStandby || wasLeader) {
+                    // standby -> leader or leader -> leader
+                    dropKv();
+                }
+
+                // follower -> follower: do nothing.
+            }
         }
+
         if (lakeTieringMetricGroup != null) {
             lakeTieringMetricGroup.close();
         }
@@ -586,6 +627,26 @@ public final class Replica {
                 isDataLakeEnabled);
     }
 
+    private void becomeStandby() {
+        try {
+            checkNotNull(kvSnapshotManager);
+            kvSnapshotManager.downloadLatestSnapshot();
+            isStandbyReplica = true;
+            LOG.info(
+                    "TabletServer {} becomes standby for bucket {}",
+                    localTabletServerId,
+                    tableBucket);
+        } catch (Exception e) {
+            // Mark as standby anyway to ensure coordinator's state is consistent.
+            // The snapshot download can be retried via NotifyKvSnapshotOffsetRequest.
+            isStandbyReplica = true;
+            LOG.warn(
+                    "Failed to download snapshot when becoming standby replica for bucket {}.",
+                    tableBucket,
+                    e);
+        }
+    }
+
     private void createKv() {
         try {
             // create a closeable registry for the closable related to kv
@@ -613,8 +674,8 @@ public final class Replica {
                         e);
             }
         }
-        // start periodic kv snapshot
-        startPeriodicKvSnapshot(snapshotUsed.orElse(null));
+        // start periodic upload kv snapshot
+        startPeriodicUploadKvSnapshot(snapshotUsed.orElse(null));
     }
 
     private void dropKv() {
@@ -648,50 +709,31 @@ public final class Replica {
      */
     private Optional<CompletedSnapshot> initKvTablet() {
         checkNotNull(kvManager);
+        checkNotNull(kvSnapshotManager);
         long startTime = clock.milliseconds();
         LOG.info("Start to init kv tablet for {} of table {}.", tableBucket, physicalPath);
 
-        // todo: we may need to handle the following cases:
-        // case1: no kv files in local, restore from remote snapshot; and apply
-        // the log;
-        // case2: kv files in local
-        //       - if no remote snapshot, restore from local and apply the log known to the local
-        // files.
-        //       - have snapshot, if the known offset to the local files is much less than(maybe
-        // some value configured)
-        //         the remote snapshot; restore from remote snapshot;
-
-        // currently for simplicity, we'll always download the snapshot files and restore from
-        // the snapshots as kv files won't exist in our current implementation for
-        // when replica become follower, we'll always delete the kv files.
-
-        // get the offset from which, we should restore from. default is 0
-        long restoreStartOffset = 0;
-        Optional<CompletedSnapshot> optCompletedSnapshot = getLatestSnapshot(tableBucket);
+        Optional<CompletedSnapshot> optCompletedSnapshot;
         try {
+            optCompletedSnapshot = kvSnapshotManager.downloadLatestSnapshot();
+            long restoreStartOffset = 0;
             if (optCompletedSnapshot.isPresent()) {
                 LOG.info(
-                        "Use snapshot {} to restore kv tablet for {} of table {}.",
-                        optCompletedSnapshot.get(),
+                        "Init kv tablet for download latest snapshot {} of {} finish, cost {} ms.",
+                        physicalPath,
                         tableBucket,
-                        physicalPath);
-                CompletedSnapshot completedSnapshot = optCompletedSnapshot.get();
-                // always create a new dir for the kv tablet
-                File tabletDir = kvManager.createTabletDir(physicalPath, tableBucket);
-                // down the snapshot to target tablet dir
-                downloadKvSnapshots(completedSnapshot, tabletDir.toPath());
-
+                        clock.milliseconds() - startTime);
                 // as we have downloaded kv files into the tablet dir, now, we can load it
-                kvTablet = kvManager.loadKv(tabletDir, schemaGetter);
+                kvTablet = kvManager.loadKv(kvSnapshotManager.getTabletDir(), schemaGetter);
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
-                restoreStartOffset = completedSnapshot.getLogOffset();
+                restoreStartOffset = optCompletedSnapshot.get().getLogOffset();
             } else {
                 LOG.info(
                         "No snapshot found for {} of {}, restore from log.",
                         tableBucket,
                         physicalPath);
-
+                kvManager.dropKv(tableBucket);
                 // actually, kv manager always create a kv tablet since we will drop the kv
                 // if it exists before init kv tablet
                 kvTablet =
@@ -727,49 +769,6 @@ public final class Replica {
         }
 
         return optCompletedSnapshot;
-    }
-
-    private void downloadKvSnapshots(CompletedSnapshot completedSnapshot, Path kvTabletDir)
-            throws IOException {
-        Path kvDbPath = kvTabletDir.resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING);
-        KvSnapshotDownloadSpec downloadSpec =
-                new KvSnapshotDownloadSpec(completedSnapshot.getKvSnapshotHandle(), kvDbPath);
-        long start = clock.milliseconds();
-        LOG.info("Start to download kv snapshot {} to directory {}.", completedSnapshot, kvDbPath);
-        KvSnapshotDataDownloader kvSnapshotDataDownloader =
-                snapshotContext.getSnapshotDataDownloader();
-        try {
-            kvSnapshotDataDownloader.transferAllDataToDirectory(downloadSpec, closeableRegistry);
-        } catch (Exception e) {
-            if (e.getMessage().contains(CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE)) {
-                try {
-                    snapshotContext.handleSnapshotBroken(completedSnapshot);
-                } catch (Exception t) {
-                    LOG.error("Handle broken snapshot {} failed.", completedSnapshot, t);
-                }
-            }
-            throw new IOException("Fail to download kv snapshot.", e);
-        }
-        long end = clock.milliseconds();
-        LOG.info(
-                "Download kv snapshot {} to directory {} finish, cost {} ms.",
-                completedSnapshot,
-                kvDbPath,
-                end - start);
-    }
-
-    private Optional<CompletedSnapshot> getLatestSnapshot(TableBucket tableBucket) {
-        try {
-            return Optional.ofNullable(
-                    snapshotContext.getLatestCompletedSnapshotProvider().apply(tableBucket));
-        } catch (Exception e) {
-            LOG.warn(
-                    "Get latest completed snapshot for {} of table {} failed.",
-                    tableBucket,
-                    physicalPath,
-                    e);
-        }
-        return Optional.empty();
     }
 
     private void recoverKvTablet(long startRecoverLogOffset) {
@@ -808,9 +807,11 @@ public final class Replica {
                 end - start);
     }
 
-    private void startPeriodicKvSnapshot(@Nullable CompletedSnapshot completedSnapshot) {
+    private void startPeriodicUploadKvSnapshot(@Nullable CompletedSnapshot completedSnapshot) {
         checkNotNull(kvTablet);
-        KvTabletSnapshotTarget kvTabletSnapshotTarget;
+        checkNotNull(kvSnapshotManager);
+        checkNotNull(closeableRegistryForKv);
+        KvTabletUploadSnapshotTarget kvTabletSnapshotTarget;
         try {
             // get the snapshot reporter to report the completed snapshot
             CompletedKvSnapshotCommitter completedKvSnapshotCommitter =
@@ -862,7 +863,7 @@ public final class Replica {
                             snapshotContext.getRemoteKvDir(), physicalPath, tableBucket);
 
             kvTabletSnapshotTarget =
-                    new KvTabletSnapshotTarget(
+                    new KvTabletUploadSnapshotTarget(
                             tableBucket,
                             completedKvSnapshotCommitter,
                             snapshotContext.getZooKeeperClient(),
@@ -878,14 +879,8 @@ public final class Replica {
                             coordinatorEpochSupplier,
                             lastCompletedSnapshotLogOffset,
                             snapshotSize);
-            this.kvSnapshotManager =
-                    PeriodicSnapshotManager.create(
-                            tableBucket,
-                            kvTabletSnapshotTarget,
-                            snapshotContext,
-                            kvTablet.getGuardedExecutor(),
-                            bucketMetricGroup);
-            kvSnapshotManager.start();
+            kvSnapshotManager.startPeriodicUploadSnapshot(
+                    kvTablet.getGuardedExecutor(), kvTabletSnapshotTarget);
             closeableRegistryForKv.registerCloseable(kvSnapshotManager);
         } catch (Exception e) {
             LOG.error("init kv periodic snapshot for {} failed.", tableBucket, e);
@@ -897,6 +892,14 @@ public final class Replica {
             return 0L;
         } else {
             return kvSnapshotManager.getSnapshotSize();
+        }
+    }
+
+    public long getStandbySnapshotSize() {
+        if (kvSnapshotManager == null || !isStandby()) {
+            return 0L;
+        } else {
+            return kvSnapshotManager.getStandbySnapshotSize();
         }
     }
 
@@ -1083,7 +1086,10 @@ public final class Replica {
     }
 
     private void updateAssignmentAndIsr(
-            List<Integer> replicas, boolean isLeader, List<Integer> isr) {
+            List<Integer> replicas,
+            boolean isLeader,
+            List<Integer> isr,
+            List<Integer> standbyReplicas) {
         if (isLeader) {
             List<Integer> followers =
                     replicas.stream()
@@ -1106,7 +1112,7 @@ public final class Replica {
         }
 
         // update isr info.
-        isrState = new IsrState.CommittedIsrState(isr);
+        isrState = new IsrState.CommittedIsrState(isr, standbyReplicas);
     }
 
     private void updateFollowerFetchState(
@@ -1560,7 +1566,12 @@ public final class Replica {
 
         LeaderAndIsr newLeaderAndIsr =
                 new LeaderAndIsr(
-                        localTabletServerId, leaderEpoch, isrToSend, coordinatorEpoch, bucketEpoch);
+                        localTabletServerId,
+                        leaderEpoch,
+                        isrToSend,
+                        currentState.standbyReplicas(),
+                        coordinatorEpoch,
+                        bucketEpoch);
 
         IsrState.PendingExpandIsrState updatedState =
                 new IsrState.PendingExpandIsrState(
@@ -1582,7 +1593,12 @@ public final class Replica {
 
         LeaderAndIsr newLeaderAndIsr =
                 new LeaderAndIsr(
-                        localTabletServerId, leaderEpoch, isrToSend, coordinatorEpoch, bucketEpoch);
+                        localTabletServerId,
+                        leaderEpoch,
+                        isrToSend,
+                        currentState.standbyReplicas(),
+                        coordinatorEpoch,
+                        bucketEpoch);
         IsrState.PendingShrinkIsrState updatedState =
                 new IsrState.PendingShrinkIsrState(
                         outOfSyncFollowerReplicas, newLeaderAndIsr, currentState);
@@ -1677,7 +1693,9 @@ public final class Replica {
             // proposed and actual state are the same.
             // In both cases, we want to move from Pending to Committed state to ensure new updates
             // are processed.
-            isrState = new IsrState.CommittedIsrState(leaderAndIsr.isr());
+            isrState =
+                    new IsrState.CommittedIsrState(
+                            leaderAndIsr.isr(), leaderAndIsr.standbyReplicas());
             bucketEpoch = leaderAndIsr.bucketEpoch();
             LOG.info(
                     "ISR updated to {} and bucket epoch updated to {} for bucket {}",
@@ -1873,6 +1891,11 @@ public final class Replica {
         return leaderReplicaId != null && leaderReplicaId.equals(localTabletServerId);
     }
 
+    @VisibleForTesting
+    public boolean isStandby() {
+        return isStandbyReplica;
+    }
+
     private LogTablet createLog(
             OffsetCheckpointFile.LazyOffsetCheckpoints lazyHighWatermarkCheckpoint)
             throws Exception {
@@ -1961,7 +1984,7 @@ public final class Replica {
 
     @VisibleForTesting
     @Nullable
-    public PeriodicSnapshotManager getKvSnapshotManager() {
+    public KvSnapshotManager getKvSnapshotManager() {
         return kvSnapshotManager;
     }
 }

@@ -17,6 +17,7 @@
 
 package org.apache.fluss.server.kv;
 
+import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
@@ -52,7 +53,8 @@ public class KvSnapshotResource {
     /** A downloader to download snapshot data. */
     private final KvSnapshotDataDownloader kvSnapshotDataDownloader;
 
-    private KvSnapshotResource(
+    @VisibleForTesting
+    public KvSnapshotResource(
             ScheduledExecutorService kvSnapshotScheduler,
             KvSnapshotDataUploader kvSnapshotDataUploader,
             KvSnapshotDataDownloader kvSnapshotDataDownloader,

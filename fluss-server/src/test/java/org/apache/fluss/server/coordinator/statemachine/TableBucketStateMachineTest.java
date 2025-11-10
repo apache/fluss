@@ -131,6 +131,22 @@ class TableBucketStateMachineTest {
         TableBucket t2b0 = new TableBucket(t2Id, 0);
         coordinatorContext.putTablePath(t1Id, TablePath.of("db1", "t1"));
         coordinatorContext.putTablePath(t2Id, TablePath.of("db1", "t2"));
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        TablePath.of("db1", "t1"),
+                        t1Id,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        TablePath.of("db1", "t2"),
+                        t2Id,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
 
         coordinatorContext.setLiveTabletServers(createServers(Arrays.asList(0, 1, 3)));
         makeSendLeaderAndStopRequestAlwaysSuccess(
@@ -142,9 +158,11 @@ class TableBucketStateMachineTest {
 
         // create LeaderAndIsr for t10/t11 info in zk,
         zookeeperClient.registerLeaderAndIsr(
-                new TableBucket(t1Id, 0), new LeaderAndIsr(0, 0, Arrays.asList(0, 1), 0, 0));
+                new TableBucket(t1Id, 0),
+                new LeaderAndIsr(0, 0, Arrays.asList(0, 1), Collections.emptyList(), 0, 0));
         zookeeperClient.registerLeaderAndIsr(
-                new TableBucket(t1Id, 1), new LeaderAndIsr(2, 0, Arrays.asList(2, 3), 0, 0));
+                new TableBucket(t1Id, 1),
+                new LeaderAndIsr(2, 0, Arrays.asList(2, 3), Collections.emptyList(), 0, 0));
         // update the LeaderAndIsr to context
         coordinatorContext.putBucketLeaderAndIsr(
                 t1b0, zookeeperClient.getLeaderAndIsr(new TableBucket(t1Id, 0)).get());
@@ -287,6 +305,15 @@ class TableBucketStateMachineTest {
         tableId = 5;
         final TableBucket tableBucket1 = new TableBucket(tableId, 0);
         coordinatorContext.putTablePath(tableId, fakeTablePath);
+        coordinatorContext.putTableInfo(
+                TableInfo.of(
+                        fakeTablePath,
+                        tableId,
+                        0,
+                        DATA1_TABLE_DESCRIPTOR,
+                        System.currentTimeMillis(),
+                        System.currentTimeMillis()));
+        coordinatorContext.putTablePath(tableId, fakeTablePath);
         coordinatorContext.updateBucketReplicaAssignment(tableBucket1, Arrays.asList(0, 1, 2));
         coordinatorContext.putBucketState(tableBucket1, NewBucket);
         tableBucketStateMachine.handleStateChange(
@@ -393,7 +420,7 @@ class TableBucketStateMachineTest {
         List<Integer> liveReplicas = Collections.singletonList(4);
 
         Optional<ElectionResult> leaderElectionResultOpt =
-                initReplicaLeaderElection(assignments, liveReplicas, 0);
+                initReplicaLeaderElection(assignments, liveReplicas, 0, false);
         assertThat(leaderElectionResultOpt.isPresent()).isTrue();
         ElectionResult leaderElectionResult = leaderElectionResultOpt.get();
         assertThat(leaderElectionResult.getLiveReplicas()).containsExactlyInAnyOrder(4);
