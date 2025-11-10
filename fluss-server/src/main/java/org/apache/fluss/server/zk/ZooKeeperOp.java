@@ -44,6 +44,10 @@ public class ZooKeeperOp {
         return zkClient.transactionOp().setData().forPath(path, data);
     }
 
+    public CuratorOp deleteOp(String path) throws Exception {
+        return zkClient.transactionOp().delete().forPath(path);
+    }
+
     public static List<CuratorOp> multiRequest(CuratorOp op1, CuratorOp op2) {
         List<CuratorOp> ops = new ArrayList<>();
         ops.add(op1);
