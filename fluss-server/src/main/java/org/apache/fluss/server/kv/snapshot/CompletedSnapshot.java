@@ -114,6 +114,17 @@ public class CompletedSnapshot {
         this(tableBucket, snapshotID, snapshotLocation, kvSnapshotHandle, 0, null, null);
     }
 
+    public CompletedSnapshot getIncrementalSnapshot(KvSnapshotHandle newKvSnapshotHandle) {
+        return new CompletedSnapshot(
+                tableBucket,
+                snapshotID,
+                snapshotLocation,
+                newKvSnapshotHandle,
+                logOffset,
+                rowCount,
+                autoIncIDRanges);
+    }
+
     public long getSnapshotID() {
         return snapshotID;
     }

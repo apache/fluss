@@ -61,17 +61,14 @@ import org.apache.fluss.server.kv.KvRecoverHelper;
 import org.apache.fluss.server.kv.KvTablet;
 import org.apache.fluss.server.kv.RemoteLogFetcher;
 import org.apache.fluss.server.kv.autoinc.AutoIncIDRange;
-import org.apache.fluss.server.kv.rocksdb.RocksDBKvBuilder;
 import org.apache.fluss.server.kv.scan.OpenScanResult;
 import org.apache.fluss.server.kv.scan.ScannerContext;
 import org.apache.fluss.server.kv.scan.ScannerManager;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
 import org.apache.fluss.server.kv.snapshot.KvFileHandleAndLocalPath;
-import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
-import org.apache.fluss.server.kv.snapshot.KvSnapshotDownloadSpec;
-import org.apache.fluss.server.kv.snapshot.KvTabletSnapshotTarget;
-import org.apache.fluss.server.kv.snapshot.PeriodicSnapshotManager;
+import org.apache.fluss.server.kv.snapshot.KvSnapshotManager;
+import org.apache.fluss.server.kv.snapshot.KvTabletUploadSnapshotTarget;
 import org.apache.fluss.server.kv.snapshot.RocksIncrementalSnapshot;
 import org.apache.fluss.server.kv.snapshot.SnapshotContext;
 import org.apache.fluss.server.log.FetchDataInfo;
@@ -104,6 +101,7 @@ import org.apache.fluss.server.zk.data.LeaderAndIsr;
 import org.apache.fluss.server.zk.data.ZkData;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableRegistry;
+import org.apache.fluss.utils.FileUtils;
 import org.apache.fluss.utils.FlussPaths;
 import org.apache.fluss.utils.IOUtils;
 import org.apache.fluss.utils.clock.Clock;
@@ -132,6 +130,9 @@ import java.util.OptionalLong;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.locks.ReadWriteLock;
@@ -210,10 +211,29 @@ public final class Replica {
     private volatile int coordinatorEpoch = CoordinatorContext.INITIAL_COORDINATOR_EPOCH;
     private volatile boolean isStandbyReplica = false;
 
+    /**
+     * Tracks the in-flight standby snapshot download submitted by {@link #becomeStandbyAsync()}.
+     * All paths that leave the standby role (becoming leader, becoming follower, dropKv) MUST call
+     * {@link #awaitStandbyDownload()} before touching the kv tablet directory or the {@link
+     * KvSnapshotManager}, otherwise the asynchronous downloader and the new role's file operations
+     * would race on the same {@code db/} directory and corrupt RocksDB state.
+     */
+    private volatile CompletableFuture<Void> standbyDownloadFuture =
+            CompletableFuture.completedFuture(null);
+
+    /**
+     * Max time to wait for an in-flight standby snapshot download to drain before a role transition
+     * continues. Without a bounded wait, CI environments with a small ForkJoinPool commonPool can
+     * leave role-transition callers blocked indefinitely on {@link CompletableFuture#join()} when
+     * the async downloader is not yet scheduled or is stuck on slow I/O. 30 seconds is generous
+     * enough for real downloads while preventing indefinite test hangs.
+     */
+    private static final long STANDBY_DOWNLOAD_AWAIT_TIMEOUT_SECONDS = 30L;
+
     // null if table without pk or haven't become leader
     private volatile @Nullable KvTablet kvTablet;
     private volatile @Nullable CloseableRegistry closeableRegistryForKv;
-    private @Nullable PeriodicSnapshotManager kvSnapshotManager;
+    private @Nullable KvSnapshotManager kvSnapshotManager;
 
     /**
      * Server-wide {@link ScannerManager}. Active sessions for this bucket are closed in {@link
@@ -277,6 +297,18 @@ public final class Replica {
         this.snapshotContext = snapshotContext;
         // create a closeable registry for the replica
         this.closeableRegistry = new CloseableRegistry();
+
+        if (kvManager != null) {
+            // Create KvSnapshotManager for all replicas (leader/follower/standby).
+            // The tablet directory is always created for KV tables,
+            // even if the replica is a follower with no KV data.
+            this.kvSnapshotManager =
+                    KvSnapshotManager.create(
+                            tableBucket,
+                            kvManager.getOrCreateTabletDir(dataDir, physicalPath, tableBucket),
+                            snapshotContext,
+                            clock);
+        }
 
         this.logTablet = createLog(dataDir, lazyHighWatermarkCheckpoint);
         this.logTablet.updateIsDataLakeEnabled(tableConfig.isDataLakeEnabled());
@@ -558,10 +590,68 @@ public final class Replica {
                 });
     }
 
+    public void downloadSnapshot(long snapshotId) throws Exception {
+        if (isStandbyReplica) {
+            checkNotNull(kvSnapshotManager);
+            kvSnapshotManager.downloadSnapshot(snapshotId);
+        }
+    }
+
+    /**
+     * Submit a snapshot download task that is chained on the previous standby download.
+     *
+     * <p>This is the entry point used by {@link
+     * org.apache.fluss.server.replica.ReplicaManager#notifyKvSnapshotOffset} to download a specific
+     * snapshot id for a standby replica. The returned future is stored in {@link
+     * #standbyDownloadFuture} so any subsequent role transition can {@link #awaitStandbyDownload()}
+     * for the in-flight download to drain. Without this chaining, two concurrent notifications (or
+     * a notification racing with the initial standby download) would write into the same {@code
+     * db/} directory and corrupt RocksDB state.
+     *
+     * @return a future that completes (always normally) when the chained download finishes.
+     */
+    public CompletableFuture<Void> submitStandbyDownload(long snapshotId, Executor executor) {
+        synchronized (this) {
+            CompletableFuture<Void> chained =
+                    standbyDownloadFuture.handleAsync(
+                            (v, prevEx) -> {
+                                try {
+                                    downloadSnapshot(snapshotId);
+                                } catch (Throwable t) {
+                                    LOG.warn(
+                                            "Failed to download snapshot {} for standby replica {}.",
+                                            snapshotId,
+                                            tableBucket,
+                                            t);
+                                }
+                                return null;
+                            },
+                            executor);
+            standbyDownloadFuture = chained;
+            return chained;
+        }
+    }
+
     // -------------------------------------------------------------------------------------------
 
     private void onBecomeNewLeader() {
+        // Wait for any in-flight standby snapshot download to finish before we touch the
+        // kv tablet directory. Without this, the async downloader and the leader's
+        // initKvTablet (loadKv) would race on the same db/ directory and corrupt RocksDB.
+        if (isKvTable()) {
+            awaitStandbyDownload();
+        }
+
+        // Capture the previous role before clearing the standby flag, so the log
+        // message below can correctly reflect the transition (e.g. standby -> leader).
+        String previousRole = null;
+        if (isKvTable()) {
+            previousRole =
+                    isStandbyReplica ? "standby" : (kvTablet != null ? "leader" : "follower");
+        }
+
         // Clear standby flag — a leader is never a standby replica.
+        // This must be done before becomeLeader() to ensure consistent state.
         isStandbyReplica = false;
 
         updateLeaderEndOffsetSnapshot();
@@ -571,11 +661,34 @@ public final class Replica {
         }
 
         if (isKvTable()) {
-            // if it's become new leader, we must
-            // first destroy the old kv tablet
-            // if exist. Otherwise, it'll use still the old kv tablet which will cause data loss
-            dropKv();
-            // now, we can create a new kv tablet
+            // If kvTablet already exists (e.g., Leader -> Leader scenario),
+            // we need to close it first to release RocksDB lock before re-initializing.
+            // Set need drop as false to avoid deleting files.
+            if (kvTablet != null) {
+                LOG.info(
+                        "Closing existing kvTablet before re-initializing as leader for bucket {}",
+                        tableBucket);
+                // Close the old closeableRegistryForKv to cancel any stale scheduled
+                // snapshot task from the previous epoch. Without this, the stale task
+                // remains in the scheduler queue and can cause an infinite loop in tests
+                // (and unnecessary duplicate snapshots in production).
+                if (closeableRegistry.unregisterCloseable(closeableRegistryForKv)) {
+                    IOUtils.closeQuietly(closeableRegistryForKv);
+                }
+                kvManager.closeOrDropKv(tableBucket, false);
+                kvTablet = null;
+            }
+
+            LOG.info(
+                    "Bucket {} transitioning from {} to leader, starting kv initialization.",
+                    tableBucket,
+                    previousRole);
+
+            // 1. If there is no sst files in local, download the latest kv snapshot and apply log.
+            // 2. If there is already sst files in local, check the diff with the latest snapshot
+            // and download the diff and delete the deleted sst files. And then apply log.
+            checkNotNull(kvSnapshotManager);
+            kvSnapshotManager.becomeLeader();
             createKv();
         }
     }
@@ -610,21 +723,42 @@ public final class Replica {
             boolean isNowStandby = (standbyReplica == localTabletServerId);
             boolean wasLeader = isLeader();
             boolean wasStandby = this.isStandbyReplica;
+            String previousRole = wasLeader ? "leader" : (wasStandby ? "standby" : "follower");
+            String newRole = isNowStandby ? "standby" : "follower";
+
+            LOG.info("Bucket {} transitioning from {} to {}.", tableBucket, previousRole, newRole);
+
+            checkNotNull(kvSnapshotManager);
             if (isNowStandby) {
+                // Drain the previous standby download (if any) BEFORE touching shared state
+                // of KvSnapshotManager. becomeStandby() resets the incremental download caches
+                // (downloadedSstFiles, lastDownloadedSnapshotId, ...); doing so while a previous
+                // downloader is still running would cause that downloader to read torn cache
+                // state and silently re-download files into a directory whose layout is being
+                // mutated underneath it.
+                awaitStandbyDownload();
+                kvSnapshotManager.becomeStandby();
                 // Mark as standby immediately to ensure coordinator's state is consistent.
+                // The snapshot download is done asynchronously to avoid blocking makeFollower.
                 isStandbyReplica = true;
+                becomeStandbyAsync();
             } else {
+                // Wait for any in-flight standby download before mutating the role/files,
+                // so we don't delete a directory that the downloader is still writing into.
+                awaitStandbyDownload();
+                // to be new follower.
+                kvSnapshotManager.becomeFollower();
                 if (wasStandby || wasLeader) {
                     // standby -> follower or leader -> follower
+                    // Clear standby flag before dropKv() so logging is accurate
                     if (wasStandby) {
                         isStandbyReplica = false;
                     }
+                    dropKv();
                 }
+
                 // follower -> follower: do nothing.
             }
-
-            // it should be from leader to follower, we need to destroy the kv tablet
-            dropKv();
         }
 
         if (lakeTieringMetricGroup != null) {
@@ -684,6 +818,101 @@ public final class Replica {
                 tieredLogLocalSegments);
     }
 
+    /**
+     * Asynchronously download the latest snapshot for standby replica.
+     *
+     * <p>This method submits the snapshot download task to an async thread pool to avoid blocking
+     * the makeFollower operation. The download can be retried later via
+     * NotifyKvSnapshotOffsetRequest if it fails.
+     *
+     * <p>The returned {@link CompletableFuture} is stored in {@link #standbyDownloadFuture} so that
+     * any subsequent role transition (standby -> leader / follower) can wait for the in-flight
+     * download to finish before mutating the same tablet directory. See {@link
+     * #awaitStandbyDownload()}.
+     */
+    private void becomeStandbyAsync() {
+        checkNotNull(snapshotContext);
+        // Wait for any previous standby download to drain before submitting a new one. This
+        // prevents two downloaders from concurrently writing into the same db/ directory when
+        // the replica is repeatedly notified to become standby (e.g. across leader epochs).
+        awaitStandbyDownload();
+        synchronized (this) {
+            standbyDownloadFuture =
+                    CompletableFuture.runAsync(
+                            () -> {
+                                try {
+                                    checkNotNull(kvSnapshotManager);
+                                    kvSnapshotManager.downloadLatestSnapshot();
+                                    LOG.info(
+                                            "TabletServer {} successfully downloaded snapshot and becomes standby for bucket {}",
+                                            localTabletServerId,
+                                            tableBucket);
+                                } catch (Exception e) {
+                                    // The snapshot download can be retried via
+                                    // NotifyKvSnapshotOffsetRequest.
+                                    LOG.warn(
+                                            "Failed to download snapshot when becoming standby replica for bucket {}. Will retry later.",
+                                            tableBucket,
+                                            e);
+                                }
+                            },
+                            snapshotContext.getAsyncOperationsThreadPool());
+        }
+        LOG.info(
+                "TabletServer {} is becoming standby for bucket {}, snapshot download started asynchronously",
+                localTabletServerId,
+                tableBucket);
+    }
+
+    /**
+     * Block until the in-flight standby snapshot download (if any) finishes.
+     *
+     * <p>Must be invoked before any code path that mutates the kv tablet directory after the
+     * replica has left, or is about to leave, the standby role. Without this barrier, the
+     * asynchronous downloader and the new role's file operations (loadKv / deleteDirectory /
+     * createKv) would race on the same {@code db/} directory and can leave RocksDB in a corrupt
+     * state or wipe a directory that is currently being written.
+     *
+     * <p>Failures inside the downloader are already swallowed by {@link #becomeStandbyAsync()} so
+     * this method never throws.
+     */
+    private void awaitStandbyDownload() {
+        CompletableFuture<Void> future = standbyDownloadFuture;
+        if (future == null || future.isDone()) {
+            return;
+        }
+        try {
+            future.get(STANDBY_DOWNLOAD_AWAIT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (TimeoutException t) {
+            // Don't block role transition forever. Typically caused by an I/O-bound downloader
+            // or a congested snapshot executor on CI runners. Note: CompletableFuture.cancel()
+            // does NOT interrupt the running thread, so the download may still be in progress.
+            // The caller should be aware that a concurrent write to the db/ directory is
+            // possible in this edge case.
+            LOG.warn(
+                    "Timed out after {}s waiting for standby snapshot download to drain for bucket {}.",
+                    STANDBY_DOWNLOAD_AWAIT_TIMEOUT_SECONDS,
+                    tableBucket,
+                    t);
+            future.cancel(true);
+        } catch (InterruptedException t) {
+            Thread.currentThread().interrupt();
+            LOG.warn(
+                    "Interrupted while waiting for standby snapshot download to drain for bucket {}. Cancelling.",
+                    tableBucket,
+                    t);
+            future.cancel(true);
+        } catch (Throwable t) {
+            // Downloader already swallows its own exceptions; any throwable here is from
+            // CompletableFuture wrapping. Just log and continue – the caller is going to
+            // overwrite or delete the affected files anyway.
+            LOG.debug(
+                    "Standby snapshot download for bucket {} finished exceptionally while waiting.",
+                    tableBucket,
+                    t);
+        }
+    }
+
     private void createKv() {
         try {
             // create a closeable registry for the closable related to kv
@@ -711,14 +940,19 @@ public final class Replica {
                         e);
             }
         }
-        // start periodic kv snapshot
-        startPeriodicKvSnapshot(snapshotUsed.orElse(null));
+        // start periodic upload kv snapshot
+        startPeriodicUploadKvSnapshot(snapshotUsed.orElse(null));
     }
 
     private void dropKv() {
         // Release scanner leases first; otherwise resourceGuard.close() inside kvTablet.close()
         // blocks waiting for them. Runs under leaderIsrUpdateLock(W), so no concurrent register.
         scannerManager.closeScannersForBucket(tableBucket);
+
+        // Make sure no async standby download is touching the tablet directory while we are
+        // about to delete or close it. Safe to call unconditionally – it is a no-op when no
+        // download is in flight.
+        awaitStandbyDownload();
 
         if (closeableRegistry.unregisterCloseable(closeableRegistryForKv)) {
             IOUtils.closeQuietly(closeableRegistryForKv);
@@ -727,8 +961,29 @@ public final class Replica {
             bucketMetricGroup.unregisterRocksDBStatistics();
 
             checkNotNull(kvManager);
-            kvManager.dropKv(tableBucket);
+            kvManager.closeOrDropKv(tableBucket, true);
             kvTablet = null;
+        } else {
+            // For standby replicas, kvTablet is null, so we need to manually delete the
+            // downloaded snapshot files and the tablet directory.
+            // For follower replicas, we need to delete the empty directory.
+            checkNotNull(kvSnapshotManager);
+            File tabletDir = kvSnapshotManager.getTabletDir();
+            try {
+                FileUtils.deleteDirectory(tabletDir);
+                LOG.info(
+                        "Deleted {} tablet directory {} for table bucket {}",
+                        isStandbyReplica ? "standby replica" : "follower",
+                        tabletDir,
+                        tableBucket);
+            } catch (IOException e) {
+                LOG.warn(
+                        "Failed to delete {} tablet directory {} for table bucket {}",
+                        isStandbyReplica ? "standby replica" : "follower",
+                        tabletDir,
+                        tableBucket,
+                        e);
+            }
         }
     }
 
@@ -746,57 +1001,36 @@ public final class Replica {
      */
     private Optional<CompletedSnapshot> initKvTablet() {
         checkNotNull(kvManager);
+        checkNotNull(kvSnapshotManager);
         long startTime = clock.milliseconds();
         LOG.info("Start to init kv tablet for {} of table {}.", tableBucket, physicalPath);
 
-        // todo: we may need to handle the following cases:
-        // case1: no kv files in local, restore from remote snapshot; and apply
-        // the log;
-        // case2: kv files in local
-        //       - if no remote snapshot, restore from local and apply the log known to the local
-        // files.
-        //       - have snapshot, if the known offset to the local files is much less than(maybe
-        // some value configured)
-        //         the remote snapshot; restore from remote snapshot;
-
-        // currently for simplicity, we'll always download the snapshot files and restore from
-        // the snapshots as kv files won't exist in our current implementation for
-        // when replica become follower, we'll always delete the kv files.
-
-        // get the offset from which, we should restore from. default is 0
-        long restoreStartOffset = 0;
-        Optional<CompletedSnapshot> optCompletedSnapshot = getLatestSnapshot(tableBucket);
+        Optional<CompletedSnapshot> optCompletedSnapshot;
         try {
+            optCompletedSnapshot = kvSnapshotManager.downloadLatestSnapshot();
+            long restoreStartOffset = 0;
             Long rowCount;
             AutoIncIDRange autoIncIDRange;
             if (optCompletedSnapshot.isPresent()) {
                 LOG.info(
-                        "Use snapshot {} to restore kv tablet for {} of table {}.",
-                        optCompletedSnapshot.get(),
+                        "Init kv tablet for download latest snapshot {} of {} finish, cost {} ms.",
+                        physicalPath,
                         tableBucket,
-                        physicalPath);
-                CompletedSnapshot completedSnapshot = optCompletedSnapshot.get();
-                // always create a new dir for the kv tablet
-                File tabletDir =
-                        kvManager.createTabletDir(
-                                logTablet.getDataDir(), physicalPath, tableBucket);
-                // down the snapshot to target tablet dir
-                downloadKvSnapshots(completedSnapshot, tabletDir.toPath());
-
-                // as we have downloaded kv files into the tablet dir, now, we can load it
+                        clock.milliseconds() - startTime);
+                // The snapshot files have already been downloaded into the tablet directory
+                // managed by KvSnapshotManager (created via getOrCreateTabletDir during
+                // construction). DO NOT call kvManager.createTabletDir here, otherwise it
+                // would wipe the just-downloaded SST files and cause data loss.
+                File tabletDir = kvSnapshotManager.getTabletDir();
                 kvTablet = kvManager.loadKv(tabletDir, schemaGetter);
 
                 checkNotNull(kvTablet, "kv tablet should not be null.");
+                CompletedSnapshot completedSnapshot = optCompletedSnapshot.get();
                 restoreStartOffset = completedSnapshot.getLogOffset();
                 rowCount = completedSnapshot.getRowCount();
                 // currently, we only support one auto-increment column.
                 autoIncIDRange = completedSnapshot.getFirstAutoIncIDRange();
             } else {
-                LOG.info(
-                        "No snapshot found for {} of {}, restore from log.",
-                        tableBucket,
-                        physicalPath);
-
                 // actually, kv manager always create a kv tablet since we will drop the kv
                 // if it exists before init kv tablet
                 kvTablet =
@@ -841,49 +1075,6 @@ public final class Replica {
         }
 
         return optCompletedSnapshot;
-    }
-
-    private void downloadKvSnapshots(CompletedSnapshot completedSnapshot, Path kvTabletDir)
-            throws IOException {
-        Path kvDbPath = kvTabletDir.resolve(RocksDBKvBuilder.DB_INSTANCE_DIR_STRING);
-        KvSnapshotDownloadSpec downloadSpec =
-                new KvSnapshotDownloadSpec(completedSnapshot.getKvSnapshotHandle(), kvDbPath);
-        long start = clock.milliseconds();
-        LOG.info("Start to download kv snapshot {} to directory {}.", completedSnapshot, kvDbPath);
-        KvSnapshotDataDownloader kvSnapshotDataDownloader =
-                snapshotContext.getSnapshotDataDownloader();
-        try {
-            kvSnapshotDataDownloader.transferAllDataToDirectory(downloadSpec, closeableRegistry);
-        } catch (Exception e) {
-            if (e.getMessage().contains(CompletedSnapshot.SNAPSHOT_DATA_NOT_EXISTS_ERROR_MESSAGE)) {
-                try {
-                    snapshotContext.handleSnapshotBroken(completedSnapshot);
-                } catch (Exception t) {
-                    LOG.error("Handle broken snapshot {} failed.", completedSnapshot, t);
-                }
-            }
-            throw new IOException("Fail to download kv snapshot.", e);
-        }
-        long end = clock.milliseconds();
-        LOG.info(
-                "Download kv snapshot {} to directory {} finish, cost {} ms.",
-                completedSnapshot,
-                kvDbPath,
-                end - start);
-    }
-
-    private Optional<CompletedSnapshot> getLatestSnapshot(TableBucket tableBucket) {
-        try {
-            return Optional.ofNullable(
-                    snapshotContext.getLatestCompletedSnapshotProvider().apply(tableBucket));
-        } catch (Exception e) {
-            LOG.warn(
-                    "Get latest completed snapshot for {} of table {} failed.",
-                    tableBucket,
-                    physicalPath,
-                    e);
-        }
-        return Optional.empty();
     }
 
     private void recoverKvTablet(
@@ -941,9 +1132,11 @@ public final class Replica {
                 end - start);
     }
 
-    private void startPeriodicKvSnapshot(@Nullable CompletedSnapshot completedSnapshot) {
+    private void startPeriodicUploadKvSnapshot(@Nullable CompletedSnapshot completedSnapshot) {
         checkNotNull(kvTablet);
-        KvTabletSnapshotTarget kvTabletSnapshotTarget;
+        checkNotNull(kvSnapshotManager);
+        checkNotNull(closeableRegistryForKv);
+        KvTabletUploadSnapshotTarget kvTabletSnapshotTarget;
         try {
             // get the snapshot reporter to report the completed snapshot
             CompletedKvSnapshotCommitter completedKvSnapshotCommitter =
@@ -995,7 +1188,7 @@ public final class Replica {
                             snapshotContext.getRemoteKvDir(), physicalPath, tableBucket);
 
             kvTabletSnapshotTarget =
-                    new KvTabletSnapshotTarget(
+                    new KvTabletUploadSnapshotTarget(
                             tableBucket,
                             completedKvSnapshotCommitter,
                             snapshotContext.getZooKeeperClient(),
@@ -1011,13 +1204,8 @@ public final class Replica {
                             coordinatorEpochSupplier,
                             lastCompletedSnapshotLogOffset,
                             snapshotSize);
-            this.kvSnapshotManager =
-                    PeriodicSnapshotManager.create(
-                            tableBucket,
-                            kvTabletSnapshotTarget,
-                            snapshotContext,
-                            kvTablet.getGuardedExecutor());
-            kvSnapshotManager.start();
+            kvSnapshotManager.startPeriodicUploadSnapshot(
+                    kvTablet.getGuardedExecutor(), kvTabletSnapshotTarget);
             closeableRegistryForKv.registerCloseable(kvSnapshotManager);
         } catch (Exception e) {
             LOG.error("init kv periodic snapshot for {} failed.", tableBucket, e);
@@ -1029,6 +1217,14 @@ public final class Replica {
             return 0L;
         } else {
             return kvSnapshotManager.getSnapshotSize();
+        }
+    }
+
+    public long getStandbySnapshotSize() {
+        if (kvSnapshotManager == null || !isStandby()) {
+            return 0L;
+        } else {
+            return kvSnapshotManager.getStandbySnapshotSize();
         }
     }
 
@@ -2153,6 +2349,11 @@ public final class Replica {
         return leaderReplicaId != null && leaderReplicaId.equals(localTabletServerId);
     }
 
+    @VisibleForTesting
+    public boolean isStandby() {
+        return isStandbyReplica;
+    }
+
     private LogTablet createLog(
             File dataDir, OffsetCheckpointFile.LazyOffsetCheckpoints lazyHighWatermarkCheckpoint)
             throws Exception {
@@ -2242,7 +2443,7 @@ public final class Replica {
 
     @VisibleForTesting
     @Nullable
-    public PeriodicSnapshotManager getKvSnapshotManager() {
+    public KvSnapshotManager getKvSnapshotManager() {
         return kvSnapshotManager;
     }
 }
