@@ -244,6 +244,7 @@ public final class Replica {
         this.closeableRegistry = new CloseableRegistry();
 
         this.logTablet = createLog(lazyHighWatermarkCheckpoint);
+        this.logTablet.updateIsDataLakeEnabled(tableConfig.isDataLakeEnabled());
         this.clock = clock;
         registerMetrics();
     }
