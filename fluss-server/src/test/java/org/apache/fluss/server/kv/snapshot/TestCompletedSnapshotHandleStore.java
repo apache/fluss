@@ -68,6 +68,12 @@ public class TestCompletedSnapshotHandleStore implements CompletedSnapshotHandle
         return getLatestSupplier.get();
     }
 
+    @Override
+    public Optional<CompletedSnapshotHandle> getCompletedSnapshotHandle(
+            TableBucket tableBucket, long snapshotId) throws Exception {
+        return getLatestSupplier.get();
+    }
+
     public static Builder newBuilder() {
         return new Builder();
     }
