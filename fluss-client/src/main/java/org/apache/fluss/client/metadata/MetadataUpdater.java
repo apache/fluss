@@ -18,6 +18,7 @@
 package org.apache.fluss.client.metadata;
 
 import org.apache.fluss.annotation.VisibleForTesting;
+import org.apache.fluss.client.utils.ClientRpcMessageUtils;
 import org.apache.fluss.client.utils.ClientUtils;
 import org.apache.fluss.cluster.BucketLocation;
 import org.apache.fluss.cluster.Cluster;
@@ -28,6 +29,7 @@ import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.exception.PartitionNotExistException;
 import org.apache.fluss.exception.RetriableException;
+import org.apache.fluss.metadata.PartitionInfo;
 import org.apache.fluss.metadata.PhysicalTablePath;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
@@ -38,6 +40,12 @@ import org.apache.fluss.rpc.RpcClient;
 import org.apache.fluss.rpc.gateway.AdminReadOnlyGateway;
 import org.apache.fluss.rpc.gateway.CoordinatorGateway;
 import org.apache.fluss.rpc.gateway.TabletServerGateway;
+import org.apache.fluss.rpc.messages.ListPartitionInfosRequest;
+import org.apache.fluss.rpc.messages.ListPartitionInfosResponse;
+import org.apache.fluss.rpc.messages.PbTablePath;
+import org.apache.fluss.shaded.guava32.com.google.common.cache.CacheBuilder;
+import org.apache.fluss.shaded.guava32.com.google.common.cache.CacheLoader;
+import org.apache.fluss.shaded.guava32.com.google.common.cache.LoadingCache;
 import org.apache.fluss.utils.ExceptionUtils;
 
 import org.slf4j.Logger;
@@ -52,6 +60,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.stream.Collectors;
 
@@ -65,6 +75,20 @@ public class MetadataUpdater {
 
     private final RpcClient rpcClient;
     protected volatile Cluster cluster;
+
+    // Cache for storing partition information with automatic loading and refresh
+    private final LoadingCache<TablePath, List<PartitionInfo>> partitionInfoCache =
+            CacheBuilder.newBuilder()
+                    .refreshAfterWrite(5, TimeUnit.SECONDS)
+                    .maximumSize(1000)
+                    .build(
+                            new CacheLoader<TablePath, List<PartitionInfo>>() {
+                                @Override
+                                public List<PartitionInfo> load(TablePath tablePath)
+                                        throws Exception {
+                                    return fetchPartitionInfos(tablePath);
+                                }
+                            });
 
     public MetadataUpdater(Configuration configuration, RpcClient rpcClient) {
         this(rpcClient, initializeCluster(configuration, rpcClient));
@@ -176,6 +200,11 @@ public class MetadataUpdater {
         }
     }
 
+    public AdminReadOnlyGateway newAdminReadOnlyGateway() {
+        return GatewayClientProxy.createGatewayProxy(
+                this::getRandomTabletServer, rpcClient, AdminReadOnlyGateway.class);
+    }
+
     public void checkAndUpdateTableMetadata(Set<TablePath> tablePaths) {
         Set<TablePath> needUpdateTablePaths =
                 tablePaths.stream()
@@ -237,6 +266,84 @@ public class MetadataUpdater {
         Collection<Long> partitionIds =
                 partitionId == null ? null : Collections.singleton(partitionId);
         updateMetadata(Collections.singleton(tablePath), null, partitionIds);
+    }
+
+    /**
+     * Update table partition metadata with rate limiting.
+     *
+     * <p>This method maintains a rate limiter per table with a 1-second period. It uses
+     * non-blocking mode to get permits from the rate limiter, and only updates table partition
+     * metadata when the rate limiter allows. The metadata is updated by calling listPartitionInfos
+     * to retrieve the latest partition information.
+     *
+     * <p>TODO: This is a tricky implementation for cached metadata updates that is neither
+     * performance-optimal nor consistent. Fluss currently lacks a distributed metadata cache
+     * consistency mechanism. This issue needs to be addressed in the future.
+     *
+     * @param tablePath the table path to update metadata for
+     */
+
+    /**
+     * Get partitions for the given table with caching and rate limiting.
+     *
+     * <p>This method first checks the cache for existing partition information. If not found in
+     * cache, it calls listPartitionInfos API with rate limiting to retrieve the latest partition
+     * information and caches the result.
+     *
+     * @param tablePath the table path to get partitions for
+     * @return list of partition information for the table
+     */
+    public List<PartitionInfo> getPartitions(TablePath tablePath) {
+        try {
+            List<PartitionInfo> partitions = partitionInfoCache.get(tablePath);
+            LOG.debug("Retrieved {} partitions for table: {}", partitions.size(), tablePath);
+            return partitions;
+        } catch (Exception e) {
+            LOG.warn("Failed to load partition info for table: {}", tablePath, e);
+            // Try to get stale data from cache if load failed
+            List<PartitionInfo> stalePartitions = partitionInfoCache.getIfPresent(tablePath);
+            if (stalePartitions != null) {
+                LOG.debug("Returning stale partition data for table: {}", tablePath);
+                return stalePartitions;
+            }
+            // Return empty list if no cached data available
+            return Collections.emptyList();
+        }
+    }
+
+    /**
+     * Fetch partition information using Admin's listPartitionInfos interface.
+     *
+     * <p>This implementation uses the AdminReadOnlyGateway to call listPartitionInfos, which
+     * retrieves the latest partition information directly from the server, ensuring data freshness
+     * and consistency.
+     *
+     * @param tablePath the table path to fetch partitions for
+     * @return list of partition information
+     * @throws Exception if failed to retrieve partition information
+     */
+    private List<PartitionInfo> fetchPartitionInfos(TablePath tablePath) throws Exception {
+        AdminReadOnlyGateway gateway = newAdminReadOnlyGateway();
+
+        // Create request for listPartitionInfos
+        ListPartitionInfosRequest request = new ListPartitionInfosRequest();
+        request.setTablePath(
+                new PbTablePath()
+                        .setDatabaseName(tablePath.getDatabaseName())
+                        .setTableName(tablePath.getTableName()));
+
+        // Call listPartitionInfos to get the latest partition information
+        CompletableFuture<ListPartitionInfosResponse> future = gateway.listPartitionInfos(request);
+        ListPartitionInfosResponse response = future.get();
+
+        // Convert response to partition infos
+        List<PartitionInfo> partitionInfos = ClientRpcMessageUtils.toPartitionInfos(response);
+
+        LOG.debug(
+                "Retrieved {} partitions using Admin API for table: {}",
+                partitionInfos.size(),
+                tablePath);
+        return partitionInfos;
     }
 
     /** Update the table or partition metadata info. */

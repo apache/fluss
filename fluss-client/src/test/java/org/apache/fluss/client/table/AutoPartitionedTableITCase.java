@@ -170,8 +170,9 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
     }
 
     @Test
-    void testInvalidPrefixLookupForPartitionedTable() throws Exception {
-        // This case partition key 'c' only in pk but not in prefix key.
+    void testMultiPartitionPrefixLookupForPartitionedTable() throws Exception {
+        // This case tests multi-partition prefix lookup where partition key 'c' is not in lookup
+        // keys.
         TablePath tablePath = TablePath.of("test_db_1", "test_partitioned_table_prefix_lookup2");
         Schema schema =
                 Schema.newBuilder()
@@ -192,15 +193,25 @@ class AutoPartitionedTableITCase extends ClientToServerITCaseBase {
                                 AutoPartitionTimeUnit.YEAR)
                         .build();
         createTable(tablePath, descriptor, false);
+        Map<String, Long> partitionIdByNames =
+                FLUSS_CLUSTER_EXTENSION.waitUntilPartitionAllReady(tablePath);
 
         Table table = conn.getTable(tablePath);
 
-        // test prefix lookup with (a, b).
-        assertThatThrownBy(() -> table.newLookup().lookupBy("a", "b").createLookuper())
-                .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining(
-                        "Can not perform prefix lookup on table 'test_db_1.test_partitioned_table_prefix_lookup2', "
-                                + "because the lookup columns [a, b] must contain all partition fields [c].");
+        // Insert test data into different partitions
+        UpsertWriter upsertWriter = table.newUpsert().createWriter();
+        for (String partitionName : partitionIdByNames.keySet()) {
+            upsertWriter.upsert(row(1, 1L, partitionName, "value1_" + partitionName));
+            upsertWriter.upsert(row(1, 2L, partitionName, "value2_" + partitionName));
+        }
+        upsertWriter.flush();
+
+        // test prefix lookup with (a, b) - should now work with multi-partition support
+        Lookuper prefixLookuper = table.newLookup().lookupBy("a", "b").createLookuper();
+        LookupResult result = prefixLookuper.lookup(row(1, 1L)).get();
+
+        // Should find results from all partitions
+        assertThat(result.getRowList()).hasSize(partitionIdByNames.size());
     }
 
     @Test
