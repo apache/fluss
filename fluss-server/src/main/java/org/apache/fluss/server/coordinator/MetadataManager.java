@@ -360,7 +360,6 @@ public class MetadataManager {
                         newDescriptor,
                         tableChanges,
                         lakeCatalog,
-                        dataLakeFormat,
                         lakeCatalogContext);
                 // update the table to zk
                 TableRegistration updatedTableRegistration =
@@ -400,7 +399,6 @@ public class MetadataManager {
             TableDescriptor newDescriptor,
             List<TableChange> tableChanges,
             LakeCatalog lakeCatalog,
-            DataLakeFormat dataLakeFormat,
             LakeCatalog.Context lakeCatalogContext) {
         if (isDataLakeEnabled(newDescriptor)) {
             if (lakeCatalog == null) {
@@ -410,38 +408,31 @@ public class MetadataManager {
                                 + " in data lake, because the Fluss cluster doesn't enable datalake tables.");
             }
 
-            boolean isLakeTableNewlyCreated = false;
             // to enable lake table
             if (!isDataLakeEnabled(tableDescriptor)) {
                 // before create table in fluss, we may create in lake
                 try {
                     lakeCatalog.createTable(tablePath, newDescriptor, lakeCatalogContext);
-                    // no need to alter lake table if it is newly created
-                    isLakeTableNewlyCreated = true;
                 } catch (TableAlreadyExistException e) {
-                    // TODO: should tolerate if the lake exist but matches our schema. This ensures
-                    // eventually consistent by idempotently creating the table multiple times. See
-                    // #846
-                    throw new LakeTableAlreadyExistException(
-                            String.format(
-                                    "The table %s already exists in %s catalog, please "
-                                            + "first drop the table in %s catalog or use a new table name.",
-                                    tablePath, dataLakeFormat, dataLakeFormat));
+                    throw new LakeTableAlreadyExistException(e.getMessage(), e);
                 }
             }
+        }
 
-            // only need to alter lake table if it is not newly created
-            if (!isLakeTableNewlyCreated) {
-                {
-                    try {
-                        lakeCatalog.alterTable(tablePath, tableChanges, lakeCatalogContext);
-                    } catch (TableNotExistException e) {
-                        throw new FlussRuntimeException(
-                                "Lake table doesn't exists for lake-enabled table "
-                                        + tablePath
-                                        + ", which shouldn't be happened. Please check if the lake table was deleted manually.",
-                                e);
-                    }
+        // We should always alter lake table even though datalake is disabled.
+        // Otherwise, if user alter the fluss table when datalake is disabled, then enable datalake
+        // again, the lake table will mismatch.
+        if (lakeCatalog != null) {
+            try {
+                lakeCatalog.alterTable(tablePath, tableChanges, lakeCatalogContext);
+            } catch (TableNotExistException e) {
+                // only throw TableNotExistException if datalake is enabled
+                if (isDataLakeEnabled(newDescriptor)) {
+                    throw new FlussRuntimeException(
+                            "Lake table doesn't exists for lake-enabled table "
+                                    + tablePath
+                                    + ", which shouldn't be happened. Please check if the lake table was deleted manually.",
+                            e);
                 }
             }
         }

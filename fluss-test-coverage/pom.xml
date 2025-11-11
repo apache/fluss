@@ -384,7 +384,7 @@
                                         <exclude>org.apache.fluss.flink.DummyClass120</exclude>
                                         <exclude>org.apache.fluss.lake.batch.ArrowRecordBatch</exclude>
                                         <exclude>org.apache.fluss.lake.committer.CommittedLakeSnapshot</exclude>
-                                        <exclude>org.apache.fluss.lake.paimon.FlussDataTypeToPaimonDataType</exclude>
+                                        <exclude>org.apache.fluss.lake.paimon.utils.FlussDataTypeToPaimonDataType</exclude>
                                         <!-- start exclude for lake lance -->
                                         <exclude>org.apache.fluss.lake.lance.*</exclude>
                                         <!-- temporarily exclude iceberg -->

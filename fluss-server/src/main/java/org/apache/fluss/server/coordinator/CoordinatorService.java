@@ -283,8 +283,6 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
             tableAssignment = generateAssignment(bucketCount, replicaFactor, servers);
         }
 
-        // TODO: should tolerate if the lake exist but matches our schema. This ensures eventually
-        //  consistent by idempotently creating the table multiple times. See #846
         // before create table in fluss, we may create in lake
         if (isDataLakeEnabled(tableDescriptor)) {
             try {
@@ -294,13 +292,7 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                                 tableDescriptor,
                                 new DefaultLakeCatalogContext(currentSession().getPrincipal()));
             } catch (TableAlreadyExistException e) {
-                throw new LakeTableAlreadyExistException(
-                        String.format(
-                                "The table %s already exists in %s catalog, please "
-                                        + "first drop the table in %s catalog or use a new table name.",
-                                tablePath,
-                                lakeCatalogContainer.getDataLakeFormat(),
-                                lakeCatalogContainer.getDataLakeFormat()));
+                throw new LakeTableAlreadyExistException(e.getMessage(), e);
             }
         }
 
