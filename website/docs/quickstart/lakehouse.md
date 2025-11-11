@@ -520,10 +520,13 @@ SELECT o.order_key,
        c.acctbal,
        c.mktsegment,
        n.name
-FROM fluss_order o
-LEFT JOIN fluss_customer FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
+FROM (
+    SELECT *, PROCTIME() as ptime
+    FROM `default_catalog`.`default_database`.source_order
+) o
+LEFT JOIN fluss_customer FOR SYSTEM_TIME AS OF o.ptime AS c
     ON o.cust_key = c.cust_key
-LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF `o`.`ptime` AS `n`
+LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF o.ptime AS n
     ON c.nation_key = n.nation_key;
 ```
 
