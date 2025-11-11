@@ -223,12 +223,14 @@ if command -v sha256sum >/dev/null; then
 elif command -v shasum >/dev/null; then 
   SHA_CMD="shasum -a 256 -c"
 fi
-if $(uname -a) in 
-"*Darwin*") 
-  if $SHA_CMD != ""; then
-    SHA_CMD="$SHA_CMD -"
-  fi
-fi
+case "$(uname -s)" in
+  Darwin*)
+    if [ "$SHA_CMD" != "" ]; then
+      SHA_CMD="$SHA_CMD -"
+      echo "Using sha256 command on mac os: $SHA_CMD"
+    fi
+    ;;
+esac
 # If specified, validate the SHA-256 sum of the Maven distribution zip file
 if [ -n "${distributionSha256Sum-}" ]; then
   distributionSha256Result=false
