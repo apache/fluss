@@ -332,6 +332,10 @@ For further information how to store catalog configurations, see [Flink's Catalo
 :::
 
 ### Create Tables
+<Tabs groupId="lake-tabs">
+  <TabItem value="paimon" label="Paimon" default>
+
+
 Running the following SQL to create Fluss tables to be used in this guide:
 ```sql  title="Flink SQL"
 CREATE TABLE fluss_order (
@@ -366,6 +370,46 @@ CREATE TABLE fluss_nation (
 );
 ```
 
+  </TabItem>
+
+  <TabItem value="iceberg" label="Iceberg">
+
+
+Running the following SQL to create Fluss tables to be used in this guide:
+```sql  title="Flink SQL"
+CREATE TABLE fluss_order (
+    `order_key` BIGINT,
+    `cust_key` INT NOT NULL,
+    `total_price` DECIMAL(15, 2),
+    `order_date` DATE,
+    `order_priority` STRING,
+    `clerk` STRING,
+    `ptime` AS PROCTIME()
+);
+```
+
+```sql  title="Flink SQL"
+CREATE TABLE fluss_customer (
+    `cust_key` INT NOT NULL,
+    `name` STRING,
+    `phone` STRING,
+    `nation_key` INT NOT NULL,
+    `acctbal` DECIMAL(15, 2),
+    `mktsegment` STRING,
+    PRIMARY KEY (`cust_key`) NOT ENFORCED
+);
+```
+
+```sql  title="Flink SQL"
+CREATE TABLE fluss_nation (
+  `nation_key` INT NOT NULL,
+  `name`       STRING,
+   PRIMARY KEY (`nation_key`) NOT ENFORCED
+);
+```
+
+  </TabItem>
+</Tabs>
 ## Streaming into Fluss
 
 First, run the following SQL to sync data from source tables to Fluss tables:
@@ -520,13 +564,10 @@ SELECT o.order_key,
        c.acctbal,
        c.mktsegment,
        n.name
-FROM (
-    SELECT *, PROCTIME() as ptime
-    FROM `default_catalog`.`default_database`.source_order
-) o
-LEFT JOIN fluss_customer FOR SYSTEM_TIME AS OF o.ptime AS c
+FROM fluss_order o
+LEFT JOIN fluss_customer FOR SYSTEM_TIME AS OF `o`.`ptime` AS `c`
     ON o.cust_key = c.cust_key
-LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF o.ptime AS n
+LEFT JOIN fluss_nation FOR SYSTEM_TIME AS OF `o`.`ptime` AS `n`
     ON c.nation_key = n.nation_key;
 ```
 
