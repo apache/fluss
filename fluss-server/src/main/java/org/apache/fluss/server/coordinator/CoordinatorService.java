@@ -290,7 +290,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                         .createTable(
                                 tablePath,
                                 tableDescriptor,
-                                new DefaultLakeCatalogContext(currentSession().getPrincipal()));
+                                new DefaultLakeCatalogContext(
+                                        true, currentSession().getPrincipal()));
             } catch (TableAlreadyExistException e) {
                 throw new LakeTableAlreadyExistException(e.getMessage(), e);
             }
@@ -322,9 +323,8 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
                 tablePropertyChanges,
                 request.isIgnoreIfNotExists(),
                 lakeCatalogContainer.getLakeCatalog(),
-                lakeCatalogContainer.getDataLakeFormat(),
                 lakeTableTieringManager,
-                new DefaultLakeCatalogContext(currentSession().getPrincipal()));
+                new DefaultLakeCatalogContext(false, currentSession().getPrincipal()));
 
         return CompletableFuture.completedFuture(new AlterTableResponse());
     }
@@ -758,10 +758,18 @@ public final class CoordinatorService extends RpcServiceBase implements Coordina
 
     static class DefaultLakeCatalogContext implements LakeCatalog.Context {
 
+        private final boolean isCreatingFlussTable;
         private final FlussPrincipal flussPrincipal;
 
-        public DefaultLakeCatalogContext(FlussPrincipal flussPrincipal) {
+        public DefaultLakeCatalogContext(
+                boolean isCreatingFlussTable, FlussPrincipal flussPrincipal) {
+            this.isCreatingFlussTable = isCreatingFlussTable;
             this.flussPrincipal = flussPrincipal;
+        }
+
+        @Override
+        public boolean isCreatingFlussTable() {
+            return isCreatingFlussTable;
         }
 
         @Override
