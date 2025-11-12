@@ -219,7 +219,7 @@ public class PaimonLakeCatalog implements LakeCatalog {
     }
 
     private void checkTableIsEmpty(Identifier tablePath, FileStoreTable table) {
-        if (!table.latestSnapshot().isEmpty()) {
+        if (table.latestSnapshot().isPresent()) {
             throw new TableAlreadyExistException(
                     String.format(
                             "The table %s already exists in Paimon catalog, and the table is not empty. "
