@@ -520,7 +520,11 @@ public class FlinkTableSource
                 return Result.of(Collections.emptyList(), filters);
             }
             singleRowFilter = lookupRow;
-            return Result.of(acceptedFilters, remainingFilters);
+
+            // We cannot determine whether this source will ultimately be used as a scan source or
+            // a lookup source. Since fluss lookup sources cannot accept filters yet, to be safe, we
+            // return all filters to the Flink planner.
+            return Result.of(acceptedFilters, filters);
         } else if (isPartitioned()) {
             // apply partition filter pushdown
             List<Predicate> converted = new ArrayList<>();
@@ -572,7 +576,11 @@ public class FlinkTableSource
                     }
                 }
             }
-            return Result.of(acceptedFilters, remainingFilters);
+
+            // We cannot determine whether this source will ultimately be used as a scan source or
+            // a lookup source. Since fluss lookup sources cannot accept filters yet, to be safe, we
+            // return all filters to the Flink planner.
+            return Result.of(acceptedFilters, filters);
         }
 
         return Result.of(Collections.emptyList(), filters);
