@@ -41,7 +41,6 @@ import org.apache.paimon.table.Table;
 import org.apache.paimon.types.DataType;
 import org.apache.paimon.types.DataTypes;
 
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -170,8 +169,8 @@ public class PaimonLakeCatalog implements LakeCatalog {
     private void validatePaimonSchemaCapability(
             Identifier tablePath, Schema existingSchema, Schema newSchema) {
         // Adjust options for comparison
-        Map<String, String> existingOptions = new HashMap<>(existingSchema.options());
-        Map<String, String> newOptions = new HashMap<>(newSchema.options());
+        Map<String, String> existingOptions = existingSchema.options();
+        Map<String, String> newOptions = newSchema.options();
         // `path` will be set automatically by Paimon, so we need to remove it in existing options
         existingOptions.remove(CoreOptions.PATH.key());
         // when enable datalake with an existing table, `table.datalake.enabled` will be `false`
@@ -182,40 +181,14 @@ public class PaimonLakeCatalog implements LakeCatalog {
             newOptions.remove(datalakeConfigKey);
         }
 
-        // Build schemas with adjusted options for comparison
-        Schema adjustedExistingSchema = buildSchemaWithOptions(existingSchema, existingOptions);
-        Schema adjustedNewSchema = buildSchemaWithOptions(newSchema, newOptions);
-
-        if (!adjustedExistingSchema.equals(adjustedNewSchema)) {
+        if (!existingSchema.equals(newSchema)) {
             throw new TableAlreadyExistException(
                     String.format(
                             "The table %s already exists in Paimon catalog, but the table schema is not compatible. "
                                     + "Existing schema: %s, new schema: %s. "
                                     + "Please first drop the table in Paimon catalog or use a new table name.",
-                            tablePath.getEscapedFullName(),
-                            adjustedExistingSchema,
-                            adjustedNewSchema));
+                            tablePath.getEscapedFullName(), existingSchema, newSchema));
         }
-    }
-
-    private Schema buildSchemaWithOptions(Schema schema, Map<String, String> options) {
-        Schema.Builder builder = Schema.newBuilder();
-        // Copy fields
-        for (org.apache.paimon.types.DataField field : schema.fields()) {
-            builder.column(field.name(), field.type(), field.description());
-        }
-        // Copy primary keys
-        if (!schema.primaryKeys().isEmpty()) {
-            builder.primaryKey(schema.primaryKeys());
-        }
-        // Copy partition keys
-        if (!schema.partitionKeys().isEmpty()) {
-            builder.partitionKeys(schema.partitionKeys());
-        }
-        // Set adjusted options
-        builder.options(options);
-        builder.comment(schema.comment());
-        return builder.build();
     }
 
     private void checkTableIsEmpty(Identifier tablePath, FileStoreTable table) {

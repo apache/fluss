@@ -427,7 +427,7 @@ public class MetadataManager {
                 // only throw TableNotExistException if datalake is enabled
                 if (isDataLakeEnabled(newDescriptor)) {
                     throw new FlussRuntimeException(
-                            "Lake table doesn't exists for lake-enabled table "
+                            "Lake table doesn't exist for lake-enabled table "
                                     + tablePath
                                     + ", which shouldn't be happened. Please check if the lake table was deleted manually.",
                             e);

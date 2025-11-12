@@ -34,6 +34,7 @@ import org.apache.fluss.server.testutils.FlussClusterExtension;
 import org.apache.fluss.types.DataTypes;
 
 import org.apache.paimon.CoreOptions;
+import org.apache.paimon.Snapshot;
 import org.apache.paimon.catalog.Catalog;
 import org.apache.paimon.catalog.CatalogContext;
 import org.apache.paimon.catalog.CatalogFactory;
@@ -62,6 +63,7 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 import static org.apache.fluss.lake.paimon.utils.PaimonConversions.PAIMON_UNSETTABLE_OPTIONS;
@@ -414,8 +416,8 @@ class LakeEnabledTableCreateITCase {
         customProperties.put("k1", "v1");
         customProperties.put("paimon.file.format", "parquet");
 
-        // 1. test for existing lake table without bucket keys
-        TableDescriptor logTableWithoutBucketKeys =
+        // test for existing lake table
+        TableDescriptor td =
                 createTableDescriptor(
                         2,
                         BUCKET_NUM,
@@ -423,20 +425,19 @@ class LakeEnabledTableCreateITCase {
                         Collections.emptyList(),
                         customProperties,
                         false);
-        TablePath logTablePathWithoutBucketkeys =
-                TablePath.of(DATABASE, "log_table_without_bucket_keys");
-        admin.createTable(logTablePathWithoutBucketkeys, logTableWithoutBucketKeys, false).get();
+        TablePath tablePath = TablePath.of(DATABASE, "log_table_with_exist_lake_table");
+        admin.createTable(tablePath, td, false).get();
         // drop fluss table, lake table should still exist
-        admin.dropTable(logTablePathWithoutBucketkeys, false).get();
+        admin.dropTable(tablePath, false).get();
         // create the same fluss table again should be ok
-        admin.createTable(logTablePathWithoutBucketkeys, logTableWithoutBucketKeys, false).get();
-        admin.dropTable(logTablePathWithoutBucketkeys, false).get();
+        admin.createTable(tablePath, td, false).get();
+        admin.dropTable(tablePath, false).get();
 
         // paimon table use dynamic bucket for fluss log table without bucket keys
         // so it should be ok to create the same fluss table with a new bucket num
-        logTableWithoutBucketKeys = logTableWithoutBucketKeys.withBucketCount(BUCKET_NUM + 1);
-        admin.createTable(logTablePathWithoutBucketkeys, logTableWithoutBucketKeys, false).get();
-        admin.dropTable(logTablePathWithoutBucketkeys, false).get();
+        td = td.withBucketCount(BUCKET_NUM + 1);
+        admin.createTable(tablePath, td, false).get();
+        admin.dropTable(tablePath, false).get();
 
         // create log table with bucket keys will throw exception
         TableDescriptor logTableWithoutBucketKeys1 =
@@ -448,16 +449,11 @@ class LakeEnabledTableCreateITCase {
                         customProperties,
                         false);
         assertThatThrownBy(
-                        () ->
-                                admin.createTable(
-                                                logTablePathWithoutBucketkeys,
-                                                logTableWithoutBucketKeys1,
-                                                false)
-                                        .get())
+                        () -> admin.createTable(tablePath, logTableWithoutBucketKeys1, false).get())
                 .cause()
                 .isInstanceOf(LakeTableAlreadyExistException.class)
                 .hasMessage(
-                        "The table `fluss`.`log_table_without_bucket_keys` already exists in Paimon catalog, but the table schema is not compatible. "
+                        "The table `fluss`.`log_table_with_exist_lake_table` already exists in Paimon catalog, but the table schema is not compatible. "
                                 + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}, "
                                 + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=3, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, bucket-key=c1,c2, file.format=parquet, fluss.k1=v1}, comment=null}. "
                                 + "Please first drop the table in Paimon catalog or use a new table name.");
@@ -472,154 +468,13 @@ class LakeEnabledTableCreateITCase {
                         customProperties,
                         false);
         assertThatThrownBy(
-                        () ->
-                                admin.createTable(
-                                                logTablePathWithoutBucketkeys,
-                                                logTableWithoutBucketKeys2,
-                                                false)
-                                        .get())
+                        () -> admin.createTable(tablePath, logTableWithoutBucketKeys2, false).get())
                 .cause()
                 .isInstanceOf(LakeTableAlreadyExistException.class)
                 .hasMessage(
-                        "The table `fluss`.`log_table_without_bucket_keys` already exists in Paimon catalog, but the table schema is not compatible. "
+                        "The table `fluss`.`log_table_with_exist_lake_table` already exists in Paimon catalog, but the table schema is not compatible. "
                                 + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}, "
                                 + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `c3` STRING, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}. "
-                                + "Please first drop the table in Paimon catalog or use a new table name.");
-
-        // create table with primary keys will throw exception
-        TableDescriptor logTableWithoutBucketKeys3 =
-                createTableDescriptor(
-                        2,
-                        BUCKET_NUM,
-                        Collections.emptyList(),
-                        Collections.emptyList(),
-                        customProperties,
-                        true);
-        assertThatThrownBy(
-                        () ->
-                                admin.createTable(
-                                                logTablePathWithoutBucketkeys,
-                                                logTableWithoutBucketKeys3,
-                                                false)
-                                        .get())
-                .cause()
-                .isInstanceOf(LakeTableAlreadyExistException.class)
-                .hasMessage(
-                        "The table `fluss`.`log_table_without_bucket_keys` already exists in Paimon catalog, but the table schema is not compatible. "
-                                + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}, "
-                                + "new schema: UpdateSchema{fields=[`c1` STRING NOT NULL, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[c1], options={bucket=3, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, bucket-key=c1, changelog-producer=input, file.format=parquet, fluss.k1=v1}, comment=null}. "
-                                + "Please first drop the table in Paimon catalog or use a new table name.");
-
-        // create log table with partition keys will throw exception
-        TableDescriptor logTableWithoutBucketKeys4 =
-                createTableDescriptor(
-                        2,
-                        BUCKET_NUM,
-                        Collections.emptyList(),
-                        Collections.singletonList("c1"),
-                        customProperties,
-                        false);
-        assertThatThrownBy(
-                        () ->
-                                admin.createTable(
-                                                logTablePathWithoutBucketkeys,
-                                                logTableWithoutBucketKeys4,
-                                                false)
-                                        .get())
-                .cause()
-                .isInstanceOf(LakeTableAlreadyExistException.class)
-                .hasMessage(
-                        "The table `fluss`.`log_table_without_bucket_keys` already exists in Paimon catalog, but the table schema is not compatible. "
-                                + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}, "
-                                + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[c1], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}. "
-                                + "Please first drop the table in Paimon catalog or use a new table name.");
-
-        // create log table with different custom properties will throw exception
-        customProperties.put("paimon.file.format", "orc");
-        TableDescriptor logTableWithoutBucketKeys5 =
-                createTableDescriptor(
-                        2,
-                        BUCKET_NUM,
-                        Collections.emptyList(),
-                        Collections.emptyList(),
-                        customProperties,
-                        false);
-        assertThatThrownBy(
-                        () ->
-                                admin.createTable(
-                                                logTablePathWithoutBucketkeys,
-                                                logTableWithoutBucketKeys5,
-                                                false)
-                                        .get())
-                .cause()
-                .isInstanceOf(LakeTableAlreadyExistException.class)
-                .hasMessage(
-                        "The table `fluss`.`log_table_without_bucket_keys` already exists in Paimon catalog, but the table schema is not compatible. "
-                                + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}, "
-                                + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=orc, fluss.k1=v1}, comment=null}. "
-                                + "Please first drop the table in Paimon catalog or use a new table name.");
-
-        // 2. test existing lake table with bucket keys
-        TableDescriptor logTableWithBucketKeys =
-                createTableDescriptor(
-                        2,
-                        BUCKET_NUM,
-                        Collections.singletonList("c1"),
-                        Collections.emptyList(),
-                        customProperties,
-                        false);
-        TablePath logTablePathWithBucketKeys = TablePath.of(DATABASE, "log_table_with_bucket_keys");
-        admin.createTable(logTablePathWithBucketKeys, logTableWithBucketKeys, false).get();
-        // drop fluss table, lake table should still exist
-        admin.dropTable(logTablePathWithBucketKeys, false).get();
-        // create the same fluss table again should be ok
-        admin.createTable(logTablePathWithBucketKeys, logTableWithBucketKeys, false).get();
-        admin.dropTable(logTablePathWithBucketKeys, false).get();
-
-        // fluss table with bucket keys will use static bucket in paimon
-        TableDescriptor logTableWithBucketKeys1 =
-                logTableWithBucketKeys.withBucketCount(BUCKET_NUM + 1);
-        assertThatThrownBy(
-                        () ->
-                                admin.createTable(
-                                                logTablePathWithBucketKeys,
-                                                logTableWithBucketKeys1,
-                                                false)
-                                        .get())
-                .cause()
-                .isInstanceOf(LakeTableAlreadyExistException.class)
-                .hasMessage(
-                        "The table `fluss`.`log_table_with_bucket_keys` already exists in Paimon catalog, but the table schema is not compatible. "
-                                + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=3, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, bucket-key=c1, file.format=orc, fluss.k1=v1}, comment=null}, "
-                                + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=4, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, bucket-key=c1, file.format=orc, fluss.k1=v1}, comment=null}. "
-                                + "Please first drop the table in Paimon catalog or use a new table name.");
-
-        // 3. test existing lake table with primary keys
-        TableDescriptor pkTable =
-                createTableDescriptor(
-                        2,
-                        BUCKET_NUM,
-                        Collections.emptyList(),
-                        Collections.emptyList(),
-                        customProperties,
-                        true);
-        TablePath pkTablePath = TablePath.of(DATABASE, "pk_table_for_exist_lake_table");
-        admin.createTable(pkTablePath, pkTable, false).get();
-        // drop fluss table, lake table should still exist
-        admin.dropTable(pkTablePath, false).get();
-        // create the same fluss table again should be ok
-        admin.createTable(pkTablePath, pkTable, false).get();
-        admin.dropTable(pkTablePath, false).get();
-
-        // fluss table with bucket keys will use static bucket in paimon
-        TableDescriptor pkTable1 = pkTable.withBucketCount(BUCKET_NUM + 1);
-        assertThatThrownBy(() -> admin.createTable(pkTablePath, pkTable1, false).get())
-                .cause()
-                .isInstanceOf(LakeTableAlreadyExistException.class)
-                .hasMessage(
-                        "The table `fluss`.`pk_table_for_exist_lake_table` already exists in Paimon catalog, but the table schema is not compatible. "
-                                + "Existing schema: UpdateSchema{fields=[`c1` STRING NOT NULL, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[c1], options={bucket=3, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, bucket-key=c1, changelog-producer=input, file.format=orc, fluss.k1=v1}, comment=null}, "
-                                + "new schema: UpdateSchema{fields=[`c1` STRING NOT NULL, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[c1], options={bucket=4, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, bucket-key=c1, changelog-producer=input, file.format=orc, fluss.k1=v1}, comment=null}. "
                                 + "Please first drop the table in Paimon catalog or use a new table name.");
     }
 
@@ -693,8 +548,8 @@ class LakeEnabledTableCreateITCase {
 
         admin.alterTable(logTablePath, changes, false).get();
 
-        Table enabledPaimonLogTable =
-                paimonCatalog.getTable(Identifier.create(DATABASE, logTablePath.getTableName()));
+        Identifier paimonTablePath = Identifier.create(DATABASE, logTablePath.getTableName());
+        Table enabledPaimonLogTable = paimonCatalog.getTable(paimonTablePath);
 
         Map<String, String> updatedProperties = new HashMap<>();
         updatedProperties.put(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
@@ -728,12 +583,26 @@ class LakeEnabledTableCreateITCase {
         changes = Collections.singletonList(disableLake);
         admin.alterTable(logTablePath, changes, false).get();
         // paimon table should still exist although lake is disabled
-        paimonCatalog.getTable(Identifier.create(DATABASE, logTablePath.getTableName()));
+        paimonCatalog.getTable(paimonTablePath);
 
         // try to enable lake table again
         enableLake = TableChange.set(ConfigOptions.TABLE_DATALAKE_ENABLED.key(), "true");
         changes = Collections.singletonList(enableLake);
         admin.alterTable(logTablePath, changes, false).get();
+
+        // write some data to the lake table
+        writeData(paimonCatalog.getTable(paimonTablePath));
+        Optional<Snapshot> snapshot = paimonCatalog.getTable(paimonTablePath).latestSnapshot();
+        assertThat(snapshot).isNotEmpty();
+
+        // disable lake table again
+        changes = Collections.singletonList(disableLake);
+        admin.alterTable(logTablePath, changes, false).get();
+
+        // try to enable lake table again, the snapshot should not change
+        changes = Collections.singletonList(enableLake);
+        admin.alterTable(logTablePath, changes, false).get();
+        assertThat(paimonCatalog.getTable(paimonTablePath).latestSnapshot()).isEqualTo(snapshot);
     }
 
     @Test
@@ -852,7 +721,7 @@ class LakeEnabledTableCreateITCase {
                 .cause()
                 .isInstanceOf(FlussRuntimeException.class)
                 .hasMessageContaining(
-                        "Lake table doesn't exists for lake-enabled table "
+                        "Lake table doesn't exist for lake-enabled table "
                                 + tablePath
                                 + ", which shouldn't be happened. Please check if the lake table was deleted manually.");
 
@@ -934,7 +803,7 @@ class LakeEnabledTableCreateITCase {
         tableChanges = Collections.singletonList(TableChange.set("k2", "v22"));
         admin.alterTable(tablePath, tableChanges, false).get();
 
-        // enable lake table again should be ok, even though the table properties are changed
+        // enable lake table again should be ok, even though the table properties have changed
         admin.alterTable(tablePath, Collections.singletonList(enableLake), false).get();
     }
 
