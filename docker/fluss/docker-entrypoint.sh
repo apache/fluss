@@ -26,6 +26,7 @@ prepare_configuration() {
         echo "${FLUSS_PROPERTIES}" >> "${CONF_FILE}"
     fi
     envsubst < "${CONF_FILE}" > "${CONF_FILE}.tmp" && mv "${CONF_FILE}.tmp" "${CONF_FILE}"
+    chown fluss:fluss "${CONF_FILE}"
 }
 
 prepare_configuration
@@ -39,11 +40,11 @@ if [ "$1" = "help" ]; then
 elif [ "$1" = "coordinatorServer" ]; then
   args=("${args[@]:1}")
   echo "Starting Coordinator Server"
-  exec "$FLUSS_HOME/bin/coordinator-server.sh" start-foreground "${args[@]}"
+  exec gosu fluss "$FLUSS_HOME/bin/coordinator-server.sh" start-foreground "${args[@]}"
 elif [ "$1" = "tabletServer" ]; then
   args=("${args[@]:1}")
   echo "Starting Tablet Server"
-  exec "$FLUSS_HOME/bin/tablet-server.sh" start-foreground "${args[@]}"
+  exec gosu fluss "$FLUSS_HOME/bin/tablet-server.sh" start-foreground "${args[@]}"
 fi
 
 args=("${args[@]}")
