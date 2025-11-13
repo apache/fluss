@@ -20,7 +20,6 @@ package org.apache.fluss.lake.paimon.utils;
 import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.exception.InvalidConfigException;
 import org.apache.fluss.exception.InvalidTableException;
-import org.apache.fluss.lake.paimon.FlussDataTypeToPaimonDataType;
 import org.apache.fluss.lake.paimon.source.FlussRowAsPaimonRow;
 import org.apache.fluss.metadata.TableChange;
 import org.apache.fluss.metadata.TableDescriptor;
@@ -57,7 +56,7 @@ public class PaimonConversions {
     private static final String PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY = "partition.legacy-name";
 
     // for fluss config
-    private static final String FLUSS_CONF_PREFIX = "fluss.";
+    public static final String FLUSS_CONF_PREFIX = "fluss.";
     // for paimon config
     private static final String PAIMON_CONF_PREFIX = "paimon.";
 
@@ -67,6 +66,7 @@ public class PaimonConversions {
     static {
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET.key());
         PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.BUCKET_KEY.key());
+        PAIMON_UNSETTABLE_OPTIONS.add(CoreOptions.PATH.key());
         PAIMON_UNSETTABLE_OPTIONS.add(PARTITION_GENERATE_LEGACY_NAME_OPTION_KEY);
     }
 

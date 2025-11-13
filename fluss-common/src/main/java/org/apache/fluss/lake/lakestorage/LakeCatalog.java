@@ -75,6 +75,13 @@ public interface LakeCatalog extends AutoCloseable {
     @PublicEvolving
     interface Context {
 
+        /**
+         * Whether the current operation is creating a fluss table.
+         *
+         * @return true if the current operation is creating a fluss table
+         */
+        boolean isCreatingFlussTable();
+
         /** Get the fluss principal currently accessing the catalog. */
         FlussPrincipal getFlussPrincipal();
     }

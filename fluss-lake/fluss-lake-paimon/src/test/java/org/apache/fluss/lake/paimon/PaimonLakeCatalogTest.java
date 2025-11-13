@@ -32,7 +32,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.File;
-import java.util.Arrays;
+import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -51,9 +51,9 @@ class PaimonLakeCatalogTest {
     }
 
     @Test
-    void testAlterTableConfigs() throws Exception {
-        String database = "test_alter_table_configs_db";
-        String tableName = "test_alter_table_configs_table";
+    void testAlterTableProperties() throws Exception {
+        String database = "test_alter_table_properties_db";
+        String tableName = "test_alter_table_properties_table";
         TablePath tablePath = TablePath.of(database, tableName);
         Identifier identifier = Identifier.create(database, tableName);
         createTable(database, tableName);
@@ -65,7 +65,7 @@ class PaimonLakeCatalogTest {
         // set the value for key
         flussPaimonCatalog.alterTable(
                 tablePath,
-                Arrays.asList(TableChange.set("key", "value")),
+                Collections.singletonList(TableChange.set("key", "value")),
                 new TestingLakeCatalogContext());
 
         table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);
@@ -75,7 +75,7 @@ class PaimonLakeCatalogTest {
         // reset the value for key
         flussPaimonCatalog.alterTable(
                 tablePath,
-                Arrays.asList(TableChange.reset("key")),
+                Collections.singletonList(TableChange.reset("key")),
                 new TestingLakeCatalogContext());
 
         table = flussPaimonCatalog.getPaimonCatalog().getTable(identifier);

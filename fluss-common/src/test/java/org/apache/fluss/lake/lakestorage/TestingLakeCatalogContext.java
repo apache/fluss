@@ -23,6 +23,11 @@ import org.apache.fluss.security.acl.FlussPrincipal;
 public class TestingLakeCatalogContext implements LakeCatalog.Context {
 
     @Override
+    public boolean isCreatingFlussTable() {
+        return false;
+    }
+
+    @Override
     public FlussPrincipal getFlussPrincipal() {
         return null;
     }
