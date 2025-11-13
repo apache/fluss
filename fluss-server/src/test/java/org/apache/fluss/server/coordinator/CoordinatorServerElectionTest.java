@@ -83,18 +83,18 @@ class CoordinatorServerElectionTest {
         CoordinatorAddress firstLeaderAddress = zookeeperClient.getCoordinatorLeaderAddress().get();
 
         // Find the leader and try to restart it.
-        CoordinatorServer elected = null;
+        CoordinatorServer firstLeader = null;
         for (CoordinatorServer coordinatorServer : coordinatorServerList) {
             if (coordinatorServer.getServerId() == firstLeaderAddress.getId()) {
-                elected = coordinatorServer;
+                firstLeader = coordinatorServer;
                 break;
             }
         }
-        assertThat(elected).isNotNull();
+        assertThat(firstLeader).isNotNull();
         assertThat(zookeeperClient.getCurrentEpoch().getCoordinatorEpoch())
                 .isEqualTo(CoordinatorContext.INITIAL_COORDINATOR_EPOCH);
-        elected.close();
-        elected.start();
+        firstLeader.close();
+        firstLeader.start();
 
         // Then we should get another Coordinator server leader elected
         waitUntilCoordinatorServerReelected(firstLeaderAddress);
@@ -104,12 +104,25 @@ class CoordinatorServerElectionTest {
         assertThat(zookeeperClient.getCurrentEpoch().getCoordinatorEpoch())
                 .isEqualTo(CoordinatorContext.INITIAL_COORDINATOR_EPOCH + 1);
 
-        // kill other 2 coordinator servers except the first one
+        CoordinatorServer secondLeader = null;
         for (CoordinatorServer coordinatorServer : coordinatorServerList) {
-            if (coordinatorServer.getServerId() != firstLeaderAddress.getId()) {
-                coordinatorServer.close();
+            if (coordinatorServer.getServerId() == secondLeaderAddress.getId()) {
+                secondLeader = coordinatorServer;
+                break;
             }
         }
+        CoordinatorServer nonLeader = null;
+        for (CoordinatorServer coordinatorServer : coordinatorServerList) {
+            if (coordinatorServer.getServerId() != firstLeaderAddress.getId()
+                    && coordinatorServer.getServerId() != secondLeaderAddress.getId()) {
+                nonLeader = coordinatorServer;
+                break;
+            }
+        }
+        // kill other 2 coordinator servers except the first one
+        nonLeader.close();
+        secondLeader.close();
+
         // the origin coordinator server should become leader again
         waitUntilCoordinatorServerReelected(secondLeaderAddress);
         CoordinatorAddress thirdLeaderAddress = zookeeperClient.getCoordinatorLeaderAddress().get();

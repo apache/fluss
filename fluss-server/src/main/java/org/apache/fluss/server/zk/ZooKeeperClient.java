@@ -1785,20 +1785,21 @@ public class ZooKeeperClient implements AutoCloseable {
                 throw new IllegalArgumentException("Invalid path: " + path);
             } else if (indexOfLastSlash == 0) {
                 // root path can be directly create without fence
-                zkClient.create()
-                        .creatingParentsIfNeeded()
-                        .withMode(CreateMode.PERSISTENT)
-                        .forPath(path);
-            }
-            // If indexOfLastSlash is 0, it means the parent is root "/" which should already exist
-            // We should not try to create it, just retry creating the current path
-            if (indexOfLastSlash > 0) {
+                try {
+                    zkClient.create()
+                            .creatingParentsIfNeeded()
+                            .withMode(CreateMode.PERSISTENT)
+                            .forPath(path);
+                } catch (KeeperException.NodeExistsException ignored) {
+                }
+            } else {
+                // indexOfLastSlash > 0
                 String parentPath = path.substring(0, indexOfLastSlash);
                 createRecursiveWithEpochCheck(
                         parentPath, null, expectedZkVersion, throwIfPathExists);
+                // After creating parent (or if parent is root), retry creating the original path
+                zkClient.transaction().forOperations(ops);
             }
-            // After creating parent (or if parent is root), retry creating the original path
-            zkClient.transaction().forOperations(ops);
         }
     }
 
