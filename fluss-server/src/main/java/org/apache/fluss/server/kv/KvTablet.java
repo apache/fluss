@@ -319,8 +319,8 @@ public final class KvTablet {
                                 // it's update
                                 if (oldValue != null) {
                                     BinaryRow oldRow = valueDecoder.decodeValue(oldValue).row;
-                                    BinaryRow newRow =
-                                            currentMerger.merge(oldRow, kvRecord.getRow());
+                                    BinaryRow inputRow = kvRecord.getRow();
+                                    BinaryRow newRow = currentMerger.merge(oldRow, inputRow);
                                     if (newRow == oldRow) {
                                         // newRow is the same to oldRow, means nothing
                                         // happens (no update/delete), and input should be ignored
@@ -330,10 +330,9 @@ public final class KvTablet {
                                     walBuilder.append(ChangeType.UPDATE_AFTER, newRow);
                                     // logOffset is for -U, logOffset + 1 is for +U, we need to use
                                     // the log offset for +U
-                                    kvPreWriteBuffer.put(
-                                            key,
-                                            ValueEncoder.encodeValue(schemaId, newRow),
-                                            logOffset + 1);
+                                    byte[] encodedNewRow =
+                                            ValueEncoder.encodeValue(schemaId, newRow);
+                                    kvPreWriteBuffer.put(key, encodedNewRow, logOffset + 1);
                                     logOffset += 2;
                                 } else {
                                     // it's insert
@@ -341,10 +340,9 @@ public final class KvTablet {
                                     //  of the input row are set to null.
                                     BinaryRow newRow = kvRecord.getRow();
                                     walBuilder.append(ChangeType.INSERT, newRow);
-                                    kvPreWriteBuffer.put(
-                                            key,
-                                            ValueEncoder.encodeValue(schemaId, newRow),
-                                            logOffset++);
+                                    byte[] encodedNewRow =
+                                            ValueEncoder.encodeValue(schemaId, newRow);
+                                    kvPreWriteBuffer.put(key, encodedNewRow, logOffset++);
                                 }
                             }
                         }

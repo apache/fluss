@@ -83,6 +83,19 @@ public interface RowMerger {
                     }
                     return new VersionedRowMerger(
                             schema.getRowType(), versionColumn.get(), deleteBehavior);
+                case AGGREGATE:
+                    boolean removeRecordOnDelete = tableConf.getAggregationRemoveRecordOnDelete();
+                    org.apache.fluss.server.kv.rowmerger.aggregate.FieldAggregator[] aggregators =
+                            AggregatorHelper.createAggregators(
+                                    schema.getRowType(),
+                                    schema.getPrimaryKeyColumnNames(),
+                                    tableConf);
+                    return new AggregateRowMerger(
+                            schema.getRowType(),
+                            aggregators,
+                            removeRecordOnDelete,
+                            deleteBehavior,
+                            kvFormat);
                 default:
                     throw new IllegalArgumentException(
                             "Unsupported merge engine type: " + mergeEngineType.get());
