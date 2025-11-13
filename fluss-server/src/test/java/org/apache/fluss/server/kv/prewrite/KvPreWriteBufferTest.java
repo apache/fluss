@@ -17,25 +17,41 @@
 
 package org.apache.fluss.server.kv.prewrite;
 
+import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.server.kv.KvBatchWriter;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.TruncateReason;
 import org.apache.fluss.server.metrics.group.TestingMetricGroups;
 
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import javax.annotation.Nonnull;
 
+import java.nio.ByteBuffer;
+
+import static org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.toByteArray;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /** Test for {@link org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer}. */
 class KvPreWriteBufferTest {
 
+    private final TableBucket tb = new TableBucket(1, 0);
+    private KvPreWriteBufferMemoryPool memoryPool;
+
+    @BeforeEach
+    void setup() {
+        memoryPool = new KvPreWriteBufferMemoryPool(10 * 1024 * 1024, 1024 * 1024);
+    }
+
     @Test
     void testIllegalLSN() {
         KvPreWriteBuffer buffer =
                 new KvPreWriteBuffer(
-                        new NopKvBatchWriter(), TestingMetricGroups.TABLET_SERVER_METRICS);
+                        tb,
+                        new NopKvBatchWriter(),
+                        memoryPool,
+                        TestingMetricGroups.TABLET_SERVER_METRICS);
         bufferPut(buffer, "key1", "value1", 1);
         bufferDelete(buffer, "key1", 3);
 
@@ -56,7 +72,10 @@ class KvPreWriteBufferTest {
     void testWriteAndFlush() throws Exception {
         KvPreWriteBuffer buffer =
                 new KvPreWriteBuffer(
-                        new NopKvBatchWriter(), TestingMetricGroups.TABLET_SERVER_METRICS);
+                        tb,
+                        new NopKvBatchWriter(),
+                        memoryPool,
+                        TestingMetricGroups.TABLET_SERVER_METRICS);
         int elementCount = 0;
 
         // put a series of kv entries
@@ -139,7 +158,10 @@ class KvPreWriteBufferTest {
     void testTruncate() {
         KvPreWriteBuffer buffer =
                 new KvPreWriteBuffer(
-                        new NopKvBatchWriter(), TestingMetricGroups.TABLET_SERVER_METRICS);
+                        tb,
+                        new NopKvBatchWriter(),
+                        memoryPool,
+                        TestingMetricGroups.TABLET_SERVER_METRICS);
         int elementCount = 0;
 
         // put a series of kv entries
@@ -204,8 +226,8 @@ class KvPreWriteBufferTest {
         KvPreWriteBuffer.Key key = toKey(keyStr);
         KvPreWriteBuffer.Value value = preWriteBuffer.get(key);
         if (value != null && value.get() != null) {
-            byte[] bytes = value.get();
-            return bytes != null ? new String(bytes) : null;
+            ByteBuffer bytes = value.get();
+            return bytes != null ? new String(toByteArray(bytes)) : null;
         } else {
             return null;
         }
