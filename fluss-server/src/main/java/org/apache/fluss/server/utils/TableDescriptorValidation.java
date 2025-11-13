@@ -49,6 +49,7 @@ import java.util.stream.Collectors;
 
 import static org.apache.fluss.config.FlussConfigUtils.TABLE_OPTIONS;
 import static org.apache.fluss.config.FlussConfigUtils.isAlterableTableOption;
+import static org.apache.fluss.config.FlussConfigUtils.isTableLakeConfig;
 import static org.apache.fluss.config.FlussConfigUtils.isTableStorageConfig;
 import static org.apache.fluss.metadata.TableDescriptor.BUCKET_COLUMN_NAME;
 import static org.apache.fluss.metadata.TableDescriptor.OFFSET_COLUMN_NAME;
@@ -75,6 +76,13 @@ public class TableDescriptorValidation {
         // check properties should only contain table.* options,
         // and this cluster know it, and value is valid
         for (String key : tableConf.keySet()) {
+            // skip datalake configs
+            if (isTableLakeConfig(
+                    tableDescriptor.getProperties().get(ConfigOptions.TABLE_DATALAKE_FORMAT.key()),
+                    key)) {
+                continue;
+            }
+
             if (!TABLE_OPTIONS.containsKey(key)) {
                 if (isTableStorageConfig(key)) {
                     throw new InvalidConfigException(
