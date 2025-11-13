@@ -1783,6 +1783,12 @@ public class ZooKeeperClient implements AutoCloseable {
             int indexOfLastSlash = path.lastIndexOf("/");
             if (indexOfLastSlash == -1) {
                 throw new IllegalArgumentException("Invalid path: " + path);
+            } else if (indexOfLastSlash == 0) {
+                // root path can be directly create without fence
+                zkClient.create()
+                        .creatingParentsIfNeeded()
+                        .withMode(CreateMode.PERSISTENT)
+                        .forPath(path);
             }
             // If indexOfLastSlash is 0, it means the parent is root "/" which should already exist
             // We should not try to create it, just retry creating the current path
