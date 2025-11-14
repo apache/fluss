@@ -246,8 +246,6 @@ public class CoordinatorServer extends ServerBase {
                                     serverMetricGroup));
             rpcServer.start();
 
-            registerCoordinatorLeader();
-
             this.clientMetricGroup = new ClientMetricGroup(metricRegistry, SERVER_NAME);
             this.rpcClient = RpcClient.create(conf, clientMetricGroup, true);
 
@@ -257,6 +255,12 @@ public class CoordinatorServer extends ServerBase {
                     new AutoPartitionManager(metadataCache, metadataManager, conf);
             autoPartitionManager.start();
 
+            int ioExecutorPoolSize = conf.get(ConfigOptions.COORDINATOR_IO_POOL_SIZE);
+            this.ioExecutor =
+                    Executors.newFixedThreadPool(
+                            ioExecutorPoolSize, new ExecutorThreadFactory("coordinator-io"));
+
+            registerCoordinatorLeader();
             // start coordinator event processor after we register coordinator leader to zk
             // so that the event processor can get the coordinator leader node from zk during start
             // up.
