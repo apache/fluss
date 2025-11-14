@@ -32,6 +32,7 @@ import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
+import javax.annotation.concurrent.NotThreadSafe;
 
 import java.util.Collections;
 import java.util.concurrent.CompletableFuture;
@@ -40,6 +41,7 @@ import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** An implementation of {@link Lookuper} that lookups by primary key. */
+@NotThreadSafe
 class PrimaryKeyLookuper implements Lookuper {
 
     private final TableInfo tableInfo;

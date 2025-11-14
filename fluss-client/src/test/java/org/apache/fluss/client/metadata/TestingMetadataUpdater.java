@@ -55,22 +55,72 @@ public class TestingMetadataUpdater extends MetadataUpdater {
     private final Map<Integer, TestTabletServerGateway> tabletServerGatewayMap;
 
     public TestingMetadataUpdater(Map<TablePath, TableInfo> tableInfos) {
-        this(COORDINATOR, Arrays.asList(NODE1, NODE2, NODE3), tableInfos);
+        this(COORDINATOR, Arrays.asList(NODE1, NODE2, NODE3), tableInfos, null);
     }
 
     private TestingMetadataUpdater(
             ServerNode coordinatorServer,
             List<ServerNode> tabletServers,
-            Map<TablePath, TableInfo> tableInfos) {
+            Map<TablePath, TableInfo> tableInfos,
+            Map<Integer, TestTabletServerGateway> customGateways) {
         super(
                 RpcClient.create(
                         new Configuration(), TestingClientMetricGroup.newInstance(), false),
                 Cluster.empty());
         initializeCluster(coordinatorServer, tabletServers, tableInfos);
         coordinatorGateway = new TestCoordinatorGateway();
-        tabletServerGatewayMap = new HashMap<>();
-        for (ServerNode tabletServer : tabletServers) {
-            tabletServerGatewayMap.put(tabletServer.id(), new TestTabletServerGateway(false));
+        if (customGateways != null) {
+            tabletServerGatewayMap = customGateways;
+        } else {
+            tabletServerGatewayMap = new HashMap<>();
+            for (ServerNode tabletServer : tabletServers) {
+                tabletServerGatewayMap.put(tabletServer.id(), new TestTabletServerGateway(false));
+            }
+        }
+    }
+
+    /**
+     * Create a builder for constructing TestingMetadataUpdater with custom gateways.
+     *
+     * @param tableInfos the table information map
+     * @return a builder instance
+     */
+    public static Builder builder(Map<TablePath, TableInfo> tableInfos) {
+        return new Builder(tableInfos);
+    }
+
+    /** Builder for TestingMetadataUpdater to support custom gateway configuration. */
+    public static class Builder {
+        private final Map<TablePath, TableInfo> tableInfos;
+        private final Map<Integer, TestTabletServerGateway> customGateways = new HashMap<>();
+
+        private Builder(Map<TablePath, TableInfo> tableInfos) {
+            this.tableInfos = tableInfos;
+        }
+
+        /**
+         * Set a custom gateway for a specific tablet server node.
+         *
+         * @param serverId the server id (1, 2, or 3 for default nodes)
+         * @param gateway the custom gateway
+         * @return this builder
+         */
+        public Builder withTabletServerGateway(int serverId, TestTabletServerGateway gateway) {
+            customGateways.put(serverId, gateway);
+            return this;
+        }
+
+        /**
+         * Build the TestingMetadataUpdater instance.
+         *
+         * @return the configured TestingMetadataUpdater
+         */
+        public TestingMetadataUpdater build() {
+            return new TestingMetadataUpdater(
+                    COORDINATOR,
+                    Arrays.asList(NODE1, NODE2, NODE3),
+                    tableInfos,
+                    customGateways.isEmpty() ? null : customGateways);
         }
     }
 

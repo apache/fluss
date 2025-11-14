@@ -412,7 +412,6 @@ public class FlinkTableSource
                             flussConfig,
                             tablePath,
                             tableOutputType,
-                            lookupMaxRetryTimes,
                             lookupNormalizer,
                             projectedFields);
             if (cache != null) {
@@ -426,7 +425,6 @@ public class FlinkTableSource
                             flussConfig,
                             tablePath,
                             tableOutputType,
-                            lookupMaxRetryTimes,
                             lookupNormalizer,
                             projectedFields);
             if (cache != null) {

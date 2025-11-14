@@ -23,7 +23,6 @@ import org.apache.fluss.flink.utils.FlinkConversions;
 import org.apache.fluss.flink.utils.FlinkTestBase;
 import org.apache.fluss.metadata.TablePath;
 
-import org.apache.flink.table.connector.source.lookup.LookupOptions;
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.functions.AsyncLookupFunction;
 import org.apache.flink.table.types.logical.RowType;
@@ -57,7 +56,6 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         clientConf,
                         tablePath,
                         flinkRowType,
-                        LookupOptions.MAX_RETRIES.defaultValue(),
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
                         null);
 
@@ -95,7 +93,6 @@ class FlinkLookupFunctionTest extends FlinkTestBase {
                         clientConf,
                         tablePath,
                         flinkRowType,
-                        LookupOptions.MAX_RETRIES.defaultValue(),
                         createPrimaryKeyLookupNormalizer(new int[] {0}, flinkRowType),
                         null);
         asyncLookupFunction.open(null);

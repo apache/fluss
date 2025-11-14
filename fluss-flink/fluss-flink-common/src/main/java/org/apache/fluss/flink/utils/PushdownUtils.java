@@ -271,7 +271,6 @@ public class PushdownUtils {
                         flussConfig,
                         tablePath,
                         sourceOutputType,
-                        lookupMaxRetryTimes,
                         lookupNormalizer,
                         projectedFields);
         try {

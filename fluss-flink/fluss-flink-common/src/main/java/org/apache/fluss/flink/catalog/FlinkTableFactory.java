@@ -244,6 +244,13 @@ public class FlinkTableFactory implements DynamicTableSourceFactory, DynamicTabl
                     }
                 });
 
+        // map flink lookup.max-retries to client.lookup.max-retries
+        if (tableOptions.containsKey(LookupOptions.MAX_RETRIES.key())) {
+            flussConfig.setString(
+                    ConfigOptions.CLIENT_LOOKUP_MAX_RETRIES.key(),
+                    tableOptions.get(LookupOptions.MAX_RETRIES.key()));
+        }
+
         // pass flink io tmp dir to fluss client.
         flussConfig.setString(
                 ConfigOptions.CLIENT_SCANNER_IO_TMP_DIR,

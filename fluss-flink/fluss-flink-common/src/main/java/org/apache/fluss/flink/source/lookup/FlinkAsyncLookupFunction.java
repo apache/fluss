@@ -33,6 +33,7 @@ import org.apache.fluss.flink.utils.FlussRowToFlinkRowConverter;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.ProjectedRow;
+import org.apache.fluss.utils.ExceptionUtils;
 
 import org.apache.flink.table.data.RowData;
 import org.apache.flink.table.functions.AsyncLookupFunction;
@@ -58,7 +59,6 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
 
     private final Configuration flussConfig;
     private final TablePath tablePath;
-    private final int maxRetryTimes;
     private final RowType flinkRowType;
     private final LookupNormalizer lookupNormalizer;
     @Nullable private final int[] projection;
@@ -73,12 +73,10 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
             Configuration flussConfig,
             TablePath tablePath,
             RowType flinkRowType,
-            int maxRetryTimes,
             LookupNormalizer lookupNormalizer,
             @Nullable int[] projection) {
         this.flussConfig = flussConfig;
         this.tablePath = tablePath;
-        this.maxRetryTimes = maxRetryTimes;
         this.flinkRowType = flinkRowType;
         this.lookupNormalizer = lookupNormalizer;
         this.projection = projection;
@@ -121,69 +119,34 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
         RowData normalizedKeyRow = lookupNormalizer.normalizeLookupKey(keyRow);
         RemainingFilter remainingFilter = lookupNormalizer.createRemainingFilter(keyRow);
         InternalRow flussKeyRow = lookupRow.replace(normalizedKeyRow);
-        CompletableFuture<Collection<RowData>> future = new CompletableFuture<>();
-        // fetch result
-        fetchResult(future, 0, flussKeyRow, remainingFilter);
-        return future;
-    }
 
-    /**
-     * Execute async fetch result .
-     *
-     * @param resultFuture The result or exception is returned.
-     * @param currentRetry Current number of retries.
-     * @param keyRow the key row to get.
-     * @param remainingFilter the nullable remaining filter to filter the result.
-     */
-    private void fetchResult(
-            CompletableFuture<Collection<RowData>> resultFuture,
-            int currentRetry,
-            InternalRow keyRow,
-            @Nullable RemainingFilter remainingFilter) {
-        lookuper.lookup(keyRow)
+        // the retry mechanism is now handled by the underlying LookupClient layer
+        CompletableFuture<Collection<RowData>> future = new CompletableFuture<>();
+        lookuper.lookup(flussKeyRow)
                 .whenComplete(
                         (result, throwable) -> {
                             if (throwable != null) {
-                                handleLookupFailed(
-                                        resultFuture,
-                                        throwable,
-                                        currentRetry,
-                                        keyRow,
-                                        remainingFilter);
+                                if (ExceptionUtils.findThrowable(
+                                                throwable, TableNotExistException.class)
+                                        .isPresent()) {
+                                    LOG.error("Table '{}' not found ", tablePath, throwable);
+                                    future.completeExceptionally(
+                                            new RuntimeException(
+                                                    "Fluss table '" + tablePath + "' not found.",
+                                                    throwable));
+                                } else {
+                                    LOG.error("Fluss asyncLookup error", throwable);
+                                    future.completeExceptionally(
+                                            new RuntimeException(
+                                                    "Execution of Fluss asyncLookup failed: "
+                                                            + throwable.getMessage(),
+                                                    throwable));
+                                }
                             } else {
-                                handleLookupSuccess(
-                                        resultFuture, result.getRowList(), remainingFilter);
+                                handleLookupSuccess(future, result.getRowList(), remainingFilter);
                             }
                         });
-    }
-
-    private void handleLookupFailed(
-            CompletableFuture<Collection<RowData>> resultFuture,
-            Throwable throwable,
-            int currentRetry,
-            InternalRow keyRow,
-            @Nullable RemainingFilter remainingFilter) {
-        if (throwable instanceof TableNotExistException) {
-            LOG.error("Table '{}' not found ", tablePath, throwable);
-            resultFuture.completeExceptionally(
-                    new RuntimeException("Fluss table '" + tablePath + "' not found.", throwable));
-        } else {
-            LOG.error("Fluss asyncLookup error, retry times = {}", currentRetry, throwable);
-            if (currentRetry >= maxRetryTimes) {
-                String exceptionMsg =
-                        String.format(
-                                "Execution of Fluss asyncLookup failed: %s, retry times = %d.",
-                                throwable.getMessage(), currentRetry);
-                resultFuture.completeExceptionally(new RuntimeException(exceptionMsg, throwable));
-            } else {
-                try {
-                    Thread.sleep(1000L * currentRetry);
-                } catch (InterruptedException e1) {
-                    resultFuture.completeExceptionally(e1);
-                }
-                fetchResult(resultFuture, currentRetry + 1, keyRow, remainingFilter);
-            }
-        }
+        return future;
     }
 
     private void handleLookupSuccess(

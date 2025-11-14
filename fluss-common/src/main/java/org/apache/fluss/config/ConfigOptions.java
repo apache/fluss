@@ -1112,6 +1112,14 @@ public class ConfigOptions {
                             "The maximum time to wait for the lookup batch to full, if this timeout is reached, "
                                     + "the lookup batch will be closed to send.");
 
+    public static final ConfigOption<Integer> CLIENT_LOOKUP_MAX_RETRIES =
+            key("client.lookup.max-retries")
+                    .intType()
+                    .defaultValue(3)
+                    .withDescription(
+                            "Setting a value greater than zero will cause the client to resend any lookup request "
+                                    + "that fails with a potentially transient error.");
+
     public static final ConfigOption<Integer> CLIENT_SCANNER_REMOTE_LOG_PREFETCH_NUM =
             key("client.scanner.remote-log.prefetch-num")
                     .intType()
