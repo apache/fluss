@@ -30,6 +30,7 @@ import org.apache.paimon.options.Options;
 
 import java.lang.reflect.Method;
 import java.util.Map;
+import java.util.stream.Collectors;
 
 import static org.apache.fluss.metadata.DataLakeFormat.ICEBERG;
 import static org.apache.fluss.metadata.DataLakeFormat.PAIMON;
@@ -49,7 +50,8 @@ public class LakeFlinkCatalog {
         this.classLoader = classLoader;
     }
 
-    public Catalog getLakeCatalog(Configuration tableOptions) {
+    public Catalog getLakeCatalog(
+            Configuration tableOptions, Map<String, String> lakeCatalogProperties) {
         // TODO: Currently, a Fluss cluster only supports a single DataLake storage.
         // However, in the
         //  future, it may support multiple DataLakes. The following code assumes
@@ -69,12 +71,28 @@ public class LakeFlinkCatalog {
                                         + ConfigOptions.TABLE_DATALAKE_FORMAT.key()
                                         + "' is set.");
                     }
+                    String dataLakePrefix = lakeFormat.toString() + ".";
+                    Map<String, String> catalogProperties =
+                            lakeCatalogProperties.entrySet().stream()
+                                    .filter(entry -> entry.getKey().startsWith(dataLakePrefix))
+                                    .collect(
+                                            Collectors.toMap(
+                                                    entry ->
+                                                            entry.getKey()
+                                                                    .substring(
+                                                                            dataLakePrefix
+                                                                                    .length()),
+                                                    Map.Entry::getValue));
+
+                    catalogProperties.putAll(
+                            DataLakeUtils.extractLakeCatalogProperties(tableOptions));
                     if (lakeFormat == PAIMON) {
                         catalog =
-                                PaimonCatalogFactory.create(catalogName, tableOptions, classLoader);
+                                PaimonCatalogFactory.create(
+                                        catalogName, catalogProperties, classLoader);
                         this.lakeFormat = PAIMON;
                     } else if (lakeFormat == ICEBERG) {
-                        catalog = IcebergCatalogFactory.create(catalogName, tableOptions);
+                        catalog = IcebergCatalogFactory.create(catalogName, catalogProperties);
                         this.lakeFormat = ICEBERG;
                     } else {
                         throw new UnsupportedOperationException(
@@ -104,9 +122,9 @@ public class LakeFlinkCatalog {
         private PaimonCatalogFactory() {}
 
         public static Catalog create(
-                String catalogName, Configuration tableOptions, ClassLoader classLoader) {
-            Map<String, String> catalogProperties =
-                    DataLakeUtils.extractLakeCatalogProperties(tableOptions);
+                String catalogName,
+                Map<String, String> catalogProperties,
+                ClassLoader classLoader) {
             return FlinkCatalogFactory.createCatalog(
                     catalogName,
                     CatalogContext.create(
@@ -124,9 +142,7 @@ public class LakeFlinkCatalog {
         // requires Iceberg 1.5.0+.
         // Using reflection to maintain Java 8 compatibility.
         // Once Fluss drops Java 8, we can remove the reflection code
-        public static Catalog create(String catalogName, Configuration tableOptions) {
-            Map<String, String> catalogProperties =
-                    DataLakeUtils.extractLakeCatalogProperties(tableOptions);
+        public static Catalog create(String catalogName, Map<String, String> catalogProperties) {
             // Map "type" to "catalog-type" (equivalent)
             // Required: either "catalog-type" (standard type) or "catalog-impl"
             // (fully-qualified custom class, mandatory if "catalog-type" is missing)

@@ -115,6 +115,7 @@ public class FlinkCatalog extends AbstractCatalog {
     protected final String bootstrapServers;
     protected final Map<String, String> securityConfigs;
     protected final LakeFlinkCatalog lakeFlinkCatalog;
+    protected final Map<String, String> lakeCatalogProperties;
     protected Connection connection;
     protected Admin admin;
 
@@ -123,13 +124,15 @@ public class FlinkCatalog extends AbstractCatalog {
             String defaultDatabase,
             String bootstrapServers,
             ClassLoader classLoader,
-            Map<String, String> securityConfigs) {
+            Map<String, String> securityConfigs,
+            Map<String, String> lakeCatalogProperties) {
         super(name, defaultDatabase);
         this.catalogName = name;
         this.defaultDatabase = defaultDatabase;
         this.bootstrapServers = bootstrapServers;
         this.classLoader = classLoader;
         this.securityConfigs = securityConfigs;
+        this.lakeCatalogProperties = lakeCatalogProperties;
         this.lakeFlinkCatalog = new LakeFlinkCatalog(catalogName, classLoader);
     }
 
@@ -294,8 +297,12 @@ public class FlinkCatalog extends AbstractCatalog {
                                             objectPath.getDatabaseName(),
                                             tableName.split("\\" + LAKE_TABLE_SPLITTER)[0])));
                 }
+
                 return getLakeTable(
-                        objectPath.getDatabaseName(), tableName, tableInfo.getProperties());
+                        objectPath.getDatabaseName(),
+                        tableName,
+                        tableInfo.getProperties(),
+                        lakeCatalogProperties);
             } else {
                 tableInfo = admin.getTableInfo(tablePath).get();
             }
@@ -329,7 +336,10 @@ public class FlinkCatalog extends AbstractCatalog {
     }
 
     protected CatalogBaseTable getLakeTable(
-            String databaseName, String tableName, Configuration properties)
+            String databaseName,
+            String tableName,
+            Configuration properties,
+            Map<String, String> lakeCatalogProperties)
             throws TableNotExistException, CatalogException {
         String[] tableComponents = tableName.split("\\" + LAKE_TABLE_SPLITTER);
         if (tableComponents.length == 1) {
@@ -341,7 +351,7 @@ public class FlinkCatalog extends AbstractCatalog {
             tableName = String.join("", tableComponents);
         }
         return lakeFlinkCatalog
-                .getLakeCatalog(properties)
+                .getLakeCatalog(properties, lakeCatalogProperties)
                 .getTable(new ObjectPath(databaseName, tableName));
     }
 
@@ -753,5 +763,10 @@ public class FlinkCatalog extends AbstractCatalog {
     @VisibleForTesting
     public Map<String, String> getSecurityConfigs() {
         return securityConfigs;
+    }
+
+    @VisibleForTesting
+    public Map<String, String> getLakeCatalogProperties() {
+        return lakeCatalogProperties;
     }
 }
