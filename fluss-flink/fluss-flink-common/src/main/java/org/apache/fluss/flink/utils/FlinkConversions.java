@@ -365,6 +365,21 @@ public class FlinkConversions {
         }
     }
 
+    public static org.apache.fluss.record.ChangeType toChangeType(RowKind flinkRowKind) {
+        switch (flinkRowKind) {
+            case INSERT:
+                return org.apache.fluss.record.ChangeType.INSERT;
+            case UPDATE_BEFORE:
+                return org.apache.fluss.record.ChangeType.UPDATE_BEFORE;
+            case UPDATE_AFTER:
+                return org.apache.fluss.record.ChangeType.UPDATE_AFTER;
+            case DELETE:
+                return org.apache.fluss.record.ChangeType.DELETE;
+            default:
+                throw new UnsupportedOperationException();
+        }
+    }
+
     private static Map<String, String> convertFlinkOptionsToFlussTableProperties(
             Configuration options) {
         Map<String, String> properties = new HashMap<>();

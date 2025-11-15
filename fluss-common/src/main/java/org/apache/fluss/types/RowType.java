@@ -81,6 +81,10 @@ public final class RowType extends DataType {
         return fields.get(i).getType();
     }
 
+    public List<DataType> getFieldTypes() {
+        return fields.stream().map(DataField::getType).collect(Collectors.toList());
+    }
+
     public int getFieldCount() {
         return fields.size();
     }

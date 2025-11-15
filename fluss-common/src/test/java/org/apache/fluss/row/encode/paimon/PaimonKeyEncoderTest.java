@@ -17,10 +17,16 @@
 
 package org.apache.fluss.row.encode.paimon;
 
+import org.apache.fluss.row.GenericArray;
+import org.apache.fluss.row.GenericMap;
+import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.row.indexed.IndexedRowWriter;
+import org.apache.fluss.row.serializer.InternalArraySerializer;
+import org.apache.fluss.row.serializer.InternalMapSerializer;
+import org.apache.fluss.row.serializer.InternalRowSerializer;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -35,8 +41,11 @@ import org.junit.jupiter.api.Test;
 
 import java.math.BigDecimal;
 import java.math.BigInteger;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
+import static org.apache.fluss.row.BinaryString.fromString;
 import static org.apache.fluss.row.TestInternalRowGenerator.createAllRowType;
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -86,6 +95,27 @@ class PaimonKeyEncoderTest {
         writer.writeTimestampNtz(TimestampNtz.fromMillis(1698235273182L), 5);
         writer.writeTimestampLtz(TimestampLtz.fromEpochMillis(1698235273182L, 45678), 1);
         writer.setNullAt(18);
+
+        // 19: array
+        writer.writeArray(
+                new GenericArray(new Object[] {1, 2, 3}),
+                new InternalArraySerializer(DataTypes.INT()));
+
+        // 20: map
+        Map<Object, Object> javaMap = new HashMap<>();
+        javaMap.put(0, null);
+        javaMap.put(1, fromString("1"));
+        javaMap.put(2, fromString("2"));
+        writer.writeMap(
+                new GenericMap(javaMap),
+                new InternalMapSerializer(DataTypes.INT(), DataTypes.STRING()));
+
+        // 21: row
+        GenericRow innerRow = GenericRow.of(123);
+        GenericRow genericRow =
+                GenericRow.of(20, innerRow, org.apache.fluss.row.BinaryString.fromString("Test"));
+        writer.writeRow(genericRow, new InternalRowSerializer((RowType) dataTypes[21]));
+
         indexedRow.pointTo(writer.segment(), 0, writer.position());
         return indexedRow;
     }
@@ -120,6 +150,41 @@ class PaimonKeyEncoderTest {
         binaryRowWriter.writeTimestamp(16, Timestamp.fromEpochMillis(1698235273182L), 5);
         binaryRowWriter.writeTimestamp(17, Timestamp.fromEpochMillis(1698235273182L, 45678), 1);
         binaryRowWriter.setNullAt(18);
+
+        // 19: array
+        binaryRowWriter.writeArray(
+                19,
+                new org.apache.paimon.data.GenericArray(new Object[] {1, 2, 3}),
+                new org.apache.paimon.data.serializer.InternalArraySerializer(
+                        org.apache.paimon.types.DataTypes.INT()));
+
+        // 20: map
+        Map<Object, Object> javaMap = new HashMap<>();
+        javaMap.put(0, null);
+        javaMap.put(1, BinaryString.fromString("1"));
+        javaMap.put(2, BinaryString.fromString("2"));
+        binaryRowWriter.writeMap(
+                20,
+                new org.apache.paimon.data.GenericMap(javaMap),
+                new org.apache.paimon.data.serializer.InternalMapSerializer(
+                        org.apache.paimon.types.DataTypes.INT(),
+                        org.apache.paimon.types.DataTypes.STRING()));
+
+        // 21: row
+        org.apache.paimon.data.GenericRow innerRow = org.apache.paimon.data.GenericRow.of(123);
+        org.apache.paimon.data.GenericRow genericRow =
+                org.apache.paimon.data.GenericRow.of(
+                        20, innerRow, org.apache.paimon.data.BinaryString.fromString("Test"));
+        binaryRowWriter.writeRow(
+                21,
+                genericRow,
+                new org.apache.paimon.data.serializer.InternalRowSerializer(
+                        org.apache.paimon.types.RowType.of(
+                                org.apache.paimon.types.DataTypes.INT(),
+                                org.apache.paimon.types.DataTypes.ROW(
+                                        org.apache.paimon.types.DataTypes.INT()),
+                                org.apache.paimon.types.DataTypes.STRING())));
+
         binaryRowWriter.complete();
         return binaryRow;
     }

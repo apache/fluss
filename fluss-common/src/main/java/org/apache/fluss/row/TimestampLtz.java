@@ -22,6 +22,9 @@ import org.apache.fluss.types.LocalZonedTimestampType;
 
 import java.io.Serializable;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.LocalDateTime;
+import java.time.LocalTime;
 
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
@@ -38,6 +41,9 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 public class TimestampLtz implements Comparable<TimestampLtz>, Serializable {
 
     private static final long serialVersionUID = 1L;
+
+    // the number of milliseconds in a day.
+    private static final long MILLIS_PER_DAY = 86400000; // = 24 * 60 * 60 * 1000
 
     public static final long MICROS_PER_MILLIS = 1000L;
 
@@ -67,6 +73,21 @@ public class TimestampLtz implements Comparable<TimestampLtz>, Serializable {
      */
     public int getNanoOfMillisecond() {
         return nanoOfMillisecond;
+    }
+
+    /**
+     * Creates an instance of {@link TimestampLtz} from an instance of {@link LocalDateTime}.
+     *
+     * @param dateTime an instance of {@link LocalDateTime}
+     */
+    public static TimestampLtz fromLocalDateTime(LocalDateTime dateTime) {
+        long epochDay = dateTime.toLocalDate().toEpochDay();
+        long nanoOfDay = dateTime.toLocalTime().toNanoOfDay();
+
+        long millisecond = epochDay * MILLIS_PER_DAY + nanoOfDay / 1_000_000;
+        int nanoOfMillisecond = (int) (nanoOfDay % 1_000_000);
+
+        return new TimestampLtz(millisecond, nanoOfMillisecond);
     }
 
     /**
@@ -103,6 +124,20 @@ public class TimestampLtz implements Comparable<TimestampLtz>, Serializable {
     public long toEpochMicros() {
         long micros = Math.multiplyExact(millisecond, MICROS_PER_MILLIS);
         return micros + nanoOfMillisecond / NANOS_PER_MICROS;
+    }
+
+    /** Converts this {@link TimestampLtz} object to a {@link LocalDateTime}. */
+    public LocalDateTime toLocalDateTime() {
+        int date = (int) (millisecond / MILLIS_PER_DAY);
+        int time = (int) (millisecond % MILLIS_PER_DAY);
+        if (time < 0) {
+            --date;
+            time += MILLIS_PER_DAY;
+        }
+        long nanoOfDay = time * 1_000_000L + nanoOfMillisecond;
+        LocalDate localDate = LocalDate.ofEpochDay(date);
+        LocalTime localTime = LocalTime.ofNanoOfDay(nanoOfDay);
+        return LocalDateTime.of(localDate, localTime);
     }
 
     /**

@@ -18,12 +18,19 @@
 package org.apache.fluss.testutils;
 
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.types.ArrayType;
+import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 
 import org.assertj.core.api.AbstractAssert;
 
+import static org.apache.fluss.testutils.InternalArrayAssert.assertThatArray;
+import static org.apache.fluss.testutils.InternalMapAssert.assertThatMap;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Extend assertj assertions to easily assert {@link InternalRow}. */
@@ -68,9 +75,53 @@ public class InternalRowAssert extends AbstractAssert<InternalRowAssert, Interna
                     .as("InternalRow#isNullAt(" + i + ")")
                     .isEqualTo(expected.isNullAt(i));
             if (!actual.isNullAt(i)) {
-                assertThat(fieldGetters[i].getFieldOrNull(actual))
-                        .as("InternalRow#get" + rowType.getTypeAt(i).getTypeRoot() + "(" + i + ")")
-                        .isEqualTo(fieldGetters[i].getFieldOrNull(expected));
+                DataType dataType = rowType.getFields().get(i).getType();
+                // handle nested row
+                if (dataType instanceof RowType) {
+                    RowType nestedType = (RowType) dataType;
+                    InternalRow actualNested = (InternalRow) fieldGetters[i].getFieldOrNull(actual);
+                    InternalRow expectedNested =
+                            (InternalRow) fieldGetters[i].getFieldOrNull(expected);
+                    assertThatRow(actualNested)
+                            .as(
+                                    "InternalRow#get"
+                                            + rowType.getTypeAt(i).getTypeRoot()
+                                            + "("
+                                            + i
+                                            + ")")
+                            .withSchema(nestedType)
+                            .isEqualTo(expectedNested);
+                } else if (dataType instanceof ArrayType) {
+                    ArrayType arrayType = (ArrayType) dataType;
+                    InternalArray actualArray =
+                            (InternalArray) fieldGetters[i].getFieldOrNull(actual);
+                    InternalArray expectedArray =
+                            (InternalArray) fieldGetters[i].getFieldOrNull(expected);
+                    assert expectedArray != null;
+                    assertThatArray(actualArray)
+                            .as("InternalArray#get" + dataType.getTypeRoot() + "(" + i + ")")
+                            .withElementType(arrayType.getElementType())
+                            .isEqualTo(expectedArray);
+                } else if (dataType instanceof MapType) {
+                    MapType mapType = (MapType) dataType;
+                    InternalMap actualMap = (InternalMap) fieldGetters[i].getFieldOrNull(actual);
+                    InternalMap expectedMap =
+                            (InternalMap) fieldGetters[i].getFieldOrNull(expected);
+                    assert expectedMap != null;
+                    assertThatMap(actualMap)
+                            .as("InternalMap#get" + dataType.getTypeRoot() + "(" + i + ")")
+                            .withMapType(mapType)
+                            .isEqualTo(expectedMap);
+                } else {
+                    assertThat(fieldGetters[i].getFieldOrNull(actual))
+                            .as(
+                                    "InternalRow#get"
+                                            + rowType.getTypeAt(i).getTypeRoot()
+                                            + "("
+                                            + i
+                                            + ")")
+                            .isEqualTo(fieldGetters[i].getFieldOrNull(expected));
+                }
             }
         }
         return this;
