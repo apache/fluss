@@ -66,7 +66,7 @@ public class TieringSplitGenerator {
         LakeSnapshot lakeSnapshotInfo;
         try {
             lakeSnapshotInfo = flussAdmin.getLatestLakeSnapshot(tableInfo.getTablePath()).get();
-            LOG.info("Last committed lake table snapshot info is:{}", lakeSnapshotInfo);
+            LOG.debug("Last committed lake table snapshot info is:{}", lakeSnapshotInfo);
         } catch (Exception e) {
             Throwable t = ExceptionUtils.stripExecutionException(e);
             if (t instanceof LakeTableSnapshotNotExistException) {

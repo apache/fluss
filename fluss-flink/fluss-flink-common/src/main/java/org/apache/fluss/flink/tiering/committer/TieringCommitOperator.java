@@ -149,6 +149,7 @@ public class TieringCommitOperator<WriteResult, Committable>
         TableBucketWriteResult<WriteResult> tableBucketWriteResult = streamRecord.getValue();
         TableBucket tableBucket = tableBucketWriteResult.tableBucket();
         long tableId = tableBucket.getTableId();
+        TablePath tablePath = tableBucketWriteResult.tablePath();
         registerTableBucketWriteResult(tableId, tableBucketWriteResult);
 
         // may collect all write results for the table
@@ -157,16 +158,23 @@ public class TieringCommitOperator<WriteResult, Committable>
 
         if (committableWriteResults != null) {
             try {
+                LOG.info(
+                        "Starting commit for table {} with {} write results",
+                        tablePath,
+                        committableWriteResults.size());
                 Committable committable =
-                        commitWriteResults(
-                                tableId,
-                                tableBucketWriteResult.tablePath(),
-                                committableWriteResults);
+                        commitWriteResults(tableId, tablePath, committableWriteResults);
                 // only emit when committable is not-null
                 if (committable != null) {
+                    LOG.info("Commit successful for table {}, emitting committable", tablePath);
                     output.collect(new StreamRecord<>(new CommittableMessage<>(committable)));
+                } else {
+                    LOG.info(
+                            "Commit resulted in null committable for table {}, skipping emission",
+                            tablePath);
                 }
                 // notify that the table id has been finished tier
+                LOG.info("Notifying coordinator that tiering is finished for table {}", tablePath);
                 operatorEventGateway.sendEventToCoordinator(
                         new SourceEventWrapper(new FinishedTieringEvent(tableId)));
             } catch (Exception e) {
@@ -176,7 +184,8 @@ public class TieringCommitOperator<WriteResult, Committable>
                                 new FailedTieringEvent(
                                         tableId, ExceptionUtils.stringifyException(e))));
                 LOG.warn(
-                        "Fail to commit tiering write result, will try to tier again in next round.",
+                        "Fail to commit tiering write result for table {}, will try to tier again in next round.",
+                        tablePath,
                         e);
             } finally {
                 collectedTableBucketWriteResults.remove(tableId);
@@ -201,6 +210,7 @@ public class TieringCommitOperator<WriteResult, Committable>
         // empty, means all write result is null, which is a empty commit,
         // return null to skip the empty commit
         if (committableWriteResults.isEmpty()) {
+            LOG.info("Skipping commit for table {} as all write results are null", tablePath);
             return null;
         }
         try (LakeCommitter<WriteResult, Committable> lakeCommitter =
@@ -225,7 +235,12 @@ public class TieringCommitOperator<WriteResult, Committable>
                     flussCurrentLakeSnapshot == null
                             ? null
                             : flussCurrentLakeSnapshot.getSnapshotId());
+            LOG.info("Committing to lake for table {}", tablePath);
             long committedSnapshotId = lakeCommitter.commit(committable, logOffsetsProperty);
+            LOG.info(
+                    "Lake commit successful for table {}, committed snapshot ID: {}",
+                    tablePath,
+                    committedSnapshotId);
             // commit to fluss
             FlussTableLakeSnapshot flussTableLakeSnapshot =
                     new FlussTableLakeSnapshot(tableId, committedSnapshotId);
@@ -242,7 +257,9 @@ public class TieringCommitOperator<WriteResult, Committable>
                             writeResult.maxTimestamp());
                 }
             }
+            LOG.info("Committing to Fluss for table {}", tablePath);
             flussTableLakeSnapshotCommitter.commit(flussTableLakeSnapshot);
+            LOG.info("Fluss commit successful for table {}", tablePath);
             return committable;
         }
     }
