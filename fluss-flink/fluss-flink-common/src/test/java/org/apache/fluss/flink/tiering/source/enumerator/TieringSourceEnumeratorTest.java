@@ -20,7 +20,6 @@ package org.apache.fluss.flink.tiering.source.enumerator;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
-import org.apache.fluss.flink.tiering.event.TieringFailOverEvent;
 import org.apache.fluss.flink.tiering.source.TieringTestBase;
 import org.apache.fluss.flink.tiering.source.split.TieringLogSplit;
 import org.apache.fluss.flink.tiering.source.split.TieringSnapshotSplit;
@@ -655,8 +654,11 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         appendRow(tablePath2, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
 
         int numSubtasks = 1;
-        try (MockSplitEnumeratorContext<TieringSplit> context =
-                new MockSplitEnumeratorContext<>(numSubtasks)) {
+        try (org.apache.fluss.flink.tiering.source.enumerator.MockSplitEnumeratorContext<
+                        TieringSplit>
+                context =
+                        new org.apache.fluss.flink.tiering.source.enumerator
+                                .MockSplitEnumeratorContext<>(numSubtasks)) {
             TieringSourceEnumerator enumerator =
                     new TieringSourceEnumerator(flussConf, context, 500);
 
@@ -665,7 +667,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // register one reader
             int subtaskId = 0;
-            registerReader(context, enumerator, subtaskId, "localhost-" + subtaskId);
+            context.registerSourceReader(subtaskId, 0, "localhost-" + subtaskId);
+            enumerator.addReader(subtaskId);
 
             // handle split request
             enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
@@ -678,7 +681,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
 
             // enumerator handle TieringFailOverEvent, which will mark current tiering tablePath1 as
             // fail, and all pending splits should be clear
-            enumerator.handleSourceEvent(subtaskId, new TieringFailOverEvent());
+            context.registerSourceReader(subtaskId, 1, "localhost-" + subtaskId);
+            enumerator.addReader(subtaskId);
 
             // handle split request
             enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
