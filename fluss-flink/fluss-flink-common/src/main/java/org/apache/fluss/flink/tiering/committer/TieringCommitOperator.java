@@ -26,7 +26,6 @@ import org.apache.fluss.exception.LakeTableSnapshotNotExistException;
 import org.apache.fluss.flink.adapter.RuntimeContextAdapter;
 import org.apache.fluss.flink.tiering.event.FailedTieringEvent;
 import org.apache.fluss.flink.tiering.event.FinishedTieringEvent;
-import org.apache.fluss.flink.tiering.event.TieringFailOverEvent;
 import org.apache.fluss.flink.tiering.source.TableBucketWriteResult;
 import org.apache.fluss.flink.tiering.source.TieringSource;
 import org.apache.fluss.lake.committer.CommittedLakeSnapshot;
@@ -108,30 +107,16 @@ public class TieringCommitOperator<WriteResult, Committable>
         this.collectedTableBucketWriteResults = new HashMap<>();
         this.flussConfig = flussConf;
         this.lakeTieringConfig = lakeTieringConfig;
-        this.operatorEventGateway =
-                parameters
-                        .getOperatorEventDispatcher()
-                        .getOperatorEventGateway(TieringSource.TIERING_SOURCE_OPERATOR_UID);
         this.setup(
                 parameters.getContainingTask(),
                 parameters.getStreamConfig(),
                 parameters.getOutput());
+        this.operatorEventGateway =
+                parameters
+                        .getOperatorEventDispatcher()
+                        .getOperatorEventGateway(TieringSource.TIERING_SOURCE_OPERATOR_UID);
     }
 
-    @Override
-    public void setup(
-            StreamTask<?, ?> containingTask,
-            StreamConfig config,
-            Output<StreamRecord<CommittableMessage<Committable>>> output) {
-        super.setup(containingTask, config, output);
-        int attemptNumber = RuntimeContextAdapter.getAttemptNumber(getRuntimeContext());
-        if (attemptNumber > 0) {
-            LOG.info("Send TieringFailoverEvent, current attempt number: {}", attemptNumber);
-            // attempt number is greater than zero, the job must failover
-            operatorEventGateway.sendEventToCoordinator(
-                    new SourceEventWrapper(new TieringFailOverEvent()));
-        }
-    }
 
     @Override
     public void open() {
