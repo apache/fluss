@@ -19,7 +19,6 @@ package org.apache.fluss.row.compacted;
 
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.types.DataType;
-import org.apache.fluss.types.DataTypeRoot;
 
 /** A decoder for {@link CompactedRow}. */
 public class CompactedRowDeserializer {
@@ -37,30 +36,13 @@ public class CompactedRowDeserializer {
 
     public void deserialize(CompactedRowReader reader, GenericRow output) {
         for (int i = 0; i < readers.length; i++) {
-            DataType type = types[i];
-            if (type.getTypeRoot() == DataTypeRoot.ROW) {
-                handleNestedRow(reader, output, i, type);
-            } else {
-                output.setField(i, readers[i].readField(reader, i));
-            }
+            // TODO: Row type support will be added in Issue #1974
+            // Currently ROW type is not supported in CompactedRowReader.createFieldReader
+            output.setField(i, readers[i].readField(reader, i));
         }
     }
 
     public DataType[] getTypes() {
         return types;
-    }
-
-    private void handleNestedRow(
-            CompactedRowReader reader, GenericRow output, int fieldIndex, DataType rowType) {
-        DataType[] subTypes = rowType.getChildren().toArray(new DataType[0]);
-        CompactedRowDeserializer nestedDeserializer = new CompactedRowDeserializer(subTypes);
-
-        CompactedRow row = (CompactedRow) readers[fieldIndex].readField(reader, fieldIndex);
-        reader.pointTo(
-                row.getSegment(), row.getOffset(), row.getOffset() + 1, row.getSizeInBytes());
-
-        GenericRow nestedRow = new GenericRow(subTypes.length);
-        nestedDeserializer.deserialize(reader, nestedRow);
-        output.setField(fieldIndex, nestedRow);
     }
 }

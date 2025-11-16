@@ -17,11 +17,14 @@
 
 package org.apache.fluss.row.compacted;
 
+import org.apache.fluss.row.BinaryArray;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.serializer.InternalArraySerializer;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypes;
 import org.apache.fluss.types.RowType;
@@ -920,5 +923,82 @@ public class CompactedRowDeserializerTest {
         assertThat(output.getField(1)).isEqualTo(BinaryString.fromString("second"));
         assertThat(output.getField(2)).isEqualTo(BinaryString.fromString("third"));
         assertThat(output.getField(3)).isEqualTo(BinaryString.fromString("fourth"));
+    }
+
+    @Test
+    public void testDeserializeArrayType() {
+        DataType[] types = {DataTypes.INT(), DataTypes.ARRAY(DataTypes.INT())};
+        CompactedRowDeserializer deserializer = new CompactedRowDeserializer(types);
+
+        BinaryArray intArray = BinaryArray.fromPrimitiveArray(new int[] {1, 2, 3, 4, 5});
+        InternalArraySerializer arraySerializer = new InternalArraySerializer(DataTypes.INT());
+
+        CompactedRowWriter writer = new CompactedRowWriter(types.length);
+        writer.writeInt(100);
+        writer.writeArray(intArray, arraySerializer);
+
+        CompactedRowReader reader = new CompactedRowReader(types);
+        reader.pointTo(writer.segment(), 0, writer.position());
+
+        GenericRow output = new GenericRow(types.length);
+        deserializer.deserialize(reader, output);
+
+        assertThat(output.getField(0)).isEqualTo(100);
+        InternalArray resultArray = (InternalArray) output.getField(1);
+        assertThat(resultArray).isNotNull();
+        assertThat(resultArray.size()).isEqualTo(5);
+        assertThat(resultArray.getInt(0)).isEqualTo(1);
+        assertThat(resultArray.getInt(4)).isEqualTo(5);
+    }
+
+    @Test
+    public void testDeserializeArrayOfStrings() {
+        DataType[] types = {DataTypes.ARRAY(DataTypes.STRING())};
+        CompactedRowDeserializer deserializer = new CompactedRowDeserializer(types);
+
+        BinaryArray strArray = new BinaryArray();
+        org.apache.fluss.row.BinaryArrayWriter strArrayWriter =
+                new org.apache.fluss.row.BinaryArrayWriter(strArray, 3, 8);
+        strArrayWriter.writeString(0, BinaryString.fromString("hello"));
+        strArrayWriter.writeString(1, BinaryString.fromString("world"));
+        strArrayWriter.writeString(2, BinaryString.fromString("test"));
+        strArrayWriter.complete();
+
+        InternalArraySerializer arraySerializer = new InternalArraySerializer(DataTypes.STRING());
+
+        CompactedRowWriter writer = new CompactedRowWriter(types.length);
+        writer.writeArray(strArray, arraySerializer);
+
+        CompactedRowReader reader = new CompactedRowReader(types);
+        reader.pointTo(writer.segment(), 0, writer.position());
+
+        GenericRow output = new GenericRow(types.length);
+        deserializer.deserialize(reader, output);
+
+        InternalArray resultArray = (InternalArray) output.getField(0);
+        assertThat(resultArray).isNotNull();
+        assertThat(resultArray.size()).isEqualTo(3);
+        assertThat(resultArray.getString(0)).isEqualTo(BinaryString.fromString("hello"));
+        assertThat(resultArray.getString(1)).isEqualTo(BinaryString.fromString("world"));
+        assertThat(resultArray.getString(2)).isEqualTo(BinaryString.fromString("test"));
+    }
+
+    @Test
+    public void testDeserializeNullArray() {
+        DataType[] types = {DataTypes.INT(), DataTypes.ARRAY(DataTypes.INT())};
+        CompactedRowDeserializer deserializer = new CompactedRowDeserializer(types);
+
+        CompactedRowWriter writer = new CompactedRowWriter(types.length);
+        writer.writeInt(100);
+        writer.setNullAt(1);
+
+        CompactedRowReader reader = new CompactedRowReader(types);
+        reader.pointTo(writer.segment(), 0, writer.position());
+
+        GenericRow output = new GenericRow(types.length);
+        deserializer.deserialize(reader, output);
+
+        assertThat(output.getField(0)).isEqualTo(100);
+        assertThat(output.getField(1)).isNull();
     }
 }
