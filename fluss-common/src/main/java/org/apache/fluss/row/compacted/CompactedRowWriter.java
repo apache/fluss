@@ -21,18 +21,26 @@ import org.apache.fluss.annotation.VisibleForTesting;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.MemorySegmentWritable;
 import org.apache.fluss.memory.OutputView;
+import org.apache.fluss.row.BinaryArray;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
+import org.apache.fluss.row.BinaryWriter;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
+import org.apache.fluss.row.serializer.InternalArraySerializer;
+import org.apache.fluss.row.serializer.InternalSerializers;
+import org.apache.fluss.row.serializer.Serializer;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.UnsafeUtils;
 
 import java.io.IOException;
 import java.io.Serializable;
 import java.util.Arrays;
 
+import static org.apache.fluss.row.BinaryRow.calculateBitSetWidthInBytes;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 
 /**
@@ -65,7 +73,7 @@ import static org.apache.fluss.types.DataTypeChecks.getPrecision;
  * the positive integer is doubled. We assume that the probability of general integers being
  * positive is higher, so sacrifice the negative number to promote the positive number.
  */
-public class CompactedRowWriter {
+public class CompactedRowWriter implements BinaryWriter {
 
     private final int headerSizeInBytes;
 
@@ -75,8 +83,16 @@ public class CompactedRowWriter {
     private int position;
     private MemorySegment segment;
 
+    public CompactedRowWriter(RowType rowType) {
+        this(rowType.getChildren().toArray(new DataType[0]));
+    }
+
+    public CompactedRowWriter(DataType[] types) {
+        this(types.length);
+    }
+
     public CompactedRowWriter(int fieldCount) {
-        this.headerSizeInBytes = CompactedRow.calculateBitSetWidthInBytes(fieldCount);
+        this.headerSizeInBytes = calculateBitSetWidthInBytes(fieldCount);
         this.position = headerSizeInBytes;
         setBuffer(new byte[Math.max(64, headerSizeInBytes)]);
     }
@@ -95,10 +111,12 @@ public class CompactedRowWriter {
         this.segment = MemorySegment.wrap(buffer);
     }
 
+    @Override
     public MemorySegment segment() {
         return segment;
     }
 
+    @Override
     public int position() {
         return position;
     }
@@ -127,6 +145,12 @@ public class CompactedRowWriter {
     public void writeByte(byte value) {
         ensureCapacity(1);
         UnsafeUtils.putByte(buffer, position++, value);
+    }
+
+    public void writeChar(BinaryString value, int length) {
+        byte[] bytes = new byte[length];
+        BinaryString.encodeUTF8(value.toString(), bytes);
+        write(bytes, 0, length);
     }
 
     public void writeString(BinaryString value) {
@@ -166,14 +190,34 @@ public class CompactedRowWriter {
         this.position += len;
     }
 
+    /**
+     * write bytes to buffer. Used for complex types such as: array, map, row.
+     *
+     * @param length in bytes.
+     * @param segments memory segments.
+     * @param offset offset in memory segment.
+     */
+    private void write(int length, MemorySegment[] segments, int offset) {
+        writeSegments(segments, offset, length);
+    }
+
     public void writeString(String string) {
         byte[] bytes = BinaryString.encodeUTF8(string);
         writeBytes(bytes);
     }
 
-    private void writeBoolean(boolean value) {
+    public void writeBoolean(boolean value) {
         ensureCapacity(1);
         UnsafeUtils.putBoolean(buffer, position++, value);
+    }
+
+    public void writeBinary(byte[] value, int length) {
+        if (value.length > length) {
+            throw new IllegalArgumentException();
+        }
+        byte[] newByte = new byte[length];
+        System.arraycopy(value, 0, newByte, 0, value.length);
+        write(newByte, 0, length);
     }
 
     public void writeBytes(byte[] value) {
@@ -238,19 +282,19 @@ public class CompactedRowWriter {
         }
     }
 
-    private void writeFloat(float value) {
+    public void writeFloat(float value) {
         ensureCapacity(4);
         UnsafeUtils.putFloat(buffer, position, value);
         position += 4;
     }
 
-    private void writeDouble(double value) {
+    public void writeDouble(double value) {
         ensureCapacity(8);
         UnsafeUtils.putDouble(buffer, position, value);
         position += 8;
     }
 
-    private void writeTimestampNtz(TimestampNtz value, int precision) {
+    public void writeTimestampNtz(TimestampNtz value, int precision) {
         if (TimestampNtz.isCompact(precision)) {
             writeLong(value.getMillisecond());
         } else {
@@ -259,7 +303,7 @@ public class CompactedRowWriter {
         }
     }
 
-    private void writeTimestampLtz(TimestampLtz value, int precision) {
+    public void writeTimestampLtz(TimestampLtz value, int precision) {
         if (TimestampLtz.isCompact(precision)) {
             writeLong(value.getEpochMillisecond());
         } else {
@@ -267,6 +311,37 @@ public class CompactedRowWriter {
             writeInt(value.getNanoOfMillisecond());
         }
     }
+
+    public void writeArray(InternalArray value, InternalArraySerializer serializer) {
+        BinaryArray binary = serializer.toBinaryArray(value);
+        MemorySegment[] segments = binary.getSegments();
+        int offset = binary.getOffset();
+        int length = binary.getSizeInBytes();
+
+        write(length, segments, offset);
+    }
+
+    // TODO: Map and Row write methods will be added in Issue #1973 and #1974
+    // public void writeMap(InternalMap value, InternalMapSerializer serializer) {
+    //     BinaryMap binaryMap = serializer.toBinaryMap(value);
+    //     MemorySegment[] segments = binaryMap.getSegments();
+    //     int offset = binaryMap.getOffset();
+    //     int length = binaryMap.getSizeInBytes();
+    //
+    //     write(length, segments, offset);
+    // }
+    //
+    // public void writeRow(InternalRow value, InternalRowSerializer serializer) {
+    //     BinaryRow binaryRow = serializer.toBinaryRow(value);
+    //     MemorySegment[] segments = binaryRow.getSegments();
+    //     int offset = binaryRow.getOffset();
+    //     int length = binaryRow.getSizeInBytes();
+    //
+    //     write(length, segments, offset);
+    // }
+
+    @Override
+    public void complete() {}
 
     private void ensureCapacity(int size) {
         if (buffer.length - position < size) {
@@ -358,6 +433,24 @@ public class CompactedRowWriter {
                                 writer.writeTimestampLtz(
                                         (TimestampLtz) value, timestampLtzPrecision);
                 break;
+            case ARRAY:
+                final Serializer<InternalArray> arraySerializer =
+                        InternalSerializers.create(fieldType);
+                fieldWriter =
+                        (writer, pos, value) ->
+                                writer.writeArray(
+                                        (InternalArray) value,
+                                        (InternalArraySerializer) arraySerializer);
+                break;
+
+            case MAP:
+                // TODO: Map type support will be added in Issue #1973
+                throw new UnsupportedOperationException(
+                        "Map type in KV table is not supported yet. Will be added in Issue #1976.");
+            case ROW:
+                // TODO: Row type support will be added in Issue #1974
+                throw new UnsupportedOperationException(
+                        "Row type in KV table is not supported yet. Will be added in Issue #1977.");
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);
         }
@@ -372,6 +465,9 @@ public class CompactedRowWriter {
             }
         };
     }
+
+    @Override
+    public void close() throws IOException {}
 
     /** Accessor for writing the elements of an compacted row writer during runtime. */
     public interface FieldWriter extends Serializable {

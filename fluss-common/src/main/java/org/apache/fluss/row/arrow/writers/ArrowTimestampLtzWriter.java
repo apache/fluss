@@ -18,7 +18,7 @@
 package org.apache.fluss.row.arrow.writers;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampMicroVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TimeStampMilliVector;
@@ -31,7 +31,7 @@ import static org.apache.fluss.utils.Preconditions.checkState;
 
 /** {@link ArrowFieldWriter} for TimestampLtz. */
 @Internal
-public class ArrowTimestampLtzWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowTimestampLtzWriter extends ArrowFieldWriter<DataGetters> {
     public static ArrowTimestampLtzWriter forField(ValueVector valueVector, int precision) {
         return new ArrowTimestampLtzWriter(valueVector, precision);
     }
@@ -48,7 +48,7 @@ public class ArrowTimestampLtzWriter extends ArrowFieldWriter<InternalRow> {
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
         TimeStampVector vector = (TimeStampVector) getValueVector();
         if (isNullAt(row, ordinal)) {
             vector.setNull(getCount());
@@ -90,11 +90,11 @@ public class ArrowTimestampLtzWriter extends ArrowFieldWriter<InternalRow> {
         }
     }
 
-    private boolean isNullAt(InternalRow row, int ordinal) {
+    private boolean isNullAt(DataGetters row, int ordinal) {
         return row.isNullAt(ordinal);
     }
 
-    private TimestampLtz readTimestamp(InternalRow row, int ordinal) {
+    private TimestampLtz readTimestamp(DataGetters row, int ordinal) {
         return row.getTimestampLtz(ordinal, precision);
     }
 }

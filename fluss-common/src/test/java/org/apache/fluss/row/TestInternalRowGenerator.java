@@ -32,6 +32,8 @@ import java.time.LocalDate;
 import java.time.LocalTime;
 import java.util.Random;
 
+import static org.apache.fluss.row.BinaryString.fromString;
+
 /** Test all types and generate test internal row. */
 public class TestInternalRowGenerator {
     public static DataType[] createAllTypes() {
@@ -58,7 +60,17 @@ public class TestInternalRowGenerator {
                 new DataField("p", DataTypes.TIMESTAMP(1)),
                 new DataField("q", DataTypes.TIMESTAMP(5)),
                 new DataField("r", DataTypes.TIMESTAMP_LTZ(1)),
-                new DataField("s", DataTypes.TIMESTAMP_LTZ(5)));
+                new DataField("s", DataTypes.TIMESTAMP_LTZ(5)),
+                new DataField("t", DataTypes.ARRAY(DataTypes.INT()))
+                // TODO: Add Map and Row fields in Issue #1973 and #1974
+                // new DataField("u", DataTypes.MAP(DataTypes.INT(), DataTypes.STRING())),
+                // new DataField(
+                //         "v",
+                //         DataTypes.ROW(
+                //                 new DataField("u1", DataTypes.INT()),
+                //                 new DataField("u2", DataTypes.ROW(DataTypes.INT())),
+                //                 new DataField("u3", DataTypes.STRING())))
+                );
     }
 
     public static IndexedRow genIndexedRowForAllType() {
@@ -82,8 +94,8 @@ public class TestInternalRowGenerator {
         setRandomNull(writers[8], writer, 8, rnd, generateRandomTime(rnd));
         setRandomNull(writers[9], writer, 9, rnd, generateRandomBinary(rnd, 20));
         setRandomNull(writers[10], writer, 10, rnd, generateRandomBytes(rnd));
-        setRandomNull(writers[11], writer, 11, rnd, BinaryString.fromString("12"));
-        setRandomNull(writers[12], writer, 12, rnd, BinaryString.fromString(rnd.nextInt() + ""));
+        setRandomNull(writers[11], writer, 11, rnd, fromString("12"));
+        setRandomNull(writers[12], writer, 12, rnd, fromString(rnd.nextInt() + ""));
         setRandomNull(writers[13], writer, 13, rnd, Decimal.fromUnscaledLong(rnd.nextLong(), 5, 2));
         setRandomNull(
                 writers[14],
@@ -107,6 +119,22 @@ public class TestInternalRowGenerator {
                 18,
                 rnd,
                 TimestampLtz.fromEpochMillis(System.currentTimeMillis()));
+
+        GenericArray array = new GenericArray(new int[] {1, 2, 3});
+        setRandomNull(writers[19], writer, 19, rnd, array);
+
+        // TODO: Map type support will be added in Issue #1973
+        // Map<Object, Object> javaMap = new HashMap<>();
+        // javaMap.put(0, null);
+        // javaMap.put(1, fromString("1"));
+        // javaMap.put(2, fromString("2"));
+        // GenericMap map = new GenericMap(javaMap);
+        // setRandomNull(writers[20], writer, 20, rnd, map);
+
+        // TODO: Row type support will be added in Issue #1974
+        // GenericRow innerRow = GenericRow.of(123);
+        // GenericRow genericRow = GenericRow.of(20, innerRow, BinaryString.fromString("Test"));
+        // setRandomNull(writers[21], writer, 21, rnd, genericRow);
 
         IndexedRow row = new IndexedRow(dataTypes);
         row.pointTo(writer.segment(), 0, writer.position());

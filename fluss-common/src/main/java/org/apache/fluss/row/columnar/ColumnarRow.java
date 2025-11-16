@@ -20,6 +20,7 @@ package org.apache.fluss.row.columnar;
 import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -130,6 +131,14 @@ public class ColumnarRow implements InternalRow {
     public byte[] getBytes(int pos) {
         return vectorizedColumnBatch.getBytes(rowId, pos);
     }
+
+    @Override
+    public InternalArray getArray(int pos) {
+        return vectorizedColumnBatch.getArray(rowId, pos);
+    }
+
+    // TODO: getMap() will be added in Issue #1973
+    // TODO: getRow() will be added in Issue #1974
 
     @Override
     public int getFieldCount() {

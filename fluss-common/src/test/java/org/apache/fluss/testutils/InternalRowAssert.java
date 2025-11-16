@@ -18,12 +18,16 @@
 package org.apache.fluss.testutils;
 
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.types.ArrayType;
+import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.RowType;
 
 import org.assertj.core.api.AbstractAssert;
 
+import static org.apache.fluss.types.DataTypeRoot.ARRAY;
 import static org.assertj.core.api.Assertions.assertThat;
 
 /** Extend assertj assertions to easily assert {@link InternalRow}. */
@@ -68,9 +72,21 @@ public class InternalRowAssert extends AbstractAssert<InternalRowAssert, Interna
                     .as("InternalRow#isNullAt(" + i + ")")
                     .isEqualTo(expected.isNullAt(i));
             if (!actual.isNullAt(i)) {
-                assertThat(fieldGetters[i].getFieldOrNull(actual))
-                        .as("InternalRow#get" + rowType.getTypeAt(i).getTypeRoot() + "(" + i + ")")
-                        .isEqualTo(fieldGetters[i].getFieldOrNull(expected));
+                DataType fieldType = rowType.getTypeAt(i);
+                Object actualField = fieldGetters[i].getFieldOrNull(actual);
+                Object expectedField = fieldGetters[i].getFieldOrNull(expected);
+
+                // Special handling for Array types to compare content not instance
+                if (fieldType.getTypeRoot() == ARRAY) {
+                    InternalArrayAssert.assertThatArray((InternalArray) actualField)
+                            .withElementType(((ArrayType) fieldType).getElementType())
+                            .as("InternalRow#get" + fieldType.getTypeRoot() + "(" + i + ")")
+                            .isEqualTo((InternalArray) expectedField);
+                } else {
+                    assertThat(actualField)
+                            .as("InternalRow#get" + fieldType.getTypeRoot() + "(" + i + ")")
+                            .isEqualTo(expectedField);
+                }
             }
         }
         return this;

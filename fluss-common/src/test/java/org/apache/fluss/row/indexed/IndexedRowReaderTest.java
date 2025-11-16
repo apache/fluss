@@ -96,6 +96,7 @@ public class IndexedRowReaderTest {
         assertThat(reader.readTimestampNtz(1).toString()).isEqualTo("2023-10-25T12:01:13.182");
         assertThat(reader.readTimestampNtz(5).toString()).isEqualTo("2023-10-25T12:01:13.182");
         assertThat(reader.readTimestampLtz(1).toString()).isEqualTo("2023-10-25T12:01:13.182Z");
-        assertThat(reader.isNullAt(18)).isTrue();
+        assertThat(reader.readTimestampLtz(5).toString()).isEqualTo("2023-10-25T12:01:13.182Z");
+        assertThat(reader.isNullAt(19)).isTrue();
     }
 }

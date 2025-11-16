@@ -24,6 +24,7 @@ import org.apache.fluss.row.BinaryRow;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.NullAwareGetters;
 import org.apache.fluss.row.TimestampLtz;
@@ -33,6 +34,7 @@ import org.apache.fluss.types.CharType;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DecimalType;
 import org.apache.fluss.types.IntType;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.StringType;
 import org.apache.fluss.utils.MurmurHashUtils;
 
@@ -78,10 +80,14 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
     private int sizeInBytes;
     private int[] columnLengths;
 
+    public IndexedRow(RowType rowType) {
+        this(rowType.getChildren().toArray(new DataType[0]));
+    }
+
     public IndexedRow(DataType[] fieldTypes) {
         this.fieldTypes = fieldTypes;
         this.arity = fieldTypes.length;
-        this.nullBitsSizeInBytes = calculateBitSetWidthInBytes(arity);
+        this.nullBitsSizeInBytes = BinaryRow.calculateBitSetWidthInBytes(arity);
         this.headerSizeInBytes =
                 nullBitsSizeInBytes + calculateVariableColumnLengthListSize(fieldTypes);
     }
@@ -109,6 +115,14 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
     public void pointTo(MemorySegment segment, int offset, int sizeInBytes) {
         this.segment = segment;
         this.segments = new MemorySegment[] {segment};
+        this.offset = offset;
+        this.sizeInBytes = sizeInBytes;
+        this.columnLengths = calculateColumnLengths();
+    }
+
+    public void pointTo(MemorySegment[] segments, int offset, int sizeInBytes) {
+        this.segment = segments[0];
+        this.segments = segments;
         this.offset = offset;
         this.sizeInBytes = sizeInBytes;
         this.columnLengths = calculateColumnLengths();
@@ -236,10 +250,6 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
         return projectRow;
     }
 
-    public static int calculateBitSetWidthInBytes(int arity) {
-        return (arity + 7) / 8;
-    }
-
     public static boolean isFixedLength(DataType dataType) {
         switch (dataType.getTypeRoot()) {
             case BOOLEAN:
@@ -258,6 +268,9 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
                 return true;
             case STRING:
             case BYTES:
+            case ARRAY:
+            case MAP:
+            case ROW:
                 return false;
             case DECIMAL:
                 return Decimal.isCompact(((DecimalType) dataType).getPrecision());
@@ -434,6 +447,17 @@ public class IndexedRow implements BinaryRow, NullAwareGetters {
         segment.get(getFieldOffset(pos), bytes, 0, length);
         return bytes;
     }
+
+    @Override
+    public InternalArray getArray(int pos) {
+        assertIndexIsValid(pos);
+        int index = getFieldOffset(pos);
+        int length = columnLengths[pos];
+        return BinarySegmentUtils.readArrayData(segments, index, length);
+    }
+
+    // TODO: getMap() will be added in Issue #1973
+    // TODO: getRow() will be added in Issue #1974
 
     private void assertIndexIsValid(int index) {
         assert index >= 0 : "index (" + index + ") should >= 0";
