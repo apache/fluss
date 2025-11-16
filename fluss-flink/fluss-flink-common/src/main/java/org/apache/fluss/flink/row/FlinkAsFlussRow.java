@@ -19,6 +19,7 @@ package org.apache.fluss.flink.row;
 
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -132,4 +133,13 @@ public class FlinkAsFlussRow implements InternalRow {
     public byte[] getBytes(int pos) {
         return flinkRow.getBinary(pos);
     }
+
+    @Override
+    public InternalArray getArray(int pos) {
+        // TODO: Support Array type conversion from Flink to Fluss
+        return null;
+    }
+
+    // TODO: Support Map type conversion from Flink to Fluss
+    // TODO: Support Row type conversion from Flink to Fluss
 }

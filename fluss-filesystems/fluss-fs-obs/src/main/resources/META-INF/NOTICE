@@ -50,7 +50,7 @@ This project bundles the following dependencies under the Apache Software Licens
 - org.jetbrains.kotlin:kotlin-stdlib-jdk7:1.8.21
 - org.jetbrains.kotlin:kotlin-stdlib-jdk8:1.8.21
 - org.jetbrains.kotlin:kotlin-stdlib:1.8.21
-- org.jetbrains:annotations:13.0
+- org.jetbrains:annotations:26.0.1
 - org.yaml:snakeyaml:2.0
 
 This project bundles the following dependencies under the CDDL 1.1 license.

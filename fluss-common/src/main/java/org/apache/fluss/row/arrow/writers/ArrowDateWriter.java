@@ -18,12 +18,12 @@
 package org.apache.fluss.row.arrow.writers;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.DateDayVector;
 
 /** {@link ArrowFieldWriter} for Date. */
 @Internal
-public class ArrowDateWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowDateWriter extends ArrowFieldWriter<DataGetters> {
 
     public static ArrowDateWriter forField(DateDayVector dateDayVector) {
         return new ArrowDateWriter(dateDayVector);
@@ -34,7 +34,7 @@ public class ArrowDateWriter extends ArrowFieldWriter<InternalRow> {
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
         DateDayVector vector = (DateDayVector) getValueVector();
         if (isNullAt(row, ordinal)) {
             vector.setNull(getCount());
@@ -45,11 +45,11 @@ public class ArrowDateWriter extends ArrowFieldWriter<InternalRow> {
         }
     }
 
-    private boolean isNullAt(InternalRow row, int ordinal) {
+    private boolean isNullAt(DataGetters row, int ordinal) {
         return row.isNullAt(ordinal);
     }
 
-    private int readDate(InternalRow row, int ordinal) {
+    private int readDate(DataGetters row, int ordinal) {
         return row.getInt(ordinal);
     }
 }

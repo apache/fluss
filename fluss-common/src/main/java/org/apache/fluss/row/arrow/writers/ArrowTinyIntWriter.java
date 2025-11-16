@@ -18,12 +18,12 @@
 package org.apache.fluss.row.arrow.writers;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.TinyIntVector;
 
 /** {@link ArrowFieldWriter} for TinyInt. */
 @Internal
-public class ArrowTinyIntWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowTinyIntWriter extends ArrowFieldWriter<DataGetters> {
 
     public static ArrowTinyIntWriter forField(TinyIntVector tinyIntVector) {
         return new ArrowTinyIntWriter(tinyIntVector);
@@ -34,7 +34,7 @@ public class ArrowTinyIntWriter extends ArrowFieldWriter<InternalRow> {
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
         TinyIntVector vector = (TinyIntVector) getValueVector();
         if (isNullAt(row, ordinal)) {
             vector.setNull(getCount());
@@ -47,11 +47,11 @@ public class ArrowTinyIntWriter extends ArrowFieldWriter<InternalRow> {
         }
     }
 
-    private boolean isNullAt(InternalRow row, int ordinal) {
+    private boolean isNullAt(DataGetters row, int ordinal) {
         return row.isNullAt(ordinal);
     }
 
-    private byte readByte(InternalRow row, int ordinal) {
+    private byte readByte(DataGetters row, int ordinal) {
         return row.getByte(ordinal);
     }
 }

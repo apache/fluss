@@ -21,13 +21,17 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
 
 import java.io.Serializable;
 
+import static org.apache.fluss.row.BinaryRow.calculateBitSetWidthInBytes;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 import static org.apache.fluss.types.DataTypeChecks.getScale;
 
@@ -41,8 +45,10 @@ import static org.apache.fluss.types.DataTypeChecks.getScale;
  */
 public class CompactedRowReader {
 
+    private final int fieldCount;
     // Including null bits.
     private final int headerSizeInBytes;
+    private final DataType[] types;
 
     private MemorySegment segment;
     private MemorySegment[] segments;
@@ -50,15 +56,27 @@ public class CompactedRowReader {
     private int position;
     private int limit;
 
+    public CompactedRowReader(RowType rowType) {
+        this(rowType.getChildren().toArray(new DataType[0]));
+    }
+
+    public CompactedRowReader(DataType[] types) {
+        this.types = types;
+        this.fieldCount = types.length;
+        this.headerSizeInBytes = calculateBitSetWidthInBytes(fieldCount);
+    }
+
     public CompactedRowReader(int fieldCount) {
-        this.headerSizeInBytes = CompactedRow.calculateBitSetWidthInBytes(fieldCount);
+        this.types = null;
+        this.fieldCount = fieldCount;
+        this.headerSizeInBytes = calculateBitSetWidthInBytes(fieldCount);
     }
 
     public void pointTo(MemorySegment segment, int offset, int length) {
         pointTo(segment, offset, offset + headerSizeInBytes, offset + length);
     }
 
-    private void pointTo(MemorySegment segment, int offset, int position, int limit) {
+    void pointTo(MemorySegment segment, int offset, int position, int limit) {
         if (segment != this.segment) {
             this.segment = segment;
             this.segments = new MemorySegment[] {segment};
@@ -234,7 +252,7 @@ public class CompactedRowReader {
     }
 
     // ----------------------- internal methods -------------------------------
-    private byte[] readBytesInternal(int length) {
+    byte[] readBytesInternal(int length) {
         byte[] bytes = new byte[length];
         segment.get(position, bytes, 0, length);
         position += length;
@@ -306,6 +324,18 @@ public class CompactedRowReader {
                 final int timestampLtzPrecision = getPrecision(fieldType);
                 fieldReader = (reader, pos) -> reader.readTimestampLtz(timestampLtzPrecision);
                 break;
+            case ARRAY:
+                fieldReader = (reader, pos) -> reader.readArray();
+                break;
+
+            case MAP:
+                // TODO: Map type support will be added in Issue #1973
+                throw new UnsupportedOperationException(
+                        "Map type in KV table is not supported yet. Will be added in Issue #1976.");
+            case ROW:
+                // TODO: Row type support will be added in Issue #1974
+                throw new UnsupportedOperationException(
+                        "Row type in KV table is not supported yet. Will be added in Issue #1977.");
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);
         }
@@ -318,6 +348,34 @@ public class CompactedRowReader {
             }
             return fieldReader.readField(reader, pos);
         };
+    }
+
+    public InternalArray readArray() {
+        int length = readInt();
+        InternalArray array = BinarySegmentUtils.readArrayData(segments, position, length);
+        position += length;
+        return array;
+    }
+
+    public InternalMap readMap() {
+        int length = readInt();
+        InternalMap map = BinarySegmentUtils.readMapData(segments, position, length);
+        position += length;
+        return map;
+    }
+
+    public InternalRow readRow() {
+        return readRow(types);
+    }
+
+    public InternalRow readRow(DataType[] types) {
+        int length = readInt();
+        InternalRow row;
+        row =
+                BinarySegmentUtils.readCompactedRowData(
+                        segments, fieldCount, position, length, types);
+        position += length;
+        return row;
     }
 
     /**

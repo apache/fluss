@@ -51,11 +51,11 @@ public abstract class ArrowFieldWriter<IN> {
     }
 
     /** Sets the field value as the field at the specified ordinal of the specified row. */
-    public abstract void doWrite(IN row, int ordinal, boolean handleSafe);
+    public abstract void doWrite(int rowIndex, IN getters, int ordinal, boolean handleSafe);
 
     /** Writes the specified ordinal of the specified row. */
-    public void write(IN row, int ordinal, boolean handleSafe) {
-        doWrite(row, ordinal, handleSafe);
+    public void write(int rowIndex, IN getters, int ordinal, boolean handleSafe) {
+        doWrite(rowIndex, getters, ordinal, handleSafe);
         count++;
     }
 }

@@ -440,6 +440,11 @@ class TableManagerITCase {
                     () -> assertThat(zkClient.getPartitionAssignment(partitionId)).isEmpty());
         }
 
+        // wait for at least two auto-partition check intervals (check interval is 1 second)
+        // to ensure the auto partition manager has had enough time to run and verify
+        // it does not create partitions for the new table
+        Thread.sleep(2500);
+
         // make sure the auto partition manager won't create partitions for the new table
         assertThat(zkClient.getPartitions(tablePath)).isEmpty();
     }

@@ -21,8 +21,9 @@ import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.compression.ArrowCompressionFactory;
 import org.apache.fluss.exception.FlussRuntimeException;
 import org.apache.fluss.memory.MemorySegment;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.row.arrow.ArrowReader;
+import org.apache.fluss.row.arrow.vectors.ArrowArrayColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowBigIntColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowBinaryColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowBooleanColumnVector;
@@ -38,6 +39,7 @@ import org.apache.fluss.row.arrow.vectors.ArrowTimestampNtzColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowTinyIntColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowVarBinaryColumnVector;
 import org.apache.fluss.row.arrow.vectors.ArrowVarCharColumnVector;
+import org.apache.fluss.row.arrow.writers.ArrowArrayWriter;
 import org.apache.fluss.row.arrow.writers.ArrowBigIntWriter;
 import org.apache.fluss.row.arrow.writers.ArrowBinaryWriter;
 import org.apache.fluss.row.arrow.writers.ArrowBooleanWriter;
@@ -82,6 +84,8 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarBinaryVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarCharVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorLoader;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VectorSchemaRoot;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.ListVector;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.complex.MapVector;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.compression.NoCompressionCodec;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.ReadChannel;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.WriteChannel;
@@ -95,16 +99,19 @@ import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.ipc.message.Message
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.DateUnit;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.FloatingPointPrecision;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.TimeUnit;
+import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.Types;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.ArrowType;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Field;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.FieldType;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.types.pojo.Schema;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.util.DataSizeRoundingUtil;
+import org.apache.fluss.types.ArrayType;
 import org.apache.fluss.types.BigIntType;
 import org.apache.fluss.types.BinaryType;
 import org.apache.fluss.types.BooleanType;
 import org.apache.fluss.types.BytesType;
 import org.apache.fluss.types.CharType;
+import org.apache.fluss.types.DataField;
 import org.apache.fluss.types.DataType;
 import org.apache.fluss.types.DataTypeDefaultVisitor;
 import org.apache.fluss.types.DateType;
@@ -113,6 +120,7 @@ import org.apache.fluss.types.DoubleType;
 import org.apache.fluss.types.FloatType;
 import org.apache.fluss.types.IntType;
 import org.apache.fluss.types.LocalZonedTimestampType;
+import org.apache.fluss.types.MapType;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.types.SmallIntType;
 import org.apache.fluss.types.StringType;
@@ -125,6 +133,8 @@ import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.nio.channels.Channels;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
 import java.util.stream.Collectors;
 
@@ -135,11 +145,13 @@ import static org.apache.fluss.utils.Preconditions.checkArgument;
 @Internal
 public class ArrowUtils {
 
+    static final String PARQUET_FIELD_NAME = "PARQUET:field_name";
+
     /** Returns the Arrow schema of the specified type. */
     public static Schema toArrowSchema(RowType rowType) {
         List<Field> fields =
                 rowType.getFields().stream()
-                        .map(f -> toArrowField(f.getName(), f.getType()))
+                        .map(f -> toArrowField(f.getName(), f.getType(), 0))
                         .collect(Collectors.toList());
         return new Schema(fields);
     }
@@ -280,7 +292,7 @@ public class ArrowUtils {
         return buffers;
     }
 
-    public static ArrowFieldWriter<InternalRow> createArrowFieldWriter(
+    public static ArrowFieldWriter<DataGetters> createArrowFieldWriter(
             ValueVector vector, DataType dataType) {
         if (vector instanceof TinyIntVector) {
             return ArrowTinyIntWriter.forField((TinyIntVector) vector);
@@ -323,13 +335,18 @@ public class ArrowUtils {
                 precision = ((TimestampType) dataType).getPrecision();
                 return ArrowTimestampNtzWriter.forField(vector, precision);
             }
+        } else if (vector instanceof ListVector && dataType instanceof ArrayType) {
+            DataType elementType = ((ArrayType) dataType).getElementType();
+            return ArrowArrayWriter.forField(vector, elementType);
         } else {
             throw new UnsupportedOperationException(
-                    String.format("Unsupported type %s.", dataType));
+                    String.format(
+                            "Unsupported type %s. Map and Row types will be supported in Issue #1973 and #1974.",
+                            dataType));
         }
     }
 
-    private static ColumnVector createArrowColumnVector(ValueVector vector, DataType dataType) {
+    public static ColumnVector createArrowColumnVector(ValueVector vector, DataType dataType) {
         if (vector instanceof TinyIntVector) {
             return new ArrowTinyIntColumnVector((TinyIntVector) vector);
         } else if (vector instanceof SmallIntVector) {
@@ -366,19 +383,99 @@ public class ArrowUtils {
             } else {
                 return new ArrowTimestampNtzColumnVector(vector);
             }
+        } else if (vector instanceof ListVector && dataType instanceof ArrayType) {
+            DataType elementType = ((ArrayType) dataType).getElementType();
+            return new ArrowArrayColumnVector((ListVector) vector, elementType);
         } else {
             throw new UnsupportedOperationException(
-                    String.format("Unsupported type %s.", dataType));
+                    String.format(
+                            "Unsupported type %s. Map and Row types will be supported in Issue #1973 and #1974.",
+                            dataType));
         }
     }
 
-    private static Field toArrowField(String fieldName, DataType logicalType) {
+    public static Field toArrowField(String fieldName, DataType dataType, int depth) {
         FieldType fieldType =
+                FieldType.nullable(dataType.accept(DataTypeToArrowTypeConverter.INSTANCE));
+        fieldType =
                 new FieldType(
-                        logicalType.isNullable(),
-                        logicalType.accept(DataTypeToArrowTypeConverter.INSTANCE),
-                        null);
-        return new Field(fieldName, fieldType, null);
+                        fieldType.isNullable(),
+                        fieldType.getType(),
+                        fieldType.getDictionary(),
+                        Collections.singletonMap(PARQUET_FIELD_NAME, fieldName));
+
+        List<Field> children = null;
+        if (dataType instanceof ArrayType) {
+            Field elementField =
+                    toArrowField(
+                            ListVector.DATA_VECTOR_NAME,
+                            ((ArrayType) dataType).getElementType(),
+                            depth + 1);
+            FieldType elementType = elementField.getFieldType();
+
+            elementField =
+                    new Field(
+                            elementField.getName(),
+                            new FieldType(
+                                    elementType.isNullable(),
+                                    elementType.getType(),
+                                    elementType.getDictionary(),
+                                    Collections.singletonMap(
+                                            PARQUET_FIELD_NAME, fieldName + "_element")),
+                            elementField.getChildren());
+            children = Collections.singletonList(elementField);
+        } else if (dataType instanceof MapType) {
+            MapType mapType = (MapType) dataType;
+            Field keyField = toArrowField(MapVector.KEY_NAME, mapType.getKeyType(), depth + 1);
+            FieldType keyType = keyField.getFieldType();
+            keyField =
+                    new Field(
+                            keyField.getName(),
+                            new FieldType(
+                                    false,
+                                    keyType.getType(),
+                                    keyType.getDictionary(),
+                                    Collections.singletonMap(
+                                            PARQUET_FIELD_NAME, fieldName + "_key")),
+                            keyField.getChildren());
+
+            Field valueField =
+                    toArrowField(MapVector.VALUE_NAME, mapType.getValueType(), depth + 1);
+            FieldType valueType = valueField.getFieldType();
+            valueField =
+                    new Field(
+                            valueField.getName(),
+                            new FieldType(
+                                    valueType.isNullable(),
+                                    valueType.getType(),
+                                    valueType.getDictionary(),
+                                    Collections.singletonMap(
+                                            PARQUET_FIELD_NAME, fieldName + "_value")),
+                            valueField.getChildren());
+
+            FieldType structType =
+                    new FieldType(
+                            false,
+                            Types.MinorType.STRUCT.getType(),
+                            null,
+                            Collections.singletonMap(PARQUET_FIELD_NAME, fieldName));
+            Field mapField =
+                    new Field(
+                            MapVector.DATA_VECTOR_NAME,
+                            // data vector, key vector and value vector CANNOT be null
+                            structType,
+                            Arrays.asList(keyField, valueField));
+
+            children = Collections.singletonList(mapField);
+        } else if (dataType instanceof RowType) {
+            RowType rowType = (RowType) dataType;
+            children = new ArrayList<>();
+            for (DataField field : rowType.getFields()) {
+                children.add(toArrowField(field.getName(), field.getType(), 0));
+            }
+        }
+
+        return new Field(fieldName, fieldType, children);
     }
 
     private static class DataTypeToArrowTypeConverter extends DataTypeDefaultVisitor<ArrowType> {
@@ -490,6 +587,21 @@ public class ArrowUtils {
             } else {
                 return new ArrowType.Timestamp(TimeUnit.NANOSECOND, null);
             }
+        }
+
+        @Override
+        public ArrowType visit(ArrayType arrayType) {
+            return Types.MinorType.LIST.getType();
+        }
+
+        @Override
+        public ArrowType visit(MapType mapType) {
+            return new ArrowType.Map(false);
+        }
+
+        @Override
+        public ArrowType visit(RowType rowType) {
+            return ArrowType.Struct.INSTANCE;
         }
 
         @Override

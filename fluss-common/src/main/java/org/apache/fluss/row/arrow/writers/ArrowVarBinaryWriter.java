@@ -18,12 +18,12 @@
 package org.apache.fluss.row.arrow.writers;
 
 import org.apache.fluss.annotation.Internal;
-import org.apache.fluss.row.InternalRow;
+import org.apache.fluss.row.DataGetters;
 import org.apache.fluss.shaded.arrow.org.apache.arrow.vector.VarBinaryVector;
 
 /** {@link ArrowFieldWriter} for VarBinary. */
 @Internal
-public class ArrowVarBinaryWriter extends ArrowFieldWriter<InternalRow> {
+public class ArrowVarBinaryWriter extends ArrowFieldWriter<DataGetters> {
 
     public static ArrowVarBinaryWriter forField(VarBinaryVector varBinaryVector) {
         return new ArrowVarBinaryWriter(varBinaryVector);
@@ -34,7 +34,7 @@ public class ArrowVarBinaryWriter extends ArrowFieldWriter<InternalRow> {
     }
 
     @Override
-    public void doWrite(InternalRow row, int ordinal, boolean handleSafe) {
+    public void doWrite(int rowIndex, DataGetters row, int ordinal, boolean handleSafe) {
         VarBinaryVector vector = (VarBinaryVector) getValueVector();
         if (isNullAt(row, ordinal)) {
             vector.setNull(getCount());
@@ -43,11 +43,11 @@ public class ArrowVarBinaryWriter extends ArrowFieldWriter<InternalRow> {
         }
     }
 
-    private boolean isNullAt(InternalRow row, int ordinal) {
+    private boolean isNullAt(DataGetters row, int ordinal) {
         return row.isNullAt(ordinal);
     }
 
-    private byte[] readBinary(InternalRow row, int ordinal) {
+    private byte[] readBinary(DataGetters row, int ordinal) {
         return row.getBytes(ordinal);
     }
 }

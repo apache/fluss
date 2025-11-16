@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.StringUtils;
 
+import java.io.Serializable;
 import java.util.Arrays;
 
 /**
@@ -40,7 +41,7 @@ import java.util.Arrays;
  * @since 0.2
  */
 @PublicEvolving
-public final class GenericRow implements InternalRow {
+public final class GenericRow implements InternalRow, Serializable {
 
     /** The array to store the actual internal format values. */
     private final Object[] fields;
@@ -162,6 +163,14 @@ public final class GenericRow implements InternalRow {
     public byte[] getBytes(int pos) {
         return (byte[]) this.fields[pos];
     }
+
+    @Override
+    public InternalArray getArray(int pos) {
+        return (InternalArray) this.fields[pos];
+    }
+
+    // TODO: getMap() will be added in Issue #1973
+    // TODO: getRow() will be added in Issue #1974
 
     @Override
     public boolean equals(Object o) {

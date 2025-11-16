@@ -23,6 +23,7 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.TestingMemorySegmentPool;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.GenericArray;
 import org.apache.fluss.row.GenericRow;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
@@ -56,6 +57,12 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /** Tests for {@link ArrowReader} and {@link ArrowWriter}. */
 class ArrowReaderWriterTest {
 
+    private static final DataType NESTED_DATA_TYPE =
+            DataTypes.ROW(
+                    DataTypes.FIELD("ri", DataTypes.INT()),
+                    DataTypes.FIELD("rs", DataTypes.STRING()),
+                    DataTypes.FIELD("rb", DataTypes.BIGINT()));
+
     private static final List<DataType> ALL_TYPES =
             Arrays.asList(
                     DataTypes.BOOLEAN(),
@@ -79,7 +86,12 @@ class ArrowReaderWriterTest {
                     DataTypes.TIMESTAMP_LTZ(0),
                     DataTypes.TIMESTAMP_LTZ(3),
                     DataTypes.TIMESTAMP_LTZ(6),
-                    DataTypes.TIMESTAMP_LTZ(9));
+                    DataTypes.TIMESTAMP_LTZ(9),
+                    DataTypes.ARRAY(DataTypes.INT()))
+            // TODO: Add Map and Row types in Issue #1973 and #1974
+            // DataTypes.MAP(DataTypes.INT(), DataTypes.STRING()),
+            // DataTypes.ROW(...)
+            ;
 
     private static final List<InternalRow> TEST_DATA =
             Arrays.asList(
@@ -105,7 +117,11 @@ class ArrowReaderWriterTest {
                             TimestampLtz.fromEpochMillis(3600000),
                             TimestampLtz.fromEpochMillis(3600123),
                             TimestampLtz.fromEpochMillis(3600123, 456000),
-                            TimestampLtz.fromEpochMillis(3600123, 456789)),
+                            TimestampLtz.fromEpochMillis(3600123, 456789),
+                            GenericArray.of(1, 2, 3)),
+                    // TODO: Add Map and Row test data in Issue #1973 and #1974
+                    // GenericMap.of(...),
+                    // GenericRow.of(...)),
                     GenericRow.of(
                             false,
                             (byte) 1,
@@ -128,7 +144,11 @@ class ArrowReaderWriterTest {
                             null,
                             TimestampLtz.fromEpochMillis(3600120),
                             TimestampLtz.fromEpochMillis(3600120, 120000),
-                            TimestampLtz.fromEpochMillis(3600120, 123450)));
+                            TimestampLtz.fromEpochMillis(3600120, 123450),
+                            GenericArray.of(1, 2, 3)));
+    // TODO: Add Map and Row test data in Issue #1973 and #1974
+    // GenericMap.of(...),
+    // GenericRow.of(...)));
 
     @Test
     void testReaderWriter() throws IOException {
@@ -151,7 +171,8 @@ class ArrowReaderWriterTest {
             int size =
                     writer.serializeToOutputView(
                             pagedOutputView, arrowChangeTypeOffset(CURRENT_LOG_MAGIC_VALUE));
-            MemorySegment segment = MemorySegment.allocateHeapMemory(writer.estimatedSizeInBytes());
+            int heapMemorySize = Math.max(size, writer.estimatedSizeInBytes());
+            MemorySegment segment = MemorySegment.allocateHeapMemory(heapMemorySize);
 
             assertThat(pagedOutputView.getWrittenSegments().size()).isEqualTo(1);
             MemorySegment firstSegment = pagedOutputView.getCurrentSegment();
@@ -160,8 +181,8 @@ class ArrowReaderWriterTest {
             ArrowReader reader =
                     ArrowUtils.createArrowReader(segment, 0, size, root, allocator, rowType);
             int rowCount = reader.getRowCount();
-            ColumnarRow row = reader.read(0);
             for (int i = 0; i < rowCount; i++) {
+                ColumnarRow row = reader.read(i);
                 row.setRowId(i);
                 assertThatRow(row).withSchema(rowType).isEqualTo(TEST_DATA.get(i));
 
