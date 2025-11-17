@@ -51,7 +51,8 @@ class TypedAppendWriter<T> implements AppendWriter<T> {
             return delegate.append((InternalRow) record);
         }
         // TODO: initialize this on the constructor and reuse
-        PojoToRowConverter<T> converter = PojoToRowConverter.of(pojoClass, tableSchema, tableSchema);
+        PojoToRowConverter<T> converter =
+                PojoToRowConverter.of(pojoClass, tableSchema, tableSchema);
         InternalRow row = converter.toRow(record);
         return delegate.append(row);
     }

@@ -25,13 +25,12 @@ import java.util.concurrent.CompletableFuture;
  * A lookuper performs key-based lookups against a primary key table, using either the full primary
  * key or a prefix of the primary key (when configured via {@code Lookup#lookupBy}).
  *
- * <p>This interface is generic on the key type {@code K}:
- * - When used in row mode, implementations are typically declared as {@code Lookuper<InternalRow>}
- *   and accept an {@link org.apache.fluss.row.InternalRow} containing the key fields in the
- *   configured order.
- * - When used with POJO keys, client-provided lookuper instances can also accept a POJO key type
- *   (for example {@code Lookuper<MyKeyPojo>}) and will transparently convert the POJO to an
- *   {@code InternalRow} using the table schema and active lookup columns.
+ * <p>This interface is generic on the key type {@code K}: - When used in row mode, implementations
+ * are typically declared as {@code Lookuper<InternalRow>} and accept an {@link
+ * org.apache.fluss.row.InternalRow} containing the key fields in the configured order. - When used
+ * with POJO keys, client-provided lookuper instances can also accept a POJO key type (for example
+ * {@code Lookuper<MyKeyPojo>}) and will transparently convert the POJO to an {@code InternalRow}
+ * using the table schema and active lookup columns.
  *
  * <p>Usage examples:
  *

@@ -20,7 +20,6 @@ package org.apache.fluss.client.table.scanner.log;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.client.metadata.MetadataUpdater;
 import org.apache.fluss.client.table.scanner.ScanRecord;
-import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.config.ConfigOptions;
 import org.apache.fluss.config.Configuration;
 import org.apache.fluss.exception.AuthorizationException;
@@ -30,6 +29,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.record.LogRecordBatch;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.protocol.ApiError;
 import org.apache.fluss.rpc.protocol.Errors;
 
@@ -84,7 +84,8 @@ public class LogFetchCollector {
      * @throws LogOffsetOutOfRangeException If there is OffsetOutOfRange error in fetchResponse and
      *     the defaultResetPolicy is NONE
      */
-    public Map<TableBucket, List<ScanRecord<InternalRow>>> collectFetch(final LogFetchBuffer logFetchBuffer) {
+    public Map<TableBucket, List<ScanRecord<InternalRow>>> collectFetch(
+            final LogFetchBuffer logFetchBuffer) {
         Map<TableBucket, List<ScanRecord<InternalRow>>> fetched = new HashMap<>();
         int recordsRemaining = maxPollRecords;
 
@@ -116,7 +117,8 @@ public class LogFetchCollector {
 
                     logFetchBuffer.poll();
                 } else {
-                    List<ScanRecord<InternalRow>> records = fetchRecords(nextInLineFetch, recordsRemaining);
+                    List<ScanRecord<InternalRow>> records =
+                            fetchRecords(nextInLineFetch, recordsRemaining);
                     if (!records.isEmpty()) {
                         TableBucket tableBucket = nextInLineFetch.tableBucket;
                         List<ScanRecord<InternalRow>> currentRecords = fetched.get(tableBucket);
@@ -147,7 +149,8 @@ public class LogFetchCollector {
         return fetched;
     }
 
-    private List<ScanRecord<InternalRow>> fetchRecords(CompletedFetch nextInLineFetch, int maxRecords) {
+    private List<ScanRecord<InternalRow>> fetchRecords(
+            CompletedFetch nextInLineFetch, int maxRecords) {
         TableBucket tb = nextInLineFetch.tableBucket;
         Long offset = logScannerStatus.getBucketOffset(tb);
         if (offset == null) {

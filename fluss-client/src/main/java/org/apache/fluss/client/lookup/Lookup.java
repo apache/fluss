@@ -99,9 +99,9 @@ public interface Lookup {
      * lookup columns. By default, the lookup columns are the primary key columns, but can be
      * changed with ({@link #lookupBy(List)}) method.
      *
-     * <p>The returned lookuper accepts generic keys of type {@code K}. If a key is a POJO,
-     * the client implementation will convert it to an {@code InternalRow} based on the table
-     * schema and the active lookup columns.
+     * <p>The returned lookuper accepts generic keys of type {@code K}. If a key is a POJO, the
+     * client implementation will convert it to an {@code InternalRow} based on the table schema and
+     * the active lookup columns.
      *
      * @return the lookuper
      */

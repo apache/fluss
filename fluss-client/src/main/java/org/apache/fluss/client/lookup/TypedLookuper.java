@@ -23,13 +23,15 @@ import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.RowType;
 
 import javax.annotation.Nullable;
+
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /**
- * Decorator for {@link Lookuper} that enables generic key lookup via {@link Lookuper#lookup(Object)}.
- * Converts POJO keys to {@link InternalRow} using existing converters based on table schema and
- * active lookup columns, and directly delegates when the key is already an {@link InternalRow}.
+ * Decorator for {@link Lookuper} that enables generic key lookup via {@link
+ * Lookuper#lookup(Object)}. Converts POJO keys to {@link InternalRow} using existing converters
+ * based on table schema and active lookup columns, and directly delegates when the key is already
+ * an {@link InternalRow}.
  */
 final class TypedLookuper<K> implements Lookuper<K> {
 
@@ -37,9 +39,10 @@ final class TypedLookuper<K> implements Lookuper<K> {
     private final TableInfo tableInfo;
     @Nullable private final List<String> lookupColumnNames;
 
-    TypedLookuper(Lookuper<InternalRow> delegate,
-                           TableInfo tableInfo,
-                           @Nullable List<String> lookupColumnNames) {
+    TypedLookuper(
+            Lookuper<InternalRow> delegate,
+            TableInfo tableInfo,
+            @Nullable List<String> lookupColumnNames) {
         this.delegate = delegate;
         this.tableInfo = tableInfo;
         this.lookupColumnNames = lookupColumnNames;

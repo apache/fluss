@@ -38,13 +38,15 @@ public class TypedLogScanner<T> implements LogScanner<T> {
     private final LogScanner<InternalRow> delegate;
     private final RowToPojoConverter<T> converter;
 
-    public TypedLogScanner(LogScanner<InternalRow> delegate,
-                                Class<T> pojoClass,
-                                TableInfo tableInfo,
-                                int[] projectedColumns) {
+    public TypedLogScanner(
+            LogScanner<InternalRow> delegate,
+            Class<T> pojoClass,
+            TableInfo tableInfo,
+            int[] projectedColumns) {
         this.delegate = delegate;
         RowType tableSchema = tableInfo.getRowType();
-        RowType projection = projectedColumns == null ? tableSchema : tableSchema.project(projectedColumns);
+        RowType projection =
+                projectedColumns == null ? tableSchema : tableSchema.project(projectedColumns);
         this.converter = RowToPojoConverter.of(pojoClass, tableSchema, projection);
     }
 
@@ -61,7 +63,8 @@ public class TypedLogScanner<T> implements LogScanner<T> {
             for (ScanRecord<InternalRow> r : list) {
                 InternalRow row = r.getValue();
                 T pojo = converter.fromRow(row);
-                converted.add(new ScanRecord<>(r.logOffset(), r.timestamp(), r.getChangeType(), pojo));
+                converted.add(
+                        new ScanRecord<>(r.logOffset(), r.timestamp(), r.getChangeType(), pojo));
             }
             out.put(bucket, converted);
         }

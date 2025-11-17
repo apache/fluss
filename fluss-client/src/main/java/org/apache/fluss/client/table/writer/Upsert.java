@@ -57,9 +57,8 @@ public interface Upsert {
     Upsert partialUpdate(String... targetColumnNames);
 
     /**
-     * Create a new {@link UpsertWriter} using {@code InternalRow} with the optional
-     * {@link #partialUpdate(String...)} information to upsert and delete data to a Primary Key
-     * Table.
+     * Create a new {@link UpsertWriter} using {@code InternalRow} with the optional {@link
+     * #partialUpdate(String...)} information to upsert and delete data to a Primary Key Table.
      */
     UpsertWriter<?> createWriter();
 

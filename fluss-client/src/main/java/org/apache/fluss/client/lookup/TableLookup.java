@@ -61,8 +61,9 @@ public class TableLookup implements Lookup {
         if (lookupColumnNames == null) {
             lookuper = new PrimaryKeyLookuper(tableInfo, metadataUpdater, lookupClient);
         } else {
-            lookuper = new PrefixKeyLookuper(
-                    tableInfo, metadataUpdater, lookupClient, lookupColumnNames);
+            lookuper =
+                    new PrefixKeyLookuper(
+                            tableInfo, metadataUpdater, lookupClient, lookupColumnNames);
         }
         return new TypedLookuper<K>(lookuper, tableInfo, lookupColumnNames);
     }

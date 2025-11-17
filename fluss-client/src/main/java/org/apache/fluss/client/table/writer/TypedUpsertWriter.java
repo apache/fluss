@@ -42,7 +42,11 @@ class TypedUpsertWriter<T> implements UpsertWriter<T> {
     private final RowType tableSchema;
     private final int[] targetColumns; // may be null
 
-    TypedUpsertWriter(UpsertWriterImpl delegate, Class<T> pojoClass, TableInfo tableInfo, int[] targetColumns) {
+    TypedUpsertWriter(
+            UpsertWriterImpl delegate,
+            Class<T> pojoClass,
+            TableInfo tableInfo,
+            int[] targetColumns) {
         this.delegate = delegate;
         this.pojoClass = pojoClass;
         this.tableInfo = tableInfo;
@@ -55,7 +59,7 @@ class TypedUpsertWriter<T> implements UpsertWriter<T> {
         if (record instanceof InternalRow) {
             return delegate.upsert((InternalRow) record);
         }
-        InternalRow row = convertPojo(record, /*forDelete=*/false);
+        InternalRow row = convertPojo(record, /*forDelete=*/ false);
         return delegate.upsert(row);
     }
 
@@ -64,7 +68,7 @@ class TypedUpsertWriter<T> implements UpsertWriter<T> {
         if (record instanceof InternalRow) {
             return delegate.delete((InternalRow) record);
         }
-        InternalRow pkOnly = convertPojo(record, /*forDelete=*/true);
+        InternalRow pkOnly = convertPojo(record, /*forDelete=*/ true);
         return delegate.delete(pkOnly);
     }
 

@@ -37,7 +37,9 @@ import java.util.Set;
  */
 @PublicEvolving
 public class ScanRecords<T> implements Iterable<ScanRecord<T>> {
-    public static final <T> ScanRecords<T> empty() { return new ScanRecords<>(Collections.emptyMap()); }
+    public static final <T> ScanRecords<T> empty() {
+        return new ScanRecords<>(Collections.emptyMap());
+    }
 
     private final Map<TableBucket, List<ScanRecord<T>>> records;
 
