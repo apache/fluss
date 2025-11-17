@@ -18,7 +18,6 @@
 package org.apache.fluss.client.lookup;
 
 import org.apache.fluss.annotation.PublicEvolving;
-import org.apache.fluss.row.InternalRow;
 
 import java.util.concurrent.CompletableFuture;
 
