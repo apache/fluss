@@ -29,7 +29,7 @@ import java.lang.reflect.Constructor;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
-/** Tests for the private adapter TieringSplitReader.ScanRecordLogRecord */
+/** Tests for the private adapter TieringSplitReader.ScanRecordLogRecord. */
 class ScanRecordLogRecordTest {
 
     @Test
@@ -59,7 +59,6 @@ class ScanRecordLogRecordTest {
         assertThat(adapter.getChangeType()).isEqualTo(changeType);
         assertThat(adapter.getRow()).isSameAs(row);
 
-        // Call twice to make sure repeated invocations are fine and to bump coverage
         assertThat(adapter.logOffset()).isEqualTo(offset);
         assertThat(adapter.getRow()).isSameAs(row);
     }
