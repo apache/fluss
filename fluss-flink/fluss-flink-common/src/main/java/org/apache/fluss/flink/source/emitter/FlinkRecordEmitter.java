@@ -108,7 +108,7 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
         }
     }
 
-    /** Lightweight adapter to view a ScanRecord<InternalRow> as a LogRecord. */
+    /** Lightweight adapter to view a {@code ScanRecord<InternalRow>} as a {@link LogRecord}. */
     private static final class ScanRecordLogRecord implements LogRecord {
         private final ScanRecord<InternalRow> delegate;
 
