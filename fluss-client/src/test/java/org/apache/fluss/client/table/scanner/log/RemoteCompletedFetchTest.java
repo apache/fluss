@@ -107,7 +107,8 @@ class RemoteCompletedFetchTest {
                         null,
                         () -> recycleCalled.set(true));
 
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(8);
+        List<ScanRecord<org.apache.fluss.row.InternalRow>> scanRecords =
+                completedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(8);
         assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
 
@@ -140,7 +141,8 @@ class RemoteCompletedFetchTest {
                 makeCompletedFetch(
                         tb, fileLogRecords, fetchOffset, null, () -> recycleCalled.set(true));
 
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(8);
+        List<ScanRecord<org.apache.fluss.row.InternalRow>> scanRecords =
+                completedFetch.fetchRecords(8);
         assertThat(scanRecords.size()).isEqualTo(8);
         assertThat(scanRecords.get(0).logOffset()).isEqualTo(0L);
 
@@ -168,7 +170,8 @@ class RemoteCompletedFetchTest {
         RemoteCompletedFetch completedFetch =
                 makeCompletedFetch(tableBucket, fileLogRecords, fetchOffset, null);
 
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(-10);
+        List<ScanRecord<InternalRow>> scanRecords =
+                completedFetch.fetchRecords(-10);
         assertThat(scanRecords.size()).isEqualTo(0);
     }
 
@@ -185,7 +188,8 @@ class RemoteCompletedFetchTest {
         RemoteCompletedFetch completedFetch =
                 makeCompletedFetch(tableBucket, fileLogRecords, fetchOffset, null);
 
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(10);
+        List<ScanRecord<InternalRow>> scanRecords =
+                completedFetch.fetchRecords(10);
         assertThat(scanRecords.size()).isEqualTo(0);
     }
 
@@ -222,7 +226,8 @@ class RemoteCompletedFetchTest {
                 makeCompletedFetch(
                         tableBucket, fileLogRecords, fetchOffset, Projection.of(new int[] {0, 2}));
 
-        List<ScanRecord> scanRecords = completedFetch.fetchRecords(8);
+        List<ScanRecord<InternalRow>> scanRecords =
+                completedFetch.fetchRecords(8);
         List<Object[]> expectedObjects =
                 Arrays.asList(
                         new Object[] {1, "hello"},
