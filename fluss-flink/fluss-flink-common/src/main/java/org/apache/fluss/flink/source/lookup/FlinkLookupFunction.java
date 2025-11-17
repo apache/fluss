@@ -62,7 +62,7 @@ public class FlinkLookupFunction extends LookupFunction {
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
     private transient Table table;
-    private transient Lookuper lookuper;
+    private transient Lookuper<InternalRow> lookuper;
     private transient FlinkAsFlussRow lookupRow;
     @Nullable private transient ProjectedRow projectedRow;
 

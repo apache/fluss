@@ -20,6 +20,7 @@ package org.apache.fluss.flink.source.lookup;
 import org.apache.fluss.client.Connection;
 import org.apache.fluss.client.ConnectionFactory;
 import org.apache.fluss.client.lookup.Lookup;
+import org.apache.fluss.client.lookup.LookupResult;
 import org.apache.fluss.client.lookup.LookupType;
 import org.apache.fluss.client.lookup.Lookuper;
 import org.apache.fluss.client.table.Table;
@@ -66,7 +67,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
     private transient FlussRowToFlinkRowConverter flussRowToFlinkRowConverter;
     private transient Connection connection;
     private transient Table table;
-    private transient Lookuper lookuper;
+    private transient Lookuper<InternalRow> lookuper;
     private transient FlinkAsFlussRow lookupRow;
 
     public FlinkAsyncLookupFunction(
@@ -142,7 +143,7 @@ public class FlinkAsyncLookupFunction extends AsyncLookupFunction {
             @Nullable RemainingFilter remainingFilter) {
         lookuper.lookup(keyRow)
                 .whenComplete(
-                        (result, throwable) -> {
+                        (LookupResult result, Throwable throwable) -> {
                             if (throwable != null) {
                                 handleLookupFailed(
                                         resultFuture,

@@ -24,6 +24,9 @@ import org.apache.fluss.flink.source.reader.FlinkSourceReader;
 import org.apache.fluss.flink.source.reader.RecordAndPos;
 import org.apache.fluss.flink.source.split.HybridSnapshotLogSplitState;
 import org.apache.fluss.flink.source.split.SourceSplitState;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.row.InternalRow;
 
 import org.apache.flink.api.connector.source.SourceOutput;
 import org.apache.flink.connector.base.source.reader.RecordEmitter;
@@ -88,7 +91,7 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
     private void processAndEmitRecord(ScanRecord scanRecord, SourceOutput<OUT> sourceOutput) {
         OUT record;
         try {
-            record = deserializationSchema.deserialize(scanRecord);
+            record = deserializationSchema.deserialize(new ScanRecordLogRecord(scanRecord));
         } catch (Exception e) {
             throw new RuntimeException(
                     "Failed to deserialize record: " + scanRecord + ". Cause: " + e.getMessage(),
@@ -102,6 +105,36 @@ public class FlinkRecordEmitter<OUT> implements RecordEmitter<RecordAndPos, OUT,
             } else {
                 sourceOutput.collect(record);
             }
+        }
+    }
+
+    /** Lightweight adapter to view a ScanRecord<InternalRow> as a LogRecord. */
+    private static final class ScanRecordLogRecord implements LogRecord {
+        private final ScanRecord<InternalRow> delegate;
+
+        private ScanRecordLogRecord(ScanRecord<?> delegate) {
+            // unchecked, but producer in this module always uses InternalRow
+            this.delegate = (ScanRecord<InternalRow>) delegate;
+        }
+
+        @Override
+        public long logOffset() {
+            return delegate.logOffset();
+        }
+
+        @Override
+        public long timestamp() {
+            return delegate.timestamp();
+        }
+
+        @Override
+        public ChangeType getChangeType() {
+            return delegate.getChangeType();
+        }
+
+        @Override
+        public InternalRow getRow() {
+            return delegate.getRow();
         }
     }
 }

@@ -89,7 +89,7 @@ final class ConverterCommons {
         if (!pojoNames.containsAll(fieldNames)) {
             throw new IllegalArgumentException(
                     String.format(
-                            "POJO fields %s must contain all projection fields %s.",
+                            "POJO fields %s must contain all projection fields %s. For full-table writes, POJO fields must exactly match table schema fields.",
                             pojoNames, fieldNames));
         }
         for (int i = 0; i < projection.getFieldCount(); i++) {

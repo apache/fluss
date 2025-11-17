@@ -75,7 +75,12 @@ final class PojoType<T> {
         for (Map.Entry<String, Field> e : allFields.entrySet()) {
             String name = e.getKey();
             Field field = e.getValue();
-            // Allow primitive types by treating them as their boxed counterparts for compatibility
+            // Enforce nullable fields: primitives are not allowed in POJO definitions.
+            if (field.getType().isPrimitive()) {
+                throw new IllegalArgumentException(
+                        "Primitive types are not allowed; all fields must be nullable (use wrapper types).");
+            }
+            // use boxed type as effective type
             Class<?> effectiveType = boxIfPrimitive(field.getType());
             boolean publicField = Modifier.isPublic(field.getModifiers());
             Method getter = getters.get(name);
