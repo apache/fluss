@@ -37,7 +37,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /** The writer to write data to the log table. */
-class AppendWriterImpl extends AbstractTableWriter implements AppendWriter {
+class AppendWriterImpl extends AbstractTableWriter implements AppendWriter<InternalRow> {
     private static final AppendResult APPEND_SUCCESS = new AppendResult();
 
     private final @Nullable KeyEncoder bucketKeyEncoder;

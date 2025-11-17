@@ -40,7 +40,7 @@ import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
 import static org.apache.fluss.utils.Preconditions.checkArgument;
 
 /** An implementation of {@link Lookuper} that lookups by primary key. */
-class PrimaryKeyLookuper implements Lookuper {
+class PrimaryKeyLookuper implements Lookuper<InternalRow> {
 
     private final TableInfo tableInfo;
 

@@ -36,12 +36,12 @@ import java.util.Set;
  * @since 0.1
  */
 @PublicEvolving
-public class ScanRecords implements Iterable<ScanRecord> {
-    public static final ScanRecords EMPTY = new ScanRecords(Collections.emptyMap());
+public class ScanRecords<T> implements Iterable<ScanRecord<T>> {
+    public static final <T> ScanRecords<T> empty() { return new ScanRecords<>(Collections.emptyMap()); }
 
-    private final Map<TableBucket, List<ScanRecord>> records;
+    private final Map<TableBucket, List<ScanRecord<T>>> records;
 
-    public ScanRecords(Map<TableBucket, List<ScanRecord>> records) {
+    public ScanRecords(Map<TableBucket, List<ScanRecord<T>>> records) {
         this.records = records;
     }
 
@@ -50,8 +50,8 @@ public class ScanRecords implements Iterable<ScanRecord> {
      *
      * @param scanBucket The bucket to get records for
      */
-    public List<ScanRecord> records(TableBucket scanBucket) {
-        List<ScanRecord> recs = records.get(scanBucket);
+    public List<ScanRecord<T>> records(TableBucket scanBucket) {
+        List<ScanRecord<T>> recs = records.get(scanBucket);
         if (recs == null) {
             return Collections.emptyList();
         }
@@ -71,7 +71,7 @@ public class ScanRecords implements Iterable<ScanRecord> {
     /** The number of records for all buckets. */
     public int count() {
         int count = 0;
-        for (List<ScanRecord> recs : records.values()) {
+        for (List<ScanRecord<T>> recs : records.values()) {
             count += recs.size();
         }
         return count;
@@ -82,25 +82,25 @@ public class ScanRecords implements Iterable<ScanRecord> {
     }
 
     @Override
-    public Iterator<ScanRecord> iterator() {
-        return new ConcatenatedIterable(records.values()).iterator();
+    public Iterator<ScanRecord<T>> iterator() {
+        return new ConcatenatedIterable<>(records.values()).iterator();
     }
 
-    private static class ConcatenatedIterable implements Iterable<ScanRecord> {
+    private static class ConcatenatedIterable<T> implements Iterable<ScanRecord<T>> {
 
-        private final Iterable<? extends Iterable<ScanRecord>> iterables;
+        private final Iterable<? extends Iterable<ScanRecord<T>>> iterables;
 
-        public ConcatenatedIterable(Iterable<? extends Iterable<ScanRecord>> iterables) {
+        public ConcatenatedIterable(Iterable<? extends Iterable<ScanRecord<T>>> iterables) {
             this.iterables = iterables;
         }
 
         @Override
-        public Iterator<ScanRecord> iterator() {
-            return new AbstractIterator<ScanRecord>() {
-                final Iterator<? extends Iterable<ScanRecord>> iters = iterables.iterator();
-                Iterator<ScanRecord> current;
+        public Iterator<ScanRecord<T>> iterator() {
+            return new AbstractIterator<ScanRecord<T>>() {
+                final Iterator<? extends Iterable<ScanRecord<T>>> iters = iterables.iterator();
+                Iterator<ScanRecord<T>> current;
 
-                public ScanRecord makeNext() {
+                public ScanRecord<T> makeNext() {
                     while (current == null || !current.hasNext()) {
                         if (iters.hasNext()) {
                             current = iters.next().iterator();

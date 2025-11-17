@@ -21,6 +21,7 @@ import org.apache.fluss.annotation.PublicEvolving;
 import org.apache.fluss.client.table.scanner.batch.BatchScanner;
 import org.apache.fluss.client.table.scanner.log.LogScanner;
 import org.apache.fluss.metadata.TableBucket;
+import org.apache.fluss.row.InternalRow;
 
 import javax.annotation.Nullable;
 
@@ -63,7 +64,14 @@ public interface Scan {
      *
      * <p>Note: this API doesn't support pre-configured with {@link #limit(int)}.
      */
-    LogScanner createLogScanner();
+    LogScanner<InternalRow> createLogScanner();
+
+    /**
+     * Creates a typed LogScanner to continuously read log data as POJOs of the given class.
+     *
+     * <p>Note: this API doesn't support pre-configured with {@link #limit(int)}.
+     */
+    <T> LogScanner<T> createLogScanner(Class<T> pojoClass);
 
     /**
      * Creates a {@link BatchScanner} to read current data in the given table bucket for this scan.

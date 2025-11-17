@@ -46,7 +46,7 @@ import static org.apache.fluss.client.utils.ClientUtils.getPartitionId;
  * An implementation of {@link Lookuper} that lookups by prefix key. A prefix key is a prefix subset
  * of the primary key.
  */
-class PrefixKeyLookuper implements Lookuper {
+class PrefixKeyLookuper implements Lookuper<InternalRow> {
 
     private final TableInfo tableInfo;
 
