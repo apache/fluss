@@ -67,7 +67,7 @@ public class LakeSnapshotAndLogSplitScanner implements BatchScanner {
     // the sorted logs in memory, mapping from key -> value
     private Map<InternalRow, KeyValueRow> logRows;
 
-    private final LogScanner logScanner;
+    private final LogScanner<InternalRow> logScanner;
     private final long stoppingOffset;
     private boolean logScanFinished;
 
