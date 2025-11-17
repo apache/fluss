@@ -24,5 +24,6 @@ import org.apache.fluss.annotation.Internal;
 public enum WriteFormat {
     ARROW_LOG,
     INDEXED_LOG,
+    COMPACTED_LOG,
     KV
 }
