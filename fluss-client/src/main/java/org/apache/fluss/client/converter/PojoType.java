@@ -37,7 +37,6 @@ final class PojoType<T> {
     private final Class<T> pojoClass;
     private final Constructor<T> defaultConstructor;
     private final Map<String, Property> properties; // property name -> property
-    // Mapping of primitive types to their boxed counterparts to avoid long if-chains
     private static final Map<Class<?>, Class<?>> PRIMITIVE_TO_BOXED = createPrimitiveToBoxedMap();
 
     private PojoType(Class<T> pojoClass, Constructor<T> ctor, Map<String, Property> props) {

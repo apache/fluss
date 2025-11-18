@@ -33,11 +33,13 @@ class TypedAppendWriter<T> implements AppendWriter<T> {
     private final AppendWriterImpl delegate;
     private final Class<T> pojoClass;
     private final RowType tableSchema;
+    private final PojoToRowConverter<T> pojoToRowConverter;
 
     TypedAppendWriter(AppendWriterImpl delegate, Class<T> pojoClass, TableInfo tableInfo) {
         this.delegate = delegate;
         this.pojoClass = pojoClass;
         this.tableSchema = tableInfo.getRowType();
+        this.pojoToRowConverter = PojoToRowConverter.of(pojoClass, tableSchema, tableSchema);
     }
 
     @Override
@@ -50,10 +52,7 @@ class TypedAppendWriter<T> implements AppendWriter<T> {
         if (record instanceof InternalRow) {
             return delegate.append((InternalRow) record);
         }
-        // TODO: initialize this on the constructor and reuse
-        PojoToRowConverter<T> converter =
-                PojoToRowConverter.of(pojoClass, tableSchema, tableSchema);
-        InternalRow row = converter.toRow(record);
+        InternalRow row = pojoToRowConverter.toRow(record);
         return delegate.append(row);
     }
 }

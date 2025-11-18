@@ -188,8 +188,6 @@ public final class PojoToRowConverter<T> {
         BigDecimal bd = (BigDecimal) v;
         BigDecimal scaled = bd.setScale(scale, RoundingMode.HALF_UP);
 
-        // Validate precision after scaling; precision is the number of digits in the unscaled
-        // value.
         if (scaled.precision() > precision) {
             throw new IllegalArgumentException(
                     String.format(
