@@ -43,6 +43,7 @@ import org.apache.paimon.data.BinaryString;
 import org.apache.paimon.data.GenericRow;
 import org.apache.paimon.data.Timestamp;
 import org.apache.paimon.options.Options;
+import org.apache.paimon.schema.SchemaChange;
 import org.apache.paimon.table.Table;
 import org.apache.paimon.table.sink.BatchTableCommit;
 import org.apache.paimon.table.sink.BatchTableWrite;
@@ -476,6 +477,54 @@ class LakeEnabledTableCreateITCase {
                                 + "Existing schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}, "
                                 + "new schema: UpdateSchema{fields=[`c1` STRING, `c2` INT, `c3` STRING, `__bucket` INT, `__offset` BIGINT, `__timestamp` TIMESTAMP(6) WITH LOCAL TIME ZONE], partitionKeys=[], primaryKeys=[], options={bucket=-1, fluss.table.replication.factor=1, fluss.table.datalake.enabled=true, fluss.table.datalake.format=paimon, partition.legacy-name=false, file.format=parquet, fluss.k1=v1}, comment=null}. "
                                 + "Please first drop the table in Paimon catalog or use a new table name.");
+
+        // add an insignificant option to Paimon table will be ok
+        Identifier paimonTablePath =
+                Identifier.create(tablePath.getDatabaseName(), tablePath.getTableName());
+        SchemaChange schemaChange1 = SchemaChange.setOption("any.k1", "any.v1");
+        paimonCatalog.alterTable(paimonTablePath, Collections.singletonList(schemaChange1), false);
+        admin.createTable(tablePath, td, false).get();
+        admin.dropTable(tablePath, false).get();
+
+        // alter a Fluss option to Paimon table will throw exception
+        SchemaChange schemaChange2 = SchemaChange.setOption("fluss.k1", "v2");
+        paimonCatalog.alterTable(paimonTablePath, Collections.singletonList(schemaChange2), false);
+        TableDescriptor finalTd = td;
+        assertThatThrownBy(() -> admin.createTable(tablePath, finalTd, false).get())
+                .cause()
+                .isInstanceOf(LakeTableAlreadyExistException.class)
+                .hasMessageContaining(
+                        "The table `fluss`.`log_table_with_exist_lake_table` already exists in Paimon catalog, "
+                                + "but the table schema is not compatible.");
+
+        // reset fluss.k1 in Paimon
+        SchemaChange schemaChange3 = SchemaChange.setOption("fluss.k1", "v1");
+        paimonCatalog.alterTable(paimonTablePath, Collections.singletonList(schemaChange3), false);
+
+        // add a new Paimon option (not specified in the Fluss table) to Paimon table will be ok
+        SchemaChange schemaChange4 =
+                SchemaChange.setOption(CoreOptions.SNAPSHOT_NUM_RETAINED_MIN.key(), "2");
+        paimonCatalog.alterTable(paimonTablePath, Collections.singletonList(schemaChange4), false);
+        admin.createTable(tablePath, finalTd, false).get();
+        admin.dropTable(tablePath, false).get();
+
+        // try to create a Fluss table specify a different value of exist Paimon option will throw
+        // exception
+        customProperties.put("paimon.snapshot.num-retained.min", "3");
+        TableDescriptor td1 =
+                createTableDescriptor(
+                        2,
+                        BUCKET_NUM,
+                        Collections.emptyList(),
+                        Collections.emptyList(),
+                        customProperties,
+                        false);
+        assertThatThrownBy(() -> admin.createTable(tablePath, td1, false).get())
+                .cause()
+                .isInstanceOf(LakeTableAlreadyExistException.class)
+                .hasMessageContaining(
+                        "The table `fluss`.`log_table_with_exist_lake_table` already exists in Paimon catalog, "
+                                + "but the table schema is not compatible.");
     }
 
     @Test
