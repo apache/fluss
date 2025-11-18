@@ -31,12 +31,12 @@ import org.apache.fluss.rpc.messages.CommitLakeTableSnapshotRequest;
 import org.apache.fluss.rpc.messages.PbLakeTableOffsetForBucket;
 import org.apache.fluss.rpc.messages.PbLakeTableSnapshotInfo;
 
-import org.apache.flink.api.connector.source.ReaderInfo;
 import org.apache.flink.api.connector.source.SplitsAssignment;
-import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.ValueSource;
 
 import javax.annotation.Nullable;
 
@@ -75,8 +75,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         int numSubtasks = 4;
         int expectNumberOfSplits = 3;
         // test get snapshot split & log split and the assignment
-        try (MockSplitEnumeratorContext<TieringSplit> context =
-                new MockSplitEnumeratorContext<>(numSubtasks)) {
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
             TieringSourceEnumerator enumerator =
                     new TieringSourceEnumerator(flussConf, context, 500);
 
@@ -84,10 +84,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
 
             // register all readers
-            for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
-                registerReader(context, enumerator, subtaskId, "localhost-" + subtaskId);
-                enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
-            }
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
 
             // try to assign splits
             context.runPeriodicCallable(0);
@@ -166,8 +163,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         int expectNumberOfSplits = 3;
 
         // test get snapshot split assignment
-        try (MockSplitEnumeratorContext<TieringSplit> context =
-                new MockSplitEnumeratorContext<>(numSubtasks)) {
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
             TieringSourceEnumerator enumerator =
                     new TieringSourceEnumerator(flussConf, context, 500);
 
@@ -175,10 +172,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
 
             // register all readers
-            for (int subtaskId = 0; subtaskId < 3; subtaskId++) {
-                registerReader(context, enumerator, subtaskId, "localhost-" + subtaskId);
-                enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
-            }
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
             waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 3000L);
 
             Map<Integer, List<TieringSplit>> expectedSnapshotAssignment = new HashMap<>();
@@ -261,8 +255,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         int numSubtasks = 4;
         int expectNumberOfSplits = 3;
         // test get log split and the assignment
-        try (MockSplitEnumeratorContext<TieringSplit> context =
-                new MockSplitEnumeratorContext<>(numSubtasks)) {
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
             TieringSourceEnumerator enumerator =
                     new TieringSourceEnumerator(flussConf, context, 500);
 
@@ -270,10 +264,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
 
             // register all readers
-            for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
-                registerReader(context, enumerator, subtaskId, "localhost-" + subtaskId);
-                enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
-            }
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
 
             // write one row to one bucket, keep the other buckets empty
             Map<Integer, Long> bucketOffsetOfFirstWrite =
@@ -364,8 +355,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         int numSubtasks = 6;
         int expectNumberOfSplits = 6;
         // test get snapshot split assignment
-        try (MockSplitEnumeratorContext<TieringSplit> context =
-                new MockSplitEnumeratorContext<>(numSubtasks)) {
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
             TieringSourceEnumerator enumerator =
                     new TieringSourceEnumerator(flussConf, context, 500);
 
@@ -373,10 +364,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
 
             // register all readers
-            for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
-                registerReader(context, enumerator, subtaskId, "localhost-" + subtaskId);
-                enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
-            }
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
 
             // try to assign splits
             context.runPeriodicCallable(0);
@@ -469,8 +457,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         int numSubtasks = 6;
         int expectNumberOfSplits = 6;
         // test get log split assignment
-        try (MockSplitEnumeratorContext<TieringSplit> context =
-                new MockSplitEnumeratorContext<>(numSubtasks)) {
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
             TieringSourceEnumerator enumerator =
                     new TieringSourceEnumerator(flussConf, context, 500);
 
@@ -478,10 +466,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
 
             // register all readers
-            for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
-                registerReader(context, enumerator, subtaskId, "localhost-" + subtaskId);
-                enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
-            }
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
 
             Map<Long, Map<Integer, Long>> bucketOffsetOfFirstWrite =
                     appendRowForPartitionedTable(
@@ -595,8 +580,8 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         Map<Integer, Long> bucketOffsetOfWrite =
                 appendRow(tablePath, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
         // test get log split and the assignment
-        try (MockSplitEnumeratorContext<TieringSplit> context =
-                new MockSplitEnumeratorContext<>(numSubtasks)) {
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
             TieringSourceEnumerator enumerator =
                     new TieringSourceEnumerator(flussConf, context, 500);
 
@@ -604,10 +589,7 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
 
             // register all readers
-            for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
-                registerReader(context, enumerator, subtaskId, "localhost-" + subtaskId);
-                enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
-            }
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
             waitUntilTieringTableSplitAssignmentReady(context, DEFAULT_BUCKET_NUM, 200);
 
             List<TieringSplit> expectedAssignment = new ArrayList<>();
@@ -643,8 +625,9 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         }
     }
 
-    @Test
-    void testHandleFailOverEvent() throws Throwable {
+    @ParameterizedTest
+    @ValueSource(ints = {1, 2})
+    void testHandleReaderFailOver(int numSubtasks) throws Throwable {
         TablePath tablePath1 = TablePath.of(DEFAULT_DB, "tiering-failover-test-log-table1");
         createTable(tablePath1, DEFAULT_LOG_TABLE_DESCRIPTOR);
         appendRow(tablePath1, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
@@ -653,42 +636,41 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
         createTable(tablePath2, DEFAULT_LOG_TABLE_DESCRIPTOR);
         appendRow(tablePath2, DEFAULT_LOG_TABLE_DESCRIPTOR, 0, 10);
 
-        int numSubtasks = 1;
-        try (org.apache.fluss.flink.tiering.source.enumerator.MockSplitEnumeratorContext<
-                        TieringSplit>
-                context =
-                        new org.apache.fluss.flink.tiering.source.enumerator
-                                .MockSplitEnumeratorContext<>(numSubtasks)) {
+        try (FlussMockSplitEnumeratorContext<TieringSplit> context =
+                new FlussMockSplitEnumeratorContext<>(numSubtasks)) {
             TieringSourceEnumerator enumerator =
                     new TieringSourceEnumerator(flussConf, context, 500);
 
             enumerator.start();
             assertThat(context.getSplitsAssignmentSequence()).isEmpty();
 
-            // register one reader
-            int subtaskId = 0;
-            context.registerSourceReader(subtaskId, 0, "localhost-" + subtaskId);
-            enumerator.addReader(subtaskId);
-
-            // handle split request
-            enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
+            // register readers and handle split requests for attempt 0
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 0);
 
             // should get one tiering split, and the split is for tablePath1
-            verifyTieringSplitAssignment(context, 1, tablePath1);
+            verifyTieringSplitAssignment(context, numSubtasks, tablePath1);
 
             // clean assignment
             context.getSplitsAssignmentSequence().clear();
 
-            // enumerator handle TieringFailOverEvent, which will mark current tiering tablePath1 as
-            // fail, and all pending splits should be clear
-            context.registerSourceReader(subtaskId, 1, "localhost-" + subtaskId);
-            enumerator.addReader(subtaskId);
+            // first reader failover: Enumerator marks tablePath1 as failed and clears its splits
+            // register readers and handle split requests (attempt 1)
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 1);
 
-            // handle split request
-            enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
             // now, should get another one tiering split, the split is for tablePath2 since all
             // pending split for tablePath1 is clear
-            verifyTieringSplitAssignment(context, 1, tablePath2);
+            verifyTieringSplitAssignment(context, numSubtasks, tablePath2);
+
+            // clean assignment
+            context.getSplitsAssignmentSequence().clear();
+
+            // second reader failover: Enumerator marks tablePath2 as failed and clears its splits
+            // register readers and process split requests for attempt 2
+            registerReaderAndHandleSplitRequests(context, enumerator, numSubtasks, 2);
+
+            // now, should get no tiering split, since all pending split for tablePath1 and
+            // tablePath2 is clear
+            verifyTieringSplitAssignment(context, 0, tablePath2);
         }
     }
 
@@ -718,17 +700,22 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     }
 
     // --------------------- Test Utils ---------------------
-    private void registerReader(
-            MockSplitEnumeratorContext<TieringSplit> context,
+    private void registerReaderAndHandleSplitRequests(
+            FlussMockSplitEnumeratorContext<TieringSplit> context,
             TieringSourceEnumerator enumerator,
-            int readerId,
-            String hostname) {
-        context.registerReader(new ReaderInfo(readerId, hostname));
-        enumerator.addReader(readerId);
+            int numSubtasks,
+            int attemptNumber) {
+        for (int subtaskId = 0; subtaskId < numSubtasks; subtaskId++) {
+            context.registerSourceReader(subtaskId, attemptNumber, "localhost-" + subtaskId);
+            enumerator.addReader(subtaskId);
+            enumerator.handleSplitRequest(subtaskId, "localhost-" + subtaskId);
+        }
     }
 
     private void waitUntilTieringTableSplitAssignmentReady(
-            MockSplitEnumeratorContext<TieringSplit> context, int expectedSplitsNum, long sleepMs)
+            FlussMockSplitEnumeratorContext<TieringSplit> context,
+            int expectedSplitsNum,
+            long sleepMs)
             throws Throwable {
         while (context.getSplitsAssignmentSequence().size() < expectedSplitsNum) {
             if (!context.getPeriodicCallables().isEmpty()) {
@@ -747,11 +734,11 @@ class TieringSourceEnumeratorTest extends TieringTestBase {
     }
 
     private void verifyTieringSplitAssignment(
-            MockSplitEnumeratorContext<TieringSplit> context,
+            FlussMockSplitEnumeratorContext<TieringSplit> context,
             int expectedSplitSize,
             TablePath expectedTablePath)
             throws Throwable {
-        waitUntilTieringTableSplitAssignmentReady(context, 1, 200);
+        waitUntilTieringTableSplitAssignmentReady(context, expectedSplitSize, 200);
         List<SplitsAssignment<TieringSplit>> actualAssignment =
                 context.getSplitsAssignmentSequence();
 
