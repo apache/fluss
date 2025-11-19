@@ -61,8 +61,6 @@ import javax.annotation.Nullable;
 
 import java.util.Collection;
 import java.util.HashMap;
-import java.util.HashSet;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -81,14 +79,6 @@ public class MetadataManager {
     private final int maxPartitionNum;
     private final int maxBucketNum;
     private final LakeCatalogDynamicLoader lakeCatalogDynamicLoader;
-
-    public static final Set<String> SENSITIVE_TABLE_OPTIOINS = new HashSet<>();
-
-    static {
-        SENSITIVE_TABLE_OPTIOINS.add("password");
-        SENSITIVE_TABLE_OPTIOINS.add("secret");
-        SENSITIVE_TABLE_OPTIOINS.add("key");
-    }
 
     /**
      * Creates a new metadata manager.
@@ -325,15 +315,12 @@ public class MetadataManager {
             List<TableChange> tableChanges,
             TablePropertyChanges tablePropertyChanges,
             boolean ignoreIfNotExists,
-            @Nullable LakeCatalog lakeCatalog,
             LakeTableTieringManager lakeTableTieringManager,
             LakeCatalog.Context lakeCatalogContext) {
         try {
             // it throws TableNotExistException if the table or database not exists
             TableRegistration tableReg = getTableRegistration(tablePath);
             SchemaInfo schemaInfo = getLatestSchema(tablePath);
-            // we can't use MetadataManager#getTable here, because it will add the default
-            // lake options to the table properties, which may cause the validation failure
             TableInfo tableInfo = tableReg.toTableInfo(tablePath, schemaInfo);
 
             // validate the changes
@@ -357,7 +344,6 @@ public class MetadataManager {
                         tableDescriptor,
                         newDescriptor,
                         tableChanges,
-                        lakeCatalog,
                         lakeCatalogContext);
                 // update the table to zk
                 TableRegistration updatedTableRegistration =
@@ -396,8 +382,10 @@ public class MetadataManager {
             TableDescriptor tableDescriptor,
             TableDescriptor newDescriptor,
             List<TableChange> tableChanges,
-            LakeCatalog lakeCatalog,
             LakeCatalog.Context lakeCatalogContext) {
+        LakeCatalog lakeCatalog =
+                lakeCatalogDynamicLoader.getLakeCatalogContainer().getLakeCatalog();
+
         if (isDataLakeEnabled(newDescriptor)) {
             if (lakeCatalog == null) {
                 throw new InvalidAlterTableException(
@@ -506,20 +494,6 @@ public class MetadataManager {
         return Boolean.parseBoolean(dataLakeEnabledValue);
     }
 
-    public void removeSensitiveTableOptions(Map<String, String> tableLakeOptions) {
-        if (tableLakeOptions == null || tableLakeOptions.isEmpty()) {
-            return;
-        }
-
-        Iterator<Map.Entry<String, String>> iterator = tableLakeOptions.entrySet().iterator();
-        while (iterator.hasNext()) {
-            String key = iterator.next().getKey().toLowerCase();
-            if (SENSITIVE_TABLE_OPTIOINS.stream().anyMatch(key::contains)) {
-                iterator.remove();
-            }
-        }
-    }
-
     public TableInfo getTable(TablePath tablePath) throws TableNotExistException {
         Optional<TableRegistration> optionalTable;
         try {
@@ -533,10 +507,7 @@ public class MetadataManager {
         }
         TableRegistration tableReg = optionalTable.get();
         SchemaInfo schemaInfo = getLatestSchema(tablePath);
-        Map<String, String> tableLakeOptions =
-                lakeCatalogDynamicLoader.getLakeCatalogContainer().getDefaultTableLakeOptions();
-        removeSensitiveTableOptions(tableLakeOptions);
-        return tableReg.toTableInfo(tablePath, schemaInfo, tableLakeOptions);
+        return tableReg.toTableInfo(tablePath, schemaInfo);
     }
 
     public Map<TablePath, TableInfo> getTables(Collection<TablePath> tablePaths)
@@ -559,14 +530,7 @@ public class MetadataManager {
                 TableRegistration tableReg = tablePath2TableRegistrations.get(tablePath);
                 SchemaInfo schemaInfo = tablePath2SchemaInfos.get(tablePath);
 
-                result.put(
-                        tablePath,
-                        tableReg.toTableInfo(
-                                tablePath,
-                                schemaInfo,
-                                lakeCatalogDynamicLoader
-                                        .getLakeCatalogContainer()
-                                        .getDefaultTableLakeOptions()));
+                result.put(tablePath, tableReg.toTableInfo(tablePath, schemaInfo));
             }
         } catch (Exception e) {
             throw new FlussRuntimeException(
