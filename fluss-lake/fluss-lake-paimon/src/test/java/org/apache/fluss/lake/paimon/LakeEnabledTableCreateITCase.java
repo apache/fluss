@@ -151,6 +151,7 @@ class LakeEnabledTableCreateITCase {
                         .property(ConfigOptions.TABLE_DATALAKE_ENABLED, true)
                         .customProperties(customProperties)
                         .distributedBy(BUCKET_NUM, "log_c1", "log_c2")
+                        .comment("test comment")
                         .build();
         TablePath logTablePath = TablePath.of(DATABASE, "log_table");
         admin.createTable(logTablePath, logTable, false).get();
@@ -902,6 +903,8 @@ class LakeEnabledTableCreateITCase {
         // now, check schema
         RowType paimonRowType = paimonTable.rowType();
         assertThat(paimonRowType).isEqualTo(expectedRowType);
+
+        assertThat(paimonTable.comment()).isEqualTo(flussTable.getComment());
     }
 
     private TableDescriptor createTableDescriptor(
