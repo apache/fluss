@@ -91,8 +91,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                 .contains(
                         String.format(
                                 "TableSourceScan(table=[[testcatalog, defaultdb, %s, "
-                                        + "filter=[and(=(id, 1), =(name, _UTF-16LE'name1':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))], "
-                                        + "project=[address]]], fields=[address])",
+                                        + "filter=[and(=(id, 1), =(name, _UTF-16LE'name1':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))]]], "
+                                        + "fields=[id, address, name])",
                                 tableName));
         CloseableIterator<Row> collected = tEnv.executeSql(query).collect();
         List<String> expected = Collections.singletonList("+I[1, address1, name1]");
@@ -108,8 +108,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                 .contains(
                         String.format(
                                 "TableSourceScan(table=[[testcatalog, defaultdb, %s, "
-                                        + "filter=[and(=(id, 1), =(name, _UTF-16LE'name1':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))], "
-                                        + "project=[address]]], fields=[address])",
+                                        + "filter=[and(=(id, 1), =(name, _UTF-16LE'name1':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))]]], "
+                                        + "fields=[id, address, name])",
                                 tableName));
         CloseableIterator<Row> collected = tEnv.executeSql(query).collect();
         List<String> expected = Collections.singletonList("+I[1, address1, name1]");
@@ -126,7 +126,7 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                         String.format(
                                 "TableSourceScan(table=[[testcatalog, defaultdb, %s, "
                                         + "filter=[=(id, 1)], "
-                                        + "project=[name]]], fields=[name])",
+                                        + "project=[id, name]]], fields=[id, name])",
                                 tableName));
         CloseableIterator<Row> collected = tEnv.executeSql(query).collect();
         List<String> expected = Collections.singletonList("+I[1, name1]");
@@ -149,13 +149,91 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
                 .contains(
                         String.format(
                                 "TableSourceScan(table=[[testcatalog, defaultdb, %s, "
-                                        + "filter=[and(=(id, 1), =(dt, _UTF-16LE'%s':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))], "
-                                        + "project=[address, name]]], fields=[address, name])\n",
+                                        + "filter=[and(=(id, 1), =(dt, _UTF-16LE'%s':VARCHAR(2147483647) CHARACTER SET \"UTF-16LE\"))]]], "
+                                        + "fields=[id, address, name, dt])\n",
                                 tableName, partition1));
 
         CloseableIterator<Row> collected = tEnv.executeSql(query).collect();
         List<String> expected =
                 Collections.singletonList(String.format("+I[1, address1, name1, %s]", partition1));
+        assertResultsIgnoreOrder(collected, expected, true);
+    }
+
+    @Test
+    void testFilterOnLookupSource() throws Exception {
+        String srcTableName = String.format("test_src_table_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  name varchar,"
+                                + "  dt varchar,"
+                                + "  dim_dt varchar,"
+                                + "  primary key (id, dt) NOT ENFORCED) partitioned by (dt)"
+                                + " with ("
+                                + "  'bucket.num' = '4', "
+                                + "  'table.auto-partition.enabled' = 'true',"
+                                + "  'table.auto-partition.time-unit' = 'year')",
+                        srcTableName));
+
+        String dimTableName = String.format("test_dim_table_%s", RandomUtils.nextInt());
+        tEnv.executeSql(
+                String.format(
+                        "create table %s ("
+                                + "  id int not null,"
+                                + "  address varchar,"
+                                + "  dt varchar,"
+                                + "  primary key (id, dt) NOT ENFORCED) partitioned by (dt)"
+                                + " with ("
+                                + "  'bucket.num' = '4', "
+                                + "  'table.auto-partition.enabled' = 'true',"
+                                + "  'table.auto-partition.time-unit' = 'year')",
+                        dimTableName));
+
+        TablePath srcTablePath = TablePath.of(DEFAULT_DB, srcTableName);
+        Map<Long, String> partitionNameById =
+                waitUntilPartitions(FLUSS_CLUSTER_EXTENSION.getZooKeeperClient(), srcTablePath);
+        // just pick first partition to insert data
+        Iterator<String> partitionIterator =
+                partitionNameById.values().stream().sorted().iterator();
+        String partition1 = partitionIterator.next();
+
+        // prepare src table data
+        try (Table srcTable = conn.getTable(srcTablePath)) {
+            UpsertWriter upsertWriter = srcTable.newUpsert().createWriter();
+            for (int i = 1; i <= 2; i++) {
+                Object[] values = new Object[] {i, "name" + i, partition1, partition1};
+                upsertWriter.upsert(row(values));
+            }
+            upsertWriter.flush();
+        }
+
+        TablePath dimTablePath = TablePath.of(DEFAULT_DB, dimTableName);
+        // prepare dim table data
+        try (Table dimTable = conn.getTable(dimTablePath)) {
+            UpsertWriter upsertWriter = dimTable.newUpsert().createWriter();
+            for (int i = 1; i <= 2; i++) {
+                Object[] values = new Object[] {i, "address" + i, partition1};
+                upsertWriter.upsert(row(values));
+            }
+            upsertWriter.flush();
+        }
+
+        tEnv.executeSql(
+                String.format(
+                        "CREATE TEMPORARY VIEW my_view AS "
+                                + "SELECT *, proctime() as proc from %s WHERE id = 1 AND dt = '%s'",
+                        srcTableName, partition1));
+
+        CloseableIterator<Row> collected =
+                tEnv.executeSql(
+                                String.format(
+                                        "SELECT src.id, src.name, h.id, h.address FROM my_view src "
+                                                + " LEFT JOIN %s FOR SYSTEM_TIME AS OF src.proc as h "
+                                                + " ON src.id = h.id and src.dim_dt = h.dt and h.dt <> '%s'",
+                                        dimTableName, partition1))
+                        .collect();
+        List<String> expected = Collections.singletonList("+I[1, name1, null, null]");
         assertResultsIgnoreOrder(collected, expected, true);
     }
 
@@ -356,8 +434,8 @@ abstract class FlinkTableSourceBatchITCase extends FlinkTestBase {
         }
 
         // prepare table data
-        try (Table dimTable = conn.getTable(tablePath)) {
-            UpsertWriter upsertWriter = dimTable.newUpsert().createWriter();
+        try (Table table = conn.getTable(tablePath)) {
+            UpsertWriter upsertWriter = table.newUpsert().createWriter();
             for (int i = 1; i <= 5; i++) {
                 Object[] values =
                         partition1 == null
