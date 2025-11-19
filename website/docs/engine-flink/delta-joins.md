@@ -145,7 +145,7 @@ The delta join feature is introduced since Flink 2.1 and still evolving, and its
 Refer to the [Delta Join Issue](https://issues.apache.org/jira/browse/FLINK-37836) for the most up-to-date information.
 
 
-### Flink 2.1
+### Flink 2.1.2 and later
 
 #### Supported Features
 
@@ -160,7 +160,7 @@ Refer to the [Delta Join Issue](https://issues.apache.org/jira/browse/FLINK-3783
   - This is why the option `'table.merge-engine' = 'first_row'` is added to the source table DDL.
 - All upstream nodes of the join should be `TableSourceScan` or `Exchange`.
 
-### Flink 2.2 (upcoming)
+### Flink 2.2.0 and later
 
 #### Supported Features
 
@@ -172,9 +172,9 @@ Refer to the [Delta Join Issue](https://issues.apache.org/jira/browse/FLINK-3783
 
 #### Limitations
 
-- The primary key or the prefix lookup key of the tables must be included as part of the equivalence conditions in the join.
+- The primary key or the prefix key of the tables must be included as part of the equivalence conditions in the join.
 - The join must be a INNER join.
-- The downstream nodes of the join can accept duplicate changes, such as a sink that provides UPSERT mode.
+- The downstream nodes of the join can accept duplicate changes, such as a sink that provides UPSERT mode without `upsertMaterialize`.
 - When consuming a CDC stream, the join key used in the delta join must be part of the primary key.
 - All filters must be applied on the upsert key, and neither filters nor projections should contain non-deterministic functions.
 
