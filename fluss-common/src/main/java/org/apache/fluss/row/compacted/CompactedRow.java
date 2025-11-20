@@ -24,11 +24,13 @@ import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
 import org.apache.fluss.row.GenericRow;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.row.indexed.IndexedRow;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.MurmurHashUtils;
 
 /**
@@ -67,6 +69,14 @@ public class CompactedRow implements BinaryRow {
     private CompactedRowReader reader;
     private final CompactedRowDeserializer deserializer;
 
+    public CompactedRow(RowType rowType) {
+        this(rowType.getChildren().toArray(new DataType[0]));
+    }
+
+    public CompactedRow(DataType[] types) {
+        this(types.length, new CompactedRowDeserializer(types));
+    }
+
     public CompactedRow(int arity, CompactedRowDeserializer deserializer) {
         this.arity = arity;
         this.deserializer = deserializer;
@@ -93,6 +103,18 @@ public class CompactedRow implements BinaryRow {
         segment.get(offset, dst, dstOffset, sizeInBytes);
     }
 
+    @Override
+    public CompactedRow copy() {
+        return copy(new CompactedRow(arity, deserializer));
+    }
+
+    public CompactedRow copy(CompactedRow from) {
+        byte[] newBuffer = new byte[sizeInBytes];
+        segment.get(offset, newBuffer, 0, sizeInBytes);
+        from.pointTo(MemorySegment.wrap(newBuffer), 0, sizeInBytes);
+        return from;
+    }
+
     public void pointTo(MemorySegment segment, int offset, int sizeInBytes) {
         this.segment = segment;
         this.segments = new MemorySegment[] {segment};
@@ -101,9 +123,12 @@ public class CompactedRow implements BinaryRow {
         this.decoded = false;
     }
 
-    public static int calculateBitSetWidthInBytes(int arity) {
-        // need arity bits to store null bits, round up to the nearest byte size
-        return (arity + 7) / 8;
+    public void pointTo(MemorySegment[] segments, int offset, int sizeInBytes) {
+        this.segment = segments[0];
+        this.segments = segments;
+        this.offset = offset;
+        this.sizeInBytes = sizeInBytes;
+        this.decoded = false;
     }
 
     @Override
@@ -131,18 +156,24 @@ public class CompactedRow implements BinaryRow {
     }
 
     @VisibleForTesting
-    public InternalRow decodedRow() {
+    public InternalRow decodedRow(int pos) {
         if (!decoded) {
-            deserialize();
+            deserialize(pos);
         }
         return decodedRow;
     }
 
-    private void deserialize() {
+    private void ensureReaderInitialized(int pos) {
+        if (reader == null) {
+            reader = new CompactedRowReader(deserializer.getTypes());
+        }
+    }
+
+    private void deserialize(int pos) {
         if (decodedRow == null) {
             decodedRow = new GenericRow(arity);
-            reader = new CompactedRowReader(arity);
         }
+        ensureReaderInitialized(pos);
         reader.pointTo(segment, offset, sizeInBytes);
         deserializer.deserialize(reader, decodedRow);
         decoded = true;
@@ -157,73 +188,81 @@ public class CompactedRow implements BinaryRow {
 
     @Override
     public boolean getBoolean(int pos) {
-        return decodedRow().getBoolean(pos);
+        return decodedRow(pos).getBoolean(pos);
     }
 
     @Override
     public byte getByte(int pos) {
-        return decodedRow().getByte(pos);
+        return decodedRow(pos).getByte(pos);
     }
 
     @Override
     public short getShort(int pos) {
-        return decodedRow().getShort(pos);
+        return decodedRow(pos).getShort(pos);
     }
 
     @Override
     public int getInt(int pos) {
-        return decodedRow().getInt(pos);
+        return decodedRow(pos).getInt(pos);
     }
 
     @Override
     public long getLong(int pos) {
-        return decodedRow().getLong(pos);
+        return decodedRow(pos).getLong(pos);
     }
 
     @Override
     public float getFloat(int pos) {
-        return decodedRow().getFloat(pos);
+        return decodedRow(pos).getFloat(pos);
     }
 
     @Override
     public double getDouble(int pos) {
-        return decodedRow().getDouble(pos);
+        return decodedRow(pos).getDouble(pos);
     }
 
     @Override
     public BinaryString getChar(int pos, int length) {
-        return decodedRow().getChar(pos, length);
+        return decodedRow(pos).getChar(pos, length);
     }
 
     @Override
     public BinaryString getString(int pos) {
-        return decodedRow().getString(pos);
+        return decodedRow(pos).getString(pos);
     }
 
     @Override
     public Decimal getDecimal(int pos, int precision, int scale) {
-        return decodedRow().getDecimal(pos, precision, scale);
+        return decodedRow(pos).getDecimal(pos, precision, scale);
     }
 
     @Override
     public TimestampNtz getTimestampNtz(int pos, int precision) {
-        return decodedRow().getTimestampNtz(pos, precision);
+        return decodedRow(pos).getTimestampNtz(pos, precision);
     }
 
     @Override
     public TimestampLtz getTimestampLtz(int pos, int precision) {
-        return decodedRow().getTimestampLtz(pos, precision);
+        return decodedRow(pos).getTimestampLtz(pos, precision);
     }
 
     @Override
     public byte[] getBinary(int pos, int length) {
-        return decodedRow().getBinary(pos, length);
+        return decodedRow(pos).getBinary(pos, length);
     }
 
     @Override
     public byte[] getBytes(int pos) {
-        return decodedRow().getBytes(pos);
+        return decodedRow(pos).getBytes(pos);
     }
+
+    @Override
+    public InternalArray getArray(int pos) {
+        return decodedRow(pos).getArray(pos);
+    }
+
+    // TODO: getMap() will be added in Issue #1973
+    // TODO: getRow() will be added in Issue #1974
 
     @Override
     public boolean equals(Object o) {

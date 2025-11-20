@@ -50,14 +50,16 @@ class PaimonKeyEncoderTest {
         DataType[] allDataTypes = allRowType.getChildren().toArray(new DataType[0]);
 
         IndexedRow indexedRow = genFlussRowForAllTypes(allDataTypes);
-        List<String> encodedKeys = allRowType.getFieldNames();
+        // exclude the last field (array type) as Paimon doesn't support array type in key
+        List<String> encodedKeys =
+                allRowType.getFieldNames().subList(0, allRowType.getFieldCount() - 1);
         PaimonKeyEncoder paimonKeyEncoder = new PaimonKeyEncoder(allRowType, encodedKeys);
 
         // encode with Fluss own implementation for Paimon
         byte[] encodedKey = paimonKeyEncoder.encodeKey(indexedRow);
 
         // encode with Paimon implementation
-        byte[] paimonEncodedKey = genPaimonRowForAllTypes(allRowType.getFieldCount()).toBytes();
+        byte[] paimonEncodedKey = genPaimonRowForAllTypes(allRowType.getFieldCount() - 1).toBytes();
 
         // verify both the result should be same
         assertThat(encodedKey).isEqualTo(paimonEncodedKey);

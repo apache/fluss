@@ -24,6 +24,7 @@ import org.apache.fluss.row.BinarySection;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.NullAwareGetters;
 import org.apache.fluss.row.TimestampLtz;
@@ -384,6 +385,15 @@ public final class AlignedRow extends BinarySection
         final long offsetAndLen = segments[0].getLong(fieldOffset);
         return BinarySegmentUtils.readBinary(segments, offset, fieldOffset, offsetAndLen);
     }
+
+    @Override
+    public InternalArray getArray(int pos) {
+        // TODO: Array type support will be fully implemented in Issue #1972
+        return null;
+    }
+
+    // TODO: getMap() will be added in Issue #1973
+    // TODO: getRow() will be added in Issue #1974
 
     /** The bit is 1 when the field is null. Default is 0. */
     public boolean anyNull() {

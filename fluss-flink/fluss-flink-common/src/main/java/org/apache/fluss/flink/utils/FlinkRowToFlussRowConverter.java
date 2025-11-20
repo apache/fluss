@@ -175,6 +175,10 @@ public class FlinkRowToFlussRowConverter implements AutoCloseable {
                     return TimestampLtz.fromEpochMillis(
                             timestampData.getMillisecond(), timestampData.getNanoOfMillisecond());
                 };
+            case ARRAY:
+                // TODO: Add ARRAY type support for Flink connector in a future PR
+                throw new UnsupportedOperationException(
+                        "Fluss Unsupported data type: " + flinkDataType);
             default:
                 throw new UnsupportedOperationException(
                         "Fluss Unsupported data type: " + flinkDataType);

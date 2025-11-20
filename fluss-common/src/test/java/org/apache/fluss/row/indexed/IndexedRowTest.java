@@ -68,9 +68,9 @@ public class IndexedRowTest {
 
         assertAllTypeEquals(row);
 
-        assertThat(row.getHeaderSizeInBytes()).isEqualTo(15);
-        assertThat(row.getSizeInBytes()).isEqualTo(117);
-        assertThat(row.getFieldCount()).isEqualTo(19);
+        assertThat(row.getHeaderSizeInBytes()).isEqualTo(19);
+        assertThat(row.getSizeInBytes()).isEqualTo(133);
+        assertThat(row.getFieldCount()).isEqualTo(20);
         assertThat(row.anyNull()).isTrue();
         assertThat(row.anyNull(new int[] {0, 1})).isFalse();
     }
@@ -190,7 +190,8 @@ public class IndexedRowTest {
         writer.writeTimestampNtz(TimestampNtz.fromMillis(1698235273182L), 1);
         writer.writeTimestampNtz(TimestampNtz.fromMillis(1698235273182L), 5);
         writer.writeTimestampLtz(TimestampLtz.fromEpochMillis(1698235273182L), 1);
-        writer.setNullAt(18);
+        writer.writeTimestampLtz(TimestampLtz.fromEpochMillis(1698235273182L), 5);
+        writer.setNullAt(19);
         return writer;
     }
 
@@ -213,7 +214,8 @@ public class IndexedRowTest {
                 .isEqualTo(Decimal.fromBigDecimal(new BigDecimal(10), 20, 0));
         assertThat(row.getTimestampNtz(15, 1).toString()).isEqualTo("2023-10-25T12:01:13.182");
         assertThat(row.getTimestampNtz(16, 5).toString()).isEqualTo("2023-10-25T12:01:13.182");
-        assertThat(row.getTimestampLtz(17, 5).toString()).isEqualTo("2023-10-25T12:01:13.182Z");
-        assertThat(row.isNullAt(18)).isTrue();
+        assertThat(row.getTimestampLtz(17, 1).toString()).isEqualTo("2023-10-25T12:01:13.182Z");
+        assertThat(row.getTimestampLtz(18, 5).toString()).isEqualTo("2023-10-25T12:01:13.182Z");
+        assertThat(row.isNullAt(19)).isTrue();
     }
 }

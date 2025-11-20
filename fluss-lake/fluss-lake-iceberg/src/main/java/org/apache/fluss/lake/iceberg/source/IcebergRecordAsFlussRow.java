@@ -20,6 +20,7 @@ package org.apache.fluss.lake.iceberg.source;
 
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
 import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
@@ -147,4 +148,13 @@ public class IcebergRecordAsFlussRow implements InternalRow {
         ByteBuffer byteBuffer = (ByteBuffer) value;
         return BytesUtils.toArray(byteBuffer);
     }
+
+    @Override
+    public InternalArray getArray(int pos) {
+        // TODO: Support Array type conversion from Iceberg to Fluss
+        return null;
+    }
+
+    // TODO: Support Map type conversion from Iceberg to Fluss
+    // TODO: Support Row type conversion from Iceberg to Fluss
 }

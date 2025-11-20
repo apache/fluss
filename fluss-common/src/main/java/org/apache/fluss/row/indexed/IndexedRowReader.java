@@ -22,13 +22,18 @@ import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.row.BinarySegmentUtils;
 import org.apache.fluss.row.BinaryString;
 import org.apache.fluss.row.Decimal;
+import org.apache.fluss.row.InternalArray;
+import org.apache.fluss.row.InternalMap;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.row.TimestampLtz;
 import org.apache.fluss.row.TimestampNtz;
 import org.apache.fluss.types.DataType;
+import org.apache.fluss.types.RowType;
 
 import java.io.Serializable;
 import java.util.Arrays;
 
+import static org.apache.fluss.row.BinaryRow.calculateBitSetWidthInBytes;
 import static org.apache.fluss.types.DataTypeChecks.getLength;
 import static org.apache.fluss.types.DataTypeChecks.getPrecision;
 import static org.apache.fluss.types.DataTypeChecks.getScale;
@@ -43,10 +48,12 @@ import static org.apache.fluss.types.DataTypeChecks.getScale;
 @Internal
 public class IndexedRowReader {
 
+    private final int fieldCount;
     private final int nullBitsSizeInBytes;
     private final int variableColumnLengthListInBytes;
     // nullBitSet size + variable column length list size.
     private final int headerSizeInBytes;
+    private final DataType[] types;
 
     private MemorySegment segment;
     private int offset;
@@ -54,7 +61,9 @@ public class IndexedRowReader {
     private int variableLengthPosition;
 
     public IndexedRowReader(DataType[] types) {
-        this.nullBitsSizeInBytes = IndexedRow.calculateBitSetWidthInBytes(types.length);
+        this.types = types;
+        this.fieldCount = types.length;
+        this.nullBitsSizeInBytes = calculateBitSetWidthInBytes(fieldCount);
         this.variableColumnLengthListInBytes =
                 IndexedRow.calculateVariableColumnLengthListSize(types);
         this.headerSizeInBytes = nullBitsSizeInBytes + variableColumnLengthListInBytes;
@@ -199,6 +208,40 @@ public class IndexedRowReader {
         return Arrays.copyOfRange(bytes, 0, newLen);
     }
 
+    public InternalArray readArray() {
+        int length = readVarLengthFromVarLengthList();
+        MemorySegment[] segments = new MemorySegment[] {segment};
+        InternalArray array = BinarySegmentUtils.readArrayData(segments, position, length);
+        position += length;
+        return array;
+    }
+
+    public InternalMap readMap() {
+        int length = readVarLengthFromVarLengthList();
+        MemorySegment[] segments = new MemorySegment[] {segment};
+        InternalMap map = BinarySegmentUtils.readMapData(segments, position, length);
+        position += length;
+        return map;
+    }
+
+    public InternalRow readRow() {
+        return readRow(types);
+    }
+
+    public InternalRow readRow(RowType rowType) {
+        return readRow(rowType.getChildren().toArray(new DataType[0]));
+    }
+
+    public InternalRow readRow(DataType[] types) {
+        int length = readVarLengthFromVarLengthList();
+        MemorySegment[] segments = new MemorySegment[] {segment};
+        InternalRow row =
+                BinarySegmentUtils.readIndexedRowData(
+                        segments, fieldCount, position, length, types);
+        position += length;
+        return row;
+    }
+
     /**
      * Creates an accessor for reading elements.
      *
@@ -258,6 +301,17 @@ public class IndexedRowReader {
                 final int timestampLtzPrecision = getPrecision(fieldType);
                 fieldReader = (reader, pos) -> reader.readTimestampLtz(timestampLtzPrecision);
                 break;
+            case ARRAY:
+                fieldReader = (reader, pos) -> reader.readArray();
+                break;
+            case MAP:
+                // TODO: Map type support will be added in Issue #1973
+                throw new UnsupportedOperationException(
+                        "Map type in KV table is not supported yet. Will be added in Issue #1976.");
+            case ROW:
+                // TODO: Row type support will be added in Issue #1974
+                throw new UnsupportedOperationException(
+                        "Row type in KV table is not supported yet. Will be added in Issue #1977.");
             default:
                 throw new IllegalArgumentException("Unsupported type for IndexedRow: " + fieldType);
         }

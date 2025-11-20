@@ -20,6 +20,9 @@ package org.apache.fluss.row;
 import org.apache.fluss.annotation.Internal;
 import org.apache.fluss.memory.MemorySegment;
 import org.apache.fluss.memory.OutputView;
+import org.apache.fluss.row.compacted.CompactedRow;
+import org.apache.fluss.row.indexed.IndexedRow;
+import org.apache.fluss.types.DataType;
 import org.apache.fluss.utils.MurmurHashUtils;
 
 import java.io.IOException;
@@ -365,6 +368,24 @@ public final class BinarySegmentUtils {
     }
 
     /**
+     * set bit for segments array.
+     *
+     * @param segments target segments.
+     * @param baseOffset bits base offset.
+     * @param index bit index from base offset.
+     */
+    public static void bitSet(MemorySegment[] segments, int baseOffset, int index) {
+        int offset = baseOffset + byteIndex(index);
+        int segSize = segments[0].size();
+        int segIndex = offset / segSize;
+        int segOffset = offset - segIndex * segSize;
+        MemorySegment segment = segments[segIndex];
+        byte current = segment.get(segOffset);
+        current |= (1 << (index & BIT_BYTE_INDEX_MASK));
+        segment.put(segOffset, current);
+    }
+
+    /**
      * Given a bit index, return the byte index containing it.
      *
      * @param bitIndex the bit index.
@@ -389,6 +410,24 @@ public final class BinarySegmentUtils {
     }
 
     /**
+     * unset bit for segments array.
+     *
+     * @param segments target segments.
+     * @param baseOffset bits base offset.
+     * @param index bit index from base offset.
+     */
+    public static void bitUnSet(MemorySegment[] segments, int baseOffset, int index) {
+        int offset = baseOffset + byteIndex(index);
+        int segSize = segments[0].size();
+        int segIndex = offset / segSize;
+        int segOffset = offset - segIndex * segSize;
+        MemorySegment segment = segments[segIndex];
+        byte current = segment.get(segOffset);
+        current &= ~(1 << (index & BIT_BYTE_INDEX_MASK));
+        segment.put(segOffset, current);
+    }
+
+    /**
      * read bit.
      *
      * @param segment target segment.
@@ -398,6 +437,23 @@ public final class BinarySegmentUtils {
     public static boolean bitGet(MemorySegment segment, int baseOffset, int index) {
         int offset = baseOffset + byteIndex(index);
         byte current = segment.get(offset);
+        return (current & (1 << (index & BIT_BYTE_INDEX_MASK))) != 0;
+    }
+
+    /**
+     * read bit for segments array.
+     *
+     * @param segments target segments.
+     * @param baseOffset bits base offset.
+     * @param index bit index from base offset.
+     */
+    public static boolean bitGet(MemorySegment[] segments, int baseOffset, int index) {
+        int offset = baseOffset + byteIndex(index);
+        int segSize = segments[0].size();
+        int segIndex = offset / segSize;
+        int segOffset = offset - segIndex * segSize;
+        MemorySegment segment = segments[segIndex];
+        byte current = segment.get(segOffset);
         return (current & (1 << (index & BIT_BYTE_INDEX_MASK))) != 0;
     }
 
@@ -663,5 +719,538 @@ public final class BinarySegmentUtils {
         final int subOffset = (int) (offsetAndNanos >> 32);
         final long millisecond = getLong(segments, baseOffset + subOffset);
         return TimestampNtz.fromMillis(millisecond, nanoOfMillisecond);
+    }
+
+    /**
+     * get int from segments.
+     *
+     * @param segments target segments.
+     * @param offset value offset.
+     */
+    public static int getInt(MemorySegment[] segments, int offset) {
+        if (inFirstSegment(segments, offset, 4)) {
+            return segments[0].getInt(offset);
+        } else {
+            return getIntMultiSegments(segments, offset);
+        }
+    }
+
+    private static int getIntMultiSegments(MemorySegment[] segments, int offset) {
+        int segSize = segments[0].size();
+        int segIndex = offset / segSize;
+        int segOffset = offset - segIndex * segSize; // equal to %
+
+        if (segOffset < segSize - 3) {
+            return segments[segIndex].getInt(segOffset);
+        } else {
+            return getIntSlowly(segments, segSize, segIndex, segOffset);
+        }
+    }
+
+    private static int getIntSlowly(
+            MemorySegment[] segments, int segSize, int segNum, int segOffset) {
+        MemorySegment segment = segments[segNum];
+        int ret = 0;
+        for (int i = 0; i < 4; i++) {
+            if (segOffset == segSize) {
+                segment = segments[++segNum];
+                segOffset = 0;
+            }
+            int unsignedByte = segment.get(segOffset) & 0xff;
+            if (LITTLE_ENDIAN) {
+                ret |= (unsignedByte << (i * 8));
+            } else {
+                ret |= (unsignedByte << ((3 - i) * 8));
+            }
+            segOffset++;
+        }
+        return ret;
+    }
+
+    /**
+     * set int from segments.
+     *
+     * @param segments target segments.
+     * @param offset value offset.
+     */
+    public static void setInt(MemorySegment[] segments, int offset, int value) {
+        if (inFirstSegment(segments, offset, 4)) {
+            segments[0].putInt(offset, value);
+        } else {
+            setIntMultiSegments(segments, offset, value);
+        }
+    }
+
+    private static void setIntMultiSegments(MemorySegment[] segments, int offset, int value) {
+        int segSize = segments[0].size();
+        int segIndex = offset / segSize;
+        int segOffset = offset - segIndex * segSize; // equal to %
+
+        if (segOffset < segSize - 3) {
+            segments[segIndex].putInt(segOffset, value);
+        } else {
+            setIntSlowly(segments, segSize, segIndex, segOffset, value);
+        }
+    }
+
+    private static void setIntSlowly(
+            MemorySegment[] segments, int segSize, int segNum, int segOffset, int value) {
+        MemorySegment segment = segments[segNum];
+        for (int i = 0; i < 4; i++) {
+            if (segOffset == segSize) {
+                segment = segments[++segNum];
+                segOffset = 0;
+            }
+            int unsignedByte;
+            if (LITTLE_ENDIAN) {
+                unsignedByte = value >> (i * 8);
+            } else {
+                unsignedByte = value >> ((3 - i) * 8);
+            }
+            segment.put(segOffset, (byte) unsignedByte);
+            segOffset++;
+        }
+    }
+
+    /**
+     * get boolean from segments.
+     *
+     * @param segments target segments.
+     * @param offset value offset.
+     */
+    public static boolean getBoolean(MemorySegment[] segments, int offset) {
+        return getByte(segments, offset) != 0;
+    }
+
+    /**
+     * set boolean from segments.
+     *
+     * @param segments target segments.
+     * @param offset value offset.
+     */
+    public static void setBoolean(MemorySegment[] segments, int offset, boolean value) {
+        setByte(segments, offset, (byte) (value ? 1 : 0));
+    }
+
+    /**
+     * get byte from segments.
+     *
+     * @param segments target segments.
+     * @param offset value offset.
+     */
+    public static byte getByte(MemorySegment[] segments, int offset) {
+        int segSize = segments[0].size();
+        int segIndex = offset / segSize;
+        int segOffset = offset - segIndex * segSize; // equal to %
+        return segments[segIndex].get(segOffset);
+    }
+
+    /**
+     * set byte from segments.
+     *
+     * @param segments target segments.
+     * @param offset value offset.
+     */
+    public static void setByte(MemorySegment[] segments, int offset, byte value) {
+        int segSize = segments[0].size();
+        int segIndex = offset / segSize;
+        int segOffset = offset - segIndex * segSize; // equal to %
+        segments[segIndex].put(segOffset, value);
+    }
+
+    /**
+     * get short from segments.
+     *
+     * @param segments target segments.
+     * @param offset value offset.
+     */
+    public static short getShort(MemorySegment[] segments, int offset) {
+        if (inFirstSegment(segments, offset, 2)) {
+            return segments[0].getShort(offset);
+        } else {
+            return getShortMultiSegments(segments, offset);
+        }
+    }
+
+    private static short getShortMultiSegments(MemorySegment[] segments, int offset) {
+        int segSize = segments[0].size();
+        int segIndex = offset / segSize;
+        int segOffset = offset - segIndex * segSize; // equal to %
+
+        if (segOffset < segSize - 1) {
+            return segments[segIndex].getShort(segOffset);
+        } else {
+            return getShortSlowly(segments, segSize, segIndex, segOffset);
+        }
+    }
+
+    private static short getShortSlowly(
+            MemorySegment[] segments, int segSize, int segNum, int segOffset) {
+        MemorySegment segment = segments[segNum];
+        short ret = 0;
+        for (int i = 0; i < 2; i++) {
+            if (segOffset == segSize) {
+                segment = segments[++segNum];
+                segOffset = 0;
+            }
+            int unsignedByte = segment.get(segOffset) & 0xff;
+            if (LITTLE_ENDIAN) {
+                ret |= (unsignedByte << (i * 8));
+            } else {
+                ret |= (unsignedByte << ((1 - i) * 8));
+            }
+            segOffset++;
+        }
+        return ret;
+    }
+
+    /**
+     * set short from segments.
+     *
+     * @param segments target segments.
+     * @param offset value offset.
+     */
+    public static void setShort(MemorySegment[] segments, int offset, short value) {
+        if (inFirstSegment(segments, offset, 2)) {
+            segments[0].putShort(offset, value);
+        } else {
+            setShortMultiSegments(segments, offset, value);
+        }
+    }
+
+    private static void setShortMultiSegments(MemorySegment[] segments, int offset, short value) {
+        int segSize = segments[0].size();
+        int segIndex = offset / segSize;
+        int segOffset = offset - segIndex * segSize; // equal to %
+
+        if (segOffset < segSize - 1) {
+            segments[segIndex].putShort(segOffset, value);
+        } else {
+            setShortSlowly(segments, segSize, segIndex, segOffset, value);
+        }
+    }
+
+    private static void setShortSlowly(
+            MemorySegment[] segments, int segSize, int segNum, int segOffset, short value) {
+        MemorySegment segment = segments[segNum];
+        for (int i = 0; i < 2; i++) {
+            if (segOffset == segSize) {
+                segment = segments[++segNum];
+                segOffset = 0;
+            }
+            int unsignedByte;
+            if (LITTLE_ENDIAN) {
+                unsignedByte = value >> (i * 8);
+            } else {
+                unsignedByte = value >> ((1 - i) * 8);
+            }
+            segment.put(segOffset, (byte) unsignedByte);
+            segOffset++;
+        }
+    }
+
+    /**
+     * get float from segments.
+     *
+     * @param segments target segments.
+     * @param offset value offset.
+     */
+    public static float getFloat(MemorySegment[] segments, int offset) {
+        return Float.intBitsToFloat(getInt(segments, offset));
+    }
+
+    /**
+     * set float from segments.
+     *
+     * @param segments target segments.
+     * @param offset value offset.
+     */
+    public static void setFloat(MemorySegment[] segments, int offset, float value) {
+        setInt(segments, offset, Float.floatToIntBits(value));
+    }
+
+    /**
+     * get double from segments.
+     *
+     * @param segments target segments.
+     * @param offset value offset.
+     */
+    public static double getDouble(MemorySegment[] segments, int offset) {
+        return Double.longBitsToDouble(getLong(segments, offset));
+    }
+
+    /**
+     * set double from segments.
+     *
+     * @param segments target segments.
+     * @param offset value offset.
+     */
+    public static void setDouble(MemorySegment[] segments, int offset, double value) {
+        setLong(segments, offset, Double.doubleToLongBits(value));
+    }
+
+    /** Gets an instance of {@link Decimal} from underlying {@link MemorySegment}. */
+    public static Decimal readDecimal(
+            MemorySegment[] segments,
+            int baseOffset,
+            long offsetAndSize,
+            int precision,
+            int scale) {
+        final int size = ((int) offsetAndSize);
+        int subOffset = (int) (offsetAndSize >> 32);
+        byte[] bytes = new byte[size];
+        copyToBytes(segments, baseOffset + subOffset, bytes, 0, size);
+        return Decimal.fromUnscaledBytes(bytes, precision, scale);
+    }
+
+    /** Read array data from segments. */
+    public static InternalArray readArrayData(MemorySegment[] segments, int offset, int numBytes) {
+        BinaryArray array = new BinaryArray();
+        array.pointTo(segments, offset, numBytes);
+        return array;
+    }
+
+    /** Read array data from segments with long offset. */
+    public static InternalArray readArrayData(MemorySegment[] segments, int offset, long numBytes) {
+        return readArrayData(segments, offset, (int) numBytes);
+    }
+
+    /** Read map data from segments. */
+    public static InternalMap readMapData(MemorySegment[] segments, int offset, int numBytes) {
+        // TODO: Map type support will be added in Issue #1973
+        throw new UnsupportedOperationException(
+                "Map type is not supported yet. Will be added in Issue #1973.");
+    }
+
+    /** Read map data from segments with long offset. */
+    public static InternalMap readMapData(MemorySegment[] segments, int offset, long numBytes) {
+        // TODO: Map type support will be added in Issue #1973
+        throw new UnsupportedOperationException(
+                "Map type is not supported yet. Will be added in Issue #1973.");
+    }
+
+    /** Read row data from segments. */
+    public static InternalRow readRowData(
+            MemorySegment[] segments, int offset, int numBytes, long numFields) {
+        IndexedRow row = new IndexedRow(new DataType[(int) numFields]);
+        row.pointTo(segments, offset, numBytes);
+        return row;
+    }
+
+    /** Read indexed row data from segments. */
+    public static InternalRow readIndexedRowData(
+            MemorySegment[] segments,
+            int offset,
+            int numBytes,
+            int numFields,
+            DataType[] fieldTypes) {
+        IndexedRow row = new IndexedRow(fieldTypes);
+        row.pointTo(segments, offset, numBytes);
+        return row;
+    }
+
+    /** Read compacted row data from segments. */
+    public static InternalRow readCompactedRowData(
+            MemorySegment[] segments,
+            int offset,
+            int numBytes,
+            int numFields,
+            DataType[] fieldTypes) {
+        CompactedRow row = new CompactedRow(fieldTypes);
+        row.pointTo(segments, offset, numBytes);
+        return row;
+    }
+
+    /** Copy data from segments to boolean array. */
+    public static void copyToUnsafe(
+            MemorySegment[] segments,
+            int offset,
+            boolean[] target,
+            int targetOffset,
+            int numBytes) {
+        if (inFirstSegment(segments, offset, numBytes)) {
+            byte[] tempBytes = new byte[numBytes];
+            segments[0].get(offset, tempBytes, 0, numBytes);
+            for (int i = 0; i < numBytes; i++) {
+                target[targetOffset + i] = tempBytes[i] != 0;
+            }
+        } else {
+            copyMultiSegmentsToUnsafe(segments, offset, target, targetOffset, numBytes);
+        }
+    }
+
+    /** Copy data from segments to byte array. */
+    public static void copyToUnsafe(
+            MemorySegment[] segments, int offset, byte[] target, int targetOffset, int numBytes) {
+        if (inFirstSegment(segments, offset, numBytes)) {
+            segments[0].get(offset, target, targetOffset, numBytes);
+        } else {
+            copyMultiSegmentsToUnsafe(segments, offset, target, targetOffset, numBytes);
+        }
+    }
+
+    /** Copy data from segments to short array. */
+    public static void copyToUnsafe(
+            MemorySegment[] segments, int offset, short[] target, int targetOffset, int numBytes) {
+        if (inFirstSegment(segments, offset, numBytes)) {
+            byte[] tempBytes = new byte[numBytes];
+            segments[0].get(offset, tempBytes, 0, numBytes);
+            for (int i = 0; i < numBytes / 2; i++) {
+                target[targetOffset + i] =
+                        (short) ((tempBytes[i * 2] & 0xFF) | ((tempBytes[i * 2 + 1] & 0xFF) << 8));
+            }
+        } else {
+            copyMultiSegmentsToUnsafe(segments, offset, target, targetOffset, numBytes);
+        }
+    }
+
+    /** Copy data from segments to int array. */
+    public static void copyToUnsafe(
+            MemorySegment[] segments, int offset, int[] target, int targetOffset, int numBytes) {
+        if (inFirstSegment(segments, offset, numBytes)) {
+            byte[] tempBytes = new byte[numBytes];
+            segments[0].get(offset, tempBytes, 0, numBytes);
+            for (int i = 0; i < numBytes / 4; i++) {
+                target[targetOffset + i] =
+                        (tempBytes[i * 4] & 0xFF)
+                                | ((tempBytes[i * 4 + 1] & 0xFF) << 8)
+                                | ((tempBytes[i * 4 + 2] & 0xFF) << 16)
+                                | ((tempBytes[i * 4 + 3] & 0xFF) << 24);
+            }
+        } else {
+            copyMultiSegmentsToUnsafe(segments, offset, target, targetOffset, numBytes);
+        }
+    }
+
+    /** Copy data from segments to long array. */
+    public static void copyToUnsafe(
+            MemorySegment[] segments, int offset, long[] target, int targetOffset, int numBytes) {
+        if (inFirstSegment(segments, offset, numBytes)) {
+            byte[] tempBytes = new byte[numBytes];
+            segments[0].get(offset, tempBytes, 0, numBytes);
+            for (int i = 0; i < numBytes / 8; i++) {
+                target[targetOffset + i] =
+                        ((long) tempBytes[i * 8] & 0xFF)
+                                | (((long) tempBytes[i * 8 + 1] & 0xFF) << 8)
+                                | (((long) tempBytes[i * 8 + 2] & 0xFF) << 16)
+                                | (((long) tempBytes[i * 8 + 3] & 0xFF) << 24)
+                                | (((long) tempBytes[i * 8 + 4] & 0xFF) << 32)
+                                | (((long) tempBytes[i * 8 + 5] & 0xFF) << 40)
+                                | (((long) tempBytes[i * 8 + 6] & 0xFF) << 48)
+                                | (((long) tempBytes[i * 8 + 7] & 0xFF) << 56);
+            }
+        } else {
+            copyMultiSegmentsToUnsafe(segments, offset, target, targetOffset, numBytes);
+        }
+    }
+
+    /** Copy data from segments to float array. */
+    public static void copyToUnsafe(
+            MemorySegment[] segments, int offset, float[] target, int targetOffset, int numBytes) {
+        if (inFirstSegment(segments, offset, numBytes)) {
+            byte[] tempBytes = new byte[numBytes];
+            segments[0].get(offset, tempBytes, 0, numBytes);
+            for (int i = 0; i < numBytes / 4; i++) {
+                int intBits =
+                        (tempBytes[i * 4] & 0xFF)
+                                | ((tempBytes[i * 4 + 1] & 0xFF) << 8)
+                                | ((tempBytes[i * 4 + 2] & 0xFF) << 16)
+                                | ((tempBytes[i * 4 + 3] & 0xFF) << 24);
+                target[targetOffset + i] = Float.intBitsToFloat(intBits);
+            }
+        } else {
+            copyMultiSegmentsToUnsafe(segments, offset, target, targetOffset, numBytes);
+        }
+    }
+
+    /** Copy data from segments to double array. */
+    public static void copyToUnsafe(
+            MemorySegment[] segments, int offset, double[] target, int targetOffset, int numBytes) {
+        if (inFirstSegment(segments, offset, numBytes)) {
+            byte[] tempBytes = new byte[numBytes];
+            segments[0].get(offset, tempBytes, 0, numBytes);
+            for (int i = 0; i < numBytes / 8; i++) {
+                long longBits =
+                        ((long) tempBytes[i * 8] & 0xFF)
+                                | (((long) tempBytes[i * 8 + 1] & 0xFF) << 8)
+                                | (((long) tempBytes[i * 8 + 2] & 0xFF) << 16)
+                                | (((long) tempBytes[i * 8 + 3] & 0xFF) << 24)
+                                | (((long) tempBytes[i * 8 + 4] & 0xFF) << 32)
+                                | (((long) tempBytes[i * 8 + 5] & 0xFF) << 40)
+                                | (((long) tempBytes[i * 8 + 6] & 0xFF) << 48)
+                                | (((long) tempBytes[i * 8 + 7] & 0xFF) << 56);
+                target[targetOffset + i] = Double.longBitsToDouble(longBits);
+            }
+        } else {
+            copyMultiSegmentsToUnsafe(segments, offset, target, targetOffset, numBytes);
+        }
+    }
+
+    private static void copyMultiSegmentsToUnsafe(
+            MemorySegment[] segments, int offset, Object target, int targetOffset, int numBytes) {
+        byte[] tempBytes = new byte[numBytes];
+        copyMultiSegmentsToBytes(segments, offset, tempBytes, 0, numBytes);
+
+        if (target instanceof boolean[]) {
+            boolean[] boolTarget = (boolean[]) target;
+            for (int i = 0; i < numBytes; i++) {
+                boolTarget[targetOffset + i] = tempBytes[i] != 0;
+            }
+        } else if (target instanceof byte[]) {
+            byte[] byteTarget = (byte[]) target;
+            System.arraycopy(tempBytes, 0, byteTarget, targetOffset, numBytes);
+        } else if (target instanceof short[]) {
+            short[] shortTarget = (short[]) target;
+            for (int i = 0; i < numBytes / 2; i++) {
+                shortTarget[targetOffset + i] =
+                        (short) ((tempBytes[i * 2] & 0xFF) | ((tempBytes[i * 2 + 1] & 0xFF) << 8));
+            }
+        } else if (target instanceof int[]) {
+            int[] intTarget = (int[]) target;
+            for (int i = 0; i < numBytes / 4; i++) {
+                intTarget[targetOffset + i] =
+                        (tempBytes[i * 4] & 0xFF)
+                                | ((tempBytes[i * 4 + 1] & 0xFF) << 8)
+                                | ((tempBytes[i * 4 + 2] & 0xFF) << 16)
+                                | ((tempBytes[i * 4 + 3] & 0xFF) << 24);
+            }
+        } else if (target instanceof long[]) {
+            long[] longTarget = (long[]) target;
+            for (int i = 0; i < numBytes / 8; i++) {
+                longTarget[targetOffset + i] =
+                        ((long) tempBytes[i * 8] & 0xFF)
+                                | (((long) tempBytes[i * 8 + 1] & 0xFF) << 8)
+                                | (((long) tempBytes[i * 8 + 2] & 0xFF) << 16)
+                                | (((long) tempBytes[i * 8 + 3] & 0xFF) << 24)
+                                | (((long) tempBytes[i * 8 + 4] & 0xFF) << 32)
+                                | (((long) tempBytes[i * 8 + 5] & 0xFF) << 40)
+                                | (((long) tempBytes[i * 8 + 6] & 0xFF) << 48)
+                                | (((long) tempBytes[i * 8 + 7] & 0xFF) << 56);
+            }
+        } else if (target instanceof float[]) {
+            float[] floatTarget = (float[]) target;
+            for (int i = 0; i < numBytes / 4; i++) {
+                int intBits =
+                        (tempBytes[i * 4] & 0xFF)
+                                | ((tempBytes[i * 4 + 1] & 0xFF) << 8)
+                                | ((tempBytes[i * 4 + 2] & 0xFF) << 16)
+                                | ((tempBytes[i * 4 + 3] & 0xFF) << 24);
+                floatTarget[targetOffset + i] = Float.intBitsToFloat(intBits);
+            }
+        } else if (target instanceof double[]) {
+            double[] doubleTarget = (double[]) target;
+            for (int i = 0; i < numBytes / 8; i++) {
+                long longBits =
+                        ((long) tempBytes[i * 8] & 0xFF)
+                                | (((long) tempBytes[i * 8 + 1] & 0xFF) << 8)
+                                | (((long) tempBytes[i * 8 + 2] & 0xFF) << 16)
+                                | (((long) tempBytes[i * 8 + 3] & 0xFF) << 24)
+                                | (((long) tempBytes[i * 8 + 4] & 0xFF) << 32)
+                                | (((long) tempBytes[i * 8 + 5] & 0xFF) << 40)
+                                | (((long) tempBytes[i * 8 + 6] & 0xFF) << 48)
+                                | (((long) tempBytes[i * 8 + 7] & 0xFF) << 56);
+                doubleTarget[targetOffset + i] = Double.longBitsToDouble(longBits);
+            }
+        }
     }
 }

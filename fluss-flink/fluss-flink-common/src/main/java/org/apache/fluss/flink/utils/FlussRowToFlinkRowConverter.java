@@ -147,6 +147,9 @@ public class FlussRowToFlinkRowConverter {
                             timestampLtz.getEpochMillisecond(),
                             timestampLtz.getNanoOfMillisecond());
                 };
+            case ARRAY:
+                // TODO: Add ARRAY type support for Flink connector in a future PR
+                throw new UnsupportedOperationException("Unsupported data type: " + flussDataType);
             default:
                 throw new UnsupportedOperationException("Unsupported data type: " + flussDataType);
         }
