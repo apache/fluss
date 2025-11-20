@@ -86,7 +86,13 @@ public class RemoteLogTestBase extends ReplicaTestBase {
                         physicalTablePath,
                         tb,
                         Collections.singletonList(0),
-                        new LeaderAndIsr(0, 0, Collections.singletonList(0), 0, 0)));
+                        new LeaderAndIsr(
+                                0,
+                                0,
+                                Collections.singletonList(0),
+                                Collections.emptyList(),
+                                0,
+                                0)));
         addMultiSegmentsToLogTablet(replica.getLogTablet(), segmentSize);
         return replica;
     }

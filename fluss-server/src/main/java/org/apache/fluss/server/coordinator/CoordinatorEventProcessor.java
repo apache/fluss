@@ -959,6 +959,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                             // TODO: reject the request if there is a replica in ISR is not online,
                             //  see KIP-841.
                             tryAdjustLeaderAndIsr.isr(),
+                            tryAdjustLeaderAndIsr.standbyReplicas(),
                             coordinatorContext.getCoordinatorEpoch(),
                             currentLeaderAndIsr.bucketEpoch() + 1);
             newLeaderAndIsrList.put(tableBucket, newLeaderAndIsr);
@@ -1071,7 +1072,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                         completedSnapshotStore.add(completedSnapshot);
                         coordinatorEventManager.put(
                                 new NotifyKvSnapshotOffsetEvent(
-                                        tb, completedSnapshot.getLogOffset()));
+                                        tb, completedSnapshot.getCompletedSnapshotHandle()));
                         callback.complete(new CommitKvSnapshotResponse());
                     } catch (Exception e) {
                         callback.completeExceptionally(e);
@@ -1081,7 +1082,6 @@ public class CoordinatorEventProcessor implements EventProcessor {
 
     private void processNotifyKvSnapshotOffsetEvent(NotifyKvSnapshotOffsetEvent event) {
         TableBucket tb = event.getTableBucket();
-        long logOffset = event.getLogOffset();
         coordinatorRequestBatch.newBatch();
         coordinatorContext
                 .getBucketLeaderAndIsr(tb)
@@ -1092,7 +1092,7 @@ public class CoordinatorEventProcessor implements EventProcessor {
                                                 coordinatorContext.getFollowers(
                                                         tb, leaderAndIsr.leader()),
                                                 tb,
-                                                logOffset));
+                                                event.getCompletedSnapshotHandle()));
         coordinatorRequestBatch.sendNotifyKvSnapshotOffsetRequest(
                 coordinatorContext.getCoordinatorEpoch());
     }

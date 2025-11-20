@@ -40,6 +40,7 @@ import org.apache.fluss.server.coordinator.event.EventManager;
 import org.apache.fluss.server.coordinator.event.NotifyLeaderAndIsrResponseReceivedEvent;
 import org.apache.fluss.server.entity.DeleteReplicaResultForBucket;
 import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.metadata.BucketMetadata;
 import org.apache.fluss.server.metadata.PartitionMetadata;
 import org.apache.fluss.server.metadata.TableMetadata;
@@ -361,7 +362,9 @@ public class CoordinatorRequestBatch {
     }
 
     public void addNotifyKvSnapshotOffsetRequestForTabletServers(
-            List<Integer> tabletServers, TableBucket tableBucket, long minRetainOffset) {
+            List<Integer> tabletServers,
+            TableBucket tableBucket,
+            CompletedSnapshotHandle snapshotHandle) {
         tabletServers.stream()
                 .filter(s -> s >= 0)
                 .forEach(
@@ -369,7 +372,7 @@ public class CoordinatorRequestBatch {
                                 notifyKvSnapshotOffsetRequestMap.put(
                                         id,
                                         makeNotifyKvSnapshotOffsetRequest(
-                                                tableBucket, minRetainOffset)));
+                                                tableBucket, snapshotHandle)));
     }
 
     public void addNotifyLakeTableOffsetRequestForTableServers(

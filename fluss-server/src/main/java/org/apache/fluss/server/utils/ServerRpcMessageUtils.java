@@ -150,6 +150,7 @@ import org.apache.fluss.server.entity.NotifyRemoteLogOffsetsData;
 import org.apache.fluss.server.entity.StopReplicaData;
 import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshotJsonSerde;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotHandle;
 import org.apache.fluss.server.metadata.BucketMetadata;
@@ -522,7 +523,8 @@ public class ServerRpcMessageUtils {
                 new PbNotifyLeaderAndIsrReqForBucket()
                         .setLeader(notifyLeaderAndIsrData.getLeader())
                         .setLeaderEpoch(notifyLeaderAndIsrData.getLeaderEpoch())
-                        .setBucketEpoch(notifyLeaderAndIsrData.getBucketEpoch());
+                        .setBucketEpoch(notifyLeaderAndIsrData.getBucketEpoch())
+                        .setStandbyReplicas(notifyLeaderAndIsrData.getStandbyReplicasArray());
 
         TableBucket tb = notifyLeaderAndIsrData.getTableBucket();
         PbTableBucket pbTableBucket =
@@ -558,6 +560,11 @@ public class ServerRpcMessageUtils {
                 isr.add(reqForBucket.getIsrAt(i));
             }
 
+            List<Integer> standbyReplicas = new ArrayList<>();
+            for (int i = 0; i < reqForBucket.getStandbyReplicasCount(); i++) {
+                standbyReplicas.add(reqForBucket.getStandbyReplicaAt(i));
+            }
+
             PbTableBucket pbTableBucket = reqForBucket.getTableBucket();
             notifyLeaderAndIsrDataList.add(
                     new NotifyLeaderAndIsrData(
@@ -568,6 +575,7 @@ public class ServerRpcMessageUtils {
                                     reqForBucket.getLeader(),
                                     reqForBucket.getLeaderEpoch(),
                                     isr,
+                                    standbyReplicas,
                                     request.getCoordinatorEpoch(),
                                     reqForBucket.getBucketEpoch())));
         }
@@ -1124,6 +1132,8 @@ public class ServerRpcMessageUtils {
                                 leaderId,
                                 reqForBucket.getLeaderEpoch(),
                                 newIsr,
+                                Collections
+                                        .emptyList(), // No use for this request, so we don't pass.
                                 reqForBucket.getCoordinatorEpoch(),
                                 reqForBucket.getBucketEpoch()));
             }
@@ -1207,6 +1217,7 @@ public class ServerRpcMessageUtils {
                                         respForBucket.getLeaderId(),
                                         respForBucket.getLeaderEpoch(),
                                         isr,
+                                        Collections.emptyList(),
                                         respForBucket.getCoordinatorEpoch(),
                                         respForBucket.getBucketEpoch())));
             }
@@ -1419,18 +1430,22 @@ public class ServerRpcMessageUtils {
                         request.hasPartitionId() ? request.getPartitionId() : null,
                         request.getBucketId()),
                 request.getMinRetainOffset(),
-                request.getCoordinatorEpoch());
+                request.getCoordinatorEpoch(),
+                request.hasSnapshotId() ? request.getSnapshotId() : null,
+                request.hasMetadataFilePath() ? request.getMetadataFilePath() : null);
     }
 
     public static NotifyKvSnapshotOffsetRequest makeNotifyKvSnapshotOffsetRequest(
-            TableBucket tableBucket, long minRetainOffset) {
+            TableBucket tableBucket, CompletedSnapshotHandle snapshotHandle) {
         NotifyKvSnapshotOffsetRequest request = new NotifyKvSnapshotOffsetRequest();
         if (tableBucket.getPartitionId() != null) {
             request.setPartitionId(tableBucket.getPartitionId());
         }
         request.setTableId(tableBucket.getTableId())
                 .setBucketId(tableBucket.getBucket())
-                .setMinRetainOffset(minRetainOffset);
+                .setMinRetainOffset(snapshotHandle.getLogOffset())
+                .setSnapshotId(snapshotHandle.getSnapshotId())
+                .setMetadataFilePath(snapshotHandle.getMetadataFilePath().getPath());
         return request;
     }
 

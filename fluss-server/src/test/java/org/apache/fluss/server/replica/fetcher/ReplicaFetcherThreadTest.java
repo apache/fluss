@@ -371,6 +371,7 @@ public class ReplicaFetcherThreadTest {
                                         leaderServerId,
                                         INITIAL_LEADER_EPOCH,
                                         Arrays.asList(leaderServerId, followerServerId),
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
                 result -> {});
@@ -385,6 +386,7 @@ public class ReplicaFetcherThreadTest {
                                         leaderServerId,
                                         INITIAL_LEADER_EPOCH,
                                         Arrays.asList(leaderServerId, followerServerId),
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))),
                 result -> {});

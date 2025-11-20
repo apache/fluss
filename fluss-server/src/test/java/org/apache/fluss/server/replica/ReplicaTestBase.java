@@ -39,6 +39,7 @@ import org.apache.fluss.server.entity.NotifyLeaderAndIsrData;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
 import org.apache.fluss.server.kv.snapshot.CompletedSnapshot;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataDownloader;
 import org.apache.fluss.server.kv.snapshot.KvSnapshotDataUploader;
 import org.apache.fluss.server.kv.snapshot.SnapshotContext;
@@ -370,6 +371,7 @@ public class ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         INITIAL_LEADER_EPOCH,
                                         isr,
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         INITIAL_BUCKET_EPOCH))));
     }
@@ -411,6 +413,7 @@ public class ReplicaTestBase {
                                         TABLET_SERVER_ID,
                                         leaderEpoch,
                                         isr,
+                                        Collections.emptyList(),
                                         INITIAL_COORDINATOR_EPOCH,
                                         // use leader epoch as bucket epoch
                                         leaderEpoch))));
@@ -644,6 +647,12 @@ public class ReplicaTestBase {
         public FunctionWithException<TableBucket, CompletedSnapshot, Exception>
                 getLatestCompletedSnapshotProvider() {
             return testKvSnapshotStore::getLatestCompletedSnapshot;
+        }
+
+        @Override
+        public CompletedSnapshot getCompletedSnapshotProvider(
+                TableBucket tableBucket, CompletedSnapshotHandle snapshotHandle) throws Exception {
+            return testKvSnapshotStore.getLatestCompletedSnapshot(tableBucket);
         }
 
         @Override

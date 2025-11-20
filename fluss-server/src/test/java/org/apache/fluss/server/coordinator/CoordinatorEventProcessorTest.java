@@ -739,6 +739,7 @@ class CoordinatorEventProcessorTest {
                                     leader,
                                     leaderAndIsr.leaderEpoch(),
                                     newIsr,
+                                    Collections.emptyList(),
                                     coordinatorEpoch,
                                     bucketLeaderEpoch));
                     return null;

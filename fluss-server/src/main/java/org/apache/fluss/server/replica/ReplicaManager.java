@@ -67,6 +67,7 @@ import org.apache.fluss.server.entity.StopReplicaResultForBucket;
 import org.apache.fluss.server.kv.KvManager;
 import org.apache.fluss.server.kv.KvSnapshotResource;
 import org.apache.fluss.server.kv.snapshot.CompletedKvSnapshotCommitter;
+import org.apache.fluss.server.kv.snapshot.CompletedSnapshotHandle;
 import org.apache.fluss.server.kv.snapshot.DefaultSnapshotContext;
 import org.apache.fluss.server.kv.snapshot.SnapshotContext;
 import org.apache.fluss.server.log.FetchDataInfo;
@@ -320,6 +321,8 @@ public class ReplicaManager {
         physicalStorage.gauge(
                 MetricNames.SERVER_PHYSICAL_STORAGE_REMOTE_LOG_SIZE,
                 this::physicalStorageRemoteLogSize);
+        physicalStorage.gauge(
+                MetricNames.SERVER_PHYSICAL_STORAGE_STANDBY_SIZE, this::physicalStorageStandbySize);
     }
 
     private Stream<Replica> onlineReplicas() {
@@ -366,11 +369,19 @@ public class ReplicaManager {
                         replica -> {
                             long size = replica.getLogTablet().logSize();
                             if (replica.isKvTable()) {
-                                size += replica.getLatestKvSnapshotSize();
+                                if (replica.isLeader()) {
+                                    size += replica.getLatestKvSnapshotSize();
+                                } else if (replica.isStandby()) {
+                                    size += replica.getStandbySnapshotSize();
+                                }
                             }
                             return size;
                         })
                 .reduce(0L, Long::sum);
+    }
+
+    private long physicalStorageStandbySize() {
+        return onlineReplicas().map(Replica::getStandbySnapshotSize).reduce(0L, Long::sum);
     }
 
     private long physicalStorageRemoteLogSize() {
@@ -726,11 +737,37 @@ public class ReplicaManager {
                             "notifyKvSnapshotOffset");
                     // update the snapshot offset.
                     TableBucket tb = notifyKvSnapshotOffsetData.getTableBucket();
-                    LogTablet logTablet = getReplicaOrException(tb).getLogTablet();
-                    logTablet.updateMinRetainOffset(
-                            notifyKvSnapshotOffsetData.getMinRetainOffset());
+                    Replica replica = getReplicaOrException(tb);
+                    if (notifyKvSnapshotOffsetData.getSnapshotId() != null) {
+                        // try to download the snapshot for standby replica.
+                        try {
+                            replica.downloadSnapshot(
+                                    new CompletedSnapshotHandle(
+                                            notifyKvSnapshotOffsetData.getSnapshotId(),
+                                            new FsPath(
+                                                    notifyKvSnapshotOffsetData
+                                                            .getMetadataFilePath()),
+                                            notifyKvSnapshotOffsetData.getMinRetainOffset()));
+                            updateMinRetainOffset(
+                                    replica, notifyKvSnapshotOffsetData.getMinRetainOffset());
+                        } catch (Exception e) {
+                            LOG.error(
+                                    "Error downloading snapshot id {} for standby replica {}.",
+                                    notifyKvSnapshotOffsetData.getSnapshotId(),
+                                    tb,
+                                    e);
+                        }
+                    } else {
+                        updateMinRetainOffset(
+                                replica, notifyKvSnapshotOffsetData.getMinRetainOffset());
+                    }
                     responseCallback.accept(new NotifyKvSnapshotOffsetResponse());
                 });
+    }
+
+    private void updateMinRetainOffset(Replica replica, long minRetainOffset) {
+        LogTablet logTablet = replica.getLogTablet();
+        logTablet.updateMinRetainOffset(minRetainOffset);
     }
 
     public void notifyLakeTableOffset(
