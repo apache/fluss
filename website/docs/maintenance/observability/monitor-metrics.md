@@ -804,6 +804,227 @@ Some metrics might not be exposed when using other JVM implementations (e.g. IBM
   </tbody>
 </table>
 
+### RocksDB
+
+RocksDB is the underlying storage engine for KvTablet in Fluss. The following metrics provide insights into RocksDB's performance and resource usage. **All RocksDB metrics are aggregated at the server level** to avoid metric timeline explosion in production environments with many buckets.
+
+#### Cache Metrics
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="5"><strong>tabletserver</strong></th>
+      <td rowspan="5">kv_rocksdb</td>
+      <td>rocksdbBlockCacheMissCount</td>
+      <td>The aggregated number of block cache misses across all RocksDB instances (SUM).</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>rocksdbBlockCacheHitCount</td>
+      <td>The aggregated number of block cache hits across all RocksDB instances (SUM).</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>rocksdbBlockCacheAddCount</td>
+      <td>The aggregated number of blocks added to the cache across all RocksDB instances (SUM).</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>rocksdbBlockCacheUsage</td>
+      <td>The aggregated memory usage of the block cache across all RocksDB instances (SUM, in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbBlockCachePinnedUsage</td>
+      <td>The aggregated memory usage of pinned blocks in the block cache across all RocksDB instances (SUM, in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+  </tbody>
+</table>
+
+#### Compaction Metrics
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="6"><strong>tabletserver</strong></th>
+      <td rowspan="6">kv_rocksdb</td>
+      <td>rocksdbCompactionBytesRead</td>
+      <td>The aggregated number of bytes read during compaction operations across all RocksDB instances (SUM).</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>rocksdbCompactionBytesWritten</td>
+      <td>The aggregated number of bytes written during compaction operations across all RocksDB instances (SUM).</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>rocksdbCompactionTimeMicros</td>
+      <td>The average compaction time across all RocksDB instances (AVG, in microseconds).</td>
+      <td>Histogram</td>
+    </tr>
+    <tr>
+      <td>rocksdbCompactionPending</td>
+      <td>The average number of pending compaction operations across all RocksDB instances (AVG).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbFlushBytesWritten</td>
+      <td>The aggregated number of bytes written during flush operations across all RocksDB instances (SUM).</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>rocksdbFlushPending</td>
+      <td>The average number of pending flush operations across all RocksDB instances (AVG).</td>
+      <td>Gauge</td>
+    </tr>
+  </tbody>
+</table>
+
+#### Memory Metrics
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="4"><strong>tabletserver</strong></th>
+      <td rowspan="4">kv_rocksdb</td>
+      <td>rocksdbMemtableMemoryUsage</td>
+      <td>The aggregated memory usage of memtables across all RocksDB instances (SUM, in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbBlockCacheMemoryUsage</td>
+      <td>The aggregated memory usage of the block cache across all RocksDB instances (SUM, in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbTableReadersMemoryUsage</td>
+      <td>The aggregated memory usage of table readers across all RocksDB instances (SUM, in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbTotalMemoryUsage</td>
+      <td>The aggregated total memory usage across all RocksDB instances (SUM, in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+  </tbody>
+</table>
+
+#### I/O Metrics
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="2"><strong>tabletserver</strong></th>
+      <td rowspan="2">kv_rocksdb</td>
+      <td>rocksdbBytesRead</td>
+      <td>The aggregated number of bytes read from storage across all RocksDB instances (SUM).</td>
+      <td>Counter</td>
+    </tr>
+    <tr>
+      <td>rocksdbBytesWritten</td>
+      <td>The aggregated number of bytes written to storage across all RocksDB instances (SUM).</td>
+      <td>Counter</td>
+    </tr>
+  </tbody>
+</table>
+
+#### SST Files Metrics
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="2"><strong>tabletserver</strong></th>
+      <td rowspan="2">kv_rocksdb</td>
+      <td>rocksdbTotalSstFilesSize</td>
+      <td>The aggregated total size of all SST files across all RocksDB instances (SUM, in bytes).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbNumFilesAtLevel0</td>
+      <td>The average number of SST files at level 0 across all RocksDB instances (AVG).</td>
+      <td>Gauge</td>
+    </tr>
+  </tbody>
+</table>
+
+#### Latency Metrics
+
+<table class="table table-bordered">
+  <thead>
+    <tr>
+      <th class="text-left" style={{width: '30pt'}}>Scope</th>
+      <th class="text-left" style={{width: '150pt'}}>Infix</th>
+      <th class="text-left" style={{width: '80pt'}}>Metrics</th>
+      <th class="text-left" style={{width: '300pt'}}>Description</th>
+      <th class="text-left" style={{width: '40pt'}}>Type</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <th rowspan="3"><strong>tabletserver</strong></th>
+      <td rowspan="3">kv_rocksdb</td>
+      <td>rocksdbWriteStallMicros</td>
+      <td>The maximum write stall time across all RocksDB instances (MAX, in microseconds).</td>
+      <td>Gauge</td>
+    </tr>
+    <tr>
+      <td>rocksdbDbGetLatencyMicros</td>
+      <td>The average latency of get operations across all RocksDB instances (AVG, in microseconds).</td>
+      <td>Histogram</td>
+    </tr>
+    <tr>
+      <td>rocksdbDbWriteLatencyMicros</td>
+      <td>The average latency of write operations across all RocksDB instances (AVG, in microseconds).</td>
+      <td>Histogram</td>
+    </tr>
+  </tbody>
+</table>
 
 ### Flink connector standard metrics
 

@@ -24,12 +24,14 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.rocksdb.BlockBasedTableConfig;
 import org.rocksdb.BloomFilter;
+import org.rocksdb.Cache;
 import org.rocksdb.ColumnFamilyOptions;
 import org.rocksdb.CompactionStyle;
 import org.rocksdb.CompressionType;
 import org.rocksdb.DBOptions;
 import org.rocksdb.InfoLogLevel;
 import org.rocksdb.ReadOptions;
+import org.rocksdb.Statistics;
 import org.rocksdb.WriteOptions;
 import org.rocksdb.util.SizeUnit;
 
@@ -37,6 +39,7 @@ import java.io.File;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -160,7 +163,7 @@ class RocksDBResourceContainerTest {
                         ConfigOptions.KvCompressionType.ZSTD));
 
         try (RocksDBResourceContainer optionsContainer =
-                new RocksDBResourceContainer(configuration, null, true)) {
+                new RocksDBResourceContainer(configuration, null)) {
 
             DBOptions dbOptions = optionsContainer.getDbOptions();
             assertThat(dbOptions.maxOpenFiles()).isEqualTo(-1);
@@ -189,8 +192,104 @@ class RocksDBResourceContainerTest {
                     (BlockBasedTableConfig) columnOptions.tableFormatConfig();
             assertThat(tableConfig.blockSize()).isEqualTo(4 * SizeUnit.KB);
             assertThat(tableConfig.metadataBlockSize()).isEqualTo(8 * SizeUnit.KB);
-            assertThat(tableConfig.blockCacheSize()).isEqualTo(512 * SizeUnit.MB);
             assertThat(tableConfig.filterPolicy() instanceof BloomFilter).isTrue();
+        }
+    }
+
+    @Test
+    void testBlockCacheCreation() throws Exception {
+        Configuration config = new Configuration();
+        config.setString(ConfigOptions.KV_BLOCK_CACHE_SIZE.key(), "16mb");
+
+        try (RocksDBResourceContainer container = new RocksDBResourceContainer(config, null)) {
+            Cache blockCache = container.getBlockCache();
+            assertThat(blockCache).isNotNull();
+        }
+    }
+
+    @Test
+    void testBlockCacheNotCreatedWhenSizeIsZero() throws Exception {
+        Configuration config = new Configuration();
+        config.setString(ConfigOptions.KV_BLOCK_CACHE_SIZE.key(), "0mb");
+
+        try (RocksDBResourceContainer container = new RocksDBResourceContainer(config, null)) {
+            Cache blockCache = container.getBlockCache();
+            assertThat(blockCache).isNull();
+        }
+    }
+
+    @Test
+    void testStatisticsEnabledByDefault() throws Exception {
+        Configuration config = new Configuration();
+        // Statistics should be enabled by default
+        try (RocksDBResourceContainer container = new RocksDBResourceContainer(config, null)) {
+            DBOptions dbOptions = container.getDbOptions();
+            assertThat(dbOptions.statistics()).isNotNull();
+            assertThat(container.getStatistics()).isNotNull();
+        }
+    }
+
+    @Test
+    void testStatisticsDisabled() throws Exception {
+        Configuration config = new Configuration();
+        config.setBoolean(ConfigOptions.KV_STATISTICS_ENABLED.key(), false);
+
+        try (RocksDBResourceContainer container = new RocksDBResourceContainer(config, null)) {
+            DBOptions dbOptions = container.getDbOptions();
+            // Statistics should be null when disabled
+            assertThat(dbOptions.statistics()).isNull();
+            assertThat(container.getStatistics()).isNull();
+        }
+    }
+
+    @Test
+    void testStatisticsExplicitlyEnabled() throws Exception {
+        Configuration config = new Configuration();
+        config.setBoolean(ConfigOptions.KV_STATISTICS_ENABLED.key(), true);
+
+        try (RocksDBResourceContainer container = new RocksDBResourceContainer(config, null)) {
+            DBOptions dbOptions = container.getDbOptions();
+            assertThat(dbOptions.statistics()).isNotNull();
+            assertThat(container.getStatistics()).isNotNull();
+        }
+    }
+
+    @Test
+    void testStatisticsClosedWithContainer() throws Exception {
+        Configuration config = new Configuration();
+        config.setBoolean(ConfigOptions.KV_STATISTICS_ENABLED.key(), true);
+
+        Statistics statistics;
+        try (RocksDBResourceContainer container = new RocksDBResourceContainer(config, null)) {
+            statistics = container.getStatistics();
+            assertThat(statistics).isNotNull();
+            assertThat(statistics.isOwningHandle()).isTrue();
+        }
+
+        // Statistics should be closed when container is closed
+        assertThat(statistics.isOwningHandle()).isFalse();
+    }
+
+    @Test
+    void testMultipleStatisticsObjectsClosedProperly() throws Exception {
+        Configuration config = new Configuration();
+        config.setBoolean(ConfigOptions.KV_STATISTICS_ENABLED.key(), true);
+
+        List<Statistics> statisticsList = new ArrayList<>();
+
+        // Create multiple containers and collect statistics
+        for (int i = 0; i < 5; i++) {
+            RocksDBResourceContainer container = new RocksDBResourceContainer(config, null);
+            Statistics stats = container.getStatistics();
+            if (stats != null) {
+                statisticsList.add(stats);
+            }
+            container.close();
+        }
+
+        // All statistics should be closed
+        for (Statistics stats : statisticsList) {
+            assertThat(stats.isOwningHandle()).isFalse();
         }
     }
 }

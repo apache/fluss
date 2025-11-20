@@ -33,6 +33,7 @@ import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.server.TabletManagerBase;
+import org.apache.fluss.server.kv.rocksdb.RocksDBMetricsManager;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.LogManager;
 import org.apache.fluss.server.log.LogTablet;
@@ -72,6 +73,8 @@ public final class KvManager extends TabletManagerBase {
 
     private final TabletServerMetricGroup serverMetricGroup;
 
+    private final RocksDBMetricsManager rocksDBMetricsManager;
+
     private final ZooKeeperClient zkClient;
 
     private final Map<TableBucket, KvTablet> currentKvs = MapUtils.newConcurrentHashMap();
@@ -105,6 +108,7 @@ public final class KvManager extends TabletManagerBase {
         this.remoteKvDir = FlussPaths.remoteKvDir(conf);
         this.remoteFileSystem = remoteKvDir.getFileSystem();
         this.serverMetricGroup = tabletServerMetricGroup;
+        this.rocksDBMetricsManager = new RocksDBMetricsManager(tabletServerMetricGroup);
     }
 
     public static KvManager create(
@@ -137,6 +141,9 @@ public final class KvManager extends TabletManagerBase {
             } catch (Exception e) {
                 LOG.warn("Exception while closing kv tablet {}.", kvTablet.getTableBucket(), e);
             }
+        }
+        if (rocksDBMetricsManager != null) {
+            rocksDBMetricsManager.shutdown();
         }
         arrowBufferAllocator.close();
         memorySegmentPool.close();
@@ -181,6 +188,7 @@ public final class KvManager extends TabletManagerBase {
                                     tabletDir,
                                     conf,
                                     serverMetricGroup,
+                                    rocksDBMetricsManager,
                                     arrowBufferAllocator,
                                     memorySegmentPool,
                                     kvFormat,
@@ -290,6 +298,7 @@ public final class KvManager extends TabletManagerBase {
                         tabletDir,
                         conf,
                         serverMetricGroup,
+                        rocksDBMetricsManager,
                         arrowBufferAllocator,
                         memorySegmentPool,
                         tableInfo.getTableConfig().getKvFormat(),

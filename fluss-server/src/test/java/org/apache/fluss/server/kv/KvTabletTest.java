@@ -43,6 +43,7 @@ import org.apache.fluss.row.encode.ValueEncoder;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Key;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.KvEntry;
 import org.apache.fluss.server.kv.prewrite.KvPreWriteBuffer.Value;
+import org.apache.fluss.server.kv.rocksdb.RocksDBMetricsManager;
 import org.apache.fluss.server.kv.rowmerger.RowMerger;
 import org.apache.fluss.server.log.FetchIsolation;
 import org.apache.fluss.server.log.LogAppendInfo;
@@ -98,6 +99,9 @@ class KvTabletTest {
     private static final short schemaId = 1;
     private final Configuration conf = new Configuration();
     private final RowType baseRowType = TestData.DATA1_ROW_TYPE;
+    private final RocksDBMetricsManager rocksDBMetricsManager =
+            new RocksDBMetricsManager(
+                    new FlussScheduler(1), TestingMetricGroups.TABLET_SERVER_METRICS);
     private final KvRecordTestUtils.KvRecordBatchFactory kvRecordBatchFactory =
             KvRecordTestUtils.KvRecordBatchFactory.of(schemaId);
     private final KvRecordTestUtils.KvRecordFactory kvRecordFactory =
@@ -176,6 +180,7 @@ class KvTabletTest {
                 tmpKvDir,
                 conf,
                 TestingMetricGroups.TABLET_SERVER_METRICS,
+                rocksDBMetricsManager,
                 new RootAllocator(Long.MAX_VALUE),
                 new TestingMemorySegmentPool(10 * 1024),
                 KvFormat.COMPACTED,

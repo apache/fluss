@@ -23,6 +23,7 @@ import org.apache.fluss.metadata.TablePath;
 import org.apache.fluss.metrics.CharacterFilter;
 import org.apache.fluss.metrics.Counter;
 import org.apache.fluss.metrics.DescriptiveStatisticsHistogram;
+import org.apache.fluss.metrics.Gauge;
 import org.apache.fluss.metrics.Histogram;
 import org.apache.fluss.metrics.MeterView;
 import org.apache.fluss.metrics.MetricNames;
@@ -33,6 +34,7 @@ import org.apache.fluss.metrics.registry.MetricRegistry;
 import org.apache.fluss.utils.MapUtils;
 
 import java.util.Map;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** The metric group for tablet server. */
 public class TabletServerMetricGroup extends AbstractMetricGroup {
@@ -74,6 +76,40 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
     private final Counter isrShrinks;
     private final Counter isrExpands;
     private final Counter failedIsrUpdates;
+
+    // aggregated RocksDB metrics - Counter type (SUM aggregation)
+    private final Counter rocksdbBlockCacheMissCount;
+    private final Counter rocksdbBlockCacheHitCount;
+    private final Counter rocksdbBlockCacheAddCount;
+    private final Counter rocksdbCompactionBytesRead;
+    private final Counter rocksdbCompactionBytesWritten;
+    private final Counter rocksdbFlushBytesWritten;
+    private final Counter rocksdbBytesRead;
+    private final Counter rocksdbBytesWritten;
+
+    // aggregated RocksDB metrics - Gauge type SUM (resource usage)
+    private final AtomicLong rocksdbBlockCacheUsage = new AtomicLong(0);
+    private final AtomicLong rocksdbBlockCachePinnedUsage = new AtomicLong(0);
+    private final AtomicLong rocksdbMemtableMemoryUsage = new AtomicLong(0);
+    private final AtomicLong rocksdbBlockCacheMemoryUsage = new AtomicLong(0);
+    private final AtomicLong rocksdbTableReadersMemoryUsage = new AtomicLong(0);
+    private final AtomicLong rocksdbTotalMemoryUsage = new AtomicLong(0);
+    private final AtomicLong rocksdbTotalSstFilesSize = new AtomicLong(0);
+
+    // aggregated RocksDB metrics - Gauge type AVG (count metrics)
+    private final AtomicLong rocksdbCompactionPendingSum = new AtomicLong(0);
+    private final AtomicLong rocksdbFlushPendingSum = new AtomicLong(0);
+    private final AtomicLong rocksdbNumFilesAtLevel0Sum = new AtomicLong(0);
+    private final AtomicLong rocksdbCollectorCount = new AtomicLong(0);
+
+    // aggregated RocksDB metrics - Gauge type MAX (time metrics)
+    private final AtomicLong rocksdbWriteStallMicros = new AtomicLong(0);
+
+    // aggregated RocksDB metrics - Histogram type AVG (latency metrics)
+    private final Histogram rocksdbDbGetLatencyHistogram;
+    private final Histogram rocksdbDbWriteLatencyHistogram;
+    private final Histogram rocksdbCompactionTimeHistogram;
+    private final AtomicLong rocksdbLatencyCollectorCount = new AtomicLong(0);
 
     public TabletServerMetricGroup(
             MetricRegistry registry, String clusterId, String rack, String hostname, int serverId) {
@@ -133,6 +169,87 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
         meter(MetricNames.ISR_SHRINKS_RATE, new MeterView(isrShrinks));
         failedIsrUpdates = new SimpleCounter();
         meter(MetricNames.FAILED_ISR_UPDATES_RATE, new MeterView(failedIsrUpdates));
+
+        // RocksDB metrics - Counter type (SUM aggregation)
+        rocksdbBlockCacheMissCount = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.ROCKSDB_BLOCK_CACHE_MISS_COUNT,
+                new MeterView(rocksdbBlockCacheMissCount));
+        rocksdbBlockCacheHitCount = new ThreadSafeSimpleCounter();
+        meter(MetricNames.ROCKSDB_BLOCK_CACHE_HIT_COUNT, new MeterView(rocksdbBlockCacheHitCount));
+        rocksdbBlockCacheAddCount = new ThreadSafeSimpleCounter();
+        meter(MetricNames.ROCKSDB_BLOCK_CACHE_ADD_COUNT, new MeterView(rocksdbBlockCacheAddCount));
+        rocksdbCompactionBytesRead = new ThreadSafeSimpleCounter();
+        meter(MetricNames.ROCKSDB_COMPACTION_BYTES_READ, new MeterView(rocksdbCompactionBytesRead));
+        rocksdbCompactionBytesWritten = new ThreadSafeSimpleCounter();
+        meter(
+                MetricNames.ROCKSDB_COMPACTION_BYTES_WRITTEN,
+                new MeterView(rocksdbCompactionBytesWritten));
+        rocksdbFlushBytesWritten = new ThreadSafeSimpleCounter();
+        meter(MetricNames.ROCKSDB_FLUSH_BYTES_WRITTEN, new MeterView(rocksdbFlushBytesWritten));
+        rocksdbBytesRead = new ThreadSafeSimpleCounter();
+        meter(MetricNames.ROCKSDB_BYTES_READ, new MeterView(rocksdbBytesRead));
+        rocksdbBytesWritten = new ThreadSafeSimpleCounter();
+        meter(MetricNames.ROCKSDB_BYTES_WRITTEN, new MeterView(rocksdbBytesWritten));
+
+        // RocksDB metrics - Gauge type SUM (resource usage)
+        gauge(
+                MetricNames.ROCKSDB_BLOCK_CACHE_USAGE,
+                (Gauge<Long>) () -> rocksdbBlockCacheUsage.get());
+        gauge(
+                MetricNames.ROCKSDB_BLOCK_CACHE_PINNED_USAGE,
+                (Gauge<Long>) () -> rocksdbBlockCachePinnedUsage.get());
+        gauge(
+                MetricNames.ROCKSDB_MEMTABLE_MEMORY_USAGE,
+                (Gauge<Long>) () -> rocksdbMemtableMemoryUsage.get());
+        gauge(
+                MetricNames.ROCKSDB_BLOCK_CACHE_MEMORY_USAGE,
+                (Gauge<Long>) () -> rocksdbBlockCacheMemoryUsage.get());
+        gauge(
+                MetricNames.ROCKSDB_TABLE_READERS_MEMORY_USAGE,
+                (Gauge<Long>) () -> rocksdbTableReadersMemoryUsage.get());
+        gauge(
+                MetricNames.ROCKSDB_TOTAL_MEMORY_USAGE,
+                (Gauge<Long>) () -> rocksdbTotalMemoryUsage.get());
+        gauge(
+                MetricNames.ROCKSDB_TOTAL_SST_FILES_SIZE,
+                (Gauge<Long>) () -> rocksdbTotalSstFilesSize.get());
+
+        // RocksDB metrics - Gauge type AVG (count metrics)
+        gauge(
+                MetricNames.ROCKSDB_COMPACTION_PENDING,
+                (Gauge<Long>)
+                        () -> {
+                            long count = rocksdbCollectorCount.get();
+                            return count > 0 ? rocksdbCompactionPendingSum.get() / count : 0;
+                        });
+        gauge(
+                MetricNames.ROCKSDB_FLUSH_PENDING,
+                (Gauge<Long>)
+                        () -> {
+                            long count = rocksdbCollectorCount.get();
+                            return count > 0 ? rocksdbFlushPendingSum.get() / count : 0;
+                        });
+        gauge(
+                MetricNames.ROCKSDB_NUM_FILES_AT_LEVEL_0,
+                (Gauge<Long>)
+                        () -> {
+                            long count = rocksdbCollectorCount.get();
+                            return count > 0 ? rocksdbNumFilesAtLevel0Sum.get() / count : 0;
+                        });
+
+        // RocksDB metrics - Gauge type MAX (time metrics)
+        gauge(
+                MetricNames.ROCKSDB_WRITE_STALL_MICROS,
+                (Gauge<Long>) () -> rocksdbWriteStallMicros.get());
+
+        // RocksDB metrics - Histogram type AVG (latency metrics)
+        rocksdbDbGetLatencyHistogram = new DescriptiveStatisticsHistogram(WINDOW_SIZE);
+        histogram(MetricNames.ROCKSDB_DB_GET_LATENCY_MICROS, rocksdbDbGetLatencyHistogram);
+        rocksdbDbWriteLatencyHistogram = new DescriptiveStatisticsHistogram(WINDOW_SIZE);
+        histogram(MetricNames.ROCKSDB_DB_WRITE_LATENCY_MICROS, rocksdbDbWriteLatencyHistogram);
+        rocksdbCompactionTimeHistogram = new DescriptiveStatisticsHistogram(WINDOW_SIZE);
+        histogram(MetricNames.ROCKSDB_COMPACTION_TIME_MICROS, rocksdbCompactionTimeHistogram);
     }
 
     @Override
@@ -219,6 +336,111 @@ public class TabletServerMetricGroup extends AbstractMetricGroup {
 
     public Counter failedIsrUpdates() {
         return failedIsrUpdates;
+    }
+
+    // ------------------------------------------------------------------------
+    //  RocksDB aggregated metrics getters
+    // ------------------------------------------------------------------------
+
+    // Counter type (SUM aggregation)
+    public Counter rocksdbBlockCacheMissCount() {
+        return rocksdbBlockCacheMissCount;
+    }
+
+    public Counter rocksdbBlockCacheHitCount() {
+        return rocksdbBlockCacheHitCount;
+    }
+
+    public Counter rocksdbBlockCacheAddCount() {
+        return rocksdbBlockCacheAddCount;
+    }
+
+    public Counter rocksdbCompactionBytesRead() {
+        return rocksdbCompactionBytesRead;
+    }
+
+    public Counter rocksdbCompactionBytesWritten() {
+        return rocksdbCompactionBytesWritten;
+    }
+
+    public Counter rocksdbFlushBytesWritten() {
+        return rocksdbFlushBytesWritten;
+    }
+
+    public Counter rocksdbBytesRead() {
+        return rocksdbBytesRead;
+    }
+
+    public Counter rocksdbBytesWritten() {
+        return rocksdbBytesWritten;
+    }
+
+    // Gauge type SUM (resource usage)
+    public AtomicLong rocksdbBlockCacheUsage() {
+        return rocksdbBlockCacheUsage;
+    }
+
+    public AtomicLong rocksdbBlockCachePinnedUsage() {
+        return rocksdbBlockCachePinnedUsage;
+    }
+
+    public AtomicLong rocksdbMemtableMemoryUsage() {
+        return rocksdbMemtableMemoryUsage;
+    }
+
+    public AtomicLong rocksdbBlockCacheMemoryUsage() {
+        return rocksdbBlockCacheMemoryUsage;
+    }
+
+    public AtomicLong rocksdbTableReadersMemoryUsage() {
+        return rocksdbTableReadersMemoryUsage;
+    }
+
+    public AtomicLong rocksdbTotalMemoryUsage() {
+        return rocksdbTotalMemoryUsage;
+    }
+
+    public AtomicLong rocksdbTotalSstFilesSize() {
+        return rocksdbTotalSstFilesSize;
+    }
+
+    // Gauge type AVG (count metrics)
+    public AtomicLong rocksdbCompactionPendingSum() {
+        return rocksdbCompactionPendingSum;
+    }
+
+    public AtomicLong rocksdbFlushPendingSum() {
+        return rocksdbFlushPendingSum;
+    }
+
+    public AtomicLong rocksdbNumFilesAtLevel0Sum() {
+        return rocksdbNumFilesAtLevel0Sum;
+    }
+
+    public AtomicLong rocksdbCollectorCount() {
+        return rocksdbCollectorCount;
+    }
+
+    // Gauge type MAX (time metrics)
+    public AtomicLong rocksdbWriteStallMicros() {
+        return rocksdbWriteStallMicros;
+    }
+
+    // Histogram type AVG (latency metrics)
+    public Histogram rocksdbDbGetLatencyHistogram() {
+        return rocksdbDbGetLatencyHistogram;
+    }
+
+    public Histogram rocksdbDbWriteLatencyHistogram() {
+        return rocksdbDbWriteLatencyHistogram;
+    }
+
+    public Histogram rocksdbCompactionTimeHistogram() {
+        return rocksdbCompactionTimeHistogram;
+    }
+
+    public AtomicLong rocksdbLatencyCollectorCount() {
+        return rocksdbLatencyCollectorCount;
     }
 
     // ------------------------------------------------------------------------
