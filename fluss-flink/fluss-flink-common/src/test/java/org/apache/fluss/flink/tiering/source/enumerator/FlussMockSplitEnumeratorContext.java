@@ -18,6 +18,8 @@
 
 package org.apache.fluss.flink.tiering.source.enumerator;
 
+import org.apache.fluss.utils.MapUtils;
+
 import org.apache.flink.api.connector.source.ReaderInfo;
 import org.apache.flink.api.connector.source.SourceSplit;
 import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
@@ -25,7 +27,6 @@ import org.apache.flink.api.connector.source.mocks.MockSplitEnumeratorContext;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
 import static org.apache.flink.util.Preconditions.checkState;
@@ -43,12 +44,12 @@ class FlussMockSplitEnumeratorContext<SplitT extends SourceSplit>
 
     public FlussMockSplitEnumeratorContext(int parallelism) {
         super(parallelism);
-        this.registeredReaders = new ConcurrentHashMap<>();
+        this.registeredReaders = MapUtils.newConcurrentHashMap();
     }
 
     public void registerSourceReader(int subtaskId, int attemptNumber, String location) {
         final Map<Integer, ReaderInfo> attemptReaders =
-                registeredReaders.computeIfAbsent(subtaskId, k -> new ConcurrentHashMap<>());
+                registeredReaders.computeIfAbsent(subtaskId, k -> MapUtils.newConcurrentHashMap());
         checkState(
                 !attemptReaders.containsKey(attemptNumber),
                 "ReaderInfo of subtask %s (#%s) already exists.",
