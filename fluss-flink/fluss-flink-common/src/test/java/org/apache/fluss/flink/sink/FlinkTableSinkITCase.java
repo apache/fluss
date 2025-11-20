@@ -248,17 +248,17 @@ abstract class FlinkTableSinkITCase extends AbstractTestBase {
         Configuration clientConf = FLUSS_CLUSTER_EXTENSION.getClientConfig();
         try (Connection conn = ConnectionFactory.createConnection(clientConf);
                 Table table = conn.getTable(TablePath.of(DEFAULT_DB, "sink_test"));
-                LogScanner logScanner = table.newScan().createLogScanner()) {
+                LogScanner<InternalRow> logScanner = table.newScan().createLogScanner()) {
             logScanner.subscribeFromBeginning(0);
             logScanner.subscribeFromBeginning(1);
             logScanner.subscribeFromBeginning(2);
             long scanned = 0;
             while (scanned < 6) {
-                ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
+                ScanRecords<InternalRow> scanRecords = logScanner.poll(Duration.ofSeconds(1));
                 for (TableBucket bucket : scanRecords.buckets()) {
                     List<String> rowsBucket =
                             rows.computeIfAbsent(bucket.getBucket(), k -> new ArrayList<>());
-                    for (ScanRecord record : scanRecords.records(bucket)) {
+                    for (ScanRecord<InternalRow> record : scanRecords.records(bucket)) {
                         InternalRow row = record.getRow();
                         rowsBucket.add(
                                 Row.of(row.getInt(0), row.getLong(1), row.getString(2).toString())

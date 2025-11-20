@@ -32,6 +32,9 @@ import org.apache.fluss.lake.writer.LakeWriter;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.record.ChangeType;
+import org.apache.fluss.record.LogRecord;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.utils.CloseableIterator;
 
 import org.apache.flink.connector.base.source.reader.RecordsWithSplitIds;
@@ -249,11 +252,12 @@ public class TieringSplitReader<WriteResult>
     }
 
     private RecordsWithSplitIds<TableBucketWriteResult<WriteResult>> forLogRecords(
-            ScanRecords scanRecords) throws IOException {
+            ScanRecords<org.apache.fluss.row.InternalRow> scanRecords) throws IOException {
         Map<TableBucket, TableBucketWriteResult<WriteResult>> writeResults = new HashMap<>();
         Map<TableBucket, String> finishedSplitIds = new HashMap<>();
         for (TableBucket bucket : scanRecords.buckets()) {
-            List<ScanRecord> bucketScanRecords = scanRecords.records(bucket);
+            List<ScanRecord<org.apache.fluss.row.InternalRow>> bucketScanRecords =
+                    scanRecords.records(bucket);
             if (bucketScanRecords.isEmpty()) {
                 continue;
             }
@@ -265,13 +269,14 @@ public class TieringSplitReader<WriteResult>
             LakeWriter<WriteResult> lakeWriter =
                     getOrCreateLakeWriter(
                             bucket, currentTableSplitsByBucket.get(bucket).getPartitionName());
-            for (ScanRecord record : bucketScanRecords) {
+            for (ScanRecord<InternalRow> record : bucketScanRecords) {
                 // if record is less than stopping offset
                 if (record.logOffset() < stoppingOffset) {
-                    lakeWriter.write(record);
+                    lakeWriter.write(new ScanRecordLogRecord(record));
                 }
             }
-            ScanRecord lastRecord = bucketScanRecords.get(bucketScanRecords.size() - 1);
+            ScanRecord<InternalRow> lastRecord =
+                    bucketScanRecords.get(bucketScanRecords.size() - 1);
             // has arrived into the end of the split,
             if (lastRecord.logOffset() >= stoppingOffset - 1) {
                 currentTableStoppingOffsets.remove(bucket);
@@ -390,8 +395,8 @@ public class TieringSplitReader<WriteResult>
                 getOrCreateLakeWriter(
                         bucket, checkNotNull(currentSnapshotSplit).getPartitionName());
         while (recordIterator.hasNext()) {
-            ScanRecord scanRecord = recordIterator.next().record();
-            lakeWriter.write(scanRecord);
+            ScanRecord<InternalRow> scanRecord = recordIterator.next().record();
+            lakeWriter.write(new ScanRecordLogRecord(scanRecord));
         }
         recordIterator.close();
         return emptyTableBucketWriteResultWithSplitIds();
@@ -458,6 +463,35 @@ public class TieringSplitReader<WriteResult>
         }
 
         // don't need to close connection, will be closed by TieringSourceReader
+    }
+
+    /** Lightweight adapter to view a {@code ScanRecord<InternalRow>} as a {@link LogRecord}. */
+    private static final class ScanRecordLogRecord implements LogRecord {
+        private final ScanRecord<InternalRow> delegate;
+
+        private ScanRecordLogRecord(ScanRecord<InternalRow> delegate) {
+            this.delegate = delegate;
+        }
+
+        @Override
+        public long logOffset() {
+            return delegate.logOffset();
+        }
+
+        @Override
+        public long timestamp() {
+            return delegate.timestamp();
+        }
+
+        @Override
+        public ChangeType getChangeType() {
+            return delegate.getChangeType();
+        }
+
+        @Override
+        public InternalRow getRow() {
+            return delegate.getRow();
+        }
     }
 
     private void subscribeLog(TieringLogSplit logSplit) {

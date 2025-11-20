@@ -39,7 +39,7 @@ import java.util.List;
 import java.util.concurrent.CompletableFuture;
 
 /** The writer to write data to the primary key table. */
-class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter {
+class UpsertWriterImpl extends AbstractTableWriter implements UpsertWriter<InternalRow> {
     private static final UpsertResult UPSERT_SUCCESS = new UpsertResult();
     private static final DeleteResult DELETE_SUCCESS = new DeleteResult();
 

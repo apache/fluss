@@ -27,6 +27,7 @@ import org.apache.fluss.exception.WakeupException;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TableInfo;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.rpc.metrics.ClientMetricGroup;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.Projection;
@@ -55,7 +56,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * @since 0.1
  */
 @PublicEvolving
-public class LogScannerImpl implements LogScanner {
+public class LogScannerImpl implements LogScanner<InternalRow> {
     private static final Logger LOG = LoggerFactory.getLogger(LogScannerImpl.class);
 
     private static final long NO_CURRENT_THREAD = -1L;
@@ -127,7 +128,7 @@ public class LogScannerImpl implements LogScanner {
     }
 
     @Override
-    public ScanRecords poll(Duration timeout) {
+    public ScanRecords<InternalRow> poll(Duration timeout) {
         acquireAndEnsureOpen();
         try {
             if (!logScannerStatus.prepareToPoll()) {
@@ -138,17 +139,17 @@ public class LogScannerImpl implements LogScanner {
             long timeoutNanos = timeout.toNanos();
             long startNanos = System.nanoTime();
             do {
-                Map<TableBucket, List<ScanRecord>> fetchRecords = pollForFetches();
+                Map<TableBucket, List<ScanRecord<InternalRow>>> fetchRecords = pollForFetches();
                 if (fetchRecords.isEmpty()) {
                     try {
                         if (!logFetcher.awaitNotEmpty(startNanos + timeoutNanos)) {
                             // logFetcher waits for the timeout and no data in buffer,
                             // so we return empty
-                            return new ScanRecords(fetchRecords);
+                            return new ScanRecords<>(fetchRecords);
                         }
                     } catch (WakeupException e) {
                         // wakeup() is called, we need to return empty
-                        return new ScanRecords(fetchRecords);
+                        return new ScanRecords<>(fetchRecords);
                     }
                 } else {
                     // before returning the fetched records, we can send off the next round of
@@ -156,11 +157,11 @@ public class LogScannerImpl implements LogScanner {
                     // while the user is handling the fetched records.
                     logFetcher.sendFetches();
 
-                    return new ScanRecords(fetchRecords);
+                    return new ScanRecords<>(fetchRecords);
                 }
             } while (System.nanoTime() - startNanos < timeoutNanos);
 
-            return ScanRecords.EMPTY;
+            return ScanRecords.empty();
         } finally {
             release();
             scannerMetricGroup.recordPollEnd(System.currentTimeMillis());
@@ -227,8 +228,8 @@ public class LogScannerImpl implements LogScanner {
         logFetcher.wakeup();
     }
 
-    private Map<TableBucket, List<ScanRecord>> pollForFetches() {
-        Map<TableBucket, List<ScanRecord>> fetchedRecords = logFetcher.collectFetch();
+    private Map<TableBucket, List<ScanRecord<InternalRow>>> pollForFetches() {
+        Map<TableBucket, List<ScanRecord<InternalRow>>> fetchedRecords = logFetcher.collectFetch();
         if (!fetchedRecords.isEmpty()) {
             return fetchedRecords;
         }

@@ -38,6 +38,7 @@ import org.apache.fluss.lake.source.LakeSource;
 import org.apache.fluss.lake.source.LakeSplit;
 import org.apache.fluss.metadata.TableBucket;
 import org.apache.fluss.metadata.TablePath;
+import org.apache.fluss.row.InternalRow;
 import org.apache.fluss.types.RowType;
 import org.apache.fluss.utils.CloseableIterator;
 import org.apache.fluss.utils.ExceptionUtils;
@@ -407,7 +408,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
         }
     }
 
-    private FlinkRecordsWithSplitIds forLogRecords(ScanRecords scanRecords) {
+    private FlinkRecordsWithSplitIds forLogRecords(ScanRecords<InternalRow> scanRecords) {
         // For calculating the currentFetchEventTimeLag
         long fetchTimestamp = System.currentTimeMillis();
         long maxConsumerRecordTimestampInFetch = -1;
@@ -426,7 +427,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
             }
             splitIdByTableBucket.put(scanBucket, splitId);
             tableScanBuckets.add(scanBucket);
-            List<ScanRecord> bucketScanRecords = scanRecords.records(scanBucket);
+            List<ScanRecord<InternalRow>> bucketScanRecords = scanRecords.records(scanBucket);
             if (!bucketScanRecords.isEmpty()) {
                 final ScanRecord lastRecord = bucketScanRecords.get(bucketScanRecords.size() - 1);
                 // We keep the maximum message timestamp in the fetch for calculating lags
@@ -478,7 +479,7 @@ public class FlinkSourceSplitReader implements SplitReader<RecordAndPos, SourceS
     }
 
     private CloseableIterator<RecordAndPos> toRecordAndPos(
-            Iterator<ScanRecord> recordAndPosIterator) {
+            Iterator<ScanRecord<InternalRow>> recordAndPosIterator) {
         return new CloseableIterator<RecordAndPos>() {
 
             @Override

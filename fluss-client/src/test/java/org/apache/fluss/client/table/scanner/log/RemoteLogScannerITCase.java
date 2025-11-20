@@ -99,12 +99,12 @@ public class RemoteLogScannerITCase {
         FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(new TableBucket(tableId, 0));
 
         // test fetch.
-        LogScanner logScanner = table.newScan().createLogScanner();
+        LogScanner<InternalRow> logScanner = table.newScan().createLogScanner();
         logScanner.subscribeFromBeginning(0);
         List<GenericRow> rowList = new ArrayList<>();
         while (rowList.size() < recordSize) {
-            ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
-            for (ScanRecord scanRecord : scanRecords) {
+            ScanRecords<InternalRow> scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            for (ScanRecord<InternalRow> scanRecord : scanRecords) {
                 assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                 InternalRow row = scanRecord.getRow();
                 rowList.add(row(row.getInt(0), row.getString(1)));
@@ -150,12 +150,12 @@ public class RemoteLogScannerITCase {
         FLUSS_CLUSTER_EXTENSION.waitUntilSomeLogSegmentsCopyToRemote(new TableBucket(tableId, 0));
 
         // test fetch.
-        LogScanner logScanner = createLogScanner(table, new int[] {0, 2});
+        LogScanner<InternalRow> logScanner = createLogScanner(table, new int[] {0, 2});
         logScanner.subscribeFromBeginning(0);
         int count = 0;
         while (count < expectedSize) {
-            ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
-            for (ScanRecord scanRecord : scanRecords) {
+            ScanRecords<InternalRow> scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            for (ScanRecord<InternalRow> scanRecord : scanRecords) {
                 assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                 assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
                 assertThat(scanRecord.getRow().getInt(0)).isEqualTo(count);
@@ -177,8 +177,8 @@ public class RemoteLogScannerITCase {
         logScanner.subscribeFromBeginning(0);
         count = 0;
         while (count < expectedSize) {
-            ScanRecords scanRecords = logScanner.poll(Duration.ofSeconds(1));
-            for (ScanRecord scanRecord : scanRecords) {
+            ScanRecords<InternalRow> scanRecords = logScanner.poll(Duration.ofSeconds(1));
+            for (ScanRecord<InternalRow> scanRecord : scanRecords) {
                 assertThat(scanRecord.getChangeType()).isEqualTo(ChangeType.APPEND_ONLY);
                 assertThat(scanRecord.getRow().getFieldCount()).isEqualTo(2);
                 assertThat(scanRecord.getRow().getInt(1)).isEqualTo(count);

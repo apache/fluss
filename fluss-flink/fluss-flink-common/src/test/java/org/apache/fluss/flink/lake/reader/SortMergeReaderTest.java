@@ -17,7 +17,6 @@
 
 package org.apache.fluss.flink.lake.reader;
 
-import org.apache.fluss.client.table.scanner.ScanRecord;
 import org.apache.fluss.record.ChangeType;
 import org.apache.fluss.record.LogRecord;
 import org.apache.fluss.row.BinaryString;
@@ -153,8 +152,44 @@ class SortMergeReaderTest {
                             startId + i,
                             BinaryString.fromString(isLog ? "a" + "_updated" : "a"),
                             BinaryString.fromString(isLog ? "A" + "_updated" : "A"));
-            logRecords.add(new ScanRecord(i, System.currentTimeMillis(), ChangeType.INSERT, row));
+            logRecords.add(
+                    new TestLogRecord(i, System.currentTimeMillis(), ChangeType.INSERT, row));
         }
         return logRecords;
+    }
+
+    /** Simple LogRecord for tests. */
+    private static final class TestLogRecord implements LogRecord {
+        private final long offset;
+        private final long ts;
+        private final ChangeType ct;
+        private final InternalRow row;
+
+        private TestLogRecord(long offset, long ts, ChangeType ct, InternalRow row) {
+            this.offset = offset;
+            this.ts = ts;
+            this.ct = ct;
+            this.row = row;
+        }
+
+        @Override
+        public long logOffset() {
+            return offset;
+        }
+
+        @Override
+        public long timestamp() {
+            return ts;
+        }
+
+        @Override
+        public ChangeType getChangeType() {
+            return ct;
+        }
+
+        @Override
+        public InternalRow getRow() {
+            return row;
+        }
     }
 }

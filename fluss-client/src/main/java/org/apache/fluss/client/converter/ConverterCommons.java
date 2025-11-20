@@ -83,6 +83,24 @@ final class ConverterCommons {
         }
     }
 
+    static void validatePojoMatchesProjection(PojoType<?> pojoType, RowType projection) {
+        Set<String> pojoNames = pojoType.getProperties().keySet();
+        List<String> fieldNames = projection.getFieldNames();
+        if (!pojoNames.containsAll(fieldNames)) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "POJO fields %s must contain all projection fields %s. "
+                                    + "For full-table writes, POJO fields must exactly match table schema fields.",
+                            pojoNames, fieldNames));
+        }
+        for (int i = 0; i < projection.getFieldCount(); i++) {
+            String name = fieldNames.get(i);
+            DataType dt = projection.getTypeAt(i);
+            PojoType.Property prop = pojoType.getProperty(name);
+            validateCompatibility(dt, prop);
+        }
+    }
+
     static void validateProjectionSubset(RowType projection, RowType tableSchema) {
         Set<String> tableNames = new HashSet<>(tableSchema.getFieldNames());
         for (String n : projection.getFieldNames()) {

@@ -30,6 +30,7 @@ import org.apache.fluss.types.RowType;
 import javax.annotation.Nullable;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -54,7 +55,9 @@ public final class PojoToRowConverter<T> {
         this.tableSchema = tableSchema;
         this.projection = projection;
         this.projectionFieldNames = projection.getFieldNames();
-        ConverterCommons.validatePojoMatchesTable(pojoType, tableSchema);
+        // For writer path, allow POJO to be a superset of the projection. It must contain all
+        // projected fields.
+        ConverterCommons.validatePojoMatchesProjection(pojoType, projection);
         ConverterCommons.validateProjectionSubset(projection, tableSchema);
         this.fieldConverters = createFieldConverters();
     }
@@ -177,8 +180,22 @@ public final class PojoToRowConverter<T> {
                     String.format(
                             "Field %s is not a BigDecimal. Cannot convert to Decimal.", prop.name));
         }
-        return Decimal.fromBigDecimal(
-                (BigDecimal) v, decimalType.getPrecision(), decimalType.getScale());
+        final int precision = decimalType.getPrecision();
+        final int scale = decimalType.getScale();
+
+        // Scale with a deterministic rounding mode to avoid ArithmeticException when rounding is
+        // needed.
+        BigDecimal bd = (BigDecimal) v;
+        BigDecimal scaled = bd.setScale(scale, RoundingMode.HALF_UP);
+
+        if (scaled.precision() > precision) {
+            throw new IllegalArgumentException(
+                    String.format(
+                            "Decimal value for field %s exceeds precision %d after scaling to %d: %s",
+                            prop.name, precision, scale, scaled));
+        }
+
+        return Decimal.fromBigDecimal(scaled, precision, scale);
     }
 
     /** Converts a LocalDate POJO property to number of days since epoch. */
