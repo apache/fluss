@@ -23,4 +23,12 @@ import org.apache.fluss.annotation.Internal;
 @Internal
 public interface ColumnVector {
     boolean isNullAt(int i);
+
+    default int getCapacity() {
+        return Integer.MAX_VALUE;
+    }
+
+    default ColumnVector[] getChildren() {
+        return null;
+    }
 }

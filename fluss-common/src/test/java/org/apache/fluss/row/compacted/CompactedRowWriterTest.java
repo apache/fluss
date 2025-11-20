@@ -88,8 +88,8 @@ class CompactedRowWriterTest {
     @Test
     public void testTypes() {
         DataType[] allDataTypes = TestInternalRowGenerator.createAllTypes();
-        CompactedRowWriter writer = new CompactedRowWriter(allDataTypes.length);
-        CompactedRowReader reader = new CompactedRowReader(allDataTypes.length);
+        CompactedRowWriter writer = new CompactedRowWriter(allDataTypes);
+        CompactedRowReader reader = new CompactedRowReader(allDataTypes);
         InternalRow.FieldGetter[] getters = new InternalRow.FieldGetter[allDataTypes.length];
         CompactedRowWriter.FieldWriter[] writers =
                 new CompactedRowWriter.FieldWriter[allDataTypes.length];
