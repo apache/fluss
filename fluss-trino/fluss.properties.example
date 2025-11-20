@@ -1,0 +1,27 @@
+# Fluss Trino Connector Configuration Example
+# This file should be placed in: $TRINO_HOME/etc/catalog/fluss.properties
+
+# Connector name (required)
+connector.name=fluss
+
+# Bootstrap servers - comma separated list of Fluss server addresses (required)
+bootstrap.servers=localhost:9092
+
+# Connection configuration
+connection.max-idle-time=10m
+request.timeout=60s
+
+# Scanner configuration
+scanner.fetch.max-wait-time=500ms
+scanner.fetch.min-bytes=1MB
+
+# Feature flags
+union-read.enabled=true
+column-pruning.enabled=true
+predicate-pushdown.enabled=true
+limit-pushdown.enabled=true
+aggregate-pushdown.enabled=false
+
+# Performance tuning
+max-splits-per-second=1000
+max-splits-per-request=100
